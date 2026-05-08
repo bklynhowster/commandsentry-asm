@@ -92,6 +92,11 @@ jobs:
       - name: Determine targets to scan
         id: targets
         run: |
+          if [[ ! -f data/targets.yml ]]; then
+            echo "::error::data/targets.yml is missing from the repo. Either commit it, or rename targets.yml.example."
+            exit 1
+          fi
+
           INPUT_TARGET="${{ github.event.inputs.target }}"
           if [[ -z "$INPUT_TARGET" || "$INPUT_TARGET" == "all" ]]; then
             echo "mode=all" >> "$GITHUB_OUTPUT"
@@ -100,6 +105,12 @@ jobs:
             echo "mode=single" >> "$GITHUB_OUTPUT"
             echo "$INPUT_TARGET" > /tmp/scan_list
           fi
+
+          if [[ ! -s /tmp/scan_list ]]; then
+            echo "::error::No enabled targets found in data/targets.yml — workflow has nothing to scan."
+            exit 1
+          fi
+
           echo "Targets queued for scan:"
           cat /tmp/scan_list
 

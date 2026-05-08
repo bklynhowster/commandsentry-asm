@@ -2,8 +2,9 @@
 # Keep target list, raw scan artifacts, and secrets out of git.
 # We DO commit normalized findings JSON (per D-004).
 
-# Real target list — keep only the .example
-data/targets.yml
+# NOTE: targets.yml IS committed to this private repo so the GitHub Actions
+# workflow knows what to scan. Scope-verification gating (`scope_verified: true`)
+# is the abuse rail; gitignore is not.
 
 # Raw scan artifacts (text dumps, screenshots, large files)
 data/raw/
