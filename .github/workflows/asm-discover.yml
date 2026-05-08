@@ -27,9 +27,12 @@ on:
       - '.github/workflows/asm-discover.yml'
       - 'scanner/**'
 
-# Need write access to commit scan results back.
+# Need write access to commit scan results back, and actions:write to chain
+# the deploy-netlify workflow afterwards (GITHUB_TOKEN commits don't auto-trigger
+# other workflows by default, so we explicitly fire the deploy).
 permissions:
   contents: write
+  actions:  write
 
 # Don't pile up overlapping scans. A new run cancels the previous queued one.
 concurrency:
@@ -148,6 +151,20 @@ jobs:
                      -m "Triggered by: ${{ github.event_name }}" \
                      -m "Workflow run: ${{ github.run_id }}"
           git push
+
+      - name: Trigger Netlify deploy (chain past GITHUB_TOKEN anti-recursion)
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Only fire deploy if the scan actually produced a new commit
+          LATEST_MSG=$(git log -1 --format=%s)
+          if [[ "$LATEST_MSG" == asm-scan:* ]]; then
+            echo "Found scan commit on HEAD ($LATEST_MSG) — triggering deploy"
+            gh workflow run deploy-netlify.yml
+          else
+            echo "No asm-scan commit on HEAD — skipping deploy trigger"
+          fi
 
       - name: Summarize run
         if: always()
