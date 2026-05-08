@@ -1,0 +1,38 @@
+# COMMANDsentry — Netlify deploy config
+# ───────────────────────────────────────
+# Netlify publishes the static dashboard from web/ on every push to main.
+# The build step re-runs sync-data.sh so any newly-committed asset JSON
+# under data/assets/ gets copied into web/data/ before publish.
+
+[build]
+  base    = "."
+  command = "bash web/sync-data.sh"
+  publish = "web"
+
+# Lock down basics for an internal security tool.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options          = "DENY"
+    X-Content-Type-Options   = "nosniff"
+    Referrer-Policy          = "strict-origin-when-cross-origin"
+    Permissions-Policy       = "camera=(), microphone=(), geolocation=()"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+
+# JSON data files: no caching, the dashboard always reads fresh.
+[[headers]]
+  for = "/data/*"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
+# Static CSS/JS/fonts: aggressive caching since they rarely change.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=86400"
+
+# 404 → home (the SPA only has one HTML file)
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
