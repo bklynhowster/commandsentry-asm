@@ -118,15 +118,18 @@ jobs:
           cat /tmp/scan_list
 
       - name: Run ASM discovery
-        # NO errexit — phases run independently; a non-zero from the
-        # `[[ -z ]] && continue` short-circuit must NOT abort the loop.
+        # NO errexit — phases run independently.
+        # CRITICAL: redirect /dev/null into the scanner. Otherwise it inherits
+        # stdin from this loop (bound to /tmp/scan_list), and any subprocess
+        # inside (testssl.sh, wafw00f, etc.) that reads stdin will consume the
+        # rest of our target list, killing the loop after iteration 1.
         shell: bash {0}
         run: |
           chmod +x scanner/asm-discover.sh
           while IFS= read -r tid; do
             if [[ -z "$tid" ]]; then continue; fi
             echo "::group::Scan target: $tid"
-            scanner/asm-discover.sh "$tid" || echo "::warning::Target $tid had non-zero exit"
+            scanner/asm-discover.sh "$tid" </dev/null || echo "::warning::Target $tid had non-zero exit"
             echo "::endgroup::"
           done < /tmp/scan_list
 
@@ -136,14 +139,15 @@ jobs:
           web/sync-data.sh
 
       - name: Commit scan results
-        # No errexit so we can handle push race conditions cleanly
+        # No errexit so we can handle push race conditions cleanly.
+        # Strategy: our just-scanned JSON is authoritative — older data on
+        # main is stale by definition. On push race, soft-reset to origin/main
+        # and re-commit our changes on top (effectively "always-win").
         shell: bash {0}
         run: |
           set -uo pipefail
 
           git add data/assets/ web/data/ || true
-
-          # Don't commit raw scan artifacts (gitignored, but belt-and-suspenders)
           git reset HEAD -- 'data/raw/**' 2>/dev/null || true
 
           if git diff --staged --quiet; then
@@ -151,26 +155,45 @@ jobs:
             exit 0
           fi
 
-          # Build commit message summarizing what changed
+          # Stash the changes so we can always re-stage them on top of latest main
+          git stash push --staged --keep-index --message "asm-scan-results-staging" || true
+          # Bring them back into the index
+          git stash pop 2>/dev/null || true
+          git add data/assets/ web/data/
+
           CHANGED=$(git diff --staged --name-only | grep -E '^data/assets/.*\.json$' | wc -l | tr -d ' ')
           TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
-          git commit -m "asm-scan: ${CHANGED} asset(s) updated · ${TIMESTAMP}" \
-                     -m "Triggered by: ${{ github.event_name }}" \
-                     -m "Workflow run: ${{ github.run_id }}"
+          MSG="asm-scan: ${CHANGED} asset(s) updated · ${TIMESTAMP}"
 
-          # Push with retry — main may have moved while the scan was running
-          # (concurrent workflow runs, dashboard form commits, etc.)
           for attempt in 1 2 3; do
+            # Make the commit (or amend on retry attempts)
+            if [ "$attempt" -eq 1 ]; then
+              git commit -m "$MSG" \
+                         -m "Triggered by: ${{ github.event_name }}" \
+                         -m "Workflow run: ${{ github.run_id }}"
+            fi
+
             if git push; then
               echo "Pushed on attempt $attempt"
               exit 0
             fi
-            echo "Push rejected on attempt $attempt — rebasing and retrying"
-            git pull --rebase --autostash origin main || {
-              echo "::error::Rebase failed — manual intervention required"
-              git rebase --abort 2>/dev/null || true
-              exit 1
-            }
+
+            echo "Push rejected on attempt $attempt — soft-resetting to origin/main and re-applying"
+            git fetch origin main
+            # Soft-reset: HEAD moves to origin/main, but our scan data stays staged
+            git reset --soft origin/main
+            git add data/assets/ web/data/
+
+            if git diff --staged --quiet; then
+              echo "No changes left to commit after soft-reset (concurrent scan covered it)."
+              exit 0
+            fi
+
+            # Re-create the commit on top of new origin/main
+            git commit -m "$MSG" \
+                       -m "Triggered by: ${{ github.event_name }}" \
+                       -m "Workflow run: ${{ github.run_id }}" \
+                       -m "Note: rebased onto origin/main (attempt $attempt)"
           done
 
           echo "::error::Push still failing after 3 retries"
