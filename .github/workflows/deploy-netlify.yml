@@ -1,0 +1,62 @@
+name: Deploy to Netlify
+
+# COMMANDsentry — auto-deploy the dashboard to Netlify on every push to main.
+# Runs after asm-discover commits new scan data, so the dashboard always
+# reflects the latest scans within ~30s of the bot's commit.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'data/assets/**'
+      - 'netlify.toml'
+      - '.github/workflows/deploy-netlify.yml'
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-netlify
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      NETLIFY_SITE_ID: 336fce39-1236-4838-8406-053d196f503f
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync asset JSON into web/data/
+        run: |
+          chmod +x web/sync-data.sh
+          web/sync-data.sh
+
+      - name: Install Netlify CLI
+        run: npm install -g netlify-cli@latest
+
+      - name: Deploy to Netlify (production)
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+        run: |
+          netlify deploy \
+            --site "$NETLIFY_SITE_ID" \
+            --dir web \
+            --prod \
+            --message "auto-deploy from ${GITHUB_SHA::7}"
+
+      - name: Summarize deploy
+        if: always()
+        run: |
+          echo "## Netlify deploy" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Site:** https://commandsentry-asm.netlify.app" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Triggered by:** ${{ github.event_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
