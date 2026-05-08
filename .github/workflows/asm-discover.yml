@@ -140,9 +140,8 @@ jobs:
 
       - name: Commit scan results
         # No errexit so we can handle push race conditions cleanly.
-        # Strategy: our just-scanned JSON is authoritative — older data on
-        # main is stale by definition. On push race, soft-reset to origin/main
-        # and re-commit our changes on top (effectively "always-win").
+        # Strategy on push race: soft-reset to origin/main and re-stage,
+        # since our just-scanned JSON is authoritative.
         shell: bash {0}
         run: |
           set -uo pipefail
@@ -155,24 +154,17 @@ jobs:
             exit 0
           fi
 
-          # Stash the changes so we can always re-stage them on top of latest main
-          git stash push --staged --keep-index --message "asm-scan-results-staging" || true
-          # Bring them back into the index
-          git stash pop 2>/dev/null || true
-          git add data/assets/ web/data/
-
           CHANGED=$(git diff --staged --name-only | grep -E '^data/assets/.*\.json$' | wc -l | tr -d ' ')
           TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
           MSG="asm-scan: ${CHANGED} asset(s) updated · ${TIMESTAMP}"
 
-          for attempt in 1 2 3; do
-            # Make the commit (or amend on retry attempts)
-            if [ "$attempt" -eq 1 ]; then
-              git commit -m "$MSG" \
-                         -m "Triggered by: ${{ github.event_name }}" \
-                         -m "Workflow run: ${{ github.run_id }}"
-            fi
+          # First commit
+          git commit -m "$MSG" \
+                     -m "Triggered by: ${{ github.event_name }}" \
+                     -m "Workflow run: ${{ github.run_id }}"
 
+          # Push with retry on race conditions
+          for attempt in 1 2 3; do
             if git push; then
               echo "Pushed on attempt $attempt"
               exit 0
@@ -180,7 +172,7 @@ jobs:
 
             echo "Push rejected on attempt $attempt — soft-resetting to origin/main and re-applying"
             git fetch origin main
-            # Soft-reset: HEAD moves to origin/main, but our scan data stays staged
+            # Soft-reset: HEAD moves to origin/main, working tree + index keep our scan data
             git reset --soft origin/main
             git add data/assets/ web/data/
 
