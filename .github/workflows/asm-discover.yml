@@ -136,7 +136,11 @@ jobs:
           web/sync-data.sh
 
       - name: Commit scan results
+        # No errexit so we can handle push race conditions cleanly
+        shell: bash {0}
         run: |
+          set -uo pipefail
+
           git add data/assets/ web/data/ || true
 
           # Don't commit raw scan artifacts (gitignored, but belt-and-suspenders)
@@ -153,7 +157,24 @@ jobs:
           git commit -m "asm-scan: ${CHANGED} asset(s) updated · ${TIMESTAMP}" \
                      -m "Triggered by: ${{ github.event_name }}" \
                      -m "Workflow run: ${{ github.run_id }}"
-          git push
+
+          # Push with retry — main may have moved while the scan was running
+          # (concurrent workflow runs, dashboard form commits, etc.)
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "Pushed on attempt $attempt"
+              exit 0
+            fi
+            echo "Push rejected on attempt $attempt — rebasing and retrying"
+            git pull --rebase --autostash origin main || {
+              echo "::error::Rebase failed — manual intervention required"
+              git rebase --abort 2>/dev/null || true
+              exit 1
+            }
+          done
+
+          echo "::error::Push still failing after 3 retries"
+          exit 1
 
       - name: Trigger Netlify deploy (chain past GITHUB_TOKEN anti-recursion)
         if: success()
