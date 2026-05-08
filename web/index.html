@@ -27,6 +27,7 @@
   <div class="meta">
     <span>Attack Surface Management</span>
     <span id="last-scan-summary">—</span>
+    <button id="add-target-btn" class="btn-accent" title="Add a new target to scan">＋ Add target</button>
     <button id="refresh-btn" class="btn-ghost" title="Reload data">↻ Reload</button>
   </div>
 </div>
@@ -59,6 +60,70 @@
     <div id="watch-list" class="grid"></div>
   </div>
 </main>
+
+<!-- Add Target modal -->
+<div id="add-modal" class="modal" aria-hidden="true">
+  <div class="modal-backdrop"></div>
+  <div class="modal-panel" role="dialog" aria-labelledby="add-modal-title" aria-modal="true">
+    <header class="modal-header">
+      <h3 id="add-modal-title">Add target</h3>
+      <button id="add-modal-close" class="btn-ghost" aria-label="Close">×</button>
+    </header>
+    <form id="add-target-form" class="modal-body" novalidate>
+      <div class="form-row">
+        <label for="t-type">Type<span class="req">*</span></label>
+        <div class="form-radio-row">
+          <label class="form-radio"><input type="radio" name="type" value="fqdn" checked /><span>FQDN</span></label>
+          <label class="form-radio"><input type="radio" name="type" value="apex" /><span>Apex domain</span></label>
+          <label class="form-radio"><input type="radio" name="type" value="ip" /><span>IP</span></label>
+          <label class="form-radio"><input type="radio" name="type" value="cidr" /><span>CIDR range</span></label>
+        </div>
+        <p class="form-help" id="t-type-help">Single hostname (e.g. <code>www.example.com</code>)</p>
+      </div>
+
+      <div class="form-row">
+        <label for="t-value">Value<span class="req">*</span></label>
+        <input id="t-value" name="value" type="text" autocomplete="off" placeholder="www.example.com" required />
+      </div>
+
+      <div class="form-row">
+        <label for="t-id">ID<span class="req">*</span></label>
+        <input id="t-id" name="id" type="text" autocomplete="off" placeholder="example-www" pattern="^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$" required />
+        <p class="form-help">Lowercase letters/digits/hyphens. Used as filename for the asset record.</p>
+      </div>
+
+      <div class="form-row">
+        <label for="t-owner">Owner</label>
+        <input id="t-owner" name="owner" type="text" autocomplete="off" value="command_digital" />
+      </div>
+
+      <div class="form-row">
+        <label for="t-tags">Tags</label>
+        <input id="t-tags" name="tags" type="text" autocomplete="off" placeholder="production, marketing" />
+        <p class="form-help">Comma-separated. Used for filtering in the dashboard.</p>
+      </div>
+
+      <div class="form-row">
+        <label for="t-notes">Notes</label>
+        <textarea id="t-notes" name="notes" rows="2" placeholder="optional context for this target"></textarea>
+      </div>
+
+      <div class="form-row form-attest">
+        <label class="form-checkbox">
+          <input id="t-scope" name="scope_verified" type="checkbox" required />
+          <span><strong>I attest</strong> that I own this target, control its DNS, or hold written authorization to scan it. Scanning targets without authorization may violate applicable law (CFAA in the US, similar elsewhere).</span>
+        </label>
+      </div>
+
+      <div id="add-form-feedback" class="form-feedback" hidden></div>
+
+      <div class="modal-footer">
+        <button type="button" id="add-cancel-btn" class="btn-ghost">Cancel</button>
+        <button type="submit" id="add-submit-btn" class="btn-accent">Add target & queue scan</button>
+      </div>
+    </form>
+  </div>
+</div>
 
 <!-- Asset detail drawer -->
 <div id="drawer" class="drawer" aria-hidden="true">

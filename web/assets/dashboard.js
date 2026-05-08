@@ -92,8 +92,21 @@
     document.getElementById("drawer-close").addEventListener("click", closeDrawer);
     document.querySelector(".drawer-backdrop").addEventListener("click", closeDrawer);
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") closeDrawer();
+      if (e.key === "Escape") { closeDrawer(); closeAddModal(); }
     });
+
+    // Add Target modal
+    document.getElementById("add-target-btn").addEventListener("click", openAddModal);
+    document.getElementById("add-modal-close").addEventListener("click", closeAddModal);
+    document.getElementById("add-cancel-btn").addEventListener("click", closeAddModal);
+    document.querySelector("#add-modal .modal-backdrop").addEventListener("click", closeAddModal);
+    document.getElementById("add-target-form").addEventListener("submit", handleAddSubmit);
+
+    // Auto-fill ID + update help text from value/type
+    document.querySelectorAll("input[name=\"type\"]").forEach((r) => {
+      r.addEventListener("change", updateTypeHelp);
+    });
+    document.getElementById("t-value").addEventListener("input", autofillId);
   }
 
   function setView(name) {
@@ -380,6 +393,117 @@
     const d = document.getElementById("drawer");
     d.classList.remove("open");
     d.setAttribute("aria-hidden", "true");
+  }
+
+  // ─── Add Target modal ──────────────────────────────────
+  function openAddModal() {
+    const m = document.getElementById("add-modal");
+    m.classList.add("open");
+    m.setAttribute("aria-hidden", "false");
+    document.getElementById("add-form-feedback").hidden = true;
+    document.getElementById("add-submit-btn").disabled = false;
+    setTimeout(() => document.getElementById("t-value").focus(), 50);
+  }
+
+  function closeAddModal() {
+    const m = document.getElementById("add-modal");
+    m.classList.remove("open");
+    m.setAttribute("aria-hidden", "true");
+  }
+
+  function updateTypeHelp() {
+    const t = document.querySelector("input[name=\"type\"]:checked")?.value || "fqdn";
+    const help = document.getElementById("t-type-help");
+    const valueInput = document.getElementById("t-value");
+    const placeholders = {
+      fqdn: { help: "Single hostname — scans just this host (e.g. <code>www.example.com</code>)",                        ph: "www.example.com" },
+      apex: { help: "Apex domain — enumerates all subdomains via passive sources, then deep-scans the apex itself",     ph: "example.com" },
+      ip:   { help: "Single IPv4 — port + service + nuclei exposure templates. No DNS context",                         ph: "198.51.100.42" },
+      cidr: { help: "CIDR range — naabu sweeps the range for live hosts. Use cautiously, rate-limit profile applies",   ph: "198.51.100.0/29" },
+    };
+    help.innerHTML = placeholders[t].help;
+    valueInput.placeholder = placeholders[t].ph;
+
+    // Different ID hint when CIDR / IP
+    const idInput = document.getElementById("t-id");
+    if (t === "ip" || t === "cidr") {
+      idInput.placeholder = t === "ip" ? "host-198-51-100-42" : "range-198-51-100-0-29";
+    } else {
+      idInput.placeholder = "example-www";
+    }
+  }
+
+  function autofillId() {
+    const idInput = document.getElementById("t-id");
+    if (idInput.dataset.touched === "true") return;
+    const value = document.getElementById("t-value").value.trim().toLowerCase();
+    const type  = document.querySelector("input[name=\"type\"]:checked")?.value || "fqdn";
+    if (!value) { idInput.value = ""; return; }
+    let id;
+    if (type === "fqdn" || type === "apex") {
+      id = value.replace(/^www\./, "").replace(/[^a-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+    } else {
+      id = value.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    }
+    idInput.value = id.slice(0, 64);
+  }
+
+  // mark id as user-touched once they type into it
+  document.addEventListener("DOMContentLoaded", () => {
+    const idInput = document.getElementById("t-id");
+    if (idInput) {
+      idInput.addEventListener("input", () => { idInput.dataset.touched = "true"; });
+    }
+  });
+
+  async function handleAddSubmit(e) {
+    e.preventDefault();
+    const submitBtn = document.getElementById("add-submit-btn");
+    const feedback  = document.getElementById("add-form-feedback");
+    feedback.hidden = false;
+    feedback.className = "form-feedback info";
+    feedback.textContent = "Submitting…";
+    submitBtn.disabled = true;
+
+    const form = e.target;
+    const fd = new FormData(form);
+    const payload = {
+      id:    (fd.get("id") || "").trim(),
+      type:  fd.get("type"),
+      value: (fd.get("value") || "").trim().toLowerCase(),
+      owner: (fd.get("owner") || "").trim(),
+      tags:  (fd.get("tags") || "").split(",").map((t) => t.trim()).filter(Boolean),
+      notes: (fd.get("notes") || "").trim(),
+      scope_verified: !!fd.get("scope_verified"),
+    };
+
+    try {
+      const r = await fetch("/api/add-target", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(payload),
+      });
+      const data = await r.json().catch(() => ({}));
+
+      if (r.ok && data.ok) {
+        feedback.className = "form-feedback ok";
+        feedback.innerHTML = `Target <code>${escapeHtml(payload.id)}</code> added. Commit: <code>${escapeHtml((data.commit?.sha || "").slice(0, 7))}</code>. Scan will run within ~10 min on the next cron tick, or trigger manually via the GitHub Actions tab.`;
+        // Reset form fields except scope_verified (require explicit re-attestation each time)
+        form.reset();
+        document.getElementById("t-id").dataset.touched = "false";
+        updateTypeHelp();
+        submitBtn.disabled = false;
+      } else {
+        feedback.className = "form-feedback err";
+        const detail = Array.isArray(data.details) ? data.details.join(" · ") : "";
+        feedback.textContent = `Error: ${data.error || r.statusText}${detail ? " — " + detail : ""}`;
+        submitBtn.disabled = false;
+      }
+    } catch (err) {
+      feedback.className = "form-feedback err";
+      feedback.textContent = "Network error: " + (err.message || "request failed");
+      submitBtn.disabled = false;
+    }
   }
 
   function section(title, body) {

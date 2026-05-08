@@ -5,9 +5,17 @@
 # under data/assets/ gets copied into web/data/ before publish.
 
 [build]
-  base    = "."
-  command = "bash web/sync-data.sh"
-  publish = "web"
+  base      = "."
+  command   = "bash web/sync-data.sh"
+  publish   = "web"
+  functions = "netlify/functions"
+
+# Friendly URL alias: /api/add-target → /.netlify/functions/add-target
+[[redirects]]
+  from   = "/api/add-target"
+  to     = "/.netlify/functions/add-target"
+  status = 200
+  force  = true
 
 # Lock down basics for an internal security tool.
 [[headers]]
