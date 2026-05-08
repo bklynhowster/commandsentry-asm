@@ -1,0 +1,160 @@
+name: ASM Discover
+
+# COMMANDsentry — scheduled discovery workflow.
+# Runs the lean ASM tool stack against every enabled target in data/targets.yml
+# and commits the resulting asset JSON back to the repo. Netlify auto-deploys
+# the dashboard from those committed files (Module 5).
+
+on:
+  # Every 6 hours. Each target's own `schedule:` field can refine cadence later.
+  schedule:
+    - cron: '0 */6 * * *'
+
+  # Manual trigger — gives a "Run workflow" button in the GitHub UI.
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target ID to scan (or "all")'
+        required: false
+        default: 'all'
+        type: string
+
+  # Re-scan when targets.yml changes — adding a new target triggers a scan.
+  push:
+    branches: [main]
+    paths:
+      - 'data/targets.yml'
+      - '.github/workflows/asm-discover.yml'
+      - 'scanner/**'
+
+# Need write access to commit scan results back.
+permissions:
+  contents: write
+
+# Don't pile up overlapping scans. A new run cancels the previous queued one.
+concurrency:
+  group: asm-discover
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90       # well under GH's 6h ceiling
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Need full history for git operations
+          fetch-depth: 0
+
+      - name: Configure git identity (for auto-commit)
+        run: |
+          git config user.name  "commandsentry-bot"
+          git config user.email "commandsentry-bot@users.noreply.github.com"
+
+      - name: Set up Go (required for ProjectDiscovery tools)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache Go binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/bin
+            ~/.commandsentry
+          key: ${{ runner.os }}-asm-tools-${{ hashFiles('scanner/install-tools.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-asm-tools-
+
+      - name: Install ASM tool stack
+        run: |
+          chmod +x scanner/install-tools.sh
+          scanner/install-tools.sh --platform ubuntu
+
+      - name: Verify tools installed
+        run: |
+          for t in subfinder dnsx httpx naabu fingerprintx nuclei wafw00f whois jq yq python3; do
+            if ! command -v "$t" >/dev/null 2>&1; then
+              echo "::error::Required tool not found: $t"
+              exit 1
+            fi
+          done
+          echo "All tools present."
+
+      - name: Determine targets to scan
+        id: targets
+        run: |
+          INPUT_TARGET="${{ github.event.inputs.target }}"
+          if [[ -z "$INPUT_TARGET" || "$INPUT_TARGET" == "all" ]]; then
+            echo "mode=all" >> "$GITHUB_OUTPUT"
+            yq '.targets[] | select(.enabled != false) | .id' data/targets.yml | tr -d '"' | head -50 > /tmp/scan_list
+          else
+            echo "mode=single" >> "$GITHUB_OUTPUT"
+            echo "$INPUT_TARGET" > /tmp/scan_list
+          fi
+          echo "Targets queued for scan:"
+          cat /tmp/scan_list
+
+      - name: Run ASM discovery
+        run: |
+          chmod +x scanner/asm-discover.sh
+          while IFS= read -r tid; do
+            [[ -z "$tid" ]] && continue
+            echo "::group::Scan target: $tid"
+            scanner/asm-discover.sh "$tid" || echo "::warning::Target $tid had non-zero exit"
+            echo "::endgroup::"
+          done < /tmp/scan_list
+
+      - name: Sync dashboard data
+        run: |
+          chmod +x web/sync-data.sh
+          web/sync-data.sh
+
+      - name: Commit scan results
+        run: |
+          git add data/assets/ web/data/ || true
+
+          # Don't commit raw scan artifacts (gitignored, but belt-and-suspenders)
+          git reset HEAD -- 'data/raw/**' 2>/dev/null || true
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          # Build commit message summarizing what changed
+          CHANGED=$(git diff --staged --name-only | grep -E '^data/assets/.*\.json$' | wc -l | tr -d ' ')
+          TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+          git commit -m "asm-scan: ${CHANGED} asset(s) updated · ${TIMESTAMP}" \
+                     -m "Triggered by: ${{ github.event_name }}" \
+                     -m "Workflow run: ${{ github.run_id }}"
+          git push
+
+      - name: Summarize run
+        if: always()
+        run: |
+          echo "## ASM scan summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Mode:** ${{ steps.targets.outputs.mode }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Triggered by:** ${{ github.event_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Assets scanned" >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r tid; do
+            [[ -z "$tid" ]] && continue
+            FILE="data/assets/${tid}.json"
+            if [[ -f "$FILE" ]]; then
+              EXP=$(jq '.exposures | length' "$FILE" 2>/dev/null || echo "?")
+              WATCH=$(jq '[.exposures[] | select(.severity=="watch")] | length' "$FILE" 2>/dev/null || echo "?")
+              echo "- \`${tid}\` — ${EXP} exposure(s), **${WATCH}** watch-severity" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- \`${tid}\` — no output file (scan may have failed)" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done < /tmp/scan_list

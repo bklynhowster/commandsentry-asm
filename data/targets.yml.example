@@ -1,0 +1,113 @@
+# COMMANDsentry — Target Configuration
+# ─────────────────────────────────────
+# Copy this file to targets.yml and edit. The real targets.yml is gitignored
+# so the operator's target list isn't broadcast publicly even within a private repo.
+#
+# The engine is target-agnostic. Any FQDN, IP, CIDR, or ASN can be a target
+# provided the operator has scope authorization. Examples below are Command
+# Digital because we're the first operator — replace freely.
+#
+# Every target MUST have scope_verified: true before it will scan.
+# Verification methods documented in docs/runbook.md.
+# The scanner refuses to run on targets where scope_verified is false.
+
+version: 1
+
+defaults:
+  schedule: nightly        # nightly | weekly | manual
+  profile: deep-probe       # which scan profile to run (see scanner/profiles/)
+  rate_limit: normal        # gentle | normal | aggressive
+  notify_on:
+    - critical
+    - high
+  retain_history_days: 365
+
+targets:
+  # ───── FQDN ─────────────────────────────────────────────────────
+  - id: commanddigital-www
+    type: fqdn
+    value: www.commanddigital.com
+    scope_verified: true
+    owner: command_digital
+    tags: [production, wordpress, public-facing, marketing]
+    notes: "WordPress 6.9.1 + Elementor + OceanWP, WP Engine + Cloudflare WAF"
+
+  - id: unimacgraphics-www
+    type: fqdn
+    value: unimacgraphics.com
+    scope_verified: true
+    owner: command_digital
+    tags: [production, wordpress, public-facing, subsidiary]
+    notes: "Pressable shared hosting, requires --resolve for SNI"
+    rate_limit: gentle      # override — Pressable IPs are sensitive
+
+  - id: ccc-test
+    type: fqdn
+    value: test.commandcommcentral.com
+    scope_verified: true
+    owner: command_digital
+    tags: [test, dotnet-core, fortinet-waf, internal-app]
+    notes: ".NET Core 8 + IIS, FortiGate WAF, hosted by SCI. Test env."
+    rate_limit: gentle      # override — FortiWeb sensitivity
+
+  # ───── APEX (auto-enumerate subdomains) ─────────────────────────
+  # - id: commanddigital-all
+  #   type: apex
+  #   value: commanddigital.com
+  #   scope_verified: true
+  #   owner: command_digital
+  #   tags: [discovery, subdomain-enum]
+  #   notes: "Discover any new subdomain auto-magically"
+  #   discover_only: false  # if true, just inventory new subs, don't scan them
+
+  # ───── BARE IP ─────────────────────────────────────────────────
+  # - id: pressable-shared-1
+  #   type: ip
+  #   value: 199.16.172.68
+  #   scope_verified: true   # only if we have authorization!
+  #   owner: pressable        # NOT us — would need explicit auth
+  #   tags: [shared-hosting, third-party]
+  #   notes: "Shared Pressable IP serving unimacgraphics — DO NOT scan without auth"
+
+  # ───── CIDR ────────────────────────────────────────────────────
+  # - id: command-public-range
+  #   type: cidr
+  #   value: 198.51.100.0/29
+  #   scope_verified: true
+  #   owner: command_digital
+  #   tags: [public-range]
+  #   notes: "Command's public /29 — sweep weekly for new exposures"
+  #   rate_limit: gentle
+  #   schedule: weekly
+
+  # ───── ASN (Phase 2) ───────────────────────────────────────────
+  # - id: command-asn
+  #   type: asn
+  #   value: AS00000
+  #   scope_verified: true
+  #   owner: command_digital
+
+  # ───── Examples of non-Command targets ────────────────────────
+  # The engine is target-agnostic. The operator decides what to scan,
+  # gated only by scope_verified. Examples (commented out):
+  #
+  # - id: client-acme-corp-www
+  #   type: fqdn
+  #   value: www.acme-corp.example
+  #   scope_verified: true       # backed by signed authorization letter
+  #   owner: acme_corp
+  #   tags: [client-engagement, contracted-pentest]
+  #   notes: "Authorized via SOW dated 2026-05-01, ref: ACME-2026-Q2"
+  #
+  # - id: research-target-public-bb
+  #   type: fqdn
+  #   value: bugbounty-target.example
+  #   scope_verified: true       # public bug bounty program in scope
+  #   owner: external_research
+  #   tags: [bug-bounty, hackerone]
+  #   notes: "HackerOne program scope confirmed 2026-05-01"
+
+# ───── DISCOVERED (auto-populated by apex/cidr scans) ────────────
+# When an apex or CIDR scan finds new assets, they get appended here
+# pending your approval. Set scope_verified: true to promote into rotation.
+discovered: []

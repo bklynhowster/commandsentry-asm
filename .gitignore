@@ -1,0 +1,46 @@
+# COMMANDsentry .gitignore
+# Keep target list, raw scan artifacts, and secrets out of git.
+# We DO commit normalized findings JSON (per D-004).
+
+# Real target list — keep only the .example
+data/targets.yml
+
+# Raw scan artifacts (text dumps, screenshots, large files)
+data/raw/
+scans/
+*.tar.gz
+*.zip
+
+# Scope authorization PDFs (signed letters for third-party targets)
+docs/scope-auth/
+
+# Secrets (defense in depth — Actions secrets handle this for real)
+.env
+.env.local
+*.pem
+*.key
+*credentials*
+*token*
+!*.example*
+
+# Local scratch
+.DS_Store
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+web/dist/
+web/build/
+
+# Local scanner debug output
+scanner/_debug/
+scanner/output/

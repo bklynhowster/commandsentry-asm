@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>COMMANDsentry ASM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
+  <link rel="stylesheet" href="./assets/command-brand.css" />
+</head>
+<body data-palette="ink-copper">
+
+<div class="top-nav">
+  <div class="brand">
+    <img src="./assets/logos/logo-white.png" alt="Command Companies" />
+    <span>COMMANDsentry</span>
+  </div>
+  <div class="divider"></div>
+  <div class="tabs">
+    <button class="tab active" data-view="inventory">Inventory</button>
+    <button class="tab" data-view="changed">What Changed</button>
+    <button class="tab" data-view="watch">Watch List</button>
+  </div>
+  <div class="spacer"></div>
+  <div class="meta">
+    <span>Attack Surface Management</span>
+    <span id="last-scan-summary">—</span>
+    <button id="refresh-btn" class="btn-ghost" title="Reload data">↻ Reload</button>
+  </div>
+</div>
+
+<main id="main">
+  <!-- Views injected by dashboard.js -->
+  <div id="view-loading" class="view active">
+    <div class="empty">Loading asset data…</div>
+  </div>
+
+  <div id="view-inventory" class="view">
+    <div class="view-header">
+      <h2>Inventory</h2>
+      <div class="view-controls">
+        <input id="filter-input" type="search" placeholder="Filter by host, tech, owner, tag…" />
+        <select id="filter-tag" class="select-pill"><option value="">All tags</option></select>
+        <select id="filter-owner" class="select-pill"><option value="">All owners</option></select>
+      </div>
+    </div>
+    <div id="inventory-grid" class="grid"></div>
+  </div>
+
+  <div id="view-changed" class="view">
+    <div class="view-header"><h2>What changed since last scan</h2></div>
+    <div id="changed-feed" class="feed"></div>
+  </div>
+
+  <div id="view-watch" class="view">
+    <div class="view-header"><h2>Watch list</h2><span class="muted">Assets with one or more <code>watch</code>-severity exposures</span></div>
+    <div id="watch-list" class="grid"></div>
+  </div>
+</main>
+
+<!-- Asset detail drawer -->
+<div id="drawer" class="drawer" aria-hidden="true">
+  <div class="drawer-backdrop"></div>
+  <aside class="drawer-panel">
+    <header class="drawer-header">
+      <button id="drawer-close" class="btn-ghost" aria-label="Close">×</button>
+      <h3 id="drawer-title">Asset</h3>
+    </header>
+    <div id="drawer-body" class="drawer-body"></div>
+  </aside>
+</div>
+
+<footer class="bottom">
+  <span class="muted">COMMANDsentry · ASM · Self-hosted</span>
+</footer>
+
+<script src="./assets/dashboard.js"></script>
+</body>
+</html>

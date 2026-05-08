@@ -1,0 +1,392 @@
+{
+  "schema_version": "1.0",
+  "asset": {
+    "id": "commanddigital-www",
+    "type": "fqdn",
+    "value": "www.commanddigital.com",
+    "owner": "unknown",
+    "tags": [],
+    "notes": "",
+    "discovered_via": "manual"
+  },
+  "scan": {
+    "id": "scan_2026-05-08T00:30:56Z_e2bc4166",
+    "started_at": "2026-05-08T00:30:56Z",
+    "completed_at": "2026-05-08T00:32:08Z",
+    "duration_seconds": 72,
+    "engine_version": "1.0.0",
+    "tools_run": [
+      "dnsx",
+      "naabu",
+      "httpx",
+      "wafw00f",
+      "nuclei-exposure",
+      "whois"
+    ],
+    "tool_versions": {}
+  },
+  "inventory": {
+    "identity": {
+      "ip_addresses": [
+        "141.193.213.20",
+        "141.193.213.21"
+      ],
+      "reverse_dns": {},
+      "asn": null,
+      "asn_org": null,
+      "registrar": null,
+      "whois_creation": null,
+      "whois_expiry": null,
+      "geo": {
+        "country": null,
+        "city": null
+      }
+    },
+    "dns": {
+      "a": [
+        "141.193.213.20",
+        "141.193.213.21"
+      ],
+      "aaaa": [],
+      "cname": "4fdscza9fq8d.wpeproxy.com",
+      "mx": [],
+      "ns": [],
+      "txt": [],
+      "spf": null,
+      "dmarc": null,
+      "dkim_selectors_found": [],
+      "dnssec": false
+    },
+    "subdomains": [
+      {
+        "name": "www.commanddigital.com",
+        "alive": true,
+        "discovered": "2026-05-08T00:34:28Z"
+      }
+    ],
+    "ports": [
+      {
+        "port": 80,
+        "protocol": "tcp",
+        "state": "open"
+      },
+      {
+        "port": 443,
+        "protocol": "tcp",
+        "state": "open"
+      },
+      {
+        "port": 8080,
+        "protocol": "tcp",
+        "state": "open"
+      },
+      {
+        "port": 8443,
+        "protocol": "tcp",
+        "state": "open"
+      }
+    ],
+    "services": [],
+    "http": {
+      "live": true,
+      "status_code": 200,
+      "title": "Command Digital \u2013 Commanding Attention Through Smart Strategy and Unforgettable Design",
+      "server": "cloudflare",
+      "powered_by": null,
+      "technologies": [
+        {
+          "name": "Cloudflare",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "Cloudflare Bot Management",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "Elementor:2.8.3",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "HTTP/3",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "Lightbox",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "Magnific Popup:1.7.4",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "MySQL",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "PHP",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "Swiper",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "WP Engine",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "WordPress",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "imagesLoaded:5.0.0",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "jQuery",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "jQuery Migrate:3.4.1",
+          "version": null,
+          "category": null
+        }
+      ],
+      "headers_present": [],
+      "headers_missing": [
+        "Content-Security-Policy",
+        "Strict-Transport-Security",
+        "X-Frame-Options",
+        "X-Content-Type-Options",
+        "Referrer-Policy",
+        "Permissions-Policy",
+        "X-XSS-Protection"
+      ],
+      "cookies": []
+    },
+    "tls": {
+      "issuer": null,
+      "subject": null,
+      "san": [],
+      "not_before": null,
+      "not_after": null,
+      "days_until_expiry": null,
+      "protocols_supported": [],
+      "weak_ciphers": [],
+      "self_signed": false
+    },
+    "waf": {
+      "detected": true,
+      "vendor": "Cloudflare",
+      "confidence": "high"
+    }
+  },
+  "exposures": [
+    {
+      "id": "E-001",
+      "type": "missing_dmarc",
+      "category": "email",
+      "severity": "notice",
+      "title": "No DMARC record published",
+      "detail": "Domain remains spoofable beyond what SPF protects against.",
+      "evidence": "_dmarc TXT record absent",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    },
+    {
+      "id": "E-002",
+      "type": "missing_dkim",
+      "category": "email",
+      "severity": "notice",
+      "title": "No DKIM selector records found",
+      "detail": "Outbound mail is unsigned.",
+      "evidence": "Selectors probed: google, default, selector1, selector2, dkim, k1",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    },
+    {
+      "id": "E-003",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: Content-Security-Policy",
+      "detail": "Response from / does not include Content-Security-Policy.",
+      "evidence": "GET / \u2192 headers do not contain Content-Security-Policy",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    },
+    {
+      "id": "E-004",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: Strict-Transport-Security",
+      "detail": "Response from / does not include Strict-Transport-Security.",
+      "evidence": "GET / \u2192 headers do not contain Strict-Transport-Security",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    },
+    {
+      "id": "E-005",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: X-Frame-Options",
+      "detail": "Response from / does not include X-Frame-Options.",
+      "evidence": "GET / \u2192 headers do not contain X-Frame-Options",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    },
+    {
+      "id": "E-006",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: X-Content-Type-Options",
+      "detail": "Response from / does not include X-Content-Type-Options.",
+      "evidence": "GET / \u2192 headers do not contain X-Content-Type-Options",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    },
+    {
+      "id": "E-007",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: Referrer-Policy",
+      "detail": "Response from / does not include Referrer-Policy.",
+      "evidence": "GET / \u2192 headers do not contain Referrer-Policy",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    },
+    {
+      "id": "E-008",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: Permissions-Policy",
+      "detail": "Response from / does not include Permissions-Policy.",
+      "evidence": "GET / \u2192 headers do not contain Permissions-Policy",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    },
+    {
+      "id": "E-009",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: X-XSS-Protection",
+      "detail": "Response from / does not include X-XSS-Protection.",
+      "evidence": "GET / \u2192 headers do not contain X-XSS-Protection",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    },
+    {
+      "id": "E-010",
+      "type": "exposed_debug_endpoint",
+      "category": "exposure",
+      "severity": "notice",
+      "title": "Missing Cookie SameSite Strict",
+      "detail": "Identified cookies that lacked the samesite=strict attribute, which prevented enforcement of restrictions on cross-domain cookie transmission.\n",
+      "evidence": "https://www.commanddigital.com (template: missing-cookie-samesite-strict)",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    },
+    {
+      "id": "E-011",
+      "type": "exposed_debug_endpoint",
+      "category": "exposure",
+      "severity": "notice",
+      "title": "HTTP Missing Security Headers",
+      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
+      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    },
+    {
+      "id": "E-012",
+      "type": "exposed_debug_endpoint",
+      "category": "exposure",
+      "severity": "notice",
+      "title": "HTTP Missing Security Headers",
+      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
+      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    },
+    {
+      "id": "E-013",
+      "type": "exposed_debug_endpoint",
+      "category": "exposure",
+      "severity": "notice",
+      "title": "HTTP Missing Security Headers",
+      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
+      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    },
+    {
+      "id": "E-014",
+      "type": "exposed_debug_endpoint",
+      "category": "exposure",
+      "severity": "notice",
+      "title": "Missing Subresource Integrity",
+      "detail": "Checks if external script and stylesheet tags in the HTML response are missing the Subresource Integrity (SRI) attribute.\n",
+      "evidence": "https://www.commanddigital.com/ (template: missing-sri)",
+      "first_seen": "2026-05-08T00:34:28Z",
+      "last_seen": "2026-05-08T00:34:28Z",
+      "status": "open"
+    }
+  ],
+  "deltas": {
+    "since_scan": null,
+    "added": {
+      "subdomains": [],
+      "ports": [],
+      "exposures": []
+    },
+    "removed": {
+      "subdomains": [],
+      "ports": [],
+      "exposures": []
+    },
+    "changed": {
+      "tech": []
+    }
+  },
+  "history": [
+    {
+      "scan_id": "scan_2026-05-08T00:30:56Z_e2bc4166",
+      "live": true,
+      "ports_open": 4,
+      "subdomains_alive": 1,
+      "exposures_total": 14
+    }
+  ]
+}
