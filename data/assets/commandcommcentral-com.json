@@ -1,0 +1,283 @@
+{
+  "schema_version": "1.0",
+  "asset": {
+    "id": "commandcommcentral-com",
+    "type": "fqdn",
+    "value": "commandcommcentral.com",
+    "owner": "unknown",
+    "tags": [],
+    "notes": "",
+    "discovered_via": "manual"
+  },
+  "scan": {
+    "id": "scan_2026-05-08T23:38:22Z_8c27cd49",
+    "started_at": "2026-05-08T23:38:22Z",
+    "completed_at": "2026-05-08T23:45:19Z",
+    "duration_seconds": 417,
+    "engine_version": "1.0.0",
+    "tools_run": [
+      "dnsx",
+      "naabu",
+      "httpx",
+      "wafw00f",
+      "testssl",
+      "nuclei-exposure",
+      "whois"
+    ],
+    "tool_versions": {}
+  },
+  "inventory": {
+    "identity": {
+      "ip_addresses": [
+        "24.38.70.5"
+      ],
+      "reverse_dns": {},
+      "asn": null,
+      "asn_org": null,
+      "registrar": null,
+      "whois_creation": null,
+      "whois_expiry": null,
+      "geo": {
+        "country": null,
+        "city": null
+      }
+    },
+    "dns": {
+      "a": [
+        "24.38.70.5"
+      ],
+      "aaaa": [],
+      "cname": null,
+      "mx": [],
+      "ns": [
+        "ns01.commandcommcentral.com"
+      ],
+      "txt": [],
+      "spf": null,
+      "dmarc": null,
+      "dkim_selectors_found": [],
+      "dnssec": false
+    },
+    "subdomains": [
+      {
+        "name": "commandcommcentral.com",
+        "alive": true,
+        "discovered": "2026-05-08T23:45:19Z"
+      }
+    ],
+    "ports": [
+      {
+        "port": 80,
+        "protocol": "tcp",
+        "state": "open"
+      },
+      {
+        "port": 443,
+        "protocol": "tcp",
+        "state": "open"
+      }
+    ],
+    "services": [],
+    "http": {
+      "live": true,
+      "status_code": 200,
+      "title": "CommandCommCentral",
+      "server": null,
+      "powered_by": null,
+      "technologies": [
+        {
+          "name": "HSTS",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "Microsoft ASP.NET",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "Microsoft Power BI",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "Modernizr",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "jQuery",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "jQuery UI",
+          "version": null,
+          "category": null
+        }
+      ],
+      "headers_present": [],
+      "headers_missing": [
+        "Content-Security-Policy",
+        "Strict-Transport-Security",
+        "X-Frame-Options",
+        "X-Content-Type-Options",
+        "Referrer-Policy",
+        "Permissions-Policy",
+        "X-XSS-Protection"
+      ],
+      "cookies": []
+    },
+    "tls": {
+      "issuer": null,
+      "subject": null,
+      "san": [],
+      "not_before": null,
+      "not_after": null,
+      "days_until_expiry": null,
+      "protocols_supported": [],
+      "weak_ciphers": [],
+      "self_signed": false
+    },
+    "waf": {
+      "detected": true,
+      "vendor": "FortiWeb",
+      "confidence": "high"
+    }
+  },
+  "exposures": [
+    {
+      "id": "E-001",
+      "type": "missing_dmarc",
+      "category": "email",
+      "severity": "notice",
+      "title": "No DMARC record published",
+      "detail": "Domain remains spoofable beyond what SPF protects against.",
+      "evidence": "_dmarc TXT record absent",
+      "first_seen": "2026-05-08T23:45:19Z",
+      "last_seen": "2026-05-08T23:45:19Z",
+      "status": "open"
+    },
+    {
+      "id": "E-002",
+      "type": "missing_dkim",
+      "category": "email",
+      "severity": "notice",
+      "title": "No DKIM selector records found",
+      "detail": "Outbound mail is unsigned.",
+      "evidence": "Selectors probed: google, default, selector1, selector2, dkim, k1",
+      "first_seen": "2026-05-08T23:45:19Z",
+      "last_seen": "2026-05-08T23:45:19Z",
+      "status": "open"
+    },
+    {
+      "id": "E-003",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: Content-Security-Policy",
+      "detail": "Response from / does not include Content-Security-Policy.",
+      "evidence": "GET / \u2192 headers do not contain Content-Security-Policy",
+      "first_seen": "2026-05-08T23:45:19Z",
+      "last_seen": "2026-05-08T23:45:19Z",
+      "status": "open"
+    },
+    {
+      "id": "E-004",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: Strict-Transport-Security",
+      "detail": "Response from / does not include Strict-Transport-Security.",
+      "evidence": "GET / \u2192 headers do not contain Strict-Transport-Security",
+      "first_seen": "2026-05-08T23:45:19Z",
+      "last_seen": "2026-05-08T23:45:19Z",
+      "status": "open"
+    },
+    {
+      "id": "E-005",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: X-Frame-Options",
+      "detail": "Response from / does not include X-Frame-Options.",
+      "evidence": "GET / \u2192 headers do not contain X-Frame-Options",
+      "first_seen": "2026-05-08T23:45:19Z",
+      "last_seen": "2026-05-08T23:45:19Z",
+      "status": "open"
+    },
+    {
+      "id": "E-006",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: X-Content-Type-Options",
+      "detail": "Response from / does not include X-Content-Type-Options.",
+      "evidence": "GET / \u2192 headers do not contain X-Content-Type-Options",
+      "first_seen": "2026-05-08T23:45:19Z",
+      "last_seen": "2026-05-08T23:45:19Z",
+      "status": "open"
+    },
+    {
+      "id": "E-007",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: Referrer-Policy",
+      "detail": "Response from / does not include Referrer-Policy.",
+      "evidence": "GET / \u2192 headers do not contain Referrer-Policy",
+      "first_seen": "2026-05-08T23:45:19Z",
+      "last_seen": "2026-05-08T23:45:19Z",
+      "status": "open"
+    },
+    {
+      "id": "E-008",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: Permissions-Policy",
+      "detail": "Response from / does not include Permissions-Policy.",
+      "evidence": "GET / \u2192 headers do not contain Permissions-Policy",
+      "first_seen": "2026-05-08T23:45:19Z",
+      "last_seen": "2026-05-08T23:45:19Z",
+      "status": "open"
+    },
+    {
+      "id": "E-009",
+      "type": "missing_security_header",
+      "category": "headers",
+      "severity": "notice",
+      "title": "Missing: X-XSS-Protection",
+      "detail": "Response from / does not include X-XSS-Protection.",
+      "evidence": "GET / \u2192 headers do not contain X-XSS-Protection",
+      "first_seen": "2026-05-08T23:45:19Z",
+      "last_seen": "2026-05-08T23:45:19Z",
+      "status": "open"
+    }
+  ],
+  "deltas": {
+    "since_scan": null,
+    "added": {
+      "subdomains": [],
+      "ports": [],
+      "exposures": []
+    },
+    "removed": {
+      "subdomains": [],
+      "ports": [],
+      "exposures": []
+    },
+    "changed": {
+      "tech": []
+    }
+  },
+  "history": [
+    {
+      "scan_id": "scan_2026-05-08T23:38:22Z_8c27cd49",
+      "live": true,
+      "ports_open": 2,
+      "subdomains_alive": 1,
+      "exposures_total": 9
+    }
+  ]
+}

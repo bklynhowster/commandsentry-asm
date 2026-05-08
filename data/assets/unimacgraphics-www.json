@@ -1,19 +1,19 @@
 {
   "schema_version": "1.0",
   "asset": {
-    "id": "commanddigital-www",
+    "id": "unimacgraphics-www",
     "type": "fqdn",
-    "value": "www.commanddigital.com",
+    "value": "unimacgraphics.com",
     "owner": "unknown",
     "tags": [],
     "notes": "",
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-08T23:25:51Z_8418417e",
-    "started_at": "2026-05-08T23:25:51Z",
-    "completed_at": "2026-05-08T23:33:36Z",
-    "duration_seconds": 465,
+    "id": "scan_2026-05-08T23:33:36Z_f85cb086",
+    "started_at": "2026-05-08T23:33:36Z",
+    "completed_at": "2026-05-08T23:36:08Z",
+    "duration_seconds": 152,
     "engine_version": "1.0.0",
     "tools_run": [
       "dnsx",
@@ -29,8 +29,8 @@
   "inventory": {
     "identity": {
       "ip_addresses": [
-        "141.193.213.20",
-        "141.193.213.21"
+        "199.16.172.68",
+        "199.16.173.113"
       ],
       "reverse_dns": {},
       "asn": null,
@@ -45,24 +45,34 @@
     },
     "dns": {
       "a": [
-        "141.193.213.21",
-        "141.193.213.20"
+        "199.16.172.68",
+        "199.16.173.113"
       ],
       "aaaa": [],
-      "cname": "4fdscza9fq8d.wpeproxy.com",
+      "cname": null,
       "mx": [],
-      "ns": [],
-      "txt": [],
-      "spf": null,
+      "ns": [
+        "ns35.domaincontrol.com",
+        "ns36.domaincontrol.com"
+      ],
+      "txt": [
+        "2o6gse9gno2mv04ik7f14kssfq",
+        "k15vdsovvom4v46fi4r4rivts6",
+        "sek942qd3nt1s4lqh1h2ovmmai",
+        "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+        "MS=ms33269626",
+        "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1"
+      ],
+      "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
       "dmarc": null,
       "dkim_selectors_found": [],
       "dnssec": false
     },
     "subdomains": [
       {
-        "name": "www.commanddigital.com",
+        "name": "unimacgraphics.com",
         "alive": true,
-        "discovered": "2026-05-08T23:33:36Z"
+        "discovered": "2026-05-08T23:36:08Z"
       }
     ],
     "ports": [
@@ -75,38 +85,33 @@
         "port": 443,
         "protocol": "tcp",
         "state": "open"
-      },
-      {
-        "port": 8080,
-        "protocol": "tcp",
-        "state": "open"
-      },
-      {
-        "port": 8443,
-        "protocol": "tcp",
-        "state": "open"
       }
     ],
     "services": [],
     "http": {
       "live": true,
       "status_code": 200,
-      "title": "Command Digital \u2013 Commanding Attention Through Smart Strategy and Unforgettable Design",
-      "server": "cloudflare",
+      "title": "Home - Unimac, a Command Company",
+      "server": "nginx",
       "powered_by": null,
       "technologies": [
         {
-          "name": "Cloudflare",
+          "name": "Bootstrap:5.1.3",
           "version": null,
           "category": null
         },
         {
-          "name": "Cloudflare Bot Management",
+          "name": "Font Awesome",
           "version": null,
           "category": null
         },
         {
-          "name": "Elementor:2.8.3",
+          "name": "Google Tag Manager",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "HSTS",
           "version": null,
           "category": null
         },
@@ -116,12 +121,7 @@
           "category": null
         },
         {
-          "name": "Lightbox",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Magnific Popup:1.7.4",
+          "name": "Imagely NextGEN Gallery",
           "version": null,
           "category": null
         },
@@ -131,17 +131,22 @@
           "category": null
         },
         {
+          "name": "Nginx",
+          "version": null,
+          "category": null
+        },
+        {
           "name": "PHP",
           "version": null,
           "category": null
         },
         {
-          "name": "Swiper",
+          "name": "Slider Revolution:6.7.54",
           "version": null,
           "category": null
         },
         {
-          "name": "WP Engine",
+          "name": "WPMU DEV Smush:4.0.3",
           "version": null,
           "category": null
         },
@@ -151,7 +156,7 @@
           "category": null
         },
         {
-          "name": "imagesLoaded:5.0.0",
+          "name": "Yoast SEO:27.5",
           "version": null,
           "category": null
         },
@@ -162,6 +167,21 @@
         },
         {
           "name": "jQuery Migrate:3.4.1",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "jsDelivr",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "wp.cloud",
+          "version": null,
+          "category": null
+        },
+        {
+          "name": "wpBakery",
           "version": null,
           "category": null
         }
@@ -191,7 +211,7 @@
     },
     "waf": {
       "detected": true,
-      "vendor": "Cloudflare",
+      "vendor": "Generic",
       "confidence": "high"
     }
   },
@@ -204,8 +224,8 @@
       "title": "No DMARC record published",
       "detail": "Domain remains spoofable beyond what SPF protects against.",
       "evidence": "_dmarc TXT record absent",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:36:08Z",
+      "last_seen": "2026-05-08T23:36:08Z",
       "status": "open"
     },
     {
@@ -216,8 +236,8 @@
       "title": "No DKIM selector records found",
       "detail": "Outbound mail is unsigned.",
       "evidence": "Selectors probed: google, default, selector1, selector2, dkim, k1",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:36:08Z",
+      "last_seen": "2026-05-08T23:36:08Z",
       "status": "open"
     },
     {
@@ -228,8 +248,8 @@
       "title": "Missing: Content-Security-Policy",
       "detail": "Response from / does not include Content-Security-Policy.",
       "evidence": "GET / \u2192 headers do not contain Content-Security-Policy",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:36:08Z",
+      "last_seen": "2026-05-08T23:36:08Z",
       "status": "open"
     },
     {
@@ -240,8 +260,8 @@
       "title": "Missing: Strict-Transport-Security",
       "detail": "Response from / does not include Strict-Transport-Security.",
       "evidence": "GET / \u2192 headers do not contain Strict-Transport-Security",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:36:08Z",
+      "last_seen": "2026-05-08T23:36:08Z",
       "status": "open"
     },
     {
@@ -252,8 +272,8 @@
       "title": "Missing: X-Frame-Options",
       "detail": "Response from / does not include X-Frame-Options.",
       "evidence": "GET / \u2192 headers do not contain X-Frame-Options",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:36:08Z",
+      "last_seen": "2026-05-08T23:36:08Z",
       "status": "open"
     },
     {
@@ -264,8 +284,8 @@
       "title": "Missing: X-Content-Type-Options",
       "detail": "Response from / does not include X-Content-Type-Options.",
       "evidence": "GET / \u2192 headers do not contain X-Content-Type-Options",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:36:08Z",
+      "last_seen": "2026-05-08T23:36:08Z",
       "status": "open"
     },
     {
@@ -276,8 +296,8 @@
       "title": "Missing: Referrer-Policy",
       "detail": "Response from / does not include Referrer-Policy.",
       "evidence": "GET / \u2192 headers do not contain Referrer-Policy",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:36:08Z",
+      "last_seen": "2026-05-08T23:36:08Z",
       "status": "open"
     },
     {
@@ -288,8 +308,8 @@
       "title": "Missing: Permissions-Policy",
       "detail": "Response from / does not include Permissions-Policy.",
       "evidence": "GET / \u2192 headers do not contain Permissions-Policy",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:36:08Z",
+      "last_seen": "2026-05-08T23:36:08Z",
       "status": "open"
     },
     {
@@ -300,8 +320,8 @@
       "title": "Missing: X-XSS-Protection",
       "detail": "Response from / does not include X-XSS-Protection.",
       "evidence": "GET / \u2192 headers do not contain X-XSS-Protection",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:36:08Z",
+      "last_seen": "2026-05-08T23:36:08Z",
       "status": "open"
     },
     {
@@ -309,11 +329,11 @@
       "type": "exposed_debug_endpoint",
       "category": "exposure",
       "severity": "notice",
-      "title": "Missing Cookie SameSite Strict",
-      "detail": "Identified cookies that lacked the samesite=strict attribute, which prevented enforcement of restrictions on cross-domain cookie transmission.\n",
-      "evidence": "https://www.commanddigital.com (template: missing-cookie-samesite-strict)",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "title": "Microsoft Azure Domain Tenant ID - Detect",
+      "detail": "Microsoft Azure Domain Tenant ID was detected.",
+      "evidence": "https://login.microsoftonline.com:443/unimacgraphics.com/v2.0/.well-known/openid-configuration (template: azure-domain-tenant)",
+      "first_seen": "2026-05-08T23:36:08Z",
+      "last_seen": "2026-05-08T23:36:08Z",
       "status": "open"
     },
     {
@@ -321,65 +341,25 @@
       "type": "exposed_debug_endpoint",
       "category": "exposure",
       "severity": "notice",
-      "title": "Missing Subresource Integrity",
-      "detail": "Checks if external script and stylesheet tags in the HTML response are missing the Subresource Integrity (SRI) attribute.\n",
-      "evidence": "https://www.commanddigital.com/ (template: missing-sri)",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
-      "status": "open"
-    },
-    {
-      "id": "E-012",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
-      "status": "open"
-    },
-    {
-      "id": "E-013",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
-      "status": "open"
-    },
-    {
-      "id": "E-014",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "title": "WordPress Readme File",
+      "detail": "",
+      "evidence": "https://unimacgraphics.com/readme.html (template: wordpress-readme-file)",
+      "first_seen": "2026-05-08T23:36:08Z",
+      "last_seen": "2026-05-08T23:36:08Z",
       "status": "open"
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-08T18:01:24Z_174472f1",
+    "since_scan": null,
     "added": {
       "subdomains": [],
       "ports": [],
-      "exposures": [
-        "E-011"
-      ]
+      "exposures": []
     },
     "removed": {
       "subdomains": [],
       "ports": [],
-      "exposures": [
-        "E-010"
-      ]
+      "exposures": []
     },
     "changed": {
       "tech": []
@@ -387,74 +367,11 @@
   },
   "history": [
     {
-      "scan_id": "scan_2026-05-08T00:30:56Z_e2bc4166",
+      "scan_id": "scan_2026-05-08T23:33:36Z_f85cb086",
       "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 14
-    },
-    {
-      "scan_id": "scan_2026-05-08T12:17:49Z_d424d519",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 13
-    },
-    {
-      "scan_id": "scan_2026-05-08T14:06:40Z_ac4e408a",
-      "live": true,
-      "ports_open": 4,
+      "ports_open": 2,
       "subdomains_alive": 1,
       "exposures_total": 11
-    },
-    {
-      "scan_id": "scan_2026-05-08T15:12:48Z_cc86e892",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 22
-    },
-    {
-      "scan_id": "scan_2026-05-08T15:43:54Z_ec6f6b38",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 15
-    },
-    {
-      "scan_id": "scan_2026-05-08T16:14:24Z_86a8df18",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 14
-    },
-    {
-      "scan_id": "scan_2026-05-08T16:37:08Z_7d985c45",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 11
-    },
-    {
-      "scan_id": "scan_2026-05-08T17:20:37Z_774a3663",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 13
-    },
-    {
-      "scan_id": "scan_2026-05-08T18:01:24Z_174472f1",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 14
-    },
-    {
-      "scan_id": "scan_2026-05-08T23:25:51Z_8418417e",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 14
     }
   ]
 }
