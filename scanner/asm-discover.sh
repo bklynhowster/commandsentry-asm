@@ -191,6 +191,7 @@ discover_fqdn() {
   naabu -list "$wd/_resolved_ips.txt" \
     -top-ports "${NAABU_TOP_PORTS:-1000}" \
     -rate "${NAABU_RATE:-1000}" \
+    -scan-type CONNECT \
     -silent -json \
     > "$wd/naabu.json" 2> "$wd/naabu.err" || warn "naabu had errors"
 
@@ -278,6 +279,7 @@ discover_ip() {
   naabu -host "$ip" \
     -top-ports "${NAABU_TOP_PORTS:-1000}" \
     -rate "${NAABU_RATE:-1000}" \
+    -scan-type CONNECT \
     -silent -json \
     > "$wd/naabu.json" 2> "$wd/naabu.err" || warn "naabu had errors"
 
@@ -322,6 +324,7 @@ discover_cidr() {
   naabu -host "$cidr" \
     -top-ports 100 \
     -rate "${NAABU_RATE:-1000}" \
+    -scan-type CONNECT \
     -silent -json \
     > "$wd/naabu_cidr.json" 2> "$wd/naabu_cidr.err" || warn "naabu CIDR sweep had errors"
 
