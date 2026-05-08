@@ -118,10 +118,13 @@ jobs:
           cat /tmp/scan_list
 
       - name: Run ASM discovery
+        # NO errexit — phases run independently; a non-zero from the
+        # `[[ -z ]] && continue` short-circuit must NOT abort the loop.
+        shell: bash {0}
         run: |
           chmod +x scanner/asm-discover.sh
           while IFS= read -r tid; do
-            [[ -z "$tid" ]] && continue
+            if [[ -z "$tid" ]]; then continue; fi
             echo "::group::Scan target: $tid"
             scanner/asm-discover.sh "$tid" || echo "::warning::Target $tid had non-zero exit"
             echo "::endgroup::"
