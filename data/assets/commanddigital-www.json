@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "2.0",
   "asset": {
     "id": "commanddigital-www",
     "type": "fqdn",
@@ -10,443 +10,263 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-09T08:05:20Z_d4668eb2",
-    "started_at": "2026-05-09T08:05:20Z",
-    "completed_at": "2026-05-09T08:13:16Z",
-    "duration_seconds": 476,
-    "engine_version": "1.0.0",
+    "id": "scan_2026-05-09T13:05:58Z_7d1fe284",
+    "started_at": "2026-05-09T13:05:58Z",
+    "completed_at": "2026-05-09T13:09:12Z",
+    "duration_seconds": 194,
+    "engine_version": "2.0.0",
+    "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
       "dnsx",
       "naabu",
       "httpx",
       "wafw00f",
       "testssl",
-      "nuclei-exposure",
       "whois"
-    ],
-    "tool_versions": {}
+    ]
   },
-  "inventory": {
-    "identity": {
-      "ip_addresses": [
-        "141.193.213.20",
-        "141.193.213.21"
-      ],
-      "reverse_dns": {},
-      "asn": null,
-      "asn_org": null,
-      "registrar": null,
-      "whois_creation": null,
-      "whois_expiry": null,
-      "geo": {
-        "country": null,
-        "city": null
-      }
-    },
-    "dns": {
-      "a": [
-        "141.193.213.21",
-        "141.193.213.20"
-      ],
-      "aaaa": [],
-      "cname": "4fdscza9fq8d.wpeproxy.com",
-      "mx": [],
-      "ns": [],
-      "txt": [],
-      "spf": null,
-      "dmarc": null,
-      "dkim_selectors_found": [],
-      "dnssec": false
-    },
-    "subdomains": [
-      {
-        "name": "www.commanddigital.com",
-        "alive": true,
-        "discovered": "2026-05-09T08:13:16Z"
-      }
-    ],
-    "ports": [
-      {
-        "port": 80,
-        "protocol": "tcp",
-        "state": "open"
-      },
-      {
-        "port": 443,
-        "protocol": "tcp",
-        "state": "open"
-      },
-      {
-        "port": 8080,
-        "protocol": "tcp",
-        "state": "open"
-      },
-      {
-        "port": 8443,
-        "protocol": "tcp",
-        "state": "open"
-      }
-    ],
-    "services": [],
-    "http": {
-      "live": true,
-      "status_code": 200,
-      "title": "Command Digital \u2013 Commanding Attention Through Smart Strategy and Unforgettable Design",
-      "server": "cloudflare",
-      "powered_by": null,
-      "technologies": [
-        {
-          "name": "Cloudflare",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Cloudflare Bot Management",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Elementor:2.8.3",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "HTTP/3",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Lightbox",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Magnific Popup:1.7.4",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "MySQL",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "PHP",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Swiper",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "WP Engine",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "WordPress",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "imagesLoaded:5.0.0",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "jQuery",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "jQuery Migrate:3.4.1",
-          "version": null,
-          "category": null
-        }
-      ],
-      "headers_present": [],
-      "headers_missing": [
-        "Content-Security-Policy",
-        "Strict-Transport-Security",
-        "X-Frame-Options",
-        "X-Content-Type-Options",
-        "Referrer-Policy",
-        "Permissions-Policy",
-        "X-XSS-Protection"
-      ],
-      "cookies": []
-    },
-    "tls": {
-      "issuer": null,
-      "subject": null,
-      "san": [],
-      "not_before": null,
-      "not_after": null,
-      "days_until_expiry": null,
-      "protocols_supported": [],
-      "weak_ciphers": [],
-      "self_signed": false
-    },
-    "waf": {
-      "detected": true,
-      "vendor": "Cloudflare",
-      "confidence": "high"
-    }
+  "reachability": {
+    "live": true,
+    "http_status": 200,
+    "title": "Command Digital \u2013 Commanding Attention Through Smart Strategy and Unforgettable Design"
   },
-  "exposures": [
+  "hosts": [
     {
-      "id": "E-001",
-      "type": "missing_dmarc",
-      "category": "email",
-      "severity": "notice",
-      "title": "No DMARC record published",
-      "detail": "Domain remains spoofable beyond what SPF protects against.",
-      "evidence": "_dmarc TXT record absent",
-      "first_seen": "2026-05-09T08:13:16Z",
-      "last_seen": "2026-05-09T08:13:16Z",
-      "status": "open"
+      "ip": "141.193.213.20",
+      "asn": "AS209242",
+      "asn_org": "Cloudflare London, LLC",
+      "country": "US",
+      "region": "Texas",
+      "city": "Austin",
+      "reverse_dns": null,
+      "is_private": false
     },
     {
-      "id": "E-002",
-      "type": "missing_dkim",
-      "category": "email",
-      "severity": "notice",
-      "title": "No DKIM selector records found",
-      "detail": "Outbound mail is unsigned.",
-      "evidence": "Selectors probed: google, default, selector1, selector2, dkim, k1",
-      "first_seen": "2026-05-09T08:13:16Z",
-      "last_seen": "2026-05-09T08:13:16Z",
-      "status": "open"
-    },
-    {
-      "id": "E-003",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: Content-Security-Policy",
-      "detail": "Response from / does not include Content-Security-Policy.",
-      "evidence": "GET / \u2192 headers do not contain Content-Security-Policy",
-      "first_seen": "2026-05-09T08:13:16Z",
-      "last_seen": "2026-05-09T08:13:16Z",
-      "status": "open"
-    },
-    {
-      "id": "E-004",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: Strict-Transport-Security",
-      "detail": "Response from / does not include Strict-Transport-Security.",
-      "evidence": "GET / \u2192 headers do not contain Strict-Transport-Security",
-      "first_seen": "2026-05-09T08:13:16Z",
-      "last_seen": "2026-05-09T08:13:16Z",
-      "status": "open"
-    },
-    {
-      "id": "E-005",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: X-Frame-Options",
-      "detail": "Response from / does not include X-Frame-Options.",
-      "evidence": "GET / \u2192 headers do not contain X-Frame-Options",
-      "first_seen": "2026-05-09T08:13:16Z",
-      "last_seen": "2026-05-09T08:13:16Z",
-      "status": "open"
-    },
-    {
-      "id": "E-006",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: X-Content-Type-Options",
-      "detail": "Response from / does not include X-Content-Type-Options.",
-      "evidence": "GET / \u2192 headers do not contain X-Content-Type-Options",
-      "first_seen": "2026-05-09T08:13:16Z",
-      "last_seen": "2026-05-09T08:13:16Z",
-      "status": "open"
-    },
-    {
-      "id": "E-007",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: Referrer-Policy",
-      "detail": "Response from / does not include Referrer-Policy.",
-      "evidence": "GET / \u2192 headers do not contain Referrer-Policy",
-      "first_seen": "2026-05-09T08:13:16Z",
-      "last_seen": "2026-05-09T08:13:16Z",
-      "status": "open"
-    },
-    {
-      "id": "E-008",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: Permissions-Policy",
-      "detail": "Response from / does not include Permissions-Policy.",
-      "evidence": "GET / \u2192 headers do not contain Permissions-Policy",
-      "first_seen": "2026-05-09T08:13:16Z",
-      "last_seen": "2026-05-09T08:13:16Z",
-      "status": "open"
-    },
-    {
-      "id": "E-009",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: X-XSS-Protection",
-      "detail": "Response from / does not include X-XSS-Protection.",
-      "evidence": "GET / \u2192 headers do not contain X-XSS-Protection",
-      "first_seen": "2026-05-09T08:13:16Z",
-      "last_seen": "2026-05-09T08:13:16Z",
-      "status": "open"
-    },
-    {
-      "id": "E-010",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "Missing Cookie SameSite Strict",
-      "detail": "Identified cookies that lacked the samesite=strict attribute, which prevented enforcement of restrictions on cross-domain cookie transmission.\n",
-      "evidence": "https://www.commanddigital.com (template: missing-cookie-samesite-strict)",
-      "first_seen": "2026-05-09T08:13:16Z",
-      "last_seen": "2026-05-09T08:13:16Z",
-      "status": "open"
-    },
-    {
-      "id": "E-011",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "Weak Content Security Policy - Detect",
-      "detail": "Detected misconfigured CSP directives containing unsafe and overly permissive keywords that weakened resource loading restrictions. This configuration allowed high-risk script behaviors, resulting in reduced protection against XSS attacks.\n",
-      "evidence": "https://www.commanddigital.com (template: weak-csp-detect)",
-      "first_seen": "2026-05-09T08:13:16Z",
-      "last_seen": "2026-05-09T08:13:16Z",
-      "status": "open"
+      "ip": "141.193.213.21",
+      "asn": "AS209242",
+      "asn_org": "Cloudflare London, LLC",
+      "country": "US",
+      "region": "Texas",
+      "city": "Austin",
+      "reverse_dns": null,
+      "is_private": false
     }
   ],
+  "services": [
+    {
+      "ip": "141.193.213.20",
+      "port": 80,
+      "protocol": "tcp",
+      "service": "http",
+      "banner": null,
+      "tls": false
+    },
+    {
+      "ip": "141.193.213.20",
+      "port": 443,
+      "protocol": "tcp",
+      "service": "https",
+      "banner": null,
+      "tls": true,
+      "cert": {
+        "subject": "CN=www.commanddigital.com",
+        "issuer": "CN=WE1, O=Google Trust Services, C=US",
+        "san": [
+          "www.commanddigital.com"
+        ],
+        "not_before": "2026-04-18T07:32:05Z",
+        "not_after": "2026-07-17T08:32:04Z",
+        "self_signed": false,
+        "days_to_expiry": 68
+      }
+    },
+    {
+      "ip": "141.193.213.20",
+      "port": 8080,
+      "protocol": "tcp",
+      "service": "http-alt",
+      "banner": null,
+      "tls": false
+    },
+    {
+      "ip": "141.193.213.20",
+      "port": 8443,
+      "protocol": "tcp",
+      "service": "https-alt",
+      "banner": null,
+      "tls": true
+    },
+    {
+      "ip": "141.193.213.21",
+      "port": 80,
+      "protocol": "tcp",
+      "service": "http",
+      "banner": null,
+      "tls": false
+    },
+    {
+      "ip": "141.193.213.21",
+      "port": 443,
+      "protocol": "tcp",
+      "service": "https",
+      "banner": null,
+      "tls": true,
+      "cert": {
+        "subject": "CN=www.commanddigital.com",
+        "issuer": "CN=WE1, O=Google Trust Services, C=US",
+        "san": [
+          "www.commanddigital.com"
+        ],
+        "not_before": "2026-04-18T07:32:05Z",
+        "not_after": "2026-07-17T08:32:04Z",
+        "self_signed": false,
+        "days_to_expiry": 68
+      }
+    },
+    {
+      "ip": "141.193.213.21",
+      "port": 8080,
+      "protocol": "tcp",
+      "service": "http-alt",
+      "banner": null,
+      "tls": false
+    },
+    {
+      "ip": "141.193.213.21",
+      "port": 8443,
+      "protocol": "tcp",
+      "service": "https-alt",
+      "banner": null,
+      "tls": true
+    }
+  ],
+  "subdomains": [
+    {
+      "name": "www.commanddigital.com",
+      "alive": true,
+      "first_discovered": "2026-05-09T13:09:12Z",
+      "last_seen": "2026-05-09T13:09:12Z"
+    }
+  ],
+  "dns": {
+    "a": [
+      "141.193.213.21",
+      "141.193.213.20"
+    ],
+    "aaaa": [],
+    "cname": "4fdscza9fq8d.wpeproxy.com",
+    "mx": [],
+    "ns": [],
+    "txt": [],
+    "spf": null,
+    "dnssec": false
+  },
+  "registration": {},
+  "fingerprint": {
+    "server": "cloudflare",
+    "platform_label": "WordPress on WP Engine",
+    "tech": [
+      {
+        "name": "Cloudflare",
+        "version": null,
+        "category": "cdn"
+      },
+      {
+        "name": "Cloudflare Bot Management",
+        "version": null,
+        "category": null
+      },
+      {
+        "name": "Elementor",
+        "version": "2.8.3",
+        "category": "wp-plugin"
+      },
+      {
+        "name": "HTTP/3",
+        "version": null,
+        "category": "transport"
+      },
+      {
+        "name": "Lightbox",
+        "version": null,
+        "category": null
+      },
+      {
+        "name": "Magnific Popup",
+        "version": "1.7.4",
+        "category": null
+      },
+      {
+        "name": "MySQL",
+        "version": null,
+        "category": "database"
+      },
+      {
+        "name": "PHP",
+        "version": null,
+        "category": "language"
+      },
+      {
+        "name": "Swiper",
+        "version": null,
+        "category": null
+      },
+      {
+        "name": "WP Engine",
+        "version": null,
+        "category": "hosting"
+      },
+      {
+        "name": "WordPress",
+        "version": null,
+        "category": "cms"
+      },
+      {
+        "name": "imagesLoaded",
+        "version": "5.0.0",
+        "category": null
+      },
+      {
+        "name": "jQuery",
+        "version": null,
+        "category": "frontend"
+      },
+      {
+        "name": "jQuery Migrate",
+        "version": "3.4.1",
+        "category": "frontend"
+      }
+    ]
+  },
+  "waf": {
+    "detected": true,
+    "vendor": "Cloudflare",
+    "confidence": "high"
+  },
   "deltas": {
-    "since_scan": "scan_2026-05-09T03:42:09Z_bc73defb",
+    "since_scan": null,
     "added": {
       "subdomains": [],
-      "ports": [],
-      "exposures": [
-        "E-010"
-      ]
+      "hosts": [],
+      "services": []
     },
     "removed": {
       "subdomains": [],
-      "ports": [],
-      "exposures": [
-        "E-013"
-      ]
+      "hosts": [],
+      "services": []
     },
     "changed": {
-      "tech": []
+      "fingerprint": [],
+      "cert": []
     }
   },
   "history": [
     {
-      "scan_id": "scan_2026-05-08T00:30:56Z_e2bc4166",
+      "scan_id": "scan_2026-05-09T13:05:58Z_7d1fe284",
       "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 14
-    },
-    {
-      "scan_id": "scan_2026-05-08T12:17:49Z_d424d519",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 13
-    },
-    {
-      "scan_id": "scan_2026-05-08T14:06:40Z_ac4e408a",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 11
-    },
-    {
-      "scan_id": "scan_2026-05-08T15:12:48Z_cc86e892",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 22
-    },
-    {
-      "scan_id": "scan_2026-05-08T15:43:54Z_ec6f6b38",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 15
-    },
-    {
-      "scan_id": "scan_2026-05-08T16:14:24Z_86a8df18",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 14
-    },
-    {
-      "scan_id": "scan_2026-05-08T16:37:08Z_7d985c45",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 11
-    },
-    {
-      "scan_id": "scan_2026-05-08T17:20:37Z_774a3663",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 13
-    },
-    {
-      "scan_id": "scan_2026-05-08T18:01:24Z_174472f1",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 14
-    },
-    {
-      "scan_id": "scan_2026-05-08T23:45:58Z_813eefe1",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 22
-    },
-    {
-      "scan_id": "scan_2026-05-09T00:35:03Z_f41f1fe6",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 12
-    },
-    {
-      "scan_id": "scan_2026-05-09T01:38:19Z_c8ee8a89",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 10
-    },
-    {
-      "scan_id": "scan_2026-05-09T03:42:09Z_bc73defb",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 13
-    },
-    {
-      "scan_id": "scan_2026-05-09T08:05:20Z_d4668eb2",
-      "live": true,
-      "ports_open": 4,
-      "subdomains_alive": 1,
-      "exposures_total": 11
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_count": 1
     }
   ]
 }

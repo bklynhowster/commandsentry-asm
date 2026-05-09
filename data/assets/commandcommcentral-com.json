@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "2.0",
   "asset": {
     "id": "commandcommcentral-com",
     "type": "fqdn",
@@ -10,288 +10,156 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-09T08:20:03Z_5411c7ef",
-    "started_at": "2026-05-09T08:20:03Z",
-    "completed_at": "2026-05-09T08:29:24Z",
-    "duration_seconds": 561,
-    "engine_version": "1.0.0",
+    "id": "scan_2026-05-09T13:13:00Z_f6443f2e",
+    "started_at": "2026-05-09T13:13:00Z",
+    "completed_at": "2026-05-09T13:14:43Z",
+    "duration_seconds": 103,
+    "engine_version": "2.0.0",
+    "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
       "dnsx",
       "naabu",
       "httpx",
       "wafw00f",
       "testssl",
-      "nuclei-exposure",
       "whois"
-    ],
-    "tool_versions": {}
+    ]
   },
-  "inventory": {
-    "identity": {
-      "ip_addresses": [
-        "24.38.70.5"
-      ],
-      "reverse_dns": {},
-      "asn": null,
-      "asn_org": null,
-      "registrar": null,
-      "whois_creation": null,
-      "whois_expiry": null,
-      "geo": {
-        "country": null,
-        "city": null
-      }
-    },
-    "dns": {
-      "a": [
-        "24.38.70.5"
-      ],
-      "aaaa": [],
-      "cname": null,
-      "mx": [],
-      "ns": [
-        "ns01.commandcommcentral.com"
-      ],
-      "txt": [],
-      "spf": null,
-      "dmarc": null,
-      "dkim_selectors_found": [],
-      "dnssec": false
-    },
-    "subdomains": [
-      {
-        "name": "commandcommcentral.com",
-        "alive": true,
-        "discovered": "2026-05-09T08:29:24Z"
-      }
-    ],
-    "ports": [
-      {
-        "port": 80,
-        "protocol": "tcp",
-        "state": "open"
-      },
-      {
-        "port": 443,
-        "protocol": "tcp",
-        "state": "open"
-      }
-    ],
-    "services": [],
-    "http": {
-      "live": true,
-      "status_code": 200,
-      "title": "CommandCommCentral",
-      "server": null,
-      "powered_by": null,
-      "technologies": [
-        {
-          "name": "HSTS",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Microsoft ASP.NET",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Microsoft Power BI",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Modernizr",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "jQuery",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "jQuery UI",
-          "version": null,
-          "category": null
-        }
-      ],
-      "headers_present": [],
-      "headers_missing": [
-        "Content-Security-Policy",
-        "Strict-Transport-Security",
-        "X-Frame-Options",
-        "X-Content-Type-Options",
-        "Referrer-Policy",
-        "Permissions-Policy",
-        "X-XSS-Protection"
-      ],
-      "cookies": []
-    },
-    "tls": {
-      "issuer": null,
-      "subject": null,
-      "san": [],
-      "not_before": null,
-      "not_after": null,
-      "days_until_expiry": null,
-      "protocols_supported": [],
-      "weak_ciphers": [],
-      "self_signed": false
-    },
-    "waf": {
-      "detected": true,
-      "vendor": "FortiWeb",
-      "confidence": "high"
-    }
+  "reachability": {
+    "live": true,
+    "http_status": 200,
+    "title": "CommandCommCentral"
   },
-  "exposures": [
+  "hosts": [
     {
-      "id": "E-001",
-      "type": "missing_dmarc",
-      "category": "email",
-      "severity": "notice",
-      "title": "No DMARC record published",
-      "detail": "Domain remains spoofable beyond what SPF protects against.",
-      "evidence": "_dmarc TXT record absent",
-      "first_seen": "2026-05-09T08:29:24Z",
-      "last_seen": "2026-05-09T08:29:24Z",
-      "status": "open"
-    },
-    {
-      "id": "E-002",
-      "type": "missing_dkim",
-      "category": "email",
-      "severity": "notice",
-      "title": "No DKIM selector records found",
-      "detail": "Outbound mail is unsigned.",
-      "evidence": "Selectors probed: google, default, selector1, selector2, dkim, k1",
-      "first_seen": "2026-05-09T08:29:24Z",
-      "last_seen": "2026-05-09T08:29:24Z",
-      "status": "open"
-    },
-    {
-      "id": "E-003",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: Content-Security-Policy",
-      "detail": "Response from / does not include Content-Security-Policy.",
-      "evidence": "GET / \u2192 headers do not contain Content-Security-Policy",
-      "first_seen": "2026-05-09T08:29:24Z",
-      "last_seen": "2026-05-09T08:29:24Z",
-      "status": "open"
-    },
-    {
-      "id": "E-004",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: Strict-Transport-Security",
-      "detail": "Response from / does not include Strict-Transport-Security.",
-      "evidence": "GET / \u2192 headers do not contain Strict-Transport-Security",
-      "first_seen": "2026-05-09T08:29:24Z",
-      "last_seen": "2026-05-09T08:29:24Z",
-      "status": "open"
-    },
-    {
-      "id": "E-005",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: X-Frame-Options",
-      "detail": "Response from / does not include X-Frame-Options.",
-      "evidence": "GET / \u2192 headers do not contain X-Frame-Options",
-      "first_seen": "2026-05-09T08:29:24Z",
-      "last_seen": "2026-05-09T08:29:24Z",
-      "status": "open"
-    },
-    {
-      "id": "E-006",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: X-Content-Type-Options",
-      "detail": "Response from / does not include X-Content-Type-Options.",
-      "evidence": "GET / \u2192 headers do not contain X-Content-Type-Options",
-      "first_seen": "2026-05-09T08:29:24Z",
-      "last_seen": "2026-05-09T08:29:24Z",
-      "status": "open"
-    },
-    {
-      "id": "E-007",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: Referrer-Policy",
-      "detail": "Response from / does not include Referrer-Policy.",
-      "evidence": "GET / \u2192 headers do not contain Referrer-Policy",
-      "first_seen": "2026-05-09T08:29:24Z",
-      "last_seen": "2026-05-09T08:29:24Z",
-      "status": "open"
-    },
-    {
-      "id": "E-008",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: Permissions-Policy",
-      "detail": "Response from / does not include Permissions-Policy.",
-      "evidence": "GET / \u2192 headers do not contain Permissions-Policy",
-      "first_seen": "2026-05-09T08:29:24Z",
-      "last_seen": "2026-05-09T08:29:24Z",
-      "status": "open"
-    },
-    {
-      "id": "E-009",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: X-XSS-Protection",
-      "detail": "Response from / does not include X-XSS-Protection.",
-      "evidence": "GET / \u2192 headers do not contain X-XSS-Protection",
-      "first_seen": "2026-05-09T08:29:24Z",
-      "last_seen": "2026-05-09T08:29:24Z",
-      "status": "open"
+      "ip": "24.38.70.5",
+      "asn": "AS6128",
+      "asn_org": "Cablevision Systems Corp.",
+      "country": "US",
+      "region": "New York",
+      "city": "New York City",
+      "reverse_dns": "18264605.cst.lightpath.net",
+      "is_private": false
     }
   ],
+  "services": [
+    {
+      "ip": "24.38.70.5",
+      "port": 80,
+      "protocol": "tcp",
+      "service": "http",
+      "banner": null,
+      "tls": false
+    },
+    {
+      "ip": "24.38.70.5",
+      "port": 443,
+      "protocol": "tcp",
+      "service": "https",
+      "banner": null,
+      "tls": true,
+      "cert": {
+        "subject": "CN=*.commandcommcentral.com, O=Strategic Content Imaging, L=Secaucus, ST=New Jersey, C=US",
+        "issuer": "CN=Go Daddy Secure Certificate Authority - G2, OU=http://certs.godaddy.com/repository/, O=GoDaddy.com\\, Inc., L=Scottsdale, ST=Arizona, C=US",
+        "san": [
+          "*.commandcommcentral.com",
+          "commandcommcentral.com"
+        ],
+        "not_before": "2026-01-02T18:09:44Z",
+        "not_after": "2027-02-03T18:09:44Z",
+        "self_signed": false,
+        "days_to_expiry": 270
+      }
+    }
+  ],
+  "subdomains": [
+    {
+      "name": "commandcommcentral.com",
+      "alive": true,
+      "first_discovered": "2026-05-09T13:14:43Z",
+      "last_seen": "2026-05-09T13:14:43Z"
+    }
+  ],
+  "dns": {
+    "a": [
+      "24.38.70.5"
+    ],
+    "aaaa": [],
+    "cname": null,
+    "mx": [],
+    "ns": [
+      "ns01.commandcommcentral.com"
+    ],
+    "txt": [],
+    "spf": null,
+    "dnssec": false
+  },
+  "registration": {},
+  "fingerprint": {
+    "server": null,
+    "platform_label": ".NET / IIS",
+    "tech": [
+      {
+        "name": "HSTS",
+        "version": null,
+        "category": "security"
+      },
+      {
+        "name": "Microsoft ASP.NET",
+        "version": null,
+        "category": "framework"
+      },
+      {
+        "name": "Microsoft Power BI",
+        "version": null,
+        "category": null
+      },
+      {
+        "name": "Modernizr",
+        "version": null,
+        "category": "frontend"
+      },
+      {
+        "name": "jQuery",
+        "version": null,
+        "category": "frontend"
+      },
+      {
+        "name": "jQuery UI",
+        "version": null,
+        "category": null
+      }
+    ]
+  },
+  "waf": {
+    "detected": true,
+    "vendor": "FortiWeb",
+    "confidence": "high"
+  },
   "deltas": {
-    "since_scan": "scan_2026-05-09T03:55:20Z_76440ea3",
+    "since_scan": null,
     "added": {
       "subdomains": [],
-      "ports": [],
-      "exposures": []
+      "hosts": [],
+      "services": []
     },
     "removed": {
       "subdomains": [],
-      "ports": [],
-      "exposures": []
+      "hosts": [],
+      "services": []
     },
     "changed": {
-      "tech": []
+      "fingerprint": [],
+      "cert": []
     }
   },
   "history": [
     {
-      "scan_id": "scan_2026-05-08T23:59:21Z_099f1a82",
+      "scan_id": "scan_2026-05-09T13:13:00Z_f6443f2e",
       "live": true,
-      "ports_open": 2,
-      "subdomains_alive": 1,
-      "exposures_total": 9
-    },
-    {
-      "scan_id": "scan_2026-05-09T03:55:20Z_76440ea3",
-      "live": true,
-      "ports_open": 2,
-      "subdomains_alive": 1,
-      "exposures_total": 9
-    },
-    {
-      "scan_id": "scan_2026-05-09T08:20:03Z_5411c7ef",
-      "live": true,
-      "ports_open": 2,
-      "subdomains_alive": 1,
-      "exposures_total": 9
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_count": 1
     }
   ]
 }

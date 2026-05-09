@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "2.0",
   "asset": {
     "id": "unimacgraphics-www",
     "type": "fqdn",
@@ -10,394 +10,258 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-09T08:13:16Z_40488083",
-    "started_at": "2026-05-09T08:13:16Z",
-    "completed_at": "2026-05-09T08:16:54Z",
-    "duration_seconds": 218,
-    "engine_version": "1.0.0",
+    "id": "scan_2026-05-09T13:09:12Z_64b9cb1a",
+    "started_at": "2026-05-09T13:09:12Z",
+    "completed_at": "2026-05-09T13:11:17Z",
+    "duration_seconds": 125,
+    "engine_version": "2.0.0",
+    "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
       "dnsx",
       "naabu",
       "httpx",
       "wafw00f",
       "testssl",
-      "nuclei-exposure",
       "whois"
-    ],
-    "tool_versions": {}
+    ]
   },
-  "inventory": {
-    "identity": {
-      "ip_addresses": [
-        "199.16.172.68",
-        "199.16.173.113"
-      ],
-      "reverse_dns": {},
-      "asn": null,
-      "asn_org": null,
-      "registrar": null,
-      "whois_creation": null,
-      "whois_expiry": null,
-      "geo": {
-        "country": null,
-        "city": null
-      }
-    },
-    "dns": {
-      "a": [
-        "199.16.172.68",
-        "199.16.173.113"
-      ],
-      "aaaa": [],
-      "cname": null,
-      "mx": [],
-      "ns": [
-        "ns35.domaincontrol.com",
-        "ns36.domaincontrol.com"
-      ],
-      "txt": [
-        "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
-        "2o6gse9gno2mv04ik7f14kssfq",
-        "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-        "MS=ms33269626",
-        "sek942qd3nt1s4lqh1h2ovmmai",
-        "k15vdsovvom4v46fi4r4rivts6"
-      ],
-      "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-      "dmarc": null,
-      "dkim_selectors_found": [],
-      "dnssec": false
-    },
-    "subdomains": [
-      {
-        "name": "unimacgraphics.com",
-        "alive": true,
-        "discovered": "2026-05-09T08:16:54Z"
-      }
-    ],
-    "ports": [
-      {
-        "port": 80,
-        "protocol": "tcp",
-        "state": "open"
-      },
-      {
-        "port": 443,
-        "protocol": "tcp",
-        "state": "open"
-      }
-    ],
-    "services": [],
-    "http": {
-      "live": true,
-      "status_code": 200,
-      "title": "Home - Unimac, a Command Company",
-      "server": "nginx",
-      "powered_by": null,
-      "technologies": [
-        {
-          "name": "Bootstrap:5.1.3",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Font Awesome",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Google Tag Manager",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "HSTS",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "HTTP/3",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Imagely NextGEN Gallery",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "MySQL",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Nginx",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "PHP",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Slider Revolution:6.7.54",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "WPMU DEV Smush:4.0.3",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "WordPress",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "Yoast SEO:27.5",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "jQuery",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "jQuery Migrate:3.4.1",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "jsDelivr",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "wp.cloud",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "wpBakery",
-          "version": null,
-          "category": null
-        }
-      ],
-      "headers_present": [],
-      "headers_missing": [
-        "Content-Security-Policy",
-        "Strict-Transport-Security",
-        "X-Frame-Options",
-        "X-Content-Type-Options",
-        "Referrer-Policy",
-        "Permissions-Policy",
-        "X-XSS-Protection"
-      ],
-      "cookies": []
-    },
-    "tls": {
-      "issuer": null,
-      "subject": null,
-      "san": [],
-      "not_before": null,
-      "not_after": null,
-      "days_until_expiry": null,
-      "protocols_supported": [],
-      "weak_ciphers": [],
-      "self_signed": false
-    },
-    "waf": {
-      "detected": true,
-      "vendor": "Generic",
-      "confidence": "high"
-    }
+  "reachability": {
+    "live": true,
+    "http_status": 200,
+    "title": "Home - Unimac, a Command Company"
   },
-  "exposures": [
+  "hosts": [
     {
-      "id": "E-001",
-      "type": "missing_dmarc",
-      "category": "email",
-      "severity": "notice",
-      "title": "No DMARC record published",
-      "detail": "Domain remains spoofable beyond what SPF protects against.",
-      "evidence": "_dmarc TXT record absent",
-      "first_seen": "2026-05-09T08:16:54Z",
-      "last_seen": "2026-05-09T08:16:54Z",
-      "status": "open"
+      "ip": "199.16.172.68",
+      "asn": "AS2635",
+      "asn_org": "Automattic, Inc",
+      "country": "US",
+      "region": "California",
+      "city": "San Francisco",
+      "reverse_dns": null,
+      "is_private": false
     },
     {
-      "id": "E-002",
-      "type": "missing_dkim",
-      "category": "email",
-      "severity": "notice",
-      "title": "No DKIM selector records found",
-      "detail": "Outbound mail is unsigned.",
-      "evidence": "Selectors probed: google, default, selector1, selector2, dkim, k1",
-      "first_seen": "2026-05-09T08:16:54Z",
-      "last_seen": "2026-05-09T08:16:54Z",
-      "status": "open"
-    },
-    {
-      "id": "E-003",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: Content-Security-Policy",
-      "detail": "Response from / does not include Content-Security-Policy.",
-      "evidence": "GET / \u2192 headers do not contain Content-Security-Policy",
-      "first_seen": "2026-05-09T08:16:54Z",
-      "last_seen": "2026-05-09T08:16:54Z",
-      "status": "open"
-    },
-    {
-      "id": "E-004",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: Strict-Transport-Security",
-      "detail": "Response from / does not include Strict-Transport-Security.",
-      "evidence": "GET / \u2192 headers do not contain Strict-Transport-Security",
-      "first_seen": "2026-05-09T08:16:54Z",
-      "last_seen": "2026-05-09T08:16:54Z",
-      "status": "open"
-    },
-    {
-      "id": "E-005",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: X-Frame-Options",
-      "detail": "Response from / does not include X-Frame-Options.",
-      "evidence": "GET / \u2192 headers do not contain X-Frame-Options",
-      "first_seen": "2026-05-09T08:16:54Z",
-      "last_seen": "2026-05-09T08:16:54Z",
-      "status": "open"
-    },
-    {
-      "id": "E-006",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: X-Content-Type-Options",
-      "detail": "Response from / does not include X-Content-Type-Options.",
-      "evidence": "GET / \u2192 headers do not contain X-Content-Type-Options",
-      "first_seen": "2026-05-09T08:16:54Z",
-      "last_seen": "2026-05-09T08:16:54Z",
-      "status": "open"
-    },
-    {
-      "id": "E-007",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: Referrer-Policy",
-      "detail": "Response from / does not include Referrer-Policy.",
-      "evidence": "GET / \u2192 headers do not contain Referrer-Policy",
-      "first_seen": "2026-05-09T08:16:54Z",
-      "last_seen": "2026-05-09T08:16:54Z",
-      "status": "open"
-    },
-    {
-      "id": "E-008",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: Permissions-Policy",
-      "detail": "Response from / does not include Permissions-Policy.",
-      "evidence": "GET / \u2192 headers do not contain Permissions-Policy",
-      "first_seen": "2026-05-09T08:16:54Z",
-      "last_seen": "2026-05-09T08:16:54Z",
-      "status": "open"
-    },
-    {
-      "id": "E-009",
-      "type": "missing_security_header",
-      "category": "headers",
-      "severity": "notice",
-      "title": "Missing: X-XSS-Protection",
-      "detail": "Response from / does not include X-XSS-Protection.",
-      "evidence": "GET / \u2192 headers do not contain X-XSS-Protection",
-      "first_seen": "2026-05-09T08:16:54Z",
-      "last_seen": "2026-05-09T08:16:54Z",
-      "status": "open"
-    },
-    {
-      "id": "E-010",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "Microsoft Azure Domain Tenant ID - Detect",
-      "detail": "Microsoft Azure Domain Tenant ID was detected.",
-      "evidence": "https://login.microsoftonline.com:443/unimacgraphics.com/v2.0/.well-known/openid-configuration (template: azure-domain-tenant)",
-      "first_seen": "2026-05-09T08:16:54Z",
-      "last_seen": "2026-05-09T08:16:54Z",
-      "status": "open"
-    },
-    {
-      "id": "E-011",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "WordPress Yoast SEO Plugin - User Enumeration",
-      "detail": "",
-      "evidence": "https://unimacgraphics.com/author-sitemap.xml (template: wp-yoast-user-enumeration)",
-      "first_seen": "2026-05-09T08:16:54Z",
-      "last_seen": "2026-05-09T08:16:54Z",
-      "status": "open"
-    },
-    {
-      "id": "E-012",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "WordPress Readme File",
-      "detail": "",
-      "evidence": "https://unimacgraphics.com/readme.html (template: wordpress-readme-file)",
-      "first_seen": "2026-05-09T08:16:54Z",
-      "last_seen": "2026-05-09T08:16:54Z",
-      "status": "open"
+      "ip": "199.16.173.113",
+      "asn": "AS2635",
+      "asn_org": "Automattic, Inc",
+      "country": "US",
+      "region": "California",
+      "city": "San Francisco",
+      "reverse_dns": null,
+      "is_private": false
     }
   ],
+  "services": [
+    {
+      "ip": "199.16.172.68",
+      "port": 80,
+      "protocol": "tcp",
+      "service": "http",
+      "banner": null,
+      "tls": false
+    },
+    {
+      "ip": "199.16.172.68",
+      "port": 443,
+      "protocol": "tcp",
+      "service": "https",
+      "banner": null,
+      "tls": true,
+      "cert": {
+        "subject": "CN=tls.automattic.com",
+        "issuer": "CN=E7, O=Let's Encrypt, C=US",
+        "san": [
+          "tls.automattic.com",
+          "unimacgraphics.com"
+        ],
+        "not_before": "2026-03-18T15:27:57Z",
+        "not_after": "2026-06-16T15:27:56Z",
+        "self_signed": false,
+        "days_to_expiry": 38
+      }
+    },
+    {
+      "ip": "199.16.173.113",
+      "port": 80,
+      "protocol": "tcp",
+      "service": "http",
+      "banner": null,
+      "tls": false
+    },
+    {
+      "ip": "199.16.173.113",
+      "port": 443,
+      "protocol": "tcp",
+      "service": "https",
+      "banner": null,
+      "tls": true,
+      "cert": {
+        "subject": "CN=tls.automattic.com",
+        "issuer": "CN=E7, O=Let's Encrypt, C=US",
+        "san": [
+          "tls.automattic.com",
+          "unimacgraphics.com"
+        ],
+        "not_before": "2026-03-18T15:27:57Z",
+        "not_after": "2026-06-16T15:27:56Z",
+        "self_signed": false,
+        "days_to_expiry": 38
+      }
+    }
+  ],
+  "subdomains": [
+    {
+      "name": "unimacgraphics.com",
+      "alive": true,
+      "first_discovered": "2026-05-09T13:11:17Z",
+      "last_seen": "2026-05-09T13:11:17Z"
+    }
+  ],
+  "dns": {
+    "a": [
+      "199.16.172.68",
+      "199.16.173.113"
+    ],
+    "aaaa": [],
+    "cname": null,
+    "mx": [],
+    "ns": [
+      "ns35.domaincontrol.com",
+      "ns36.domaincontrol.com"
+    ],
+    "txt": [
+      "2o6gse9gno2mv04ik7f14kssfq",
+      "MS=ms33269626",
+      "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+      "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
+      "sek942qd3nt1s4lqh1h2ovmmai",
+      "k15vdsovvom4v46fi4r4rivts6"
+    ],
+    "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+    "dnssec": false
+  },
+  "registration": {},
+  "fingerprint": {
+    "server": "nginx",
+    "platform_label": "WordPress on wp.cloud (Pressable)",
+    "tech": [
+      {
+        "name": "Bootstrap",
+        "version": "5.1.3",
+        "category": "frontend"
+      },
+      {
+        "name": "Font Awesome",
+        "version": null,
+        "category": "frontend"
+      },
+      {
+        "name": "Google Tag Manager",
+        "version": null,
+        "category": "tracking"
+      },
+      {
+        "name": "HSTS",
+        "version": null,
+        "category": "security"
+      },
+      {
+        "name": "Imagely NextGEN Gallery",
+        "version": null,
+        "category": "wp-plugin"
+      },
+      {
+        "name": "MySQL",
+        "version": null,
+        "category": "database"
+      },
+      {
+        "name": "Nginx",
+        "version": null,
+        "category": "webserver"
+      },
+      {
+        "name": "PHP",
+        "version": null,
+        "category": "language"
+      },
+      {
+        "name": "Slider Revolution",
+        "version": "6.7.54",
+        "category": "wp-plugin"
+      },
+      {
+        "name": "WPMU DEV Smush",
+        "version": "4.0.3",
+        "category": "wp-plugin"
+      },
+      {
+        "name": "WordPress",
+        "version": null,
+        "category": "cms"
+      },
+      {
+        "name": "Yoast SEO",
+        "version": "27.5",
+        "category": "wp-plugin"
+      },
+      {
+        "name": "jQuery",
+        "version": null,
+        "category": "frontend"
+      },
+      {
+        "name": "jQuery Migrate",
+        "version": "3.4.1",
+        "category": "frontend"
+      },
+      {
+        "name": "jsDelivr",
+        "version": null,
+        "category": "cdn"
+      },
+      {
+        "name": "wp.cloud",
+        "version": null,
+        "category": "hosting"
+      },
+      {
+        "name": "wpBakery",
+        "version": null,
+        "category": "wp-plugin"
+      }
+    ]
+  },
+  "waf": {
+    "detected": true,
+    "vendor": "Generic",
+    "confidence": "high"
+  },
   "deltas": {
-    "since_scan": "scan_2026-05-09T03:50:07Z_e622225d",
+    "since_scan": null,
     "added": {
       "subdomains": [],
-      "ports": [],
-      "exposures": []
+      "hosts": [],
+      "services": []
     },
     "removed": {
       "subdomains": [],
-      "ports": [],
-      "exposures": []
+      "hosts": [],
+      "services": []
     },
     "changed": {
-      "tech": []
+      "fingerprint": [],
+      "cert": []
     }
   },
   "history": [
     {
-      "scan_id": "scan_2026-05-08T23:53:36Z_ac08569f",
+      "scan_id": "scan_2026-05-09T13:09:12Z_64b9cb1a",
       "live": true,
-      "ports_open": 2,
-      "subdomains_alive": 1,
-      "exposures_total": 12
-    },
-    {
-      "scan_id": "scan_2026-05-09T03:50:07Z_e622225d",
-      "live": true,
-      "ports_open": 2,
-      "subdomains_alive": 1,
-      "exposures_total": 12
-    },
-    {
-      "scan_id": "scan_2026-05-09T08:13:16Z_40488083",
-      "live": true,
-      "ports_open": 2,
-      "subdomains_alive": 1,
-      "exposures_total": 12
+      "host_count": 2,
+      "service_count": 4,
+      "subdomain_count": 1
     }
   ]
 }
