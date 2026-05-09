@@ -221,14 +221,8 @@ discover_fqdn() {
     log "Port 443 not open, skipping testssl"
   fi
 
-  phase "Exposure templates (nuclei)"
-  echo "$target" | nuclei -silent -json-export "$wd/nuclei.json" \
-    -tags "${NUCLEI_TAGS:-exposure,misconfig,disclosure}" \
-    -exclude-tags "${NUCLEI_EXCLUDE_TAGS:-cve,intrusive,fuzz}" \
-    -severity "${NUCLEI_SEVERITY:-info,low,medium}" \
-    -concurrency "${NUCLEI_CONCURRENCY:-25}" \
-    -rate-limit "${NUCLEI_RATE_LIMIT:-150}" \
-    > "$wd/nuclei.log" 2> "$wd/nuclei.err" || warn "nuclei had errors"
+  # Exposure templates removed — that's vuln scanning, not ASM.
+  # See [[12 - Future: Vuln Scanning Module]] for the planned separate workflow.
 
   log "FQDN phases complete for $target"
 }
@@ -301,16 +295,9 @@ discover_ip() {
       testssl.sh --jsonfile "$wd/testssl.json" --quiet --warnings off \
         --severity LOW --ip "$ip" "$ip:443" > "$wd/testssl.log" 2>&1 || warn "testssl had errors"
     fi
-
-    echo "$ip" | nuclei -silent -json-export "$wd/nuclei.json" \
-      -tags "${NUCLEI_TAGS:-exposure,misconfig,disclosure}" \
-      -exclude-tags "${NUCLEI_EXCLUDE_TAGS:-cve,intrusive,fuzz}" \
-      -severity "${NUCLEI_SEVERITY:-info,low,medium}" \
-      -concurrency "${NUCLEI_CONCURRENCY:-25}" \
-      -rate-limit "${NUCLEI_RATE_LIMIT:-150}" \
-      > "$wd/nuclei.log" 2> "$wd/nuclei.err" || warn "nuclei had errors"
+    # Exposure templates removed — vuln scanning lives in a separate (future) workflow.
   else
-    log "No web ports open, skipping HTTP/WAF/TLS/exposure phases"
+    log "No web ports open, skipping HTTP/WAF/TLS phases"
   fi
 
   log "IP phases complete for $ip"

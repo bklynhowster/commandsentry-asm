@@ -655,6 +655,340 @@ input[type="search"]:focus,
   margin-top: var(--s3);
 }
 
+/* ═════════════════════════════════════════════════════════════
+   v2 ASM components — visual treatment for new schema
+   ═════════════════════════════════════════════════════════════ */
+
+/* ─── Status dots with pulse ─────────────────────────── */
+.status-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--ink-40);
+  flex-shrink: 0;
+  margin-right: 4px;
+  vertical-align: middle;
+  position: relative;
+}
+.status-dot.live {
+  background: var(--ok);
+  box-shadow: 0 0 0 0 rgba(47, 107, 79, 0.6);
+  animation: pulse-live 2.4s ease-out infinite;
+}
+.status-dot.down {
+  background: var(--danger);
+}
+@keyframes pulse-live {
+  0%   { box-shadow: 0 0 0 0 rgba(47, 107, 79, 0.6); }
+  60%  { box-shadow: 0 0 0 8px rgba(47, 107, 79, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(47, 107, 79, 0); }
+}
+
+/* ─── Asset card upgrades ──────────────────────────── */
+.asset-card-title-block {
+  display: flex; align-items: center; gap: var(--s2);
+  flex: 1;
+  min-width: 0;
+}
+.asset-card-title-block .status-dot { margin-right: 0; }
+
+.asset-stats {
+  display: flex;
+  gap: var(--s4);
+  padding: var(--s2) 0;
+  border-top: 1px solid var(--ink-10);
+  border-bottom: 1px solid var(--ink-10);
+}
+.stat {
+  flex: 1;
+  display: flex; flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.stat-num {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+}
+
+/* ─── Hosting attribution pills ─────────────────────── */
+.hosting-pill {
+  display: inline-flex; align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  border: 1px solid transparent;
+  background: var(--ink-05);
+  color: var(--ink-80);
+}
+.hosting-pill.h-cloudflare { background: #FFE9D9; color: #B85A14; border-color: #F7B98C; }
+.hosting-pill.h-aws        { background: #FCE8B7; color: #6E5113; border-color: #E5BA45; }
+.hosting-pill.h-azure      { background: #DCE8F8; color: #1F4E8F; border-color: #95B6E0; }
+.hosting-pill.h-google     { background: #E2ECFD; color: #1A4DAB; border-color: #97B7E8; }
+.hosting-pill.h-pressable  { background: #E0E5EA; color: #1B2C3F; border-color: #98A6B4; }
+.hosting-pill.h-wpengine   { background: #F1E1D3; color: #8C3E10; border-color: #D8A78A; }
+.hosting-pill.h-godaddy    { background: #E5F3DC; color: #2D5C18; border-color: #9FCB85; }
+.hosting-pill.h-do         { background: #DCEAFA; color: #163C82; border-color: #92B6E5; }
+.hosting-pill.h-other      { background: var(--ink-05); color: var(--ink-80); border-color: var(--ink-20); }
+
+/* ─── WAF / platform pills ──────────────────────────── */
+.waf-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid var(--ink-20);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-80);
+}
+.waf-pill-icon { color: var(--copper); font-weight: 700; }
+
+.platform-pill {
+  display: inline-flex; align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  background: var(--ink-05);
+  border: 1px solid var(--ink-20);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  color: var(--ink-80);
+}
+
+/* ─── Verdict strip (top of drawer) ─────────────────── */
+.verdict-strip {
+  background: linear-gradient(180deg, var(--paper-2) 0%, var(--paper) 100%);
+  border-bottom: 1px solid var(--paper-rule);
+  padding: var(--s5) var(--s6);
+  margin: calc(var(--s6) * -1) calc(var(--s6) * -1) var(--s6);
+}
+.verdict-row {
+  display: flex; flex-wrap: wrap; gap: var(--s2);
+  margin-bottom: var(--s4);
+}
+.verdict-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--r-pill);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+.verdict-pill .v-icon { font-size: 12px; }
+.verdict-pill.v-good { background: var(--ok-soft);     color: var(--ok);     border-color: var(--ok); }
+.verdict-pill.v-warn { background: var(--warn-soft);   color: var(--warn);   border-color: var(--warn); }
+.verdict-pill.v-bad  { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
+.verdict-pill.v-info { background: var(--paper);       color: var(--ink-80); border-color: var(--paper-rule); }
+
+.verdict-stats {
+  display: flex; gap: var(--s7);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--ink-10);
+}
+.stat-big {
+  display: flex; flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.stat-big .stat-num {
+  font-family: var(--font-display);
+  font-size: 36px;
+  font-weight: 800;
+  color: var(--ink);
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.stat-big .stat-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+}
+
+/* ─── Data tables (hosts / services / subdomains) ───── */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  margin-top: var(--s2);
+}
+.data-table thead th {
+  text-align: left;
+  padding: var(--s2) var(--s3);
+  background: var(--fill-1);
+  border-top: 2px solid var(--ink);
+  border-bottom: 1px solid var(--ink);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+}
+.data-table tbody td {
+  padding: var(--s3) var(--s3);
+  border-bottom: 1px solid var(--ink-10);
+  vertical-align: middle;
+}
+.data-table tbody tr:last-child td { border-bottom: 2px solid var(--ink); }
+.data-table tbody tr:hover { background: var(--ink-05); }
+.td-mono { font-family: var(--font-mono); font-size: 13px; }
+.muted { color: var(--ink-60); }
+
+/* ─── Service badge (with icon) ─────────────────────── */
+.service-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px 3px 8px;
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+.svc-icon {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+.svc-tls {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  border-radius: 3px;
+  background: var(--copper);
+  color: #fff;
+  font-weight: 600;
+}
+.service-badge.svc-web      { background: #E5F3DC; color: #2D5C18; border-color: #9FCB85; }
+.service-badge.svc-web-tls  { background: #DDF1D2; color: #1F4D0E; border-color: #84B96A; }
+.service-badge.svc-shell    { background: #F8E0E0; color: #7B1F1F; border-color: #D89393; }
+.service-badge.svc-file     { background: #FCE8B7; color: #6E5113; border-color: #E5BA45; }
+.service-badge.svc-mail     { background: #DCE8F8; color: #1F4E8F; border-color: #95B6E0; }
+.service-badge.svc-net      { background: #EAE7DF; color: #2A3A4B; border-color: var(--ink-20); }
+.service-badge.svc-db       { background: #E2D6F4; color: #4A2587; border-color: #B59CDC; }
+.service-badge.svc-unknown  { background: var(--ink-05); color: var(--ink-60); border-color: var(--ink-20); }
+
+/* port number cell */
+.port-cell {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.port-proto {
+  margin-left: 2px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ink-60);
+  letter-spacing: 0.04em;
+}
+
+/* cert cell */
+.cert-cell {
+  display: inline-flex; flex-direction: column; gap: 2px;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  border-left: 3px solid var(--ink-20);
+  background: var(--ink-05);
+}
+.cert-cell.cert-good { border-left-color: var(--ok);     background: var(--ok-soft); }
+.cert-cell.cert-warn { border-left-color: var(--warn);   background: var(--warn-soft); }
+.cert-cell.cert-bad  { border-left-color: var(--danger); background: var(--danger-soft); }
+.cert-issuer {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-80);
+}
+.cert-days {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+}
+.cert-cell.cert-good .cert-days { color: var(--ok); }
+.cert-cell.cert-warn .cert-days { color: var(--warn); }
+.cert-cell.cert-bad  .cert-days { color: var(--danger); font-weight: 600; }
+
+/* ─── Tech fingerprint groups ──────────────────────── */
+.platform-banner {
+  background: linear-gradient(90deg, var(--ink) 0%, #1B3552 100%);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  padding: var(--s3) var(--s4);
+  border-radius: var(--r-sm);
+  border-left: 4px solid var(--copper);
+  margin-bottom: var(--s4);
+  letter-spacing: 0.04em;
+}
+.tech-groups {
+  display: flex; flex-direction: column; gap: var(--s4);
+}
+.tech-group {
+  border-bottom: 1px dashed var(--ink-10);
+  padding-bottom: var(--s3);
+}
+.tech-group:last-child { border-bottom: none; }
+.tech-group-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+  margin-bottom: var(--s2);
+  font-weight: 600;
+}
+.tech-group-items {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.tech-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px 5px 12px;
+  background: var(--paper);
+  border: 1px solid var(--paper-rule);
+  border-radius: var(--r-sm);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  color: var(--ink-80);
+  transition: border-color 120ms;
+}
+.tech-chip:hover { border-color: var(--copper); color: var(--ink); }
+.tech-chip-v {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  background: var(--copper-soft);
+  color: var(--copper-ink);
+  border-radius: 3px;
+  margin-left: 2px;
+}
+
+/* ─── Drawer body padding adjustments for verdict strip ─ */
+.drawer-body {
+  padding: var(--s6);
+  padding-top: 0;
+}
+
 /* ─── Footer ──────────────────────────────────────── */
 .bottom {
   text-align: center;
