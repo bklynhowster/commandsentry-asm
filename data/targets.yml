@@ -17,7 +17,6 @@ targets:
       - public-facing
       - corporate
     notes: Replaces commanddigital.com (which is no longer used by the org).
-
   - id: unimacgraphics
     type: apex
     value: unimacgraphics.com
@@ -29,7 +28,6 @@ targets:
       - public-facing
     notes: Pressable shared hosting.
     rate_limit: gentle
-
   - id: commandcommcentral
     type: apex
     value: commandcommcentral.com
@@ -40,5 +38,11 @@ targets:
       - internal-app
     notes: .NET Core 8 + IIS, FortiGate WAF, hosted by SCI. Includes test subdomain.
     rate_limit: gentle
-
+  - id: scrimmage
+    type: apex
+    value: scrimmage.com
+    scope_verified: true
+    owner: command_digital
+    tags: []
+    notes: ''
 discovered: []
