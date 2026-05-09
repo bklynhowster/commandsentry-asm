@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-09T01:18:03Z_9599a9ee",
-    "started_at": "2026-05-09T01:18:03Z",
-    "completed_at": "2026-05-09T01:25:49Z",
-    "duration_seconds": 466,
+    "id": "scan_2026-05-09T01:38:19Z_c8ee8a89",
+    "started_at": "2026-05-09T01:38:19Z",
+    "completed_at": "2026-05-09T01:46:08Z",
+    "duration_seconds": 469,
     "engine_version": "1.0.0",
     "tools_run": [
       "dnsx",
@@ -45,8 +45,8 @@
     },
     "dns": {
       "a": [
-        "141.193.213.21",
-        "141.193.213.20"
+        "141.193.213.20",
+        "141.193.213.21"
       ],
       "aaaa": [],
       "cname": "4fdscza9fq8d.wpeproxy.com",
@@ -62,7 +62,7 @@
       {
         "name": "www.commanddigital.com",
         "alive": true,
-        "discovered": "2026-05-09T01:25:49Z"
+        "discovered": "2026-05-09T01:46:08Z"
       }
     ],
     "ports": [
@@ -204,8 +204,8 @@
       "title": "No DMARC record published",
       "detail": "Domain remains spoofable beyond what SPF protects against.",
       "evidence": "_dmarc TXT record absent",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
+      "first_seen": "2026-05-09T01:46:08Z",
+      "last_seen": "2026-05-09T01:46:08Z",
       "status": "open"
     },
     {
@@ -216,8 +216,8 @@
       "title": "No DKIM selector records found",
       "detail": "Outbound mail is unsigned.",
       "evidence": "Selectors probed: google, default, selector1, selector2, dkim, k1",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
+      "first_seen": "2026-05-09T01:46:08Z",
+      "last_seen": "2026-05-09T01:46:08Z",
       "status": "open"
     },
     {
@@ -228,8 +228,8 @@
       "title": "Missing: Content-Security-Policy",
       "detail": "Response from / does not include Content-Security-Policy.",
       "evidence": "GET / \u2192 headers do not contain Content-Security-Policy",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
+      "first_seen": "2026-05-09T01:46:08Z",
+      "last_seen": "2026-05-09T01:46:08Z",
       "status": "open"
     },
     {
@@ -240,8 +240,8 @@
       "title": "Missing: Strict-Transport-Security",
       "detail": "Response from / does not include Strict-Transport-Security.",
       "evidence": "GET / \u2192 headers do not contain Strict-Transport-Security",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
+      "first_seen": "2026-05-09T01:46:08Z",
+      "last_seen": "2026-05-09T01:46:08Z",
       "status": "open"
     },
     {
@@ -252,8 +252,8 @@
       "title": "Missing: X-Frame-Options",
       "detail": "Response from / does not include X-Frame-Options.",
       "evidence": "GET / \u2192 headers do not contain X-Frame-Options",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
+      "first_seen": "2026-05-09T01:46:08Z",
+      "last_seen": "2026-05-09T01:46:08Z",
       "status": "open"
     },
     {
@@ -264,8 +264,8 @@
       "title": "Missing: X-Content-Type-Options",
       "detail": "Response from / does not include X-Content-Type-Options.",
       "evidence": "GET / \u2192 headers do not contain X-Content-Type-Options",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
+      "first_seen": "2026-05-09T01:46:08Z",
+      "last_seen": "2026-05-09T01:46:08Z",
       "status": "open"
     },
     {
@@ -276,8 +276,8 @@
       "title": "Missing: Referrer-Policy",
       "detail": "Response from / does not include Referrer-Policy.",
       "evidence": "GET / \u2192 headers do not contain Referrer-Policy",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
+      "first_seen": "2026-05-09T01:46:08Z",
+      "last_seen": "2026-05-09T01:46:08Z",
       "status": "open"
     },
     {
@@ -288,8 +288,8 @@
       "title": "Missing: Permissions-Policy",
       "detail": "Response from / does not include Permissions-Policy.",
       "evidence": "GET / \u2192 headers do not contain Permissions-Policy",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
+      "first_seen": "2026-05-09T01:46:08Z",
+      "last_seen": "2026-05-09T01:46:08Z",
       "status": "open"
     },
     {
@@ -300,8 +300,8 @@
       "title": "Missing: X-XSS-Protection",
       "detail": "Response from / does not include X-XSS-Protection.",
       "evidence": "GET / \u2192 headers do not contain X-XSS-Protection",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
+      "first_seen": "2026-05-09T01:46:08Z",
+      "last_seen": "2026-05-09T01:46:08Z",
       "status": "open"
     },
     {
@@ -309,59 +309,11 @@
       "type": "exposed_debug_endpoint",
       "category": "exposure",
       "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
-      "status": "open"
-    },
-    {
-      "id": "E-011",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
-      "status": "open"
-    },
-    {
-      "id": "E-012",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
-      "status": "open"
-    },
-    {
-      "id": "E-013",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
       "title": "WordPress wp-links-opml.php - Version Disclosure",
       "detail": "WordPress wp-links-opml.php file was publicly accessible and expossed the WordPress version in the generator tag.\n",
       "evidence": "https://www.commanddigital.com/wp-links-opml.php (template: wp-links-opml)",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
-      "status": "open"
-    },
-    {
-      "id": "E-014",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "Missing Cookie SameSite Strict",
-      "detail": "Identified cookies that lacked the samesite=strict attribute, which prevented enforcement of restrictions on cross-domain cookie transmission.\n",
-      "evidence": "https://www.commanddigital.com (template: missing-cookie-samesite-strict)",
-      "first_seen": "2026-05-09T01:25:49Z",
-      "last_seen": "2026-05-09T01:25:49Z",
+      "first_seen": "2026-05-09T01:46:08Z",
+      "last_seen": "2026-05-09T01:46:08Z",
       "status": "open"
     }
   ],
@@ -371,14 +323,15 @@
       "subdomains": [],
       "ports": [],
       "exposures": [
-        "E-013",
-        "E-014"
+        "E-010"
       ]
     },
     "removed": {
       "subdomains": [],
       "ports": [],
-      "exposures": []
+      "exposures": [
+        "E-012"
+      ]
     },
     "changed": {
       "tech": []
@@ -463,11 +416,11 @@
       "exposures_total": 12
     },
     {
-      "scan_id": "scan_2026-05-09T01:18:03Z_9599a9ee",
+      "scan_id": "scan_2026-05-09T01:38:19Z_c8ee8a89",
       "live": true,
       "ports_open": 4,
       "subdomains_alive": 1,
-      "exposures_total": 14
+      "exposures_total": 10
     }
   ]
 }

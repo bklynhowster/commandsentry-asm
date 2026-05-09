@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-09T01:30:59Z_955aeb0e",
-    "started_at": "2026-05-09T01:30:59Z",
-    "completed_at": "2026-05-09T01:37:35Z",
-    "duration_seconds": 396,
+    "id": "scan_2026-05-08T23:59:21Z_099f1a82",
+    "started_at": "2026-05-08T23:59:22Z",
+    "completed_at": "2026-05-09T00:06:36Z",
+    "duration_seconds": 434,
     "engine_version": "1.0.0",
     "tools_run": [
       "dnsx",
@@ -62,7 +62,7 @@
       {
         "name": "commandcommcentral.com",
         "alive": true,
-        "discovered": "2026-05-09T01:37:35Z"
+        "discovered": "2026-05-09T00:06:36Z"
       }
     ],
     "ports": [
@@ -154,8 +154,8 @@
       "title": "No DMARC record published",
       "detail": "Domain remains spoofable beyond what SPF protects against.",
       "evidence": "_dmarc TXT record absent",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
+      "first_seen": "2026-05-09T00:06:36Z",
+      "last_seen": "2026-05-09T00:06:36Z",
       "status": "open"
     },
     {
@@ -166,8 +166,8 @@
       "title": "No DKIM selector records found",
       "detail": "Outbound mail is unsigned.",
       "evidence": "Selectors probed: google, default, selector1, selector2, dkim, k1",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
+      "first_seen": "2026-05-09T00:06:36Z",
+      "last_seen": "2026-05-09T00:06:36Z",
       "status": "open"
     },
     {
@@ -178,8 +178,8 @@
       "title": "Missing: Content-Security-Policy",
       "detail": "Response from / does not include Content-Security-Policy.",
       "evidence": "GET / \u2192 headers do not contain Content-Security-Policy",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
+      "first_seen": "2026-05-09T00:06:36Z",
+      "last_seen": "2026-05-09T00:06:36Z",
       "status": "open"
     },
     {
@@ -190,8 +190,8 @@
       "title": "Missing: Strict-Transport-Security",
       "detail": "Response from / does not include Strict-Transport-Security.",
       "evidence": "GET / \u2192 headers do not contain Strict-Transport-Security",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
+      "first_seen": "2026-05-09T00:06:36Z",
+      "last_seen": "2026-05-09T00:06:36Z",
       "status": "open"
     },
     {
@@ -202,8 +202,8 @@
       "title": "Missing: X-Frame-Options",
       "detail": "Response from / does not include X-Frame-Options.",
       "evidence": "GET / \u2192 headers do not contain X-Frame-Options",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
+      "first_seen": "2026-05-09T00:06:36Z",
+      "last_seen": "2026-05-09T00:06:36Z",
       "status": "open"
     },
     {
@@ -214,8 +214,8 @@
       "title": "Missing: X-Content-Type-Options",
       "detail": "Response from / does not include X-Content-Type-Options.",
       "evidence": "GET / \u2192 headers do not contain X-Content-Type-Options",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
+      "first_seen": "2026-05-09T00:06:36Z",
+      "last_seen": "2026-05-09T00:06:36Z",
       "status": "open"
     },
     {
@@ -226,8 +226,8 @@
       "title": "Missing: Referrer-Policy",
       "detail": "Response from / does not include Referrer-Policy.",
       "evidence": "GET / \u2192 headers do not contain Referrer-Policy",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
+      "first_seen": "2026-05-09T00:06:36Z",
+      "last_seen": "2026-05-09T00:06:36Z",
       "status": "open"
     },
     {
@@ -238,8 +238,8 @@
       "title": "Missing: Permissions-Policy",
       "detail": "Response from / does not include Permissions-Policy.",
       "evidence": "GET / \u2192 headers do not contain Permissions-Policy",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
+      "first_seen": "2026-05-09T00:06:36Z",
+      "last_seen": "2026-05-09T00:06:36Z",
       "status": "open"
     },
     {
@@ -250,115 +250,17 @@
       "title": "Missing: X-XSS-Protection",
       "detail": "Response from / does not include X-XSS-Protection.",
       "evidence": "GET / \u2192 headers do not contain X-XSS-Protection",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
-      "status": "open"
-    },
-    {
-      "id": "E-010",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://commandcommcentral.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
-      "status": "open"
-    },
-    {
-      "id": "E-011",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://commandcommcentral.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
-      "status": "open"
-    },
-    {
-      "id": "E-012",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://commandcommcentral.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
-      "status": "open"
-    },
-    {
-      "id": "E-013",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://commandcommcentral.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
-      "status": "open"
-    },
-    {
-      "id": "E-014",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://commandcommcentral.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
-      "status": "open"
-    },
-    {
-      "id": "E-015",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://commandcommcentral.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
-      "status": "open"
-    },
-    {
-      "id": "E-016",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://commandcommcentral.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
-      "status": "open"
-    },
-    {
-      "id": "E-017",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
-      "title": "HTTP Missing Security Headers",
-      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
-      "evidence": "https://commandcommcentral.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-09T01:37:35Z",
-      "last_seen": "2026-05-09T01:37:35Z",
+      "first_seen": "2026-05-09T00:06:36Z",
+      "last_seen": "2026-05-09T00:06:36Z",
       "status": "open"
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-08T23:59:21Z_099f1a82",
+    "since_scan": null,
     "added": {
       "subdomains": [],
       "ports": [],
-      "exposures": [
-        "E-017"
-      ]
+      "exposures": []
     },
     "removed": {
       "subdomains": [],
@@ -376,13 +278,6 @@
       "ports_open": 2,
       "subdomains_alive": 1,
       "exposures_total": 9
-    },
-    {
-      "scan_id": "scan_2026-05-09T01:30:59Z_955aeb0e",
-      "live": true,
-      "ports_open": 2,
-      "subdomains_alive": 1,
-      "exposures_total": 17
     }
   ]
 }
