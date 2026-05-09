@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-08T23:25:51Z_8418417e",
-    "started_at": "2026-05-08T23:25:51Z",
-    "completed_at": "2026-05-08T23:33:36Z",
-    "duration_seconds": 465,
+    "id": "scan_2026-05-08T23:45:58Z_813eefe1",
+    "started_at": "2026-05-08T23:45:58Z",
+    "completed_at": "2026-05-08T23:53:36Z",
+    "duration_seconds": 458,
     "engine_version": "1.0.0",
     "tools_run": [
       "dnsx",
@@ -45,8 +45,8 @@
     },
     "dns": {
       "a": [
-        "141.193.213.21",
-        "141.193.213.20"
+        "141.193.213.20",
+        "141.193.213.21"
       ],
       "aaaa": [],
       "cname": "4fdscza9fq8d.wpeproxy.com",
@@ -62,7 +62,7 @@
       {
         "name": "www.commanddigital.com",
         "alive": true,
-        "discovered": "2026-05-08T23:33:36Z"
+        "discovered": "2026-05-08T23:53:36Z"
       }
     ],
     "ports": [
@@ -204,8 +204,8 @@
       "title": "No DMARC record published",
       "detail": "Domain remains spoofable beyond what SPF protects against.",
       "evidence": "_dmarc TXT record absent",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     },
     {
@@ -216,8 +216,8 @@
       "title": "No DKIM selector records found",
       "detail": "Outbound mail is unsigned.",
       "evidence": "Selectors probed: google, default, selector1, selector2, dkim, k1",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     },
     {
@@ -228,8 +228,8 @@
       "title": "Missing: Content-Security-Policy",
       "detail": "Response from / does not include Content-Security-Policy.",
       "evidence": "GET / \u2192 headers do not contain Content-Security-Policy",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     },
     {
@@ -240,8 +240,8 @@
       "title": "Missing: Strict-Transport-Security",
       "detail": "Response from / does not include Strict-Transport-Security.",
       "evidence": "GET / \u2192 headers do not contain Strict-Transport-Security",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     },
     {
@@ -252,8 +252,8 @@
       "title": "Missing: X-Frame-Options",
       "detail": "Response from / does not include X-Frame-Options.",
       "evidence": "GET / \u2192 headers do not contain X-Frame-Options",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     },
     {
@@ -264,8 +264,8 @@
       "title": "Missing: X-Content-Type-Options",
       "detail": "Response from / does not include X-Content-Type-Options.",
       "evidence": "GET / \u2192 headers do not contain X-Content-Type-Options",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     },
     {
@@ -276,8 +276,8 @@
       "title": "Missing: Referrer-Policy",
       "detail": "Response from / does not include Referrer-Policy.",
       "evidence": "GET / \u2192 headers do not contain Referrer-Policy",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     },
     {
@@ -288,8 +288,8 @@
       "title": "Missing: Permissions-Policy",
       "detail": "Response from / does not include Permissions-Policy.",
       "evidence": "GET / \u2192 headers do not contain Permissions-Policy",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     },
     {
@@ -300,8 +300,8 @@
       "title": "Missing: X-XSS-Protection",
       "detail": "Response from / does not include X-XSS-Protection.",
       "evidence": "GET / \u2192 headers do not contain X-XSS-Protection",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     },
     {
@@ -309,11 +309,11 @@
       "type": "exposed_debug_endpoint",
       "category": "exposure",
       "severity": "notice",
-      "title": "Missing Cookie SameSite Strict",
-      "detail": "Identified cookies that lacked the samesite=strict attribute, which prevented enforcement of restrictions on cross-domain cookie transmission.\n",
-      "evidence": "https://www.commanddigital.com (template: missing-cookie-samesite-strict)",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "title": "HTTP Missing Security Headers",
+      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
+      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     },
     {
@@ -321,11 +321,11 @@
       "type": "exposed_debug_endpoint",
       "category": "exposure",
       "severity": "notice",
-      "title": "Missing Subresource Integrity",
-      "detail": "Checks if external script and stylesheet tags in the HTML response are missing the Subresource Integrity (SRI) attribute.\n",
-      "evidence": "https://www.commanddigital.com/ (template: missing-sri)",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "title": "HTTP Missing Security Headers",
+      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
+      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     },
     {
@@ -336,8 +336,8 @@
       "title": "HTTP Missing Security Headers",
       "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
       "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     },
     {
@@ -348,8 +348,8 @@
       "title": "HTTP Missing Security Headers",
       "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
       "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     },
     {
@@ -360,8 +360,104 @@
       "title": "HTTP Missing Security Headers",
       "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
       "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
-      "first_seen": "2026-05-08T23:33:36Z",
-      "last_seen": "2026-05-08T23:33:36Z",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
+      "status": "open"
+    },
+    {
+      "id": "E-015",
+      "type": "exposed_debug_endpoint",
+      "category": "exposure",
+      "severity": "notice",
+      "title": "HTTP Missing Security Headers",
+      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
+      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
+      "status": "open"
+    },
+    {
+      "id": "E-016",
+      "type": "exposed_debug_endpoint",
+      "category": "exposure",
+      "severity": "notice",
+      "title": "HTTP Missing Security Headers",
+      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
+      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
+      "status": "open"
+    },
+    {
+      "id": "E-017",
+      "type": "exposed_debug_endpoint",
+      "category": "exposure",
+      "severity": "notice",
+      "title": "HTTP Missing Security Headers",
+      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
+      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
+      "status": "open"
+    },
+    {
+      "id": "E-018",
+      "type": "exposed_debug_endpoint",
+      "category": "exposure",
+      "severity": "notice",
+      "title": "HTTP Missing Security Headers",
+      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
+      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
+      "status": "open"
+    },
+    {
+      "id": "E-019",
+      "type": "exposed_debug_endpoint",
+      "category": "exposure",
+      "severity": "notice",
+      "title": "HTTP Missing Security Headers",
+      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
+      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
+      "status": "open"
+    },
+    {
+      "id": "E-020",
+      "type": "exposed_debug_endpoint",
+      "category": "exposure",
+      "severity": "notice",
+      "title": "HTTP Missing Security Headers",
+      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
+      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
+      "status": "open"
+    },
+    {
+      "id": "E-021",
+      "type": "exposed_debug_endpoint",
+      "category": "exposure",
+      "severity": "notice",
+      "title": "HTTP Missing Security Headers",
+      "detail": "This template searches for missing HTTP security headers. The impact of these missing headers can vary.\n",
+      "evidence": "https://www.commanddigital.com (template: http-missing-security-headers)",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
+      "status": "open"
+    },
+    {
+      "id": "E-022",
+      "type": "exposed_debug_endpoint",
+      "category": "exposure",
+      "severity": "notice",
+      "title": "Missing Cookie SameSite Strict",
+      "detail": "Identified cookies that lacked the samesite=strict attribute, which prevented enforcement of restrictions on cross-domain cookie transmission.\n",
+      "evidence": "https://www.commanddigital.com (template: missing-cookie-samesite-strict)",
+      "first_seen": "2026-05-08T23:53:36Z",
+      "last_seen": "2026-05-08T23:53:36Z",
       "status": "open"
     }
   ],
@@ -370,9 +466,7 @@
     "added": {
       "subdomains": [],
       "ports": [],
-      "exposures": [
-        "E-011"
-      ]
+      "exposures": []
     },
     "removed": {
       "subdomains": [],
@@ -450,11 +544,11 @@
       "exposures_total": 14
     },
     {
-      "scan_id": "scan_2026-05-08T23:25:51Z_8418417e",
+      "scan_id": "scan_2026-05-08T23:45:58Z_813eefe1",
       "live": true,
       "ports_open": 4,
       "subdomains_alive": 1,
-      "exposures_total": 14
+      "exposures_total": 22
     }
   ]
 }
