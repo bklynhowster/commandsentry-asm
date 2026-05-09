@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-09T13:09:12Z_64b9cb1a",
-    "started_at": "2026-05-09T13:09:12Z",
-    "completed_at": "2026-05-09T13:11:17Z",
-    "duration_seconds": 125,
+    "id": "scan_2026-05-09T13:18:29Z_ab108c46",
+    "started_at": "2026-05-09T13:18:29Z",
+    "completed_at": "2026-05-09T13:20:28Z",
+    "duration_seconds": 119,
     "engine_version": "2.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -114,8 +114,8 @@
     {
       "name": "unimacgraphics.com",
       "alive": true,
-      "first_discovered": "2026-05-09T13:11:17Z",
-      "last_seen": "2026-05-09T13:11:17Z"
+      "first_discovered": "2026-05-09T13:20:28Z",
+      "last_seen": "2026-05-09T13:20:28Z"
     }
   ],
   "dns": {
@@ -131,17 +131,24 @@
       "ns36.domaincontrol.com"
     ],
     "txt": [
-      "2o6gse9gno2mv04ik7f14kssfq",
-      "MS=ms33269626",
-      "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
       "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
+      "k15vdsovvom4v46fi4r4rivts6",
+      "MS=ms33269626",
+      "2o6gse9gno2mv04ik7f14kssfq",
       "sek942qd3nt1s4lqh1h2ovmmai",
-      "k15vdsovvom4v46fi4r4rivts6"
+      "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
     ],
     "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
     "dnssec": false
   },
-  "registration": {},
+  "registration": {
+    "registrar": "GoDaddy.com, LLC",
+    "registrar_url": "https://www.godaddy.com",
+    "created": "1999-09-24",
+    "updated": "2022-08-08",
+    "expires": "2027-09-24",
+    "status": "clientTransferProhibited"
+  },
   "fingerprint": {
     "server": "nginx",
     "platform_label": "WordPress on wp.cloud (Pressable)",
@@ -165,6 +172,11 @@
         "name": "HSTS",
         "version": null,
         "category": "security"
+      },
+      {
+        "name": "HTTP/3",
+        "version": null,
+        "category": "transport"
       },
       {
         "name": "Imagely NextGEN Gallery",
@@ -257,7 +269,7 @@
   },
   "history": [
     {
-      "scan_id": "scan_2026-05-09T13:09:12Z_64b9cb1a",
+      "scan_id": "scan_2026-05-09T13:18:29Z_ab108c46",
       "live": true,
       "host_count": 2,
       "service_count": 4,
