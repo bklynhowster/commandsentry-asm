@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-09T13:20:28Z_7043776e",
-    "started_at": "2026-05-09T13:20:28Z",
-    "completed_at": "2026-05-09T13:22:13Z",
-    "duration_seconds": 105,
+    "id": "scan_2026-05-09T13:47:21Z_6072c83d",
+    "started_at": "2026-05-09T13:47:21Z",
+    "completed_at": "2026-05-09T13:48:59Z",
+    "duration_seconds": 98,
     "engine_version": "2.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -76,8 +76,8 @@
     {
       "name": "test.commandcommcentral.com",
       "alive": true,
-      "first_discovered": "2026-05-09T13:22:13Z",
-      "last_seen": "2026-05-09T13:22:13Z"
+      "first_discovered": "2026-05-09T13:48:59Z",
+      "last_seen": "2026-05-09T13:48:59Z"
     }
   ],
   "dns": {
@@ -135,7 +135,7 @@
     "confidence": "high"
   },
   "deltas": {
-    "since_scan": null,
+    "since_scan": "scan_2026-05-09T13:20:28Z_7043776e",
     "added": {
       "subdomains": [],
       "hosts": [],
@@ -154,6 +154,13 @@
   "history": [
     {
       "scan_id": "scan_2026-05-09T13:20:28Z_7043776e",
+      "live": true,
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_count": 1
+    },
+    {
+      "scan_id": "scan_2026-05-09T13:47:21Z_6072c83d",
       "live": true,
       "host_count": 1,
       "service_count": 2,
