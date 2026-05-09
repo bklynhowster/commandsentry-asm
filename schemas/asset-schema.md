@@ -1,24 +1,19 @@
-# Asset JSON Schema (ASM v2)
+# Asset JSON Schema (ASM v3)
 
-Per-asset record produced by `scanner/normalize.py`. Pure ASM — no vulnerability analysis,
-no security posture scoring, no exposure flags. Just surface data: what's out there,
-where it lives, and what it's serving.
+**Asset = apex domain.** Subdomains are nested children, each with their own
+hosts/services/cert/WAF/fingerprint. This matches how real ASM tools organize
+data and matches how operators reason about their attack surface.
 
 ## Top-level shape
 
 ```json
 {
-  "schema_version": "2.0",
+  "schema_version": "3.0",
   "asset":         { ... },
   "scan":          { ... },
-  "reachability":  { ... },
-  "hosts":         [ ... ],
-  "services":      [ ... ],
-  "subdomains":    [ ... ],
-  "dns":           { ... },
   "registration":  { ... },
-  "fingerprint":   { ... },
-  "waf":           { ... },
+  "summary":       { ... },
+  "subdomains":    [ ... ],
   "deltas":        { ... },
   "history":       [ ... ]
 }
@@ -28,206 +23,208 @@ where it lives, and what it's serving.
 
 ```json
 {
-  "id": "unimacgraphics-www",
-  "type": "fqdn",
-  "value": "unimacgraphics.com",
+  "id": "commandcommcentral",
+  "type": "apex",
+  "value": "commandcommcentral.com",
   "owner": "command_digital",
-  "tags": ["production", "subsidiary"],
-  "notes": "Pressable shared hosting",
+  "tags": ["production"],
+  "notes": "...",
   "discovered_via": "manual"
 }
 ```
+
+`type` values: `apex` (preferred), `fqdn`, `ip`, `cidr`. Apex is the canonical type — even single-FQDN scans should usually be modeled as an apex with one subdomain.
 
 ## `scan`
 
 ```json
 {
-  "id": "scan_2026-05-09T03:50:07Z_e622225d",
+  "id": "scan_2026-05-09T...",
   "started_at": "2026-05-09T03:50:07Z",
-  "completed_at": "2026-05-09T03:52:54Z",
-  "duration_seconds": 167,
-  "engine_version": "2.0.0",
+  "completed_at": "2026-05-09T04:01:12Z",
+  "duration_seconds": 665,
+  "engine_version": "3.0.0",
   "scanner_origin": "github-actions-ubuntu-azure",
-  "tools_run": ["dnsx", "subfinder", "naabu", "fingerprintx", "httpx", "wafw00f", "testssl", "whois"]
+  "tools_run": ["subfinder", "dnsx", "naabu", "fingerprintx", "httpx", "wafw00f", "testssl", "whois"]
 }
 ```
-
-## `reachability`
-
-```json
-{
-  "live": true,
-  "http_status": 200,
-  "title": "Home - Unimac, a Command Company"
-}
-```
-
-## `hosts[]` — IPs the asset resolves to, with attribution
-
-```json
-[
-  {
-    "ip": "199.16.172.68",
-    "asn": "AS54017",
-    "asn_org": "Pressable, Inc.",
-    "country": "US",
-    "region": "Oregon",
-    "city": "Boardman",
-    "reverse_dns": null,
-    "is_private": false
-  }
-]
-```
-
-## `services[]` — what's listening on each (IP, port)
-
-```json
-[
-  {
-    "ip": "199.16.172.68",
-    "port": 80,
-    "protocol": "tcp",
-    "service": "http",
-    "banner": "nginx",
-    "tls": false
-  },
-  {
-    "ip": "199.16.172.68",
-    "port": 443,
-    "protocol": "tcp",
-    "service": "https",
-    "banner": "nginx",
-    "tls": true,
-    "cert": {
-      "subject": "*.wpcomstaging.com",
-      "issuer": "Let's Encrypt",
-      "san": ["*.wpcomstaging.com", "wpcomstaging.com"],
-      "not_before": "2026-04-01T00:00:00Z",
-      "not_after":  "2026-06-30T00:00:00Z",
-      "days_to_expiry": 47,
-      "self_signed": false
-    }
-  }
-]
-```
-
-Service strings produced by fingerprintx (preferred) or inferred from port number when fingerprintx is unavailable.
-
-Common services: `http`, `https`, `ssh`, `ftp`, `sftp`, `smtp`, `imap`, `pop3`, `dns`,
-`mysql`, `postgres`, `redis`, `mongodb`, `rdp`, `vnc`, `telnet`, `snmp`, `ldap`, `kerberos`.
-
-## `subdomains[]`
-
-```json
-[
-  {
-    "name": "www.commanddigital.com",
-    "alive": true,
-    "first_discovered": "2026-05-08T00:30:56Z",
-    "last_seen":        "2026-05-09T03:50:07Z"
-  }
-]
-```
-
-For `fqdn` targets: just the asset itself.
-For `apex` targets: passive enum + liveness check.
-
-## `dns`
-
-```json
-{
-  "a":     ["199.16.172.68", "199.16.173.113"],
-  "aaaa":  [],
-  "cname": null,
-  "mx":    [],
-  "ns":    ["ns35.domaincontrol.com", "ns36.domaincontrol.com"],
-  "txt":   ["v=spf1 exists:..."],
-  "spf":   "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-  "dnssec": false
-}
-```
-
-Informational only. ASM doesn't grade DMARC/DKIM presence — that's posture analysis.
 
 ## `registration`
+
+Whois data for the apex domain. One per asset (not per subdomain).
 
 ```json
 {
   "registrar": "GoDaddy",
   "registrar_url": "https://www.godaddy.com",
-  "created":    "2003-04-15",
-  "updated":    "2025-03-10",
-  "expires":    "2027-04-15",
-  "status":     "active"
+  "created":  "2003-04-15",
+  "updated":  "2025-03-10",
+  "expires":  "2027-04-15",
+  "status":   "active"
 }
 ```
 
-Whois data, when parseable. Registrar-specific format — graceful when fields can't be extracted.
+## `summary`
 
-## `fingerprint`
+Roll-up metrics across all subdomains. Drives the inventory card.
 
 ```json
 {
-  "server": "nginx",
-  "platform_label": "WordPress on wp.cloud (Pressable)",
-  "tech": [
-    { "name": "WordPress",        "version": null,    "category": "cms" },
-    { "name": "Yoast SEO",        "version": "27.5",  "category": "wp-plugin" },
-    { "name": "Slider Revolution","version": "6.7.54","category": "wp-plugin" },
-    { "name": "Bootstrap",        "version": "5.1.3", "category": "frontend" },
-    { "name": "Google Tag Manager","version": null,   "category": "tracking" }
-  ]
+  "subdomain_count":       2,
+  "live_subdomain_count":  2,
+  "host_count":            4,
+  "service_count":         8,
+  "newest_cert_expiry_days": 47,
+  "top_hosting_org":       "SCI",
+  "platforms":             ["FortiGate-protected .NET Core"]
 }
 ```
 
-Informational tech detection from httpx. ASM-relevant only as inventory — version-to-CVE
-matching is a vuln-scanning concern (future module).
+`top_hosting_org` is the most-common ASN org across all subdomain hosts.
 
-## `waf`
+## `subdomains[]`
+
+Each subdomain is a complete record of what's discovered at that hostname.
 
 ```json
-{ "detected": true, "vendor": "Cloudflare", "confidence": "high" }
+[
+  {
+    "name": "commandcommcentral.com",
+    "alive": true,
+    "is_root": true,
+    "discovered_via": "dnsx",
+    "first_discovered": "2026-05-09T03:50:07Z",
+    "last_seen":        "2026-05-09T03:50:07Z",
+    "tags": [],
+
+    "reachability": {
+      "live": true,
+      "http_status": 200,
+      "title": "Command Communications Central"
+    },
+
+    "hosts": [
+      {
+        "ip": "12.34.56.78",
+        "asn": "AS00000",
+        "asn_org": "SCI",
+        "country": "US",
+        "region": "Texas",
+        "city": "Houston",
+        "reverse_dns": null,
+        "is_private": false
+      }
+    ],
+
+    "services": [
+      {
+        "ip": "12.34.56.78",
+        "port": 443,
+        "protocol": "tcp",
+        "service": "https",
+        "banner": "Microsoft-IIS/10.0",
+        "tls": true,
+        "cert": {
+          "subject": "*.commandcommcentral.com",
+          "issuer": "Sectigo",
+          "san": [...],
+          "not_before": "...",
+          "not_after":  "...",
+          "days_to_expiry": 47,
+          "self_signed": false
+        }
+      }
+    ],
+
+    "dns": {
+      "a": [...], "aaaa": [...], "cname": null,
+      "mx": [...], "ns": [...], "txt": [...],
+      "spf": "v=spf1 ...", "dnssec": false
+    },
+
+    "fingerprint": {
+      "server": "Microsoft-IIS/10.0",
+      "platform_label": "Microsoft .NET Core 8 + IIS",
+      "tech": [
+        { "name": "ASP.NET Core", "version": "8.0", "category": "framework" }
+      ]
+    },
+
+    "waf": { "detected": true, "vendor": "FortiGate", "confidence": "high" }
+  },
+  {
+    "name": "test.commandcommcentral.com",
+    "alive": true,
+    "is_root": false,
+    "discovered_via": "subfinder",
+    "first_discovered": "...",
+    "last_seen": "...",
+    "tags": ["test"],
+    "reachability": { ... },
+    "hosts": [ ... ],
+    "services": [ ... ],
+    "dns": { ... },
+    "fingerprint": { ... },
+    "waf": { ... }
+  }
+]
 ```
 
-## `deltas` — what changed since the previous scan
+`is_root: true` marks the apex itself. Sorted with root first, then alphabetical.
+
+`discovered_via`: `dnsx` (the apex resolves directly), `subfinder` (passive enum), `manual` (explicit), `cidr` (from CIDR sweep).
+
+## `deltas` — surface changes since previous scan
+
+Now subdomain-aware: each delta entry references which subdomain it belongs to.
 
 ```json
 {
-  "since_scan": "scan_2026-05-08T...",
+  "since_scan": "scan_...",
   "added": {
-    "subdomains": ["staging.example.com"],
-    "hosts":      [{ "ip": "..." }],
-    "services":   [{ "ip": "...", "port": 8443 }]
+    "subdomains": ["staging.commandcommcentral.com"],
+    "services":   [{ "subdomain": "test.commandcommcentral.com", "ip": "...", "port": 8443 }],
+    "hosts":      [{ "subdomain": "...", "ip": "..." }]
   },
   "removed": {
     "subdomains": [],
-    "hosts":      [],
-    "services":   []
+    "services":   [],
+    "hosts":      []
   },
   "changed": {
-    "fingerprint": [{ "name": "WordPress", "from": "6.8.2", "to": "6.9.1" }],
-    "cert":        []
+    "fingerprint": [{ "subdomain": "...", "name": "WordPress", "from": "6.8", "to": "6.9" }],
+    "cert":        [{ "subdomain": "...", "from": ["Sectigo"], "to": ["Let's Encrypt"] }]
   }
 }
 ```
 
-This is what email alerts fire on. Surface changes — not posture interpretations.
+## `history[]`
 
-## `history[]` — last N scans, for trend rendering
+Last 90 scans, summary metrics for trend rendering.
 
 ```json
 [
   {
     "scan_id": "...",
-    "live": true,
-    "host_count": 2,
-    "service_count": 4,
-    "subdomain_count": 1
+    "subdomain_count": 2,
+    "live_subdomain_count": 2,
+    "host_count": 4,
+    "service_count": 8
   }
 ]
 ```
 
-## Legacy v1 fields (deprecated)
+## Adapter behavior per target type
 
-The old `inventory.*` and `exposures[]` fields from v1 are gone. Migration: re-scan
-each asset to produce v2 records. Old v1 asset files will be overwritten on next scan.
+| Target type | `subdomains[]` content |
+|---|---|
+| `apex`  | Root + everything subfinder finds, each scanned individually |
+| `fqdn`  | Just the single FQDN as one entry (no subfinder run — backward compat) |
+| `ip`    | One entry, name = the IP, no DNS |
+| `cidr`  | One entry per live host in the range (Phase 2: full per-host scan) |
+
+Either way the structure is uniform — clients always read `subdomains[]`.
+
+## Migration
+
+v2 records (which lacked nesting) are not forward-compatible. First scan after the v3 engine deploys produces a v3 record; old v2 files are overwritten on re-scan, removed otherwise.

@@ -65,8 +65,8 @@ def collect_alerts() -> list[Alert]:
             asset = json.loads(path.read_text())
         except Exception:
             continue
-        # Only v2 records — skip v1 assets that haven't been re-scanned yet
-        if asset.get("schema_version") != "2.0":
+        # Only v3 records
+        if asset.get("schema_version") != "3.0":
             continue
 
         completed_at = asset.get("scan", {}).get("completed_at")
@@ -85,96 +85,94 @@ def collect_alerts() -> list[Alert]:
         changed = deltas.get("changed") or {}
         first_scan = (deltas.get("since_scan") in (None, ""))
 
+        summary = asset.get("summary") or {}
         if first_scan:
-            host_count = len(asset.get("hosts") or [])
-            svc_count  = len(asset.get("services") or [])
-            sub_count  = sum(1 for s in (asset.get("subdomains") or []) if s.get("alive"))
+            sc = summary.get("live_subdomain_count", 0)
+            hc = summary.get("host_count", 0)
+            vc = summary.get("service_count", 0)
             out.append(Alert(
                 "notice", aname, "first_scan",
                 f"First scan completed for {aname}",
-                f"{host_count} host(s), {svc_count} service(s), {sub_count} live subdomain(s)."
+                f"{sc} live subdomain(s), {hc} host(s), {vc} service(s)."
             ))
 
-        # WATCH-severity: new IPs (hosting moved or expanded)
+        # WATCH: new IPs (per subdomain)
         for h in (added.get("hosts") or []):
+            sub = h.get("subdomain") or "?"
             out.append(Alert(
                 "watch", aname, "new_host",
-                f"New host IP: {h.get('ip')}",
+                f"New host IP {h.get('ip')} on {sub}",
                 "Hosting expanded or moved."
             ))
         for h in (removed.get("hosts") or []):
-            out.append(Alert(
-                "notice", aname, "host_removed",
-                f"Host IP removed: {h.get('ip')}",
-                ""
-            ))
+            sub = h.get("subdomain") or "?"
+            out.append(Alert("notice", aname, "host_removed",
+                             f"Host IP {h.get('ip')} removed from {sub}", ""))
 
-        # WATCH-severity: new services (new ports/protocols open)
+        # WATCH: new services (per subdomain)
         for s in (added.get("services") or []):
+            sub = s.get("subdomain") or "?"
             out.append(Alert(
                 "watch", aname, "new_service",
-                f"New service open: {s.get('port')}/{s.get('protocol')} on {s.get('ip')}",
-                "Port wasn't open in the previous scan."
+                f"New service open on {sub}: {s.get('port')}/{s.get('protocol')}",
+                f"On host {s.get('ip')}. Port wasn't open in the previous scan."
             ))
         for s in (removed.get("services") or []):
-            out.append(Alert(
-                "notice", aname, "service_closed",
-                f"Service closed: {s.get('port')}/{s.get('protocol')} on {s.get('ip')}",
-                ""
-            ))
+            sub = s.get("subdomain") or "?"
+            out.append(Alert("notice", aname, "service_closed",
+                             f"Service closed on {sub}: {s.get('port')}/{s.get('protocol')}", ""))
 
-        # NOTICE-severity: subdomain churn
+        # NOTICE: subdomain churn
         for sub in (added.get("subdomains") or []):
-            out.append(Alert("notice", aname, "new_subdomain", f"New subdomain: {sub}", ""))
+            out.append(Alert("notice", aname, "new_subdomain",
+                             f"New subdomain discovered: {sub}",
+                             "Surfaced via subfinder passive enumeration."))
         for sub in (removed.get("subdomains") or []):
-            out.append(Alert("notice", aname, "subdomain_gone", f"Subdomain gone: {sub}", ""))
+            out.append(Alert("notice", aname, "subdomain_gone",
+                             f"Subdomain went away: {sub}", ""))
 
-        # NOTICE-severity: tech version changes
+        # NOTICE: tech version changes (per subdomain)
         for t in (changed.get("fingerprint") or []):
+            sub = t.get("subdomain") or "?"
             out.append(Alert(
                 "notice", aname, "tech_changed",
-                f"{t.get('name')}: {t.get('from') or '?'} → {t.get('to') or '?'}",
+                f"{sub}: {t.get('name')} {t.get('from') or '?'} → {t.get('to') or '?'}",
                 "Detected version change in tech fingerprint."
             ))
 
-        # WATCH-severity: cert chain changed (different issuer)
+        # WATCH: cert chain changed (per subdomain)
         for c in (changed.get("cert") or []):
+            sub = c.get("subdomain") or "?"
             out.append(Alert(
                 "watch", aname, "cert_changed",
-                "Certificate chain changed",
+                f"Certificate chain changed on {sub}",
                 f"Issuer set: {(c.get('from') or [])} → {(c.get('to') or [])}"
             ))
 
-        # WATCH/notice: cert expiry windows (across all services)
-        for s in (asset.get("services") or []):
-            cert = s.get("cert") or {}
-            days = cert.get("days_to_expiry")
-            if not isinstance(days, (int, float)):
-                continue
-            label = f"{s.get('ip')}:{s.get('port')}"
-            if days < 7:
-                out.append(Alert(
-                    "watch", aname, "cert_expiring",
-                    f"Cert on {label} expires in {int(days)} day(s)",
-                    f"Issuer: {cert.get('issuer') or '?'}"
-                ))
-            elif days < 30:
-                out.append(Alert(
-                    "notice", aname, "cert_expiring_soon",
-                    f"Cert on {label} expires in {int(days)} day(s)",
-                    ""
-                ))
+        # WATCH/notice: cert expiry windows (across all subs' services)
+        for sub in (asset.get("subdomains") or []):
+            sub_name = sub.get("name", "?")
+            for svc in (sub.get("services") or []):
+                cert = svc.get("cert") or {}
+                days = cert.get("days_to_expiry")
+                if not isinstance(days, (int, float)):
+                    continue
+                label = f"{sub_name} ({svc.get('ip')}:{svc.get('port')})"
+                if days < 7:
+                    out.append(Alert("watch", aname, "cert_expiring",
+                                     f"Cert on {label} expires in {int(days)} day(s)",
+                                     f"Issuer: {cert.get('issuer') or '?'}"))
+                elif days < 30:
+                    out.append(Alert("notice", aname, "cert_expiring_soon",
+                                     f"Cert on {label} expires in {int(days)} day(s)", ""))
 
-        # WATCH: asset went offline
-        if asset.get("reachability", {}).get("live") is False:
-            history = asset.get("history") or []
-            prev_live = next((h.get("live") for h in reversed(history[:-1])), None)
-            if prev_live:
-                out.append(Alert(
-                    "watch", aname, "asset_offline",
-                    f"{aname} is offline",
-                    "Was responding in the previous scan."
-                ))
+        # WATCH: any subdomain went offline that was previously live
+        # (best-effort — we don't store per-sub history yet, just flag dead-when-expected)
+        for sub in (asset.get("subdomains") or []):
+            if sub.get("reachability", {}).get("live") is False and sub.get("is_root"):
+                out.append(Alert("watch", aname, "asset_offline",
+                                 f"Apex {aname} is offline",
+                                 "Root subdomain not responding."))
 
     return out
 

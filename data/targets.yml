@@ -1,53 +1,44 @@
-version: 1
+version: 2
 defaults:
   schedule: nightly
-  profile: deep-probe
   rate_limit: normal
   notify_on:
     - critical
     - high
   retain_history_days: 365
 targets:
-  - id: commanddigital-www
-    type: fqdn
-    value: www.commanddigital.com
+  - id: commandcompanies
+    type: apex
+    value: commandcompanies.com
     scope_verified: true
     owner: command_digital
     tags:
       - production
-      - wordpress
       - public-facing
-      - marketing
-    notes: WordPress 6.9.1 + Elementor + OceanWP, WP Engine + Cloudflare WAF
-  - id: unimacgraphics-www
-    type: fqdn
+      - corporate
+    notes: Replaces commanddigital.com (which is no longer used by the org).
+
+  - id: unimacgraphics
+    type: apex
     value: unimacgraphics.com
     scope_verified: true
     owner: command_digital
     tags:
       - production
-      - wordpress
-      - public-facing
       - subsidiary
-    notes: Pressable shared hosting, requires --resolve for SNI
+      - public-facing
+    notes: Pressable shared hosting.
     rate_limit: gentle
-  - id: ccc-test
-    type: fqdn
-    value: test.commandcommcentral.com
-    scope_verified: true
-    owner: command_digital
-    tags:
-      - test
-      - dotnet-core
-      - fortinet-waf
-      - internal-app
-    notes: .NET Core 8 + IIS, FortiGate WAF, hosted by SCI. Test env.
-    rate_limit: gentle
-  - id: commandcommcentral-com
-    type: fqdn
+
+  - id: commandcommcentral
+    type: apex
     value: commandcommcentral.com
     scope_verified: true
     owner: command_digital
-    tags: []
-    notes: ''
+    tags:
+      - production
+      - internal-app
+    notes: .NET Core 8 + IIS, FortiGate WAF, hosted by SCI. Includes test subdomain.
+    rate_limit: gentle
+
 discovered: []

@@ -1,5 +1,5 @@
-/* COMMANDsentry — dashboard (v2 ASM schema)
-   Vanilla JS, no framework. Reads ./data/_manifest.json + per-asset JSON.
+/* COMMANDsentry — dashboard (v3 apex-as-asset schema with subdomain drill-down)
+   Vanilla JS, no framework.
    ──────────────────────────────────────────────────────────────────────── */
 
 (() => {
@@ -14,9 +14,10 @@
     filterTag: "",
     filterOwner: "",
     activeView: "inventory",
+    activeAsset: null,        // currently-open asset id
+    activeSub: null,          // currently-expanded subdomain name within drawer
   };
 
-  // ─── boot ────────────────────────────────────────────────
   document.addEventListener("DOMContentLoaded", async () => {
     bindUI();
     try { await loadAll(); }
@@ -25,7 +26,7 @@
     render();
   });
 
-  // ─── loaders ─────────────────────────────────────────────
+  // ─── data loading ────────────────────────────────────────
   async function loadAll() {
     let manifest;
     try {
@@ -33,11 +34,10 @@
       if (!r.ok) throw new Error(`manifest ${r.status}`);
       manifest = await r.json();
     } catch (e) {
-      throw new Error(`Couldn't load ${MANIFEST}: ${e.message}. Run web/sync-data.sh first.`);
+      throw new Error(`Couldn't load ${MANIFEST}: ${e.message}.`);
     }
     const ids = manifest.assets || [];
-    if (!ids.length) throw new Error("Manifest has no assets. Run a scan first, then web/sync-data.sh.");
-
+    if (!ids.length) throw new Error("Manifest has no assets.");
     const results = await Promise.all(
       ids.map(async (id) => {
         try {
@@ -47,13 +47,12 @@
         } catch { return null; }
       })
     );
-    state.assets = results.filter(Boolean);
+    state.assets = results.filter(Boolean).filter((a) => a.schema_version === "3.0");
   }
 
   function showLoadError(e) {
     const el = document.getElementById("view-loading");
-    if (!el) return;
-    el.innerHTML = `<div class="empty"><strong>${escapeHtml(e.message)}</strong></div>`;
+    if (el) el.innerHTML = `<div class="empty"><strong>${escapeHtml(e.message)}</strong></div>`;
   }
 
   // ─── ui binding ──────────────────────────────────────────
@@ -70,28 +69,23 @@
       renderInventory();
     });
     document.getElementById("filter-tag").addEventListener("change", (e) => {
-      state.filterTag = e.target.value;
-      renderInventory();
+      state.filterTag = e.target.value; renderInventory();
     });
     document.getElementById("filter-owner").addEventListener("change", (e) => {
-      state.filterOwner = e.target.value;
-      renderInventory();
+      state.filterOwner = e.target.value; renderInventory();
     });
     document.getElementById("drawer-close").addEventListener("click", closeDrawer);
     document.querySelector(".drawer-backdrop").addEventListener("click", closeDrawer);
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") { closeDrawer(); closeAddModal(); }
     });
-
-    // Add Target modal
+    // Add-target modal (unchanged)
     document.getElementById("add-target-btn").addEventListener("click", openAddModal);
     document.getElementById("add-modal-close").addEventListener("click", closeAddModal);
     document.getElementById("add-cancel-btn").addEventListener("click", closeAddModal);
     document.querySelector("#add-modal .modal-backdrop").addEventListener("click", closeAddModal);
     document.getElementById("add-target-form").addEventListener("submit", handleAddSubmit);
-    document.querySelectorAll("input[name=\"type\"]").forEach((r) => {
-      r.addEventListener("change", updateTypeHelp);
-    });
+    document.querySelectorAll("input[name=\"type\"]").forEach((r) => r.addEventListener("change", updateTypeHelp));
     document.getElementById("t-value").addEventListener("input", autofillId);
     const idInput = document.getElementById("t-id");
     if (idInput) idInput.addEventListener("input", () => { idInput.dataset.touched = "true"; });
@@ -116,12 +110,9 @@
   function renderTopbar() {
     const el = document.getElementById("last-scan-summary");
     if (!state.assets.length) { el.textContent = "no data"; return; }
-    const newest = state.assets
-      .map((a) => a.scan?.completed_at)
-      .filter(Boolean)
-      .sort()
-      .pop();
-    el.textContent = `${state.assets.length} asset${state.assets.length === 1 ? "" : "s"} · last scan ${formatRelTime(newest)}`;
+    const newest = state.assets.map((a) => a.scan?.completed_at).filter(Boolean).sort().pop();
+    const totalSubs = state.assets.reduce((n, a) => n + (a.summary?.subdomain_count || 0), 0);
+    el.textContent = `${state.assets.length} domain${state.assets.length === 1 ? "" : "s"} · ${totalSubs} subdomain${totalSubs === 1 ? "" : "s"} · last scan ${formatRelTime(newest)}`;
   }
 
   function populateFilters() {
@@ -143,7 +134,7 @@
     if (items.includes(cur)) sel.value = cur;
   }
 
-  // ─── inventory cards ─────────────────────────────────────
+  // ─── inventory cards (apex-level summary) ────────────────
   function renderInventory() {
     const grid = document.getElementById("inventory-grid");
     const filtered = state.assets.filter(matchesFilter);
@@ -152,20 +143,24 @@
       return;
     }
     grid.innerHTML = filtered.map(renderAssetCard).join("");
-    grid.querySelectorAll(".asset-card").forEach((card) => {
+    grid.querySelectorAll(".asset-card").forEach((card, i) => {
+      card.style.animationDelay = `${i * 60}ms`;
       card.addEventListener("click", () => openDrawer(card.dataset.id));
     });
+    setTimeout(() => animateCounters(grid), 50);
   }
 
   function matchesFilter(a) {
     if (state.filterTag && !(a.asset?.tags || []).includes(state.filterTag)) return false;
     if (state.filterOwner && a.asset?.owner !== state.filterOwner) return false;
     if (state.filterText) {
+      const subs = a.subdomains || [];
       const hay = [
         a.asset?.value, a.asset?.id, a.asset?.owner,
         ...(a.asset?.tags || []),
-        ...((a.fingerprint?.tech || []).map((t) => t.name)),
-        ...((a.hosts || []).map((h) => h.asn_org)),
+        ...subs.map((s) => s.name),
+        ...subs.flatMap((s) => (s.fingerprint?.tech || []).map((t) => t.name)),
+        ...subs.flatMap((s) => (s.hosts || []).map((h) => h.asn_org)),
       ].filter(Boolean).join(" ").toLowerCase();
       if (!hay.includes(state.filterText)) return false;
     }
@@ -173,19 +168,16 @@
   }
 
   function renderAssetCard(a) {
-    const hostCount = (a.hosts || []).length;
-    const svcCount = (a.services || []).length;
-    const subAlive = (a.subdomains || []).filter((s) => s.alive).length;
-    const live = a.reachability?.live;
-    const wafVendor = a.waf?.detected ? a.waf.vendor : null;
-
-    // Hosting attribution — most common ASN org becomes the "hosted by" label
-    const hostingOrg = topHostingOrg(a.hosts || []);
-    const hostingClass = hostingClassFor(hostingOrg);
-    const platformLabel = a.fingerprint?.platform_label;
+    const sm = a.summary || {};
+    const subCount = sm.live_subdomain_count || 0;
+    const hostCount = sm.host_count || 0;
+    const svcCount = sm.service_count || 0;
+    const topOrg = sm.top_hosting_org;
+    const platforms = sm.platforms || [];
+    const live = a.subdomains?.some((s) => s.reachability?.live);
 
     return `
-      <div class="asset-card" data-id="${escapeAttr(a.asset?.id || "")}">
+      <div class="asset-card asset-card-v3" data-id="${escapeAttr(a.asset?.id || "")}">
         <div class="asset-card-head">
           <div class="asset-card-title-block">
             <div class="status-dot ${live ? "live" : "down"}" aria-label="${live ? "live" : "offline"}"></div>
@@ -195,31 +187,23 @@
         </div>
 
         <div class="asset-stats">
+          <div class="stat"><span class="stat-num" data-count="${subCount}">0</span><span class="stat-label">sub${subCount === 1 ? "" : "s"}</span></div>
           <div class="stat"><span class="stat-num" data-count="${hostCount}">0</span><span class="stat-label">host${hostCount === 1 ? "" : "s"}</span></div>
           <div class="stat"><span class="stat-num" data-count="${svcCount}">0</span><span class="stat-label">service${svcCount === 1 ? "" : "s"}</span></div>
-          <div class="stat"><span class="stat-num" data-count="${subAlive}">0</span><span class="stat-label">sub${subAlive === 1 ? "" : "s"}</span></div>
         </div>
 
         <div class="asset-card-row">
-          ${hostingOrg ? `<span class="hosting-pill ${hostingClass}">${escapeHtml(hostingOrg)}</span>` : ""}
-          ${wafVendor ? `<span class="waf-pill"><span class="waf-pill-icon">⛨</span>${escapeHtml(wafVendor)}</span>` : ""}
-          ${platformLabel ? `<span class="platform-pill">${escapeHtml(platformLabel)}</span>` : ""}
+          ${topOrg ? `<span class="hosting-pill ${hostingClassFor(topOrg)}">${escapeHtml(topOrg)}</span>` : ""}
+          ${platforms.slice(0, 2).map((p) => `<span class="platform-pill">${escapeHtml(p)}</span>`).join("")}
         </div>
 
         ${(a.asset?.tags || []).length ? `<div class="tag-row">${a.asset.tags.map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>` : ""}
+
+        <div class="asset-card-footer">
+          <span class="card-drill-hint">${subCount} subdomain${subCount === 1 ? "" : "s"} →</span>
+        </div>
       </div>
     `;
-  }
-
-  function topHostingOrg(hosts) {
-    const counts = new Map();
-    for (const h of hosts) {
-      const org = (h.asn_org || "").trim();
-      if (!org) continue;
-      counts.set(org, (counts.get(org) || 0) + 1);
-    }
-    if (!counts.size) return null;
-    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
   }
 
   function hostingClassFor(org) {
@@ -233,10 +217,10 @@
     if (o.includes("wp engine"))   return "h-wpengine";
     if (o.includes("godaddy"))     return "h-godaddy";
     if (o.includes("digitalocean"))return "h-do";
+    if (o.includes("sci"))         return "h-sci";
     return "h-other";
   }
 
-  // animated counter on cards (called after render)
   function animateCounters(scope) {
     scope.querySelectorAll("[data-count]").forEach((el) => {
       const target = parseInt(el.dataset.count, 10);
@@ -245,7 +229,7 @@
       const start = performance.now();
       const step = (now) => {
         const t = Math.min(1, (now - start) / duration);
-        const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+        const eased = 1 - Math.pow(1 - t, 3);
         el.textContent = Math.round(target * eased);
         if (t < 1) requestAnimationFrame(step);
       };
@@ -253,21 +237,20 @@
     });
   }
 
-  // ─── what changed feed ──────────────────────────────────
+  // ─── what changed feed (v3 — subdomain-aware) ────────────
   function renderChanged() {
     const feed = document.getElementById("changed-feed");
     const events = [];
     state.assets.forEach((a) => {
       const aname = a.asset?.value || a.asset?.id;
       const d = a.deltas || {};
-      (d.added?.subdomains   || []).forEach((s) => events.push(["added",   "+", `New subdomain discovered: ${s}`, aname]));
-      (d.added?.hosts        || []).forEach((h) => events.push(["added",   "+", `New host IP: ${h.ip}`, aname]));
-      (d.added?.services     || []).forEach((s) => events.push(["added",   "+", `New service: port ${s.port}/${s.protocol}`, aname]));
+      (d.added?.subdomains   || []).forEach((s) => events.push(["added", "+", `New subdomain discovered: ${s}`, aname]));
+      (d.added?.hosts        || []).forEach((h) => events.push(["added", "+", `New host on ${h.subdomain}: ${h.ip}`, aname]));
+      (d.added?.services     || []).forEach((s) => events.push(["added", "+", `New service on ${s.subdomain}: ${s.port}/${s.protocol}`, aname]));
       (d.removed?.subdomains || []).forEach((s) => events.push(["removed", "−", `Subdomain went away: ${s}`, aname]));
-      (d.removed?.hosts      || []).forEach((h) => events.push(["removed", "−", `Host IP removed: ${h.ip}`, aname]));
-      (d.removed?.services   || []).forEach((s) => events.push(["removed", "−", `Service closed: port ${s.port}/${s.protocol}`, aname]));
-      (d.changed?.fingerprint || []).forEach((t) => events.push(["changed","Δ", `${t.name}: ${t.from || "?"} → ${t.to || "?"}`, aname]));
-      (d.changed?.cert        || []).forEach((c) => events.push(["changed","Δ", `Cert chain changed: ${(c.from || []).join(", ")} → ${(c.to || []).join(", ")}`, aname]));
+      (d.removed?.hosts      || []).forEach((h) => events.push(["removed", "−", `Host removed from ${h.subdomain}: ${h.ip}`, aname]));
+      (d.removed?.services   || []).forEach((s) => events.push(["removed", "−", `Service closed on ${s.subdomain}: ${s.port}/${s.protocol}`, aname]));
+      (d.changed?.fingerprint || []).forEach((t) => events.push(["changed", "Δ", `${t.subdomain}: ${t.name} ${t.from || "?"} → ${t.to || "?"}`, aname]));
     });
     if (!events.length) {
       feed.innerHTML = `<div class="empty">No surface changes detected since previous scans.</div>`;
@@ -284,87 +267,188 @@
     `).join("");
   }
 
-  // ─── drawer ──────────────────────────────────────────────
+  // ─── drawer (v3 — apex overview + subdomain table) ──────
   function openDrawer(id) {
     const a = state.assets.find((x) => x.asset?.id === id);
     if (!a) return;
+    state.activeAsset = id;
+    state.activeSub = null;
 
     document.getElementById("drawer-title").textContent = a.asset?.value || a.asset?.id;
-    document.getElementById("drawer-body").innerHTML = renderDrawerBody(a);
+    document.getElementById("drawer-body").innerHTML = renderApexOverview(a);
+    bindDrawerInteractions(a);
 
-    document.getElementById("drawer").classList.add("open");
-    document.getElementById("drawer").setAttribute("aria-hidden", "false");
-    animateCounters(document.getElementById("drawer-body"));
+    const drawer = document.getElementById("drawer");
+    drawer.classList.add("open");
+    drawer.setAttribute("aria-hidden", "false");
+    setTimeout(() => animateCounters(document.getElementById("drawer-body")), 50);
   }
 
   function closeDrawer() {
     const d = document.getElementById("drawer");
-    d.classList.remove("open");
-    d.setAttribute("aria-hidden", "true");
+    d.classList.remove("open"); d.setAttribute("aria-hidden", "true");
+    state.activeAsset = null; state.activeSub = null;
   }
 
-  function renderDrawerBody(a) {
-    const live      = a.reachability?.live;
-    const status    = a.reachability?.http_status;
-    const wafVendor = a.waf?.detected ? a.waf.vendor : null;
-    const hostingOrg = topHostingOrg(a.hosts || []);
-    const certNearest = nearestCertExpiry(a.services || []);
-    const hostCount = (a.hosts || []).length;
-    const svcCount  = (a.services || []).length;
-    const subCount  = (a.subdomains || []).filter((s) => s.alive).length;
-
-    return `
-      ${renderVerdictStrip(a, { live, status, wafVendor, hostingOrg, certNearest, hostCount, svcCount, subCount })}
-      ${renderHostsSection(a)}
-      ${renderServicesSection(a)}
-      ${renderSubdomainsSection(a)}
-      ${renderDnsSection(a)}
-      ${renderRegistrationSection(a)}
-      ${renderFingerprintSection(a)}
-      ${renderProvenanceSection(a)}
-    `;
+  function bindDrawerInteractions(asset) {
+    document.querySelectorAll(".sub-row").forEach((row) => {
+      row.addEventListener("click", () => {
+        const subName = row.dataset.sub;
+        showSubDetail(asset, subName);
+      });
+    });
+    document.querySelector(".back-to-overview")?.addEventListener("click", () => {
+      state.activeSub = null;
+      const a = state.assets.find((x) => x.asset?.id === state.activeAsset);
+      document.getElementById("drawer-body").innerHTML = renderApexOverview(a);
+      bindDrawerInteractions(a);
+      setTimeout(() => animateCounters(document.getElementById("drawer-body")), 50);
+    });
   }
 
-  function nearestCertExpiry(services) {
-    let nearest = null;
-    for (const s of services) {
-      const days = s.cert?.days_to_expiry;
-      if (typeof days === "number" && (nearest === null || days < nearest)) nearest = days;
-    }
-    return nearest;
+  function showSubDetail(asset, subName) {
+    state.activeSub = subName;
+    const sub = asset.subdomains.find((s) => s.name === subName);
+    if (!sub) return;
+    document.getElementById("drawer-body").innerHTML = renderSubDetail(asset, sub);
+    bindDrawerInteractions(asset);
+    document.getElementById("drawer-body").scrollTop = 0;
+    setTimeout(() => animateCounters(document.getElementById("drawer-body")), 50);
   }
 
-  // ─── verdict strip (top of drawer) ───────────────────────
-  function renderVerdictStrip(a, ctx) {
-    const { live, status, wafVendor, hostingOrg, certNearest, hostCount, svcCount, subCount } = ctx;
-    const certBadge = certNearest === null ? null
-      : certNearest < 7 ? { label: `Cert expires in ${certNearest}d`, cls: "v-bad" }
-      : certNearest < 30 ? { label: `Cert expires in ${certNearest}d`, cls: "v-warn" }
-      : { label: `Cert valid ${certNearest}d`, cls: "v-good" };
+  // ─── apex-level overview ────────────────────────────────
+  function renderApexOverview(a) {
+    const sm = a.summary || {};
+    const live = a.subdomains?.some((s) => s.reachability?.live);
+    const certDays = sm.newest_cert_expiry_days;
+    const certBadge = certDays === null || certDays === undefined ? null
+      : certDays < 7 ? { label: `Cert expires in ${certDays}d`, cls: "v-bad" }
+      : certDays < 30 ? { label: `Cert expires in ${certDays}d`, cls: "v-warn" }
+      : { label: `Nearest cert ${certDays}d`, cls: "v-good" };
 
     return `
       <div class="verdict-strip">
         <div class="verdict-row">
           <div class="verdict-pill ${live ? "v-good" : "v-bad"}">
             <span class="status-dot ${live ? "live" : "down"}"></span>
+            ${live ? "Live surface" : "All offline"}
+          </div>
+          ${sm.top_hosting_org ? `<div class="verdict-pill v-info hosting-pill ${hostingClassFor(sm.top_hosting_org)}">${escapeHtml(sm.top_hosting_org)}</div>` : ""}
+          ${certBadge ? `<div class="verdict-pill ${certBadge.cls}"><span class="v-icon">🔒</span>${escapeHtml(certBadge.label)}</div>` : ""}
+          ${(sm.platforms || []).map((p) => `<div class="verdict-pill v-info platform-pill">${escapeHtml(p)}</div>`).join("")}
+        </div>
+        <div class="verdict-stats">
+          <div class="stat-big"><div class="stat-num" data-count="${sm.live_subdomain_count || 0}">0</div><div class="stat-label">${(sm.live_subdomain_count || 0) === 1 ? "subdomain" : "subdomains"}</div></div>
+          <div class="stat-big"><div class="stat-num" data-count="${sm.host_count || 0}">0</div><div class="stat-label">${(sm.host_count || 0) === 1 ? "host" : "hosts"}</div></div>
+          <div class="stat-big"><div class="stat-num" data-count="${sm.service_count || 0}">0</div><div class="stat-label">${(sm.service_count || 0) === 1 ? "service" : "services"}</div></div>
+        </div>
+      </div>
+
+      ${renderSubdomainsTable(a)}
+      ${renderRegistrationSection(a)}
+      ${renderProvenanceSection(a)}
+    `;
+  }
+
+  function renderSubdomainsTable(a) {
+    const subs = a.subdomains || [];
+    if (!subs.length) return section("Subdomains", "<div class='muted'>No subdomains.</div>");
+    const rows = subs.map((s) => {
+      const live = s.reachability?.live;
+      const hostCount = (s.hosts || []).length;
+      const svcCount = (s.services || []).length;
+      const topOrg = s.hosts?.[0]?.asn_org;
+      const waf = s.waf?.detected ? s.waf.vendor : null;
+      const platform = s.fingerprint?.platform_label;
+      const certDays = s.services?.find((x) => x.cert?.days_to_expiry !== undefined)?.cert?.days_to_expiry;
+      return `
+        <tr class="sub-row" data-sub="${escapeAttr(s.name)}">
+          <td>
+            <div class="sub-name">
+              <span class="status-dot ${live ? "live" : "down"}"></span>
+              <span class="td-mono">${escapeHtml(s.name)}</span>
+              ${s.is_root ? "<span class='sub-root-badge'>root</span>" : ""}
+            </div>
+            ${platform ? `<div class="sub-platform">${escapeHtml(platform)}</div>` : ""}
+          </td>
+          <td>${hostCount > 0 ? `<span class="kv-num">${hostCount}</span>` : "<span class='muted'>0</span>"}</td>
+          <td>${svcCount > 0 ? `<span class="kv-num">${svcCount}</span>` : "<span class='muted'>0</span>"}</td>
+          <td>${topOrg ? `<span class="hosting-pill ${hostingClassFor(topOrg)}">${escapeHtml(topOrg)}</span>` : "<span class='muted'>—</span>"}</td>
+          <td>${waf ? `<span class="waf-pill"><span class="waf-pill-icon">⛨</span>${escapeHtml(waf)}</span>` : "<span class='muted'>—</span>"}</td>
+          <td>${typeof certDays === "number" ? renderCertDaysBadge(certDays) : "<span class='muted'>—</span>"}</td>
+          <td class="td-arrow">→</td>
+        </tr>`;
+    }).join("");
+    return section(`Subdomains (${subs.length})`, `
+      <table class="data-table sub-table">
+        <thead><tr><th>Name</th><th>Hosts</th><th>Svcs</th><th>Hosting</th><th>WAF</th><th>Cert</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="sub-table-hint">Click any row to drill into that subdomain</div>
+    `);
+  }
+
+  function renderCertDaysBadge(days) {
+    const cls = days < 7 ? "cert-bad" : days < 30 ? "cert-warn" : "cert-good";
+    return `<span class="cert-days-badge ${cls}">${days}d</span>`;
+  }
+
+  // ─── per-subdomain detail view ──────────────────────────
+  function renderSubDetail(asset, sub) {
+    const live = sub.reachability?.live;
+    const status = sub.reachability?.http_status;
+    const wafVendor = sub.waf?.detected ? sub.waf.vendor : null;
+    const topOrg = sub.hosts?.[0]?.asn_org;
+    const certNearest = nearestCertDays(sub.services || []);
+    const hostCount = (sub.hosts || []).length;
+    const svcCount = (sub.services || []).length;
+
+    return `
+      <div class="sub-detail-header">
+        <button class="back-to-overview">← Back to ${escapeHtml(asset.asset.value)}</button>
+        <div class="sub-detail-name">
+          <span class="status-dot ${live ? "live" : "down"}"></span>
+          <span class="td-mono">${escapeHtml(sub.name)}</span>
+          ${sub.is_root ? "<span class='sub-root-badge'>root</span>" : ""}
+        </div>
+        ${sub.reachability?.title ? `<div class="sub-detail-title">${escapeHtml(sub.reachability.title)}</div>` : ""}
+      </div>
+
+      <div class="verdict-strip">
+        <div class="verdict-row">
+          <div class="verdict-pill ${live ? "v-good" : "v-bad"}">
+            <span class="status-dot ${live ? "live" : "down"}"></span>
             ${live ? `Live · HTTP ${status || "?"}` : "Offline"}
           </div>
-          ${hostingOrg ? `<div class="verdict-pill v-info hosting-pill ${hostingClassFor(hostingOrg)}">${escapeHtml(hostingOrg)}</div>` : ""}
+          ${topOrg ? `<div class="verdict-pill v-info hosting-pill ${hostingClassFor(topOrg)}">${escapeHtml(topOrg)}</div>` : ""}
           ${wafVendor ? `<div class="verdict-pill v-info waf-pill"><span class="waf-pill-icon">⛨</span>${escapeHtml(wafVendor)}</div>` : ""}
-          ${certBadge ? `<div class="verdict-pill ${certBadge.cls}"><span class="v-icon">🔒</span>${escapeHtml(certBadge.label)}</div>` : ""}
+          ${certNearest !== null ? `<div class="verdict-pill ${certNearest < 7 ? "v-bad" : certNearest < 30 ? "v-warn" : "v-good"}"><span class="v-icon">🔒</span>Cert ${certNearest}d</div>` : ""}
+          ${sub.fingerprint?.platform_label ? `<div class="verdict-pill v-info platform-pill">${escapeHtml(sub.fingerprint.platform_label)}</div>` : ""}
         </div>
         <div class="verdict-stats">
           <div class="stat-big"><div class="stat-num" data-count="${hostCount}">0</div><div class="stat-label">${hostCount === 1 ? "host" : "hosts"}</div></div>
           <div class="stat-big"><div class="stat-num" data-count="${svcCount}">0</div><div class="stat-label">${svcCount === 1 ? "service" : "services"}</div></div>
-          <div class="stat-big"><div class="stat-num" data-count="${subCount}">0</div><div class="stat-label">${subCount === 1 ? "subdomain" : "subdomains"}</div></div>
         </div>
       </div>
+
+      ${renderHostsSection(sub)}
+      ${renderServicesSection(sub)}
+      ${renderDnsSection(sub)}
+      ${renderFingerprintSection(sub)}
     `;
   }
 
-  // ─── hosts section ───────────────────────────────────────
-  function renderHostsSection(a) {
-    const hosts = a.hosts || [];
+  function nearestCertDays(services) {
+    let nearest = null;
+    for (const s of services) {
+      const d = s.cert?.days_to_expiry;
+      if (typeof d === "number" && (nearest === null || d < nearest)) nearest = d;
+    }
+    return nearest;
+  }
+
+  function renderHostsSection(sub) {
+    const hosts = sub.hosts || [];
     if (!hosts.length) return section("Hosts", "<div class='muted'>No IP attribution available.</div>");
     const rows = hosts.map((h) => {
       const geo = [h.city, h.region, h.country].filter(Boolean).join(", ");
@@ -386,9 +470,8 @@
     `);
   }
 
-  // ─── services section ────────────────────────────────────
-  function renderServicesSection(a) {
-    const services = a.services || [];
+  function renderServicesSection(sub) {
+    const services = sub.services || [];
     if (!services.length) return section("Services", "<div class='muted'>No services detected.</div>");
     const rows = services.map((s) => `
       <tr>
@@ -441,67 +524,29 @@
     `;
   }
 
-  // ─── subdomains section ──────────────────────────────────
-  function renderSubdomainsSection(a) {
-    const subs = a.subdomains || [];
-    if (!subs.length) return "";
-    const rows = subs.map((s) => `
-      <tr>
-        <td class="td-mono">
-          <span class="status-dot ${s.alive ? "live" : "down"}"></span>
-          ${escapeHtml(s.name)}
-        </td>
-        <td class="muted">${s.alive ? "alive" : "down"}</td>
-        <td class="td-mono muted">${formatRelTime(s.last_seen)}</td>
-      </tr>`).join("");
-    return section(`Subdomains (${subs.filter((s) => s.alive).length} alive of ${subs.length})`, `
-      <table class="data-table">
-        <thead><tr><th>Name</th><th>Status</th><th>Last seen</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    `);
-  }
-
-  // ─── dns section ─────────────────────────────────────────
-  function renderDnsSection(a) {
-    const d = a.dns || {};
+  function renderDnsSection(sub) {
+    const d = sub.dns || {};
     if (!d.a?.length && !d.ns?.length) return "";
     const rows = [
-      ["A",     (d.a || []).join(", ")],
-      ["AAAA",  (d.aaaa || []).join(", ")],
+      ["A", (d.a || []).join(", ")],
+      ["AAAA", (d.aaaa || []).join(", ")],
       ["CNAME", d.cname],
-      ["MX",    (d.mx || []).map((m) => `${m.priority} ${m.host}`).join(", ")],
-      ["NS",    (d.ns || []).join(", ")],
-      ["SPF",   d.spf],
-      ["DNSSEC",d.dnssec ? "enabled" : "disabled"],
+      ["MX", (d.mx || []).map((m) => `${m.priority} ${m.host}`).join(", ")],
+      ["NS", (d.ns || []).join(", ")],
+      ["SPF", d.spf],
+      ["DNSSEC", d.dnssec ? "enabled" : "disabled"],
     ].filter(([, v]) => v && v.length);
     return section("DNS", kvTable(rows));
   }
 
-  // ─── registration ────────────────────────────────────────
-  function renderRegistrationSection(a) {
-    const r = a.registration || {};
-    if (!Object.keys(r).length) return "";
-    return section("Registration (whois)", kvTable([
-      ["Registrar", r.registrar],
-      ["URL",       r.registrar_url],
-      ["Created",   r.created],
-      ["Updated",   r.updated],
-      ["Expires",   r.expires],
-      ["Status",    r.status],
-    ]));
-  }
-
-  // ─── tech fingerprint ────────────────────────────────────
-  function renderFingerprintSection(a) {
-    const fp = a.fingerprint || {};
+  function renderFingerprintSection(sub) {
+    const fp = sub.fingerprint || {};
     if (!fp.tech?.length && !fp.server) return "";
     const grouped = groupTech(fp.tech || []);
-    const groups = Object.entries(grouped);
-    return section("Tech fingerprint",  `
+    return section("Tech fingerprint", `
       ${fp.platform_label ? `<div class="platform-banner">${escapeHtml(fp.platform_label)}</div>` : ""}
       <div class="tech-groups">
-        ${groups.map(([cat, items]) => `
+        ${Object.entries(grouped).map(([cat, items]) => `
           <div class="tech-group">
             <div class="tech-group-label">${escapeHtml(prettyCategory(cat))}</div>
             <div class="tech-group-items">
@@ -537,7 +582,19 @@
     return map[cat] || cat;
   }
 
-  // ─── provenance ──────────────────────────────────────────
+  function renderRegistrationSection(a) {
+    const r = a.registration || {};
+    if (!Object.keys(r).length) return "";
+    return section("Domain registration (whois)", kvTable([
+      ["Registrar", r.registrar],
+      ["URL",       r.registrar_url],
+      ["Created",   r.created],
+      ["Updated",   r.updated],
+      ["Expires",   r.expires],
+      ["Status",    r.status],
+    ]));
+  }
+
   function renderProvenanceSection(a) {
     const s = a.scan || {};
     return section("Scan provenance", kvTable([
@@ -551,19 +608,34 @@
     ]));
   }
 
-  // ─── helpers ─────────────────────────────────────────────
+  // ─── primitives ──────────────────────────────────────────
   function section(title, body) {
     return `<div class="drawer-section"><h4>${escapeHtml(title)}</h4>${body}</div>`;
   }
-
   function kvTable(rows) {
     return `<table class="kv-table">${rows
       .filter(([, v]) => v != null && v !== "")
-      .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`)
-      .join("")}</table>`;
+      .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`).join("")}</table>`;
   }
+  function formatRelTime(iso) {
+    if (!iso) return "—";
+    const t = new Date(iso).getTime();
+    if (isNaN(t)) return iso;
+    const diff = Date.now() - t;
+    const min = Math.floor(diff / 60000);
+    if (min < 1) return "just now";
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    return `${Math.floor(hr / 24)}d ago`;
+  }
+  function escapeHtml(s) {
+    if (s == null) return "";
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function escapeAttr(s) { return escapeHtml(s); }
 
-  // ─── Add Target modal (unchanged from v1) ────────────────
+  // ─── add-target modal (unchanged) ────────────────────────
   function openAddModal() {
     const m = document.getElementById("add-modal");
     m.classList.add("open"); m.setAttribute("aria-hidden", "false");
@@ -576,28 +648,28 @@
     m.classList.remove("open"); m.setAttribute("aria-hidden", "true");
   }
   function updateTypeHelp() {
-    const t = document.querySelector("input[name=\"type\"]:checked")?.value || "fqdn";
+    const t = document.querySelector("input[name=\"type\"]:checked")?.value || "apex";
     const help = document.getElementById("t-type-help");
     const valueInput = document.getElementById("t-value");
-    const placeholders = {
-      fqdn: { help: "Single hostname — scans just this host (e.g. <code>www.example.com</code>)", ph: "www.example.com" },
-      apex: { help: "Apex domain — enumerates subdomains via passive sources", ph: "example.com" },
-      ip:   { help: "Single IPv4 — port + service discovery, no DNS context", ph: "198.51.100.42" },
-      cidr: { help: "CIDR range — naabu sweeps the range for live hosts", ph: "198.51.100.0/29" },
+    const ph = {
+      fqdn: { help: "Single hostname (legacy) — scans just this host", ph: "www.example.com" },
+      apex: { help: "Apex domain (recommended) — enumerates subdomains, scans each", ph: "example.com" },
+      ip:   { help: "Single IP — port + service discovery, no DNS context", ph: "198.51.100.42" },
+      cidr: { help: "CIDR range — sweep for live hosts", ph: "198.51.100.0/29" },
     };
-    help.innerHTML = placeholders[t].help;
-    valueInput.placeholder = placeholders[t].ph;
+    help.innerHTML = ph[t].help;
+    valueInput.placeholder = ph[t].ph;
     const idInput = document.getElementById("t-id");
-    idInput.placeholder = (t === "ip") ? "host-198-51-100-42" : (t === "cidr") ? "range-198-51-100-0-29" : "example-www";
+    idInput.placeholder = (t === "ip") ? "host-198-51-100-42" : (t === "cidr") ? "range-198-51-100-0-29" : "example";
   }
   function autofillId() {
     const idInput = document.getElementById("t-id");
     if (idInput.dataset.touched === "true") return;
     const value = document.getElementById("t-value").value.trim().toLowerCase();
-    const type  = document.querySelector("input[name=\"type\"]:checked")?.value || "fqdn";
+    const type  = document.querySelector("input[name=\"type\"]:checked")?.value || "apex";
     if (!value) { idInput.value = ""; return; }
     let id = (type === "fqdn" || type === "apex")
-      ? value.replace(/^www\./, "").replace(/[^a-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "")
+      ? value.replace(/^www\./, "").replace(/\..*$/, "").replace(/[^a-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "")
       : value.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     idInput.value = id.slice(0, 64);
   }
@@ -605,10 +677,8 @@
     e.preventDefault();
     const submitBtn = document.getElementById("add-submit-btn");
     const feedback  = document.getElementById("add-form-feedback");
-    feedback.hidden = false;
-    feedback.className = "form-feedback info";
-    feedback.textContent = "Submitting…";
-    submitBtn.disabled = true;
+    feedback.hidden = false; feedback.className = "form-feedback info";
+    feedback.textContent = "Submitting…"; submitBtn.disabled = true;
 
     const fd = new FormData(e.target);
     const payload = {
@@ -646,24 +716,4 @@
       submitBtn.disabled = false;
     }
   }
-
-  // ─── primitives ──────────────────────────────────────────
-  function formatRelTime(iso) {
-    if (!iso) return "—";
-    const t = new Date(iso).getTime();
-    if (isNaN(t)) return iso;
-    const diff = Date.now() - t;
-    const min = Math.floor(diff / 60000);
-    if (min < 1) return "just now";
-    if (min < 60) return `${min}m ago`;
-    const hr = Math.floor(min / 60);
-    if (hr < 24) return `${hr}h ago`;
-    const d = Math.floor(hr / 24);
-    return `${d}d ago`;
-  }
-  function escapeHtml(s) {
-    if (s == null) return "";
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  }
-  function escapeAttr(s) { return escapeHtml(s); }
 })();

@@ -989,6 +989,142 @@ input[type="search"]:focus,
   padding-top: 0;
 }
 
+/* ─── v3: Apex card drill-down hint ─────────────────── */
+.asset-card-v3 {
+  animation: card-fade-in 360ms ease-out backwards;
+}
+@keyframes card-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.asset-card-footer {
+  display: flex; justify-content: flex-end;
+  margin-top: var(--s2);
+  padding-top: var(--s2);
+  border-top: 1px dashed var(--ink-10);
+}
+.card-drill-hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--copper);
+  font-weight: 600;
+}
+.asset-card:hover .card-drill-hint { color: var(--copper-ink); }
+
+/* ─── v3: Subdomain table inside drawer ─────────────── */
+.sub-table tbody tr.sub-row {
+  cursor: pointer;
+  transition: background 100ms;
+}
+.sub-table tbody tr.sub-row:hover {
+  background: var(--copper-soft);
+}
+.sub-table tbody tr.sub-row:hover .td-arrow {
+  color: var(--copper);
+  transform: translateX(2px);
+}
+.sub-name {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 14px;
+}
+.sub-platform {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--ink-60);
+  font-family: var(--font-mono);
+}
+.sub-root-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border-radius: 3px;
+  background: var(--ink);
+  color: #fff;
+  font-weight: 600;
+}
+.kv-num {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  min-width: 22px;
+}
+.td-arrow {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink-40);
+  transition: transform 120ms, color 120ms;
+}
+.sub-table-hint {
+  margin-top: var(--s2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+  text-align: center;
+  padding: var(--s2);
+  background: var(--ink-05);
+  border-radius: var(--r-sm);
+}
+
+.cert-days-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  border: 1px solid;
+}
+.cert-days-badge.cert-good { background: var(--ok-soft);     color: var(--ok);     border-color: var(--ok); }
+.cert-days-badge.cert-warn { background: var(--warn-soft);   color: var(--warn);   border-color: var(--warn); }
+.cert-days-badge.cert-bad  { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
+
+/* ─── v3: Sub detail header (drill-down view) ──────── */
+.sub-detail-header {
+  margin-bottom: var(--s5);
+  padding-bottom: var(--s4);
+  border-bottom: 2px solid var(--ink);
+}
+.back-to-overview {
+  background: transparent;
+  border: 1px solid var(--ink-20);
+  color: var(--ink-60);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  padding: 5px 12px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: all 120ms;
+  margin-bottom: var(--s3);
+}
+.back-to-overview:hover {
+  border-color: var(--copper);
+  color: var(--copper-ink);
+  background: var(--copper-soft);
+}
+.sub-detail-name {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 18px;
+  margin-bottom: 4px;
+}
+.sub-detail-title {
+  font-size: 13.5px;
+  color: var(--ink-60);
+  margin-top: 4px;
+}
+
 /* ─── Footer ──────────────────────────────────────── */
 .bottom {
   text-align: center;

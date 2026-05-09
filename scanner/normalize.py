@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """
-COMMANDsentry — normalize raw tool outputs into v2 ASM asset JSON.
+COMMANDsentry — normalize raw tool outputs into v3 ASM asset JSON.
 
-Reads the raw outputs that asm-discover.sh wrote into a working dir,
-synthesizes them into the v2 asset schema (schemas/asset-schema.md),
-computes deltas vs. the previous scan, validates, and writes
-data/assets/{target-id}.json.
+v3 model: asset = apex domain. Subdomains are nested children, each with
+its own hosts/services/cert/WAF/fingerprint.
 
-Pure ASM — no exposure analysis, no security posture grading. Just surface
-data: who, where, what's running.
+For apex targets, asm-discover.sh produces per-subdomain working dirs under
+$work_dir/subs/{subdomain}/. This script walks each, builds a subdomain
+record, and rolls them up under the asset.
 
-Designed to be tolerant of partial / missing tool outputs — any phase can
-fail without breaking the whole normalization. Missing data goes into
-nulls / empty arrays, not exceptions.
+For fqdn / ip / cidr targets: produces a single-subdomain v3 record so
+the schema is uniform.
 """
 
 from __future__ import annotations
@@ -28,8 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = "2.0"
-ENGINE_VERSION = "2.0.0"
+SCHEMA_VERSION = "3.0"
+ENGINE_VERSION = "3.0.0"
 
 # ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -66,36 +64,24 @@ def read_text(path: Path) -> str:
     return path.read_text(errors="replace") if path.exists() else ""
 
 # ─── Whois parsing ────────────────────────────────────────────────────────────
-# Multi-format. Different registrars use different field labels.
 
 WHOIS_PATTERNS = {
     "registrar": [
         r"^(?:[Rr]egistrar|[Rr]egistrar\s*Name):\s*(.+?)\s*$",
         r"^Sponsoring\s+Registrar:\s*(.+?)\s*$",
-        r"^Registry\s+Registrar:\s*(.+?)\s*$",
     ],
-    "registrar_url": [
-        r"^(?:[Rr]egistrar\s*URL|[Rr]egistrar\s*WWW):\s*(.+?)\s*$",
-    ],
+    "registrar_url": [r"^(?:[Rr]egistrar\s*URL|[Rr]egistrar\s*WWW):\s*(.+?)\s*$"],
     "created": [
         r"^Creation\s*Date:\s*(.+?)(?:T|\s|$)",
         r"^Created\s*On:\s*(.+?)(?:T|\s|$)",
-        r"^Domain\s*Name\s*Commencement\s*Date:\s*(.+?)(?:T|\s|$)",
-        r"^[Dd]omain\s*[Rr]egistered:\s*(.+?)(?:T|\s|$)",
     ],
-    "updated": [
-        r"^Updated\s*Date:\s*(.+?)(?:T|\s|$)",
-        r"^Last\s*Modified:\s*(.+?)(?:T|\s|$)",
-    ],
+    "updated": [r"^Updated\s*Date:\s*(.+?)(?:T|\s|$)"],
     "expires": [
         r"^Registry\s+Expiry\s+Date:\s*(.+?)(?:T|\s|$)",
         r"^Registrar\s+Registration\s+Expiration\s+Date:\s*(.+?)(?:T|\s|$)",
         r"^Expir(?:y|ation)\s*Date:\s*(.+?)(?:T|\s|$)",
-        r"^Renewal\s*Date:\s*(.+?)(?:T|\s|$)",
     ],
-    "status": [
-        r"^(?:Domain\s+)?Status:\s*([a-zA-Z]+)",
-    ],
+    "status": [r"^(?:Domain\s+)?Status:\s*([a-zA-Z]+)"],
 }
 
 def parse_whois_domain(text: str) -> dict:
@@ -110,27 +96,7 @@ def parse_whois_domain(text: str) -> dict:
                 break
     return out
 
-WHOIS_IP_PATTERNS = {
-    "asn":     [r"^OriginAS:\s*(AS?\d+)", r"^origin:\s*(AS?\d+)"],
-    "asn_org": [r"^OrgName:\s*(.+)", r"^org-name:\s*(.+)", r"^netname:\s*(.+)"],
-    "country": [r"^Country:\s*(\w{2})", r"^country:\s*(\w{2})"],
-    "city":    [r"^City:\s*(.+)"],
-    "region":  [r"^StateProv:\s*(.+)"],
-}
-
-def parse_whois_ip(text: str) -> dict:
-    out: dict[str, Any] = {}
-    for field, patterns in WHOIS_IP_PATTERNS.items():
-        for pat in patterns:
-            m = re.search(pat, text, re.MULTILINE | re.IGNORECASE)
-            if m:
-                out[field] = m.group(1).strip()
-                break
-    return out
-
-# ─── ASN / geo via free public API ────────────────────────────────────────────
-# ipinfo.io free tier returns ASN org + city/country with no auth (50k/mo).
-# We fall back gracefully if it fails — never block the scan on enrichment.
+# ─── ASN / geo via ipinfo ────────────────────────────────────────────────────
 
 def lookup_ip_attribution(ip: str, cache: dict) -> dict:
     if ip in cache:
@@ -139,12 +105,11 @@ def lookup_ip_attribution(ip: str, cache: dict) -> dict:
     try:
         req = urllib.request.Request(
             f"https://ipinfo.io/{ip}/json",
-            headers={"User-Agent": "commandsentry-asm/2.0"},
+            headers={"User-Agent": "commandsentry-asm/3.0"},
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         org = data.get("org") or ""
-        # ipinfo returns "AS54017 Pressable, Inc." — split into two
         m = re.match(r"^(AS\d+)\s+(.+)$", org)
         if m:
             out["asn"], out["asn_org"] = m.group(1), m.group(2)
@@ -163,7 +128,32 @@ def lookup_ip_attribution(ip: str, cache: dict) -> dict:
     cache[ip] = out
     return out
 
-# ─── Section builders ─────────────────────────────────────────────────────────
+# ─── Tech categorization ─────────────────────────────────────────────────────
+
+CATEGORY_HINTS = {
+    "wordpress": "cms", "drupal": "cms", "joomla": "cms",
+    "wpbakery": "wp-plugin", "yoast seo": "wp-plugin",
+    "slider revolution": "wp-plugin", "wpmu dev smush": "wp-plugin",
+    "imagely nextgen gallery": "wp-plugin", "elementor": "wp-plugin",
+    "elementor pro": "wp-plugin", "oceanwp": "wp-theme",
+    "bootstrap": "frontend", "jquery": "frontend",
+    "jquery migrate": "frontend", "font awesome": "frontend",
+    "modernizr": "frontend",
+    "nginx": "webserver", "apache": "webserver", "iis": "webserver",
+    "microsoft-iis": "webserver",
+    "cloudflare": "cdn", "wp engine": "hosting", "wp.cloud": "hosting",
+    "wpcomstaging": "hosting", "jsdelivr": "cdn",
+    "google tag manager": "tracking",
+    "php": "language", "mysql": "database",
+    "asp.net": "framework", "asp.net core": "framework",
+    "microsoft asp.net": "framework", "microsoft power bi": "tracking",
+    "hsts": "security", "http/3": "transport",
+}
+
+def categorize(name: str) -> str | None:
+    return CATEGORY_HINTS.get((name or "").strip().lower())
+
+# ─── Section builders (per-subdomain) ────────────────────────────────────────
 
 def build_reachability(work: Path) -> dict:
     httpx_records = read_jsonl(work / "httpx.json")
@@ -176,86 +166,19 @@ def build_reachability(work: Path) -> dict:
         "title":       rec.get("title"),
     }
 
-def build_hosts(work: Path) -> list[dict]:
-    """Resolve unique IPs from dnsx, enrich with ASN/geo via ipinfo."""
+def build_hosts(work: Path, ip_cache: dict) -> list[dict]:
     dnsx_records = read_jsonl(work / "dnsx.json")
     ips: set[str] = set()
     for rec in dnsx_records:
         ips.update(rec.get("a", []) or [])
         ips.update(rec.get("aaaa", []) or [])
-
-    # IP-target case: read from _resolved_ips.txt if dnsx didn't run
     resolved_file = work / "_resolved_ips.txt"
     if resolved_file.exists():
         for line in resolved_file.read_text().splitlines():
             line = line.strip()
             if line:
                 ips.add(line)
-
-    cache: dict[str, dict] = {}
-    return [lookup_ip_attribution(ip, cache) for ip in sorted(ips)]
-
-def build_services(work: Path, hosts: list[dict]) -> list[dict]:
-    """
-    Pair naabu open ports with fingerprintx service IDs (when available)
-    and merge in TLS cert details for HTTPS ports from testssl/httpx.
-    """
-    services: list[dict] = []
-    seen: set[tuple[str, int, str]] = set()
-
-    naabu = read_jsonl(work / "naabu.json") or read_jsonl(work / "naabu_cidr.json")
-    fpx   = read_jsonl(work / "fingerprintx.json")
-
-    # Index fingerprintx by (host, port)
-    fpx_by_key: dict[tuple[str, int], dict] = {}
-    for rec in fpx:
-        host = rec.get("host") or rec.get("ip") or rec.get("address")
-        port = rec.get("port")
-        if host and port:
-            fpx_by_key[(host, int(port))] = rec
-
-    # TLS cert extraction (best-effort) — try testssl first, fall back to httpx
-    cert_443: dict | None = None
-    testssl_data = read_json(work / "testssl.json")
-    if isinstance(testssl_data, list) and testssl_data:
-        cert_443 = extract_cert_from_testssl(testssl_data)
-    if not cert_443:
-        httpx_records = read_jsonl(work / "httpx.json")
-        if httpx_records:
-            cert_443 = extract_cert_from_httpx(httpx_records[0])
-
-    for rec in naabu:
-        host = rec.get("host") or rec.get("ip") or rec.get("address")
-        port = rec.get("port")
-        proto = rec.get("protocol") or "tcp"
-        if not host or port is None:
-            continue
-        key = (host, int(port), proto)
-        if key in seen:
-            continue
-        seen.add(key)
-
-        fpx_rec = fpx_by_key.get((host, int(port)))
-        service_name = (
-            fpx_rec.get("protocol") if fpx_rec else
-            infer_service_from_port(int(port))
-        )
-        banner = (fpx_rec or {}).get("metadata", {}).get("banner") if fpx_rec else None
-
-        svc: dict[str, Any] = {
-            "ip":       host,
-            "port":     int(port),
-            "protocol": proto,
-            "service":  service_name,
-            "banner":   banner,
-            "tls":      bool((fpx_rec or {}).get("tls")) or int(port) in (443, 8443, 993, 995),
-        }
-        if int(port) == 443 and cert_443:
-            svc["cert"] = cert_443
-        services.append(svc)
-
-    services.sort(key=lambda s: (s["ip"], s["port"]))
-    return services
+    return [lookup_ip_attribution(ip, ip_cache) for ip in sorted(ips)]
 
 PORT_HINTS = {
     21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp", 53: "dns",
@@ -266,7 +189,7 @@ PORT_HINTS = {
     9200: "elasticsearch", 27017: "mongodb",
 }
 
-def infer_service_from_port(port: int) -> str:
+def infer_service(port: int) -> str:
     return PORT_HINTS.get(port, "unknown")
 
 def extract_cert_from_testssl(findings: list[dict]) -> dict | None:
@@ -310,30 +233,58 @@ def extract_cert_from_httpx(rec: dict) -> dict | None:
             pass
     return cert if any(cert.values()) else None
 
-def build_subdomains(work: Path, target_value: str) -> list[dict]:
-    subs_file = work / "_subdomains.txt"
-    if not subs_file.exists():
-        return [{
-            "name": target_value, "alive": True,
-            "first_discovered": utc_now(), "last_seen": utc_now(),
-        }]
-    subs = [s.strip() for s in subs_file.read_text().splitlines() if s.strip()]
-    httpx_results = read_jsonl(work / "httpx_apex.json")
-    alive_set = set()
-    for r in httpx_results:
-        if r.get("status_code"):
-            url = r.get("input") or r.get("url", "")
-            host = url.replace("https://", "").replace("http://", "").split("/")[0]
-            alive_set.add(host)
-    return [
-        {
-            "name": s,
-            "alive": s in alive_set or s == target_value,
-            "first_discovered": utc_now(),
-            "last_seen": utc_now(),
+def build_services(work: Path) -> list[dict]:
+    services: list[dict] = []
+    seen: set[tuple[str, int, str]] = set()
+
+    naabu = read_jsonl(work / "naabu.json") or read_jsonl(work / "naabu_cidr.json")
+    fpx   = read_jsonl(work / "fingerprintx.json")
+
+    fpx_by_key: dict[tuple[str, int], dict] = {}
+    for rec in fpx:
+        host = rec.get("host") or rec.get("ip") or rec.get("address")
+        port = rec.get("port")
+        if host and port:
+            fpx_by_key[(host, int(port))] = rec
+
+    cert_443: dict | None = None
+    testssl_data = read_json(work / "testssl.json")
+    if isinstance(testssl_data, list) and testssl_data:
+        cert_443 = extract_cert_from_testssl(testssl_data)
+    if not cert_443:
+        httpx_records = read_jsonl(work / "httpx.json")
+        if httpx_records:
+            cert_443 = extract_cert_from_httpx(httpx_records[0])
+
+    for rec in naabu:
+        host = rec.get("host") or rec.get("ip") or rec.get("address")
+        port = rec.get("port")
+        proto = rec.get("protocol") or "tcp"
+        if not host or port is None:
+            continue
+        key = (host, int(port), proto)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        fpx_rec = fpx_by_key.get((host, int(port)))
+        service_name = (fpx_rec.get("protocol") if fpx_rec else infer_service(int(port)))
+        banner = (fpx_rec or {}).get("metadata", {}).get("banner") if fpx_rec else None
+
+        svc: dict[str, Any] = {
+            "ip":       host,
+            "port":     int(port),
+            "protocol": proto,
+            "service":  service_name,
+            "banner":   banner,
+            "tls":      bool((fpx_rec or {}).get("tls")) or int(port) in (443, 8443, 993, 995),
         }
-        for s in subs
-    ]
+        if int(port) == 443 and cert_443:
+            svc["cert"] = cert_443
+        services.append(svc)
+
+    services.sort(key=lambda s: (s["ip"], s["port"]))
+    return services
 
 def build_dns(work: Path) -> dict:
     out: dict[str, Any] = {
@@ -362,10 +313,6 @@ def build_dns(work: Path) -> dict:
             out["spf"] = txt
     return out
 
-def build_registration(work: Path) -> dict:
-    text = read_text(work / "whois.txt")
-    return parse_whois_domain(text)
-
 def build_fingerprint(work: Path) -> dict:
     httpx_records = read_jsonl(work / "httpx.json")
     out: dict[str, Any] = {"server": None, "platform_label": None, "tech": []}
@@ -377,19 +324,15 @@ def build_fingerprint(work: Path) -> dict:
     techs_raw = rec.get("technologies", []) or rec.get("tech", []) or []
     for t in techs_raw:
         if isinstance(t, str):
-            name = t
-            version = None
-            if ":" in t:
-                name, version = t.split(":", 1)
-            out["tech"].append({"name": name.strip(), "version": (version or "").strip() or None, "category": _categorize(name)})
+            name, version = (t.split(":", 1) + [None])[:2]
+            out["tech"].append({"name": name.strip(), "version": (version or "").strip() or None, "category": categorize(name)})
         elif isinstance(t, dict):
             out["tech"].append({
-                "name":     t.get("name"),
-                "version":  t.get("version"),
-                "category": _categorize(t.get("name", "")) or t.get("category"),
+                "name": t.get("name"),
+                "version": t.get("version"),
+                "category": categorize(t.get("name", "")) or t.get("category"),
             })
 
-    # Synthesize a friendly platform label
     names = [t.get("name", "").lower() for t in out["tech"]]
     if "wordpress" in names and "wp.cloud" in names:
         out["platform_label"] = "WordPress on wp.cloud (Pressable)"
@@ -397,30 +340,9 @@ def build_fingerprint(work: Path) -> dict:
         out["platform_label"] = "WordPress on WP Engine"
     elif "wordpress" in names:
         out["platform_label"] = "WordPress"
-    elif "asp.net" in names or "microsoft asp.net" in names:
-        out["platform_label"] = ".NET / IIS"
+    elif any("asp.net" in n for n in names):
+        out["platform_label"] = "Microsoft .NET / IIS"
     return out
-
-CATEGORY_HINTS = {
-    "wordpress": "cms", "drupal": "cms", "joomla": "cms", "wpbakery": "wp-plugin",
-    "yoast seo": "wp-plugin", "slider revolution": "wp-plugin",
-    "wpmu dev smush": "wp-plugin", "imagely nextgen gallery": "wp-plugin",
-    "elementor": "wp-plugin", "elementor pro": "wp-plugin", "oceanwp": "wp-theme",
-    "bootstrap": "frontend", "jquery": "frontend", "jquery migrate": "frontend",
-    "font awesome": "frontend",
-    "nginx": "webserver", "apache": "webserver", "iis": "webserver",
-    "cloudflare": "cdn", "wp engine": "hosting", "wp.cloud": "hosting",
-    "wpcomstaging": "hosting",
-    "google tag manager": "tracking",
-    "php": "language", "mysql": "database",
-    "asp.net": "framework", "microsoft asp.net": "framework",
-    "modernizr": "frontend",
-    "hsts": "security", "http/3": "transport",
-    "jsdelivr": "cdn",
-}
-
-def _categorize(name: str) -> str | None:
-    return CATEGORY_HINTS.get((name or "").strip().lower())
 
 def build_waf(work: Path) -> dict:
     out = {"detected": False, "vendor": None, "confidence": "unknown"}
@@ -430,23 +352,79 @@ def build_waf(work: Path) -> dict:
     if isinstance(waf_data, list) and waf_data:
         first = waf_data[0]
         if first.get("detected") or first.get("firewall"):
-            out["detected"]   = True
-            out["vendor"]     = first.get("firewall") or first.get("manufacturer")
+            out["detected"] = True
+            out["vendor"] = first.get("firewall") or first.get("manufacturer")
             out["confidence"] = "high"
     elif isinstance(waf_data, dict):
         if waf_data.get("detected") or waf_data.get("firewall"):
-            out["detected"]   = True
-            out["vendor"]     = waf_data.get("firewall") or waf_data.get("manufacturer")
+            out["detected"] = True
+            out["vendor"] = waf_data.get("firewall") or waf_data.get("manufacturer")
             out["confidence"] = "high"
     return out
 
-# ─── Delta computation ────────────────────────────────────────────────────────
+# ─── Build subdomain record ──────────────────────────────────────────────────
+
+def build_subdomain_record(name: str, sub_work: Path, *, is_root: bool,
+                           discovered_via: str, ip_cache: dict) -> dict:
+    return {
+        "name":    name,
+        "alive":   True,                            # we only build records for live subs
+        "is_root": is_root,
+        "discovered_via":   discovered_via,
+        "first_discovered": utc_now(),
+        "last_seen":        utc_now(),
+        "tags":             [],
+        "reachability":     build_reachability(sub_work),
+        "hosts":            build_hosts(sub_work, ip_cache),
+        "services":         build_services(sub_work),
+        "dns":              build_dns(sub_work),
+        "fingerprint":      build_fingerprint(sub_work),
+        "waf":              build_waf(sub_work),
+    }
+
+# ─── Roll-up summary across subdomains ──────────────────────────────────────
+
+def build_summary(subdomains: list[dict]) -> dict:
+    live = [s for s in subdomains if s.get("alive")]
+    all_hosts = []
+    all_services = []
+    nearest_cert = None
+    for s in subdomains:
+        all_hosts.extend(s.get("hosts", []))
+        all_services.extend(s.get("services", []))
+        for svc in s.get("services", []):
+            d = (svc.get("cert") or {}).get("days_to_expiry")
+            if isinstance(d, (int, float)) and (nearest_cert is None or d < nearest_cert):
+                nearest_cert = d
+    # Top hosting org
+    org_counts: dict[str, int] = {}
+    for h in all_hosts:
+        org = (h.get("asn_org") or "").strip()
+        if org:
+            org_counts[org] = org_counts.get(org, 0) + 1
+    top_org = max(org_counts.items(), key=lambda x: x[1])[0] if org_counts else None
+
+    # Platform labels (unique, non-null)
+    platforms = sorted({s.get("fingerprint", {}).get("platform_label") for s in subdomains
+                        if s.get("fingerprint", {}).get("platform_label")})
+
+    return {
+        "subdomain_count":          len(subdomains),
+        "live_subdomain_count":     len(live),
+        "host_count":               len({h.get("ip") for h in all_hosts if h.get("ip")}),
+        "service_count":            len(all_services),
+        "newest_cert_expiry_days":  nearest_cert,
+        "top_hosting_org":          top_org,
+        "platforms":                platforms,
+    }
+
+# ─── Delta computation (subdomain-aware) ─────────────────────────────────────
 
 def compute_deltas(prev: dict | None, current: dict) -> dict:
     out: dict[str, Any] = {
         "since_scan": None,
-        "added":   {"subdomains": [], "hosts": [], "services": []},
-        "removed": {"subdomains": [], "hosts": [], "services": []},
+        "added":   {"subdomains": [], "services": [], "hosts": []},
+        "removed": {"subdomains": [], "services": [], "hosts": []},
         "changed": {"fingerprint": [], "cert": []},
     }
     if not prev:
@@ -458,33 +436,50 @@ def compute_deltas(prev: dict | None, current: dict) -> dict:
     out["added"]["subdomains"]   = sorted(curr_subs - prev_subs)
     out["removed"]["subdomains"] = sorted(prev_subs - curr_subs)
 
-    prev_hosts = {h["ip"] for h in prev.get("hosts", []) if h.get("ip")}
-    curr_hosts = {h["ip"] for h in current["hosts"] if h.get("ip")}
-    out["added"]["hosts"]   = [{"ip": ip} for ip in sorted(curr_hosts - prev_hosts)]
-    out["removed"]["hosts"] = [{"ip": ip} for ip in sorted(prev_hosts - curr_hosts)]
+    def services_with_owner(record: dict) -> set[tuple]:
+        bag = set()
+        for s in record.get("subdomains", []):
+            sub = s.get("name")
+            for svc in s.get("services", []):
+                bag.add((sub, svc.get("ip"), svc.get("port"), svc.get("protocol")))
+        return bag
+    prev_svcs = services_with_owner(prev)
+    curr_svcs = services_with_owner(current)
+    out["added"]["services"]   = [{"subdomain": sub, "ip": ip, "port": p, "protocol": pr}
+                                  for (sub, ip, p, pr) in sorted(curr_svcs - prev_svcs)]
+    out["removed"]["services"] = [{"subdomain": sub, "ip": ip, "port": p, "protocol": pr}
+                                  for (sub, ip, p, pr) in sorted(prev_svcs - curr_svcs)]
 
-    def svc_key(s: dict) -> tuple:
-        return (s.get("ip"), s.get("port"), s.get("protocol"))
-    prev_svcs = {svc_key(s) for s in prev.get("services", [])}
-    curr_svcs = {svc_key(s) for s in current["services"]}
-    out["added"]["services"]   = [{"ip": ip, "port": p, "protocol": pr} for (ip, p, pr) in sorted(curr_svcs - prev_svcs)]
-    out["removed"]["services"] = [{"ip": ip, "port": p, "protocol": pr} for (ip, p, pr) in sorted(prev_svcs - curr_svcs)]
+    def hosts_with_owner(record: dict) -> set[tuple]:
+        bag = set()
+        for s in record.get("subdomains", []):
+            sub = s.get("name")
+            for h in s.get("hosts", []):
+                if h.get("ip"):
+                    bag.add((sub, h["ip"]))
+        return bag
+    prev_hosts = hosts_with_owner(prev)
+    curr_hosts = hosts_with_owner(current)
+    out["added"]["hosts"]   = [{"subdomain": sub, "ip": ip} for (sub, ip) in sorted(curr_hosts - prev_hosts)]
+    out["removed"]["hosts"] = [{"subdomain": sub, "ip": ip} for (sub, ip) in sorted(prev_hosts - curr_hosts)]
 
-    def tech_versions(record: dict) -> dict[str, str | None]:
-        return {t["name"]: t.get("version") for t in (record.get("fingerprint", {}) or {}).get("tech", []) if t.get("name")}
-    prev_tech = tech_versions(prev)
-    curr_tech = tech_versions(current)
-    for name, ver in curr_tech.items():
-        if name in prev_tech and prev_tech[name] != ver:
-            out["changed"]["fingerprint"].append({"name": name, "from": prev_tech[name], "to": ver})
-
-    # Cert chain change detection (just issuer for now)
-    def cert_issuers(record: dict) -> set[str]:
-        return {(s.get("cert") or {}).get("issuer") for s in record.get("services", []) if (s.get("cert") or {}).get("issuer")}
-    prev_iss = cert_issuers(prev)
-    curr_iss = cert_issuers(current)
-    if prev_iss and prev_iss != curr_iss:
-        out["changed"]["cert"].append({"from": list(prev_iss), "to": list(curr_iss)})
+    # Tech version changes per subdomain
+    def tech_index(record: dict) -> dict[tuple[str, str], str | None]:
+        bag = {}
+        for s in record.get("subdomains", []):
+            sub = s.get("name")
+            for t in s.get("fingerprint", {}).get("tech", []):
+                if t.get("name"):
+                    bag[(sub, t["name"])] = t.get("version")
+        return bag
+    prev_tech = tech_index(prev)
+    curr_tech = tech_index(current)
+    for (sub, name), ver in curr_tech.items():
+        if (sub, name) in prev_tech and prev_tech[(sub, name)] != ver:
+            out["changed"]["fingerprint"].append({
+                "subdomain": sub, "name": name,
+                "from": prev_tech[(sub, name)], "to": ver,
+            })
 
     return out
 
@@ -492,9 +487,8 @@ def compute_deltas(prev: dict | None, current: dict) -> dict:
 
 def validate(asset_json: dict) -> list[str]:
     errors = []
-    required = ["schema_version", "asset", "scan", "reachability", "hosts",
-                "services", "subdomains", "dns", "registration", "fingerprint",
-                "waf", "deltas", "history"]
+    required = ["schema_version", "asset", "scan", "registration", "summary",
+                "subdomains", "deltas", "history"]
     for k in required:
         if k not in asset_json:
             errors.append(f"missing top-level key: {k}")
@@ -504,11 +498,11 @@ def validate(asset_json: dict) -> list[str]:
     for k in ("id", "type", "value", "owner"):
         if k not in asset:
             errors.append(f"asset.{k} missing")
-    if asset.get("type") not in ("fqdn", "apex", "ip", "cidr", "asn"):
+    if asset.get("type") not in ("apex", "fqdn", "ip", "cidr", "asn"):
         errors.append(f"asset.type invalid: {asset.get('type')}")
     return errors
 
-# ─── Target metadata loader (minimal YAML reader, no PyYAML dep) ─────────────
+# ─── Target metadata loader ──────────────────────────────────────────────────
 
 def load_target_metadata(targets_path: Path, target_id: str) -> dict:
     out = {"owner": "unknown", "tags": [], "notes": "", "discovered_via": "manual"}
@@ -516,24 +510,37 @@ def load_target_metadata(targets_path: Path, target_id: str) -> dict:
         return out
     text = targets_path.read_text()
     in_block = False
+    capture_tags = False
     for line in text.splitlines():
-        s = line.strip()
-        if s.startswith(f"id: {target_id}") or s == f"id: {target_id}":
+        s = line.rstrip()
+        stripped = s.strip()
+        if stripped.startswith(f"id: {target_id}") or stripped == f"id: {target_id}":
             in_block = True
+            capture_tags = False
             continue
         if in_block:
-            if s.startswith("- id:") or s.startswith("- "):
+            # End of block: blank line OR next list item OR un-indented
+            if (stripped.startswith("- id:") or stripped.startswith("- ")) and not capture_tags:
                 break
-            if s.startswith("owner:"):
-                out["owner"] = s.split(":", 1)[1].strip().strip('"').strip("'")
-            elif s.startswith("notes:"):
-                out["notes"] = s.split(":", 1)[1].strip().strip('"').strip("'")
-            elif s.startswith("tags:"):
-                inline = s.split(":", 1)[1].strip()
+            if stripped.startswith("owner:"):
+                out["owner"] = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            elif stripped.startswith("notes:"):
+                out["notes"] = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+            elif stripped.startswith("tags:"):
+                inline = stripped.split(":", 1)[1].strip()
                 if inline.startswith("[") and inline.endswith("]"):
                     out["tags"] = [t.strip().strip('"').strip("'") for t in inline[1:-1].split(",") if t.strip()]
-            elif s.startswith("discovered_via:"):
-                out["discovered_via"] = s.split(":", 1)[1].strip().strip('"').strip("'")
+                    capture_tags = False
+                elif not inline:
+                    capture_tags = True
+                    continue
+            elif capture_tags and stripped.startswith("- "):
+                out["tags"].append(stripped[2:].strip().strip('"').strip("'"))
+                continue
+            elif capture_tags:
+                capture_tags = False
+            elif stripped.startswith("discovered_via:"):
+                out["discovered_via"] = stripped.split(":", 1)[1].strip().strip('"').strip("'")
     return out
 
 # ─── Main ────────────────────────────────────────────────────────────────────
@@ -561,25 +568,56 @@ def main():
 
     meta = load_target_metadata(Path(args.targets), args.target_id)
 
-    hosts        = build_hosts(work)
-    services     = build_services(work, hosts)
-    reachability = build_reachability(work)
-    subdomains   = build_subdomains(work, target_value)
-    dns          = build_dns(work)
-    registration = build_registration(work)
-    fingerprint  = build_fingerprint(work)
-    waf          = build_waf(work)
+    ip_cache: dict[str, dict] = {}
+    subdomains: list[dict] = []
 
-    tools_run = []
+    subs_root = work / "subs"
+    if subs_root.exists() and any(subs_root.iterdir()):
+        # Apex flow — per-sub directories
+        for sub_dir in sorted(subs_root.iterdir()):
+            if not sub_dir.is_dir():
+                continue
+            name = sub_dir.name
+            is_root = (name == target_value)
+            via = "dnsx" if is_root else "subfinder"
+            subdomains.append(build_subdomain_record(
+                name, sub_dir, is_root=is_root, discovered_via=via, ip_cache=ip_cache,
+            ))
+    else:
+        # Non-apex flow (fqdn, ip, cidr) — single record from the top-level work dir
+        is_root = True
+        via = "manual" if target_type in ("ip", "cidr") else "dnsx"
+        subdomains.append(build_subdomain_record(
+            target_value, work, is_root=is_root, discovered_via=via, ip_cache=ip_cache,
+        ))
+
+    # Sort: root first, then alphabetical
+    subdomains.sort(key=lambda s: (not s.get("is_root"), s.get("name", "")))
+
+    # Whois on the apex (the top-level work dir's whois.txt)
+    registration = parse_whois_domain(read_text(work / "whois.txt"))
+
+    # Tools-run inferred from existence/non-emptiness of any sub's outputs
+    tools_run_set = set()
+    for d in (subs_root.iterdir() if subs_root.exists() else [work]):
+        if not d.is_dir():
+            continue
+        for tool, path in [
+            ("dnsx", "dnsx.json"), ("subfinder", "subfinder.json"),
+            ("naabu", "naabu.json"), ("fingerprintx", "fingerprintx.json"),
+            ("httpx", "httpx.json"), ("wafw00f", "wafw00f.json"),
+            ("testssl", "testssl.json"), ("whois", "whois.txt"),
+        ]:
+            p = d / path
+            if p.exists() and p.stat().st_size > 0:
+                tools_run_set.add(tool)
+    # Also check top-level work dir
     for tool, path in [
-        ("dnsx", "dnsx.json"), ("subfinder", "subfinder.json"),
-        ("naabu", "naabu.json"), ("fingerprintx", "fingerprintx.json"),
-        ("httpx", "httpx.json"), ("wafw00f", "wafw00f.json"),
-        ("testssl", "testssl.json"), ("whois", "whois.txt"),
+        ("subfinder", "subfinder.json"), ("whois", "whois.txt"),
     ]:
         p = work / path
         if p.exists() and p.stat().st_size > 0:
-            tools_run.append(tool)
+            tools_run_set.add(tool)
 
     try:
         d_start = datetime.strptime(started_at, "%Y-%m-%dT%H:%M:%SZ")
@@ -606,16 +644,11 @@ def main():
             "duration_seconds": duration,
             "engine_version":   ENGINE_VERSION,
             "scanner_origin":   "github-actions-ubuntu-azure",
-            "tools_run":        tools_run,
+            "tools_run":        sorted(tools_run_set),
         },
-        "reachability": reachability,
-        "hosts":        hosts,
-        "services":     services,
-        "subdomains":   subdomains,
-        "dns":          dns,
         "registration": registration,
-        "fingerprint":  fingerprint,
-        "waf":          waf,
+        "summary":      build_summary(subdomains),
+        "subdomains":   subdomains,
         "deltas":       {},
         "history":      [],
     }
@@ -623,23 +656,24 @@ def main():
     prev = None
     if args.previous and Path(args.previous).exists():
         try:
-            prev = json.loads(Path(args.previous).read_text())
-            # Skip prev if it's v1 (incompatible structure) — first v2 scan starts fresh
-            if prev.get("schema_version", "1.0") != SCHEMA_VERSION:
-                print(f"INFO: previous asset is v{prev.get('schema_version')} — treating as fresh v2 scan", file=sys.stderr)
-                prev = None
+            prev_data = json.loads(Path(args.previous).read_text())
+            if prev_data.get("schema_version") == SCHEMA_VERSION:
+                prev = prev_data
+            else:
+                print(f"INFO: previous asset is v{prev_data.get('schema_version')} — treating as fresh v3 scan", file=sys.stderr)
         except Exception as e:
             print(f"WARN: previous asset JSON unreadable: {e}", file=sys.stderr)
 
     asset_json["deltas"] = compute_deltas(prev, asset_json)
 
     prev_history = (prev.get("history", []) if prev else [])
+    summary = asset_json["summary"]
     asset_json["history"] = prev_history[-89:] + [{
-        "scan_id":         args.scan_id,
-        "live":            reachability["live"],
-        "host_count":      len(hosts),
-        "service_count":   len(services),
-        "subdomain_count": sum(1 for s in subdomains if s.get("alive")),
+        "scan_id":              args.scan_id,
+        "subdomain_count":      summary["subdomain_count"],
+        "live_subdomain_count": summary["live_subdomain_count"],
+        "host_count":           summary["host_count"],
+        "service_count":        summary["service_count"],
     }]
 
     errors = validate(asset_json)

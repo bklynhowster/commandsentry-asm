@@ -227,36 +227,56 @@ discover_fqdn() {
   log "FQDN phases complete for $target"
 }
 
-# ─── Phase: Apex discovery (subdomain enum + per-sub FQDN scan) ────
+# ─── Phase: Apex discovery (v3 — subdomain enum + per-sub deep scan) ─
+# For each live subdomain, runs the full FQDN scan flow into a per-sub
+# subdirectory. normalize.py walks all per-sub dirs to build the nested
+# v3 asset record.
 discover_apex() {
   local apex="$1" wd="$2"
 
   phase "Subdomain enumeration (subfinder)"
   subfinder -d "$apex" -silent -json \
     -t "${SUBFINDER_CONCURRENCY:-10}" \
-    > "$wd/subfinder.json" 2> "$wd/subfinder.err" || warn "subfinder had errors"
+    > "$wd/subfinder.json" 2> "$wd/subfinder.err" </dev/null || warn "subfinder had errors"
 
+  # Build the candidate sub list: apex + everything subfinder found
   jq -r '.host' "$wd/subfinder.json" 2>/dev/null | sort -u > "$wd/_subdomains.txt"
   echo "$apex" >> "$wd/_subdomains.txt"
   sort -u -o "$wd/_subdomains.txt" "$wd/_subdomains.txt"
 
-  local sub_count=$(wc -l < "$wd/_subdomains.txt")
-  log "Discovered $sub_count subdomain(s) including apex"
+  local sub_count
+  sub_count=$(wc -l < "$wd/_subdomains.txt" | tr -d ' ')
+  log "Discovered $sub_count candidate subdomain(s) (including apex)"
 
   phase "Liveness check (httpx) on all subdomains"
   httpx -list "$wd/_subdomains.txt" -silent -json \
     -tech-detect -title -status-code -server \
     -threads "${HTTPX_THREADS:-25}" \
-    > "$wd/httpx_apex.json" 2> "$wd/httpx_apex.err" || warn "httpx apex had errors"
+    > "$wd/httpx_apex.json" 2> "$wd/httpx_apex.err" </dev/null || warn "httpx apex had errors"
 
-  jq -r 'select(.status_code != null) | .input' "$wd/httpx_apex.json" 2>/dev/null \
+  # Determine which subdomains are alive
+  jq -r 'select(.status_code != null) | (.input // .host // .url)' "$wd/httpx_apex.json" 2>/dev/null \
+    | sed -E 's#https?://##; s#/.*##' \
     | sort -u > "$wd/_live_subdomains.txt"
-  local live_count=$(wc -l < "$wd/_live_subdomains.txt")
-  log "$live_count subdomain(s) responding"
+  # Apex always considered "live for scanning purposes" even if httpx didn't report it
+  echo "$apex" >> "$wd/_live_subdomains.txt"
+  sort -u -o "$wd/_live_subdomains.txt" "$wd/_live_subdomains.txt"
 
-  # Phase 1: only deep-scan the apex itself; Phase 2 will iterate each live sub
-  phase "Deep scan on apex"
-  discover_fqdn "$apex" "$wd"
+  local live_count
+  live_count=$(wc -l < "$wd/_live_subdomains.txt" | tr -d ' ')
+  log "$live_count subdomain(s) to deep-scan"
+
+  # Per-sub deep scan — each gets its own subdirectory under $wd/subs/{sub}/
+  mkdir -p "$wd/subs"
+  while IFS= read -r sub; do
+    [[ -z "$sub" ]] && continue
+    phase "Deep scan: $sub"
+    local sub_dir="$wd/subs/$sub"
+    mkdir -p "$sub_dir"
+    discover_fqdn "$sub" "$sub_dir" </dev/null
+  done < "$wd/_live_subdomains.txt"
+
+  log "Apex deep-scan complete: $live_count sub(s) profiled under $wd/subs/"
 }
 
 # ─── Phase: Single IP discovery ────────────────────────────────────
