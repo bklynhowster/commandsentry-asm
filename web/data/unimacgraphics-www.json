@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-08T23:53:36Z_ac08569f",
-    "started_at": "2026-05-08T23:53:36Z",
-    "completed_at": "2026-05-08T23:56:40Z",
-    "duration_seconds": 184,
+    "id": "scan_2026-05-09T01:25:50Z_2dd9756e",
+    "started_at": "2026-05-09T01:25:50Z",
+    "completed_at": "2026-05-09T01:28:55Z",
+    "duration_seconds": 185,
     "engine_version": "1.0.0",
     "tools_run": [
       "dnsx",
@@ -56,12 +56,12 @@
         "ns36.domaincontrol.com"
       ],
       "txt": [
+        "sek942qd3nt1s4lqh1h2ovmmai",
         "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-        "k15vdsovvom4v46fi4r4rivts6",
         "MS=ms33269626",
-        "2o6gse9gno2mv04ik7f14kssfq",
         "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
-        "sek942qd3nt1s4lqh1h2ovmmai"
+        "2o6gse9gno2mv04ik7f14kssfq",
+        "k15vdsovvom4v46fi4r4rivts6"
       ],
       "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
       "dmarc": null,
@@ -72,7 +72,7 @@
       {
         "name": "unimacgraphics.com",
         "alive": true,
-        "discovered": "2026-05-08T23:56:40Z"
+        "discovered": "2026-05-09T01:28:55Z"
       }
     ],
     "ports": [
@@ -112,11 +112,6 @@
         },
         {
           "name": "HSTS",
-          "version": null,
-          "category": null
-        },
-        {
-          "name": "HTTP/3",
           "version": null,
           "category": null
         },
@@ -224,8 +219,8 @@
       "title": "No DMARC record published",
       "detail": "Domain remains spoofable beyond what SPF protects against.",
       "evidence": "_dmarc TXT record absent",
-      "first_seen": "2026-05-08T23:56:40Z",
-      "last_seen": "2026-05-08T23:56:40Z",
+      "first_seen": "2026-05-09T01:28:55Z",
+      "last_seen": "2026-05-09T01:28:55Z",
       "status": "open"
     },
     {
@@ -236,8 +231,8 @@
       "title": "No DKIM selector records found",
       "detail": "Outbound mail is unsigned.",
       "evidence": "Selectors probed: google, default, selector1, selector2, dkim, k1",
-      "first_seen": "2026-05-08T23:56:40Z",
-      "last_seen": "2026-05-08T23:56:40Z",
+      "first_seen": "2026-05-09T01:28:55Z",
+      "last_seen": "2026-05-09T01:28:55Z",
       "status": "open"
     },
     {
@@ -248,8 +243,8 @@
       "title": "Missing: Content-Security-Policy",
       "detail": "Response from / does not include Content-Security-Policy.",
       "evidence": "GET / \u2192 headers do not contain Content-Security-Policy",
-      "first_seen": "2026-05-08T23:56:40Z",
-      "last_seen": "2026-05-08T23:56:40Z",
+      "first_seen": "2026-05-09T01:28:55Z",
+      "last_seen": "2026-05-09T01:28:55Z",
       "status": "open"
     },
     {
@@ -260,8 +255,8 @@
       "title": "Missing: Strict-Transport-Security",
       "detail": "Response from / does not include Strict-Transport-Security.",
       "evidence": "GET / \u2192 headers do not contain Strict-Transport-Security",
-      "first_seen": "2026-05-08T23:56:40Z",
-      "last_seen": "2026-05-08T23:56:40Z",
+      "first_seen": "2026-05-09T01:28:55Z",
+      "last_seen": "2026-05-09T01:28:55Z",
       "status": "open"
     },
     {
@@ -272,8 +267,8 @@
       "title": "Missing: X-Frame-Options",
       "detail": "Response from / does not include X-Frame-Options.",
       "evidence": "GET / \u2192 headers do not contain X-Frame-Options",
-      "first_seen": "2026-05-08T23:56:40Z",
-      "last_seen": "2026-05-08T23:56:40Z",
+      "first_seen": "2026-05-09T01:28:55Z",
+      "last_seen": "2026-05-09T01:28:55Z",
       "status": "open"
     },
     {
@@ -284,8 +279,8 @@
       "title": "Missing: X-Content-Type-Options",
       "detail": "Response from / does not include X-Content-Type-Options.",
       "evidence": "GET / \u2192 headers do not contain X-Content-Type-Options",
-      "first_seen": "2026-05-08T23:56:40Z",
-      "last_seen": "2026-05-08T23:56:40Z",
+      "first_seen": "2026-05-09T01:28:55Z",
+      "last_seen": "2026-05-09T01:28:55Z",
       "status": "open"
     },
     {
@@ -296,8 +291,8 @@
       "title": "Missing: Referrer-Policy",
       "detail": "Response from / does not include Referrer-Policy.",
       "evidence": "GET / \u2192 headers do not contain Referrer-Policy",
-      "first_seen": "2026-05-08T23:56:40Z",
-      "last_seen": "2026-05-08T23:56:40Z",
+      "first_seen": "2026-05-09T01:28:55Z",
+      "last_seen": "2026-05-09T01:28:55Z",
       "status": "open"
     },
     {
@@ -308,8 +303,8 @@
       "title": "Missing: Permissions-Policy",
       "detail": "Response from / does not include Permissions-Policy.",
       "evidence": "GET / \u2192 headers do not contain Permissions-Policy",
-      "first_seen": "2026-05-08T23:56:40Z",
-      "last_seen": "2026-05-08T23:56:40Z",
+      "first_seen": "2026-05-09T01:28:55Z",
+      "last_seen": "2026-05-09T01:28:55Z",
       "status": "open"
     },
     {
@@ -320,8 +315,8 @@
       "title": "Missing: X-XSS-Protection",
       "detail": "Response from / does not include X-XSS-Protection.",
       "evidence": "GET / \u2192 headers do not contain X-XSS-Protection",
-      "first_seen": "2026-05-08T23:56:40Z",
-      "last_seen": "2026-05-08T23:56:40Z",
+      "first_seen": "2026-05-09T01:28:55Z",
+      "last_seen": "2026-05-09T01:28:55Z",
       "status": "open"
     },
     {
@@ -332,8 +327,8 @@
       "title": "Microsoft Azure Domain Tenant ID - Detect",
       "detail": "Microsoft Azure Domain Tenant ID was detected.",
       "evidence": "https://login.microsoftonline.com:443/unimacgraphics.com/v2.0/.well-known/openid-configuration (template: azure-domain-tenant)",
-      "first_seen": "2026-05-08T23:56:40Z",
-      "last_seen": "2026-05-08T23:56:40Z",
+      "first_seen": "2026-05-09T01:28:55Z",
+      "last_seen": "2026-05-09T01:28:55Z",
       "status": "open"
     },
     {
@@ -341,28 +336,16 @@
       "type": "exposed_debug_endpoint",
       "category": "exposure",
       "severity": "notice",
-      "title": "WordPress Yoast SEO Plugin - User Enumeration",
-      "detail": "",
-      "evidence": "https://unimacgraphics.com/author-sitemap.xml (template: wp-yoast-user-enumeration)",
-      "first_seen": "2026-05-08T23:56:40Z",
-      "last_seen": "2026-05-08T23:56:40Z",
-      "status": "open"
-    },
-    {
-      "id": "E-012",
-      "type": "exposed_debug_endpoint",
-      "category": "exposure",
-      "severity": "notice",
       "title": "WordPress Readme File",
       "detail": "",
       "evidence": "https://unimacgraphics.com/readme.html (template: wordpress-readme-file)",
-      "first_seen": "2026-05-08T23:56:40Z",
-      "last_seen": "2026-05-08T23:56:40Z",
+      "first_seen": "2026-05-09T01:28:55Z",
+      "last_seen": "2026-05-09T01:28:55Z",
       "status": "open"
     }
   ],
   "deltas": {
-    "since_scan": null,
+    "since_scan": "scan_2026-05-08T23:53:36Z_ac08569f",
     "added": {
       "subdomains": [],
       "ports": [],
@@ -371,7 +354,9 @@
     "removed": {
       "subdomains": [],
       "ports": [],
-      "exposures": []
+      "exposures": [
+        "E-011"
+      ]
     },
     "changed": {
       "tech": []
@@ -384,6 +369,13 @@
       "ports_open": 2,
       "subdomains_alive": 1,
       "exposures_total": 12
+    },
+    {
+      "scan_id": "scan_2026-05-09T01:25:50Z_2dd9756e",
+      "live": true,
+      "ports_open": 2,
+      "subdomains_alive": 1,
+      "exposures_total": 11
     }
   ]
 }
