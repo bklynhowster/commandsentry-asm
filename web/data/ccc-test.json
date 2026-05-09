@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-08T23:56:40Z_55a19e67",
-    "started_at": "2026-05-08T23:56:40Z",
-    "completed_at": "2026-05-08T23:59:21Z",
-    "duration_seconds": 161,
+    "id": "scan_2026-05-09T00:23:58Z_fd448aec",
+    "started_at": "2026-05-09T00:23:58Z",
+    "completed_at": "2026-05-09T00:26:55Z",
+    "duration_seconds": 177,
     "engine_version": "1.0.0",
     "tools_run": [
       "dnsx",
@@ -60,7 +60,7 @@
       {
         "name": "test.commandcommcentral.com",
         "alive": true,
-        "discovered": "2026-05-08T23:59:21Z"
+        "discovered": "2026-05-09T00:26:55Z"
       }
     ],
     "ports": [
@@ -152,8 +152,8 @@
       "title": "No DMARC record published",
       "detail": "Domain remains spoofable beyond what SPF protects against.",
       "evidence": "_dmarc TXT record absent",
-      "first_seen": "2026-05-08T23:59:21Z",
-      "last_seen": "2026-05-08T23:59:21Z",
+      "first_seen": "2026-05-09T00:26:55Z",
+      "last_seen": "2026-05-09T00:26:55Z",
       "status": "open"
     },
     {
@@ -164,8 +164,8 @@
       "title": "No DKIM selector records found",
       "detail": "Outbound mail is unsigned.",
       "evidence": "Selectors probed: google, default, selector1, selector2, dkim, k1",
-      "first_seen": "2026-05-08T23:59:21Z",
-      "last_seen": "2026-05-08T23:59:21Z",
+      "first_seen": "2026-05-09T00:26:55Z",
+      "last_seen": "2026-05-09T00:26:55Z",
       "status": "open"
     },
     {
@@ -176,8 +176,8 @@
       "title": "Missing: Content-Security-Policy",
       "detail": "Response from / does not include Content-Security-Policy.",
       "evidence": "GET / \u2192 headers do not contain Content-Security-Policy",
-      "first_seen": "2026-05-08T23:59:21Z",
-      "last_seen": "2026-05-08T23:59:21Z",
+      "first_seen": "2026-05-09T00:26:55Z",
+      "last_seen": "2026-05-09T00:26:55Z",
       "status": "open"
     },
     {
@@ -188,8 +188,8 @@
       "title": "Missing: Strict-Transport-Security",
       "detail": "Response from / does not include Strict-Transport-Security.",
       "evidence": "GET / \u2192 headers do not contain Strict-Transport-Security",
-      "first_seen": "2026-05-08T23:59:21Z",
-      "last_seen": "2026-05-08T23:59:21Z",
+      "first_seen": "2026-05-09T00:26:55Z",
+      "last_seen": "2026-05-09T00:26:55Z",
       "status": "open"
     },
     {
@@ -200,8 +200,8 @@
       "title": "Missing: X-Frame-Options",
       "detail": "Response from / does not include X-Frame-Options.",
       "evidence": "GET / \u2192 headers do not contain X-Frame-Options",
-      "first_seen": "2026-05-08T23:59:21Z",
-      "last_seen": "2026-05-08T23:59:21Z",
+      "first_seen": "2026-05-09T00:26:55Z",
+      "last_seen": "2026-05-09T00:26:55Z",
       "status": "open"
     },
     {
@@ -212,8 +212,8 @@
       "title": "Missing: X-Content-Type-Options",
       "detail": "Response from / does not include X-Content-Type-Options.",
       "evidence": "GET / \u2192 headers do not contain X-Content-Type-Options",
-      "first_seen": "2026-05-08T23:59:21Z",
-      "last_seen": "2026-05-08T23:59:21Z",
+      "first_seen": "2026-05-09T00:26:55Z",
+      "last_seen": "2026-05-09T00:26:55Z",
       "status": "open"
     },
     {
@@ -224,8 +224,8 @@
       "title": "Missing: Referrer-Policy",
       "detail": "Response from / does not include Referrer-Policy.",
       "evidence": "GET / \u2192 headers do not contain Referrer-Policy",
-      "first_seen": "2026-05-08T23:59:21Z",
-      "last_seen": "2026-05-08T23:59:21Z",
+      "first_seen": "2026-05-09T00:26:55Z",
+      "last_seen": "2026-05-09T00:26:55Z",
       "status": "open"
     },
     {
@@ -236,8 +236,8 @@
       "title": "Missing: Permissions-Policy",
       "detail": "Response from / does not include Permissions-Policy.",
       "evidence": "GET / \u2192 headers do not contain Permissions-Policy",
-      "first_seen": "2026-05-08T23:59:21Z",
-      "last_seen": "2026-05-08T23:59:21Z",
+      "first_seen": "2026-05-09T00:26:55Z",
+      "last_seen": "2026-05-09T00:26:55Z",
       "status": "open"
     },
     {
@@ -248,13 +248,13 @@
       "title": "Missing: X-XSS-Protection",
       "detail": "Response from / does not include X-XSS-Protection.",
       "evidence": "GET / \u2192 headers do not contain X-XSS-Protection",
-      "first_seen": "2026-05-08T23:59:21Z",
-      "last_seen": "2026-05-08T23:59:21Z",
+      "first_seen": "2026-05-09T00:26:55Z",
+      "last_seen": "2026-05-09T00:26:55Z",
       "status": "open"
     }
   ],
   "deltas": {
-    "since_scan": null,
+    "since_scan": "scan_2026-05-08T23:56:40Z_55a19e67",
     "added": {
       "subdomains": [],
       "ports": [],
@@ -272,6 +272,13 @@
   "history": [
     {
       "scan_id": "scan_2026-05-08T23:56:40Z_55a19e67",
+      "live": true,
+      "ports_open": 2,
+      "subdomains_alive": 1,
+      "exposures_total": 9
+    },
+    {
+      "scan_id": "scan_2026-05-09T00:23:58Z_fd448aec",
       "live": true,
       "ports_open": 2,
       "subdomains_alive": 1,
