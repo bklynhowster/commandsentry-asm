@@ -1,0 +1,244 @@
+{
+  "schema_version": "3.0",
+  "asset": {
+    "id": "scrimmage",
+    "type": "apex",
+    "value": "scrimmage.com",
+    "owner": "unknown",
+    "tags": [],
+    "notes": "",
+    "discovered_via": "manual"
+  },
+  "scan": {
+    "id": "scan_2026-05-09T22:57:24Z_56cf87db",
+    "started_at": "2026-05-09T22:57:24Z",
+    "completed_at": "2026-05-09T22:59:44Z",
+    "duration_seconds": 140,
+    "engine_version": "3.0.0",
+    "scanner_origin": "github-actions-ubuntu-azure",
+    "tools_run": [
+      "dnsx",
+      "httpx",
+      "naabu",
+      "subfinder",
+      "testssl",
+      "wafw00f",
+      "whois"
+    ]
+  },
+  "registration": {},
+  "summary": {
+    "subdomain_count": 2,
+    "live_subdomain_count": 2,
+    "host_count": 1,
+    "service_count": 4,
+    "newest_cert_expiry_days": null,
+    "top_hosting_org": "Amazon.com, Inc.",
+    "platforms": []
+  },
+  "subdomains": [
+    {
+      "name": "scrimmage.com",
+      "alive": true,
+      "is_root": true,
+      "discovered_via": "dnsx",
+      "first_discovered": "2026-05-09T22:59:44Z",
+      "last_seen": "2026-05-09T22:59:44Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 403,
+        "title": "Just a moment..."
+      },
+      "hosts": [
+        {
+          "ip": "52.20.84.62",
+          "asn": "AS14618",
+          "asn_org": "Amazon.com, Inc.",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Ashburn",
+          "reverse_dns": "ec2-52-20-84-62.compute-1.amazonaws.com",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "52.20.84.62",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.20.84.62",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "not_after": "2026-05-14 20:28",
+            "self_signed": false
+          }
+        }
+      ],
+      "dns": {
+        "a": [
+          "52.20.84.62"
+        ],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [
+          "ns1.squadhelp.com",
+          "ns2.squadhelp.com"
+        ],
+        "txt": [
+          "f0095018235b8109a2bf9f65674a1784b6971ed6"
+        ],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": "cloudflare",
+        "platform_label": null,
+        "tech": [
+          {
+            "name": "Cloudflare",
+            "version": null,
+            "category": "cdn"
+          },
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          },
+          {
+            "name": "HTTP/3",
+            "version": null,
+            "category": "transport"
+          }
+        ]
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "Cloudflare",
+        "confidence": "high"
+      }
+    },
+    {
+      "name": "www.scrimmage.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-05-09T22:59:44Z",
+      "last_seen": "2026-05-09T22:59:44Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 403,
+        "title": "Just a moment..."
+      },
+      "hosts": [
+        {
+          "ip": "52.20.84.62",
+          "asn": "AS14618",
+          "asn_org": "Amazon.com, Inc.",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Ashburn",
+          "reverse_dns": "ec2-52-20-84-62.compute-1.amazonaws.com",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "52.20.84.62",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.20.84.62",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "not_after": "2026-05-18 00:55",
+            "self_signed": false
+          }
+        }
+      ],
+      "dns": {
+        "a": [
+          "52.20.84.62"
+        ],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": "cloudflare",
+        "platform_label": null,
+        "tech": [
+          {
+            "name": "Cloudflare",
+            "version": null,
+            "category": "cdn"
+          },
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          },
+          {
+            "name": "HTTP/3",
+            "version": null,
+            "category": "transport"
+          }
+        ]
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "Cloudflare",
+        "confidence": "high"
+      }
+    }
+  ],
+  "deltas": {
+    "since_scan": null,
+    "added": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "removed": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "changed": {
+      "fingerprint": [],
+      "cert": []
+    }
+  },
+  "history": [
+    {
+      "scan_id": "scan_2026-05-09T22:57:24Z_56cf87db",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 1,
+      "service_count": 4
+    }
+  ]
+}
