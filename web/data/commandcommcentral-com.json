@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-09T13:48:59Z_88bde32e",
-    "started_at": "2026-05-09T13:48:59Z",
-    "completed_at": "2026-05-09T13:50:40Z",
-    "duration_seconds": 101,
+    "id": "scan_2026-05-09T19:22:16Z_82136193",
+    "started_at": "2026-05-09T19:22:16Z",
+    "completed_at": "2026-05-09T19:24:10Z",
+    "duration_seconds": 114,
     "engine_version": "2.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -68,7 +68,7 @@
         "not_before": "2026-01-02T18:09:44Z",
         "not_after": "2027-02-03T18:09:44Z",
         "self_signed": false,
-        "days_to_expiry": 270
+        "days_to_expiry": 269
       }
     }
   ],
@@ -76,8 +76,8 @@
     {
       "name": "commandcommcentral.com",
       "alive": true,
-      "first_discovered": "2026-05-09T13:50:40Z",
-      "last_seen": "2026-05-09T13:50:40Z"
+      "first_discovered": "2026-05-09T19:24:11Z",
+      "last_seen": "2026-05-09T19:24:11Z"
     }
   ],
   "dns": {
@@ -94,14 +94,7 @@
     "spf": null,
     "dnssec": false
   },
-  "registration": {
-    "registrar": "GoDaddy.com, LLC",
-    "registrar_url": "https://www.godaddy.com",
-    "created": "2016-12-14",
-    "updated": "2025-12-15",
-    "expires": "2028-12-14",
-    "status": "clientTransferProhibited"
-  },
+  "registration": {},
   "fingerprint": {
     "server": null,
     "platform_label": ".NET / IIS",
@@ -144,7 +137,7 @@
     "confidence": "high"
   },
   "deltas": {
-    "since_scan": "scan_2026-05-09T13:22:13Z_24dcd673",
+    "since_scan": "scan_2026-05-09T13:48:59Z_88bde32e",
     "added": {
       "subdomains": [],
       "hosts": [],
@@ -170,6 +163,13 @@
     },
     {
       "scan_id": "scan_2026-05-09T13:48:59Z_88bde32e",
+      "live": true,
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_count": 1
+    },
+    {
+      "scan_id": "scan_2026-05-09T19:22:16Z_82136193",
       "live": true,
       "host_count": 1,
       "service_count": 2,

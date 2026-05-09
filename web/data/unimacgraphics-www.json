@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-09T13:45:22Z_4fc7f348",
-    "started_at": "2026-05-09T13:45:22Z",
-    "completed_at": "2026-05-09T13:47:21Z",
-    "duration_seconds": 119,
+    "id": "scan_2026-05-09T19:18:07Z_cad27f8b",
+    "started_at": "2026-05-09T19:18:07Z",
+    "completed_at": "2026-05-09T19:20:20Z",
+    "duration_seconds": 133,
     "engine_version": "2.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -78,7 +78,7 @@
         "not_before": "2026-03-18T15:27:57Z",
         "not_after": "2026-06-16T15:27:56Z",
         "self_signed": false,
-        "days_to_expiry": 38
+        "days_to_expiry": 37
       }
     },
     {
@@ -106,7 +106,7 @@
         "not_before": "2026-03-18T15:27:57Z",
         "not_after": "2026-06-16T15:27:56Z",
         "self_signed": false,
-        "days_to_expiry": 38
+        "days_to_expiry": 37
       }
     }
   ],
@@ -114,8 +114,8 @@
     {
       "name": "unimacgraphics.com",
       "alive": true,
-      "first_discovered": "2026-05-09T13:47:21Z",
-      "last_seen": "2026-05-09T13:47:21Z"
+      "first_discovered": "2026-05-09T19:20:20Z",
+      "last_seen": "2026-05-09T19:20:20Z"
     }
   ],
   "dns": {
@@ -132,23 +132,16 @@
     ],
     "txt": [
       "2o6gse9gno2mv04ik7f14kssfq",
-      "MS=ms33269626",
-      "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-      "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
+      "k15vdsovvom4v46fi4r4rivts6",
       "sek942qd3nt1s4lqh1h2ovmmai",
-      "k15vdsovvom4v46fi4r4rivts6"
+      "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+      "MS=ms33269626",
+      "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1"
     ],
     "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
     "dnssec": false
   },
-  "registration": {
-    "registrar": "GoDaddy.com, LLC",
-    "registrar_url": "https://www.godaddy.com",
-    "created": "1999-09-24",
-    "updated": "2022-08-08",
-    "expires": "2027-09-24",
-    "status": "clientTransferProhibited"
-  },
+  "registration": {},
   "fingerprint": {
     "server": "nginx",
     "platform_label": "WordPress on wp.cloud (Pressable)",
@@ -251,7 +244,7 @@
     "confidence": "high"
   },
   "deltas": {
-    "since_scan": "scan_2026-05-09T13:18:29Z_ab108c46",
+    "since_scan": "scan_2026-05-09T13:45:22Z_4fc7f348",
     "added": {
       "subdomains": [],
       "hosts": [],
@@ -277,6 +270,13 @@
     },
     {
       "scan_id": "scan_2026-05-09T13:45:22Z_4fc7f348",
+      "live": true,
+      "host_count": 2,
+      "service_count": 4,
+      "subdomain_count": 1
+    },
+    {
+      "scan_id": "scan_2026-05-09T19:18:07Z_cad27f8b",
       "live": true,
       "host_count": 2,
       "service_count": 4,
