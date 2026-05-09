@@ -1,0 +1,289 @@
+{
+  "schema_version": "3.0",
+  "asset": {
+    "id": "commandcommcentral",
+    "type": "apex",
+    "value": "commandcommcentral.com",
+    "owner": "unknown",
+    "tags": [],
+    "notes": "",
+    "discovered_via": "manual"
+  },
+  "scan": {
+    "id": "scan_2026-05-09T22:17:02Z_15db6a40",
+    "started_at": "2026-05-09T22:17:02Z",
+    "completed_at": "2026-05-09T22:21:54Z",
+    "duration_seconds": 292,
+    "engine_version": "3.0.0",
+    "scanner_origin": "github-actions-ubuntu-azure",
+    "tools_run": [
+      "dnsx",
+      "httpx",
+      "naabu",
+      "subfinder",
+      "testssl",
+      "wafw00f",
+      "whois"
+    ]
+  },
+  "registration": {},
+  "summary": {
+    "subdomain_count": 2,
+    "live_subdomain_count": 2,
+    "host_count": 1,
+    "service_count": 4,
+    "newest_cert_expiry_days": 269,
+    "top_hosting_org": "Cablevision Systems Corp.",
+    "platforms": [
+      "Microsoft .NET / IIS"
+    ]
+  },
+  "subdomains": [
+    {
+      "name": "commandcommcentral.com",
+      "alive": true,
+      "is_root": true,
+      "discovered_via": "dnsx",
+      "first_discovered": "2026-05-09T22:21:54Z",
+      "last_seen": "2026-05-09T22:21:54Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 200,
+        "title": "CommandCommCentral"
+      },
+      "hosts": [
+        {
+          "ip": "24.38.70.5",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
+          "country": "US",
+          "region": "New York",
+          "city": "New York City",
+          "reverse_dns": "18264605.cst.lightpath.net",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "24.38.70.5",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "24.38.70.5",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=*.commandcommcentral.com, O=Strategic Content Imaging, L=Secaucus, ST=New Jersey, C=US",
+            "issuer": "CN=Go Daddy Secure Certificate Authority - G2, OU=http://certs.godaddy.com/repository/, O=GoDaddy.com\\, Inc., L=Scottsdale, ST=Arizona, C=US",
+            "san": [
+              "*.commandcommcentral.com",
+              "commandcommcentral.com"
+            ],
+            "not_before": "2026-01-02T18:09:44Z",
+            "not_after": "2027-02-03T18:09:44Z",
+            "self_signed": false,
+            "days_to_expiry": 269
+          }
+        }
+      ],
+      "dns": {
+        "a": [
+          "24.38.70.5"
+        ],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [
+          "ns01.commandcommcentral.com"
+        ],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": "Microsoft .NET / IIS",
+        "tech": [
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          },
+          {
+            "name": "Microsoft ASP.NET",
+            "version": null,
+            "category": "framework"
+          },
+          {
+            "name": "Microsoft Power BI",
+            "version": null,
+            "category": "tracking"
+          },
+          {
+            "name": "Modernizr",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery UI",
+            "version": null,
+            "category": null
+          }
+        ]
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "FortiWeb",
+        "confidence": "high"
+      }
+    },
+    {
+      "name": "www.commandcommcentral.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-05-09T22:21:54Z",
+      "last_seen": "2026-05-09T22:21:54Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 200,
+        "title": "CommandCommCentral"
+      },
+      "hosts": [
+        {
+          "ip": "24.38.70.5",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
+          "country": "US",
+          "region": "New York",
+          "city": "New York City",
+          "reverse_dns": "18264605.cst.lightpath.net",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "24.38.70.5",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "24.38.70.5",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=*.commandcommcentral.com, O=Strategic Content Imaging, L=Secaucus, ST=New Jersey, C=US",
+            "issuer": "CN=Go Daddy Secure Certificate Authority - G2, OU=http://certs.godaddy.com/repository/, O=GoDaddy.com\\, Inc., L=Scottsdale, ST=Arizona, C=US",
+            "san": [
+              "*.commandcommcentral.com",
+              "commandcommcentral.com"
+            ],
+            "not_before": "2026-01-02T18:09:44Z",
+            "not_after": "2027-02-03T18:09:44Z",
+            "self_signed": false,
+            "days_to_expiry": 269
+          }
+        }
+      ],
+      "dns": {
+        "a": [
+          "24.38.70.5"
+        ],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": "Microsoft .NET / IIS",
+        "tech": [
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          },
+          {
+            "name": "Microsoft ASP.NET",
+            "version": null,
+            "category": "framework"
+          },
+          {
+            "name": "Microsoft Power BI",
+            "version": null,
+            "category": "tracking"
+          },
+          {
+            "name": "Modernizr",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery UI",
+            "version": null,
+            "category": null
+          }
+        ]
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "FortiWeb",
+        "confidence": "high"
+      }
+    }
+  ],
+  "deltas": {
+    "since_scan": null,
+    "added": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "removed": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "changed": {
+      "fingerprint": [],
+      "cert": []
+    }
+  },
+  "history": [
+    {
+      "scan_id": "scan_2026-05-09T22:17:02Z_15db6a40",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 1,
+      "service_count": 4
+    }
+  ]
+}
