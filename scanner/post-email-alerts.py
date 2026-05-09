@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import urllib.request
 import urllib.error
@@ -274,33 +276,55 @@ def render_subject(alerts: list[Alert]) -> str:
 # ─── Resend API ──────────────────────────────────────────────────────────────
 
 def send_email(subject: str, html: str) -> None:
+    """
+    POST to Resend API. Uses curl rather than Python urllib because Resend
+    sits behind Cloudflare, and Cloudflare blocks Python's default TLS
+    fingerprint with error 1010. Curl's fingerprint is well-trusted.
+    """
     body = json.dumps({
         "from":    f"{FROM_NAME} <{FROM_EMAIL}>",
         "to":      [TO_EMAIL],
         "subject": subject,
         "html":    html,
-    }).encode("utf-8")
+    })
 
-    req = urllib.request.Request(
+    if not shutil.which("curl"):
+        print("ERROR: curl not found in PATH. Required to bypass Cloudflare TLS fingerprint check.", file=sys.stderr)
+        sys.exit(2)
+
+    cmd = [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--fail-with-body",
+        "--max-time", "30",
+        "--user-agent", "commandsentry-asm/1.0",
+        "-X", "POST",
         "https://api.resend.com/emails",
-        data=body,
-        headers={
-            "Authorization": f"Bearer {API_KEY}",
-            "Content-Type":  "application/json",
-        },
-        method="POST",
-    )
+        "-H", f"Authorization: Bearer {API_KEY}",
+        "-H", "Content-Type: application/json",
+        "-w", "\n[HTTP %{http_code}]",
+        "--data-binary", body,
+    ]
+
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            payload = resp.read().decode("utf-8")
-            print(f"Resend OK: {resp.status} {payload[:200]}", file=sys.stderr)
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")
-        print(f"Resend HTTP {e.code}: {err_body[:500]}", file=sys.stderr)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=40)
+    except subprocess.TimeoutExpired:
+        print("Resend network error: curl timed out", file=sys.stderr)
         sys.exit(2)
-    except Exception as e:
-        print(f"Resend network error: {e}", file=sys.stderr)
+
+    out  = (result.stdout or "")[:1000]
+    err  = (result.stderr or "")[:500]
+
+    if result.returncode != 0:
+        print(f"Resend curl failed (exit {result.returncode}): stdout={out}  stderr={err}", file=sys.stderr)
         sys.exit(2)
+
+    if "[HTTP 2" not in out:  # any 2xx is fine
+        print(f"Resend non-2xx response: {out}", file=sys.stderr)
+        sys.exit(2)
+
+    print(f"Resend OK: {out}", file=sys.stderr)
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
