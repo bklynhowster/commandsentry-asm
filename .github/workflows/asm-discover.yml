@@ -138,6 +138,17 @@ jobs:
           chmod +x web/sync-data.sh
           web/sync-data.sh
 
+      - name: Send email alerts (changes only)
+        # Graceful no-op if RESEND_API_KEY isn't set, so workflow doesn't fail
+        # before the operator has wired email alerts.
+        env:
+          RESEND_API_KEY:    ${{ secrets.RESEND_API_KEY }}
+          ALERT_FROM_EMAIL:  ${{ vars.ALERT_FROM_EMAIL }}
+          ALERT_TO_EMAIL:    ${{ vars.ALERT_TO_EMAIL }}
+          ALERT_FROM_NAME:   ${{ vars.ALERT_FROM_NAME }}
+          DASHBOARD_URL:     ${{ vars.DASHBOARD_URL }}
+        run: python3 scanner/post-email-alerts.py
+
       - name: Commit scan results
         # No errexit so we can handle push race conditions cleanly.
         # Strategy on push race: soft-reset to origin/main and re-stage,
