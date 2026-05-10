@@ -1125,6 +1125,174 @@ input[type="search"]:focus,
   margin-top: 4px;
 }
 
+/* ─── Add Target — success state ────────────────────── */
+.add-success {
+  animation: success-fade-in 280ms ease-out;
+}
+@keyframes success-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.add-success-header {
+  display: flex; align-items: center; gap: var(--s4);
+  padding-bottom: var(--s4);
+  border-bottom: 1px solid var(--ink-10);
+  margin-bottom: var(--s5);
+}
+.add-success-check {
+  width: 48px; height: 48px;
+  border-radius: 50%;
+  background: var(--ok);
+  color: #fff;
+  font-size: 26px;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 6px var(--ok-soft);
+}
+.add-success-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.005em;
+}
+.add-success-target {
+  margin-top: 4px;
+  display: flex; align-items: center; gap: var(--s2);
+  font-size: 14.5px;
+  word-break: break-all;
+}
+
+.add-success-timing {
+  background: var(--copper-soft);
+  border-left: 4px solid var(--copper);
+  border-radius: var(--r-sm);
+  padding: var(--s4) var(--s5);
+  margin-bottom: var(--s5);
+}
+.add-success-timing-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--copper-ink);
+  font-weight: 600;
+}
+.add-success-timing-value {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+  margin-top: 2px;
+}
+.add-success-timing-note {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--ink-80);
+  line-height: 1.5;
+}
+
+.add-success-timeline {
+  background: var(--paper-2);
+  border: 1px solid var(--paper-rule);
+  border-radius: var(--r-sm);
+  padding: var(--s4) var(--s5);
+  margin-bottom: var(--s5);
+}
+.add-success-timeline-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+  font-weight: 600;
+  margin-bottom: var(--s3);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--ink-10);
+}
+.step-row {
+  display: flex; align-items: flex-start; gap: var(--s3);
+  padding: var(--s2) 0;
+  border-bottom: 1px dashed var(--ink-10);
+}
+.step-row:last-child { border-bottom: none; }
+.step-icon {
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  margin-top: 1px;
+}
+.step-done .step-icon  { background: var(--ok);     color: #fff; }
+.step-running .step-icon {
+  background: var(--copper);
+  color: #fff;
+  animation: step-pulse 1.6s ease-in-out infinite;
+}
+.step-pending .step-icon { background: transparent; color: var(--ink-40); border: 1.5px solid var(--ink-20); }
+@keyframes step-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(200, 99, 42, 0.55); }
+  50%      { box-shadow: 0 0 0 6px rgba(200, 99, 42, 0); }
+}
+.step-body { flex: 1; min-width: 0; }
+.step-label {
+  font-size: 14px;
+  color: var(--ink);
+  font-weight: 500;
+}
+.step-pending .step-label { color: var(--ink-60); font-weight: 400; }
+.step-detail {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-60);
+  margin-top: 2px;
+}
+
+.add-success-footnote {
+  font-size: 13px;
+  color: var(--ink-60);
+  background: var(--ink-05);
+  padding: var(--s3) var(--s4);
+  border-radius: var(--r-sm);
+  margin-bottom: var(--s4);
+  line-height: 1.5;
+}
+
+.add-success-actions {
+  display: flex; flex-direction: column;
+  gap: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--ink-10);
+}
+.btn-link {
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  color: var(--copper-ink);
+  text-decoration: none;
+  font-weight: 500;
+}
+.btn-link:hover { color: var(--copper); text-decoration: underline; }
+.add-success-actions-buttons {
+  display: flex; justify-content: flex-end; gap: var(--s2);
+  margin-top: var(--s2);
+}
+.add-success-actions-buttons .btn-ghost {
+  color: var(--ink-60);
+  border-color: var(--ink-20);
+  background: var(--paper);
+}
+.add-success-actions-buttons .btn-ghost:hover {
+  color: var(--ink);
+  border-color: var(--copper);
+}
+
 /* ─── Footer ──────────────────────────────────────── */
 .bottom {
   text-align: center;

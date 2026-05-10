@@ -698,12 +698,7 @@
       });
       const data = await r.json().catch(() => ({}));
       if (r.ok && data.ok) {
-        feedback.className = "form-feedback ok";
-        feedback.innerHTML = `Target <code>${escapeHtml(payload.id)}</code> added. Commit: <code>${escapeHtml((data.commit?.sha || "").slice(0, 7))}</code>. Scan will run within ~10 min.`;
-        e.target.reset();
-        document.getElementById("t-id").dataset.touched = "false";
-        updateTypeHelp();
-        submitBtn.disabled = false;
+        showAddSuccess(payload, data);
       } else {
         feedback.className = "form-feedback err";
         const detail = Array.isArray(data.details) ? data.details.join(" · ") : "";
@@ -716,4 +711,115 @@
       submitBtn.disabled = false;
     }
   }
+
+  // Replace the form body with a clear success state — what just happened,
+  // what's happening now, what to expect, with action buttons.
+  function showAddSuccess(payload, data) {
+    const body = document.querySelector("#add-modal .modal-body");
+    const sha = (data.commit?.sha || "").slice(0, 7);
+    const commitUrl = data.commit?.url || "";
+    const actionsUrl = "https://github.com/bklynhowster/commandsentry-asm/actions/workflows/asm-discover.yml";
+    const isApex = payload.type === "apex";
+
+    const expectedTime = isApex
+      ? "10–30 minutes"
+      : payload.type === "cidr" ? "15–45 minutes" : "8–12 minutes";
+
+    const timeline = isApex ? [
+      { state: "done",    label: "Target committed to repo",                      detail: sha ? `commit ${sha}` : "" },
+      { state: "running", label: "Scan workflow triggered",                       detail: "GitHub Actions queueing" },
+      { state: "pending", label: "Subdomain enumeration (subfinder)",             detail: "passive sources — crt.sh, BufferOver, etc." },
+      { state: "pending", label: "Liveness check (httpx) on each candidate",      detail: "filters to subs that respond" },
+      { state: "pending", label: "Per-subdomain deep scan",                       detail: "DNS, ports, services, cert, fingerprint, WAF — ~5–7 min each" },
+      { state: "pending", label: "Asset JSON committed",                          detail: "bot pushes results back to main" },
+      { state: "pending", label: "Dashboard auto-deploys",                        detail: "Netlify rebuild ~1–2 min" },
+      { state: "pending", label: "Email alert sent",                              detail: "first-scan notification" },
+    ] : [
+      { state: "done",    label: "Target committed to repo",                      detail: sha ? `commit ${sha}` : "" },
+      { state: "running", label: "Scan workflow triggered",                       detail: "GitHub Actions queueing" },
+      { state: "pending", label: "DNS resolution + WHOIS",                        detail: "" },
+      { state: "pending", label: "Port discovery + service fingerprinting",       detail: "" },
+      { state: "pending", label: "HTTP probe + cert + WAF detection",             detail: "" },
+      { state: "pending", label: "Asset JSON committed",                          detail: "" },
+      { state: "pending", label: "Dashboard auto-deploys + email alert",          detail: "" },
+    ];
+
+    body.innerHTML = `
+      <div class="add-success">
+        <div class="add-success-header">
+          <div class="add-success-check">✓</div>
+          <div class="add-success-title-block">
+            <h3 class="add-success-title">Queued for scan</h3>
+            <div class="add-success-target">
+              <span class="td-mono">${escapeHtml(payload.value)}</span>
+              <span class="asset-card-type">${escapeHtml(payload.type.toUpperCase())}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="add-success-timing">
+          <div class="add-success-timing-label">Expected total time</div>
+          <div class="add-success-timing-value">${escapeHtml(expectedTime)}</div>
+          <div class="add-success-timing-note">
+            ${isApex
+              ? "Apex scans depend on how many live subdomains subfinder uncovers — each one gets its own deep scan."
+              : "Single-target scan, runs the full discovery flow once."}
+          </div>
+        </div>
+
+        <div class="add-success-timeline">
+          <div class="add-success-timeline-label">What happens next</div>
+          ${timeline.map((step) => `
+            <div class="step-row step-${step.state}">
+              <div class="step-icon">${step.state === "done" ? "✓" : step.state === "running" ? "●" : "○"}</div>
+              <div class="step-body">
+                <div class="step-label">${escapeHtml(step.label)}</div>
+                ${step.detail ? `<div class="step-detail">${escapeHtml(step.detail)}</div>` : ""}
+              </div>
+            </div>
+          `).join("")}
+        </div>
+
+        <div class="add-success-footnote">
+          You don't need to keep this open. The dashboard refreshes itself when the scan finishes.
+          You'll also get an email when it's done.
+        </div>
+
+        <div class="add-success-actions">
+          ${commitUrl ? `<a href="${escapeAttr(commitUrl)}" target="_blank" rel="noopener" class="btn-link">View commit on GitHub →</a>` : ""}
+          <a href="${escapeAttr(actionsUrl)}" target="_blank" rel="noopener" class="btn-link">Watch workflow run →</a>
+          <div class="add-success-actions-buttons">
+            <button type="button" id="add-another-btn" class="btn-ghost">Add another target</button>
+            <button type="button" id="add-done-btn" class="btn-accent">Done</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.getElementById("add-done-btn").addEventListener("click", closeAddModal);
+    document.getElementById("add-another-btn").addEventListener("click", () => {
+      // Restore the form for another add
+      restoreAddForm();
+    });
+  }
+
+  // Restore the original form into the modal body
+  function restoreAddForm() {
+    const body = document.querySelector("#add-modal .modal-body");
+    body.innerHTML = ORIGINAL_ADD_FORM_HTML;
+    // Re-bind everything because the form is fresh DOM
+    document.getElementById("add-target-form").addEventListener("submit", handleAddSubmit);
+    document.querySelectorAll("input[name=\"type\"]").forEach((r) => r.addEventListener("change", updateTypeHelp));
+    document.getElementById("t-value").addEventListener("input", autofillId);
+    const idInput = document.getElementById("t-id");
+    if (idInput) idInput.addEventListener("input", () => { idInput.dataset.touched = "true"; });
+    updateTypeHelp();
+  }
+
+  // Snapshot the original form HTML so we can restore it after a success
+  let ORIGINAL_ADD_FORM_HTML = "";
+  document.addEventListener("DOMContentLoaded", () => {
+    const body = document.querySelector("#add-modal .modal-body");
+    if (body) ORIGINAL_ADD_FORM_HTML = body.innerHTML;
+  });
 })();
