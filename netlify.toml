@@ -47,11 +47,14 @@
   [headers.values]
     Cache-Control = "no-cache, no-store, must-revalidate"
 
-# Static CSS/JS/fonts: aggressive caching since they rarely change.
+# Static CSS/JS/fonts: short cache while we iterate. Netlify's edge cache
+# was serving stale CSS on rapid pushes (palette commit 7340a39 didn't show
+# in fresh browsers). 5-min max-age + must-revalidate forces a quick re-check
+# without killing performance. Bump back to 86400 once dashboard stabilizes.
 [[headers]]
   for = "/assets/*"
   [headers.values]
-    Cache-Control = "public, max-age=86400"
+    Cache-Control = "public, max-age=300, must-revalidate"
 
 # 404 → home (the SPA only has one HTML file)
 [[redirects]]
