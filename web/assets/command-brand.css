@@ -413,17 +413,18 @@ input[type="search"]:focus,
 
 .drawer-header {
   display: flex; align-items: center; gap: var(--s3);
-  padding: var(--s5) var(--s5) var(--s4);  /* extra top breathing room so title doesn't hug the edge */
+  padding: var(--s6) var(--s5) var(--s5);  /* generous top breathing room so the bar feels substantial */
   background: var(--ink);
   color: #fff;
   border-bottom: var(--rule) solid var(--copper);
+  min-height: 88px;     /* explicit min so the bar reads as a proper title block */
 }
 .drawer-header h3 {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 16px;
+  font-size: 18px;      /* up from 16 — gives the title more presence */
   font-weight: 500;
-  line-height: 1.2;     /* tighter than inherited 1.6 so it sits visually centered with the X button */
+  line-height: 1.2;
   word-break: break-all;
 }
 .drawer-header .btn-ghost {
