@@ -294,13 +294,21 @@ discover_apex() {
   fi
 
   if [[ -f "$wordlist" && $has_wildcard -eq 0 ]]; then
-    # Strip comments and blanks, prefix every name with the apex
+    # Build the candidate list to a temp file FIRST, then feed via -list.
+    # Critical: NEVER use </dev/null on a piped dnsx call — it overrides the
+    # pipe and dnsx reads nothing. This is exactly the bug the prior version
+    # had: `... | dnsx ... </dev/null` made dnsx read /dev/null instead of
+    # the wordlist pipe, returning zero hits every run.
     grep -vE '^[[:space:]]*(#|$)' "$wordlist" \
       | awk -v apex="$apex" '{print $1 "." apex}' \
-      | dnsx -silent -a -resp \
-          -t "${DNSX_BRUTE_THREADS:-50}" \
-          -timeout "${DNSX_BRUTE_TIMEOUT:-3}" \
-          > "$wd/_src_wordlist.raw" 2> "$wd/dnsx_brute.err" </dev/null || warn "wordlist brute had errors"
+      > "$wd/_wordlist_candidates.txt"
+    log "  wordlist candidates: $(wc -l < "$wd/_wordlist_candidates.txt" | tr -d ' ')"
+    dnsx -silent -a -resp \
+        -l "$wd/_wordlist_candidates.txt" \
+        -t "${DNSX_BRUTE_THREADS:-50}" \
+        -timeout "${DNSX_BRUTE_TIMEOUT:-3}" \
+        -r "1.1.1.1,8.8.8.8,9.9.9.9" \
+        > "$wd/_src_wordlist.raw" 2> "$wd/dnsx_brute.err" || warn "wordlist brute had errors"
     # dnsx -resp output: "sub.apex.com [1.2.3.4]" — strip the bracketed IP
     awk '{print $1}' "$wd/_src_wordlist.raw" | sort -u > "$wd/_src_wordlist.txt"
   elif [[ ! -f "$wordlist" ]]; then
