@@ -26,7 +26,8 @@
   <div class="meta">
     <span id="last-scan-summary">—</span>
     <span id="global-scan-pill" class="global-scan-pill" hidden></span>
-    <button id="add-target-btn" class="btn-accent" title="Add a new target to scan">＋ Add target</button>
+    <button id="add-target-btn" class="btn-accent" title="Add a single new target to scan">＋ Add target</button>
+    <button id="bulk-add-btn" class="btn-ghost" title="Add multiple targets at once (range, list, or file)">＋＋ Bulk add</button>
     <button id="refresh-btn" class="btn-ghost" title="Reload data">↻ Reload</button>
   </div>
 </div>
@@ -117,6 +118,129 @@
         <button type="submit" id="add-submit-btn" class="btn-accent">Add target & queue scan</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- Bulk Add Targets modal -->
+<div id="bulk-modal" class="modal" aria-hidden="true">
+  <div class="modal-backdrop"></div>
+  <div class="modal-panel modal-panel-wide" role="dialog" aria-labelledby="bulk-modal-title" aria-modal="true">
+    <header class="modal-header">
+      <h3 id="bulk-modal-title">Bulk add targets</h3>
+      <button id="bulk-modal-close" class="btn-ghost" aria-label="Close">×</button>
+    </header>
+    <div class="modal-body">
+
+      <!-- Stage 1: input -->
+      <div id="bulk-stage-input">
+        <div class="bulk-tabs">
+          <button type="button" class="bulk-tab active" data-mode="range">Range</button>
+          <button type="button" class="bulk-tab" data-mode="paste">Paste list</button>
+          <button type="button" class="bulk-tab" data-mode="file">Upload file</button>
+        </div>
+
+        <div class="bulk-pane active" data-pane="range">
+          <label for="bulk-range-input">Range expression</label>
+          <input id="bulk-range-input" type="text" autocomplete="off" placeholder="e.g. 24.38.70.5-14  or  52.119.65.0/29  or  52.119.65.2,5,6" />
+          <p class="form-help">
+            Supported: dash range (<code>24.38.70.5-14</code>), CIDR (<code>24.38.70.0/28</code>), comma list (<code>52.119.65.2,5,6</code>) — all expand to individual IP targets. Use the Paste/Upload tabs for mixed lists.
+          </p>
+        </div>
+
+        <div class="bulk-pane" data-pane="paste">
+          <label for="bulk-paste-input">Paste list (one entry per line)</label>
+          <textarea id="bulk-paste-input" rows="10" placeholder="24.38.70.5&#10;24.38.70.6&#10;# skip .13 — not ours&#10;www.example.com&#10;52.119.65.0/29"></textarea>
+          <p class="form-help">One IP, FQDN, or CIDR per line. Lines starting with <code>#</code> are ignored. CIDR/range lines are expanded.</p>
+        </div>
+
+        <div class="bulk-pane" data-pane="file">
+          <label for="bulk-file-input">Upload .txt or .csv</label>
+          <input id="bulk-file-input" type="file" accept=".txt,.csv,text/plain,text/csv" />
+          <p class="form-help">Same format as paste — one entry per line. Max ~100 entries per file.</p>
+        </div>
+
+        <hr class="bulk-rule" />
+
+        <div class="bulk-shared-meta">
+          <h4>Shared metadata (applied to all targets)</h4>
+          <div class="bulk-shared-grid">
+            <div>
+              <label for="bulk-id-prefix">ID prefix</label>
+              <input id="bulk-id-prefix" type="text" autocomplete="off" placeholder="spectrum-bk-" value="ip-" />
+              <p class="form-help">IDs become <code>{prefix}01</code>, <code>{prefix}02</code>, etc. Editable per-row in preview.</p>
+            </div>
+            <div>
+              <label for="bulk-id-strategy">ID strategy</label>
+              <select id="bulk-id-strategy" class="select-pill">
+                <option value="counter" selected>Prefix + counter (spectrum-bk-01)</option>
+                <option value="from-value">From value (ip-24-38-70-5)</option>
+              </select>
+            </div>
+            <div>
+              <label for="bulk-owner">Owner</label>
+              <input id="bulk-owner" type="text" autocomplete="off" value="command_digital" />
+            </div>
+            <div>
+              <label for="bulk-tags">Tags</label>
+              <input id="bulk-tags" type="text" autocomplete="off" placeholder="spectrum, brooklyn-uplink" />
+            </div>
+            <div class="bulk-grid-full">
+              <label for="bulk-notes">Notes (template)</label>
+              <input id="bulk-notes" type="text" autocomplete="off" placeholder="Spectrum office uplink ${IP}" />
+              <p class="form-help"><code>${IP}</code> is replaced with each entry's value. Optional.</p>
+            </div>
+          </div>
+        </div>
+
+        <div id="bulk-input-feedback" class="form-feedback" hidden></div>
+
+        <div class="modal-footer">
+          <button type="button" id="bulk-cancel-btn" class="btn-ghost">Cancel</button>
+          <button type="button" id="bulk-preview-btn" class="btn-accent">Preview targets →</button>
+        </div>
+      </div>
+
+      <!-- Stage 2: preview -->
+      <div id="bulk-stage-preview" hidden>
+        <div class="bulk-preview-header">
+          <h4 id="bulk-preview-count">0 targets to add</h4>
+          <button type="button" id="bulk-back-btn" class="btn-ghost">← Edit input</button>
+        </div>
+
+        <div class="bulk-preview-table-wrap">
+          <table class="bulk-preview-table">
+            <thead>
+              <tr>
+                <th class="col-check"><input type="checkbox" id="bulk-check-all" checked title="Select / deselect all" /></th>
+                <th class="col-type">Type</th>
+                <th class="col-value">Value</th>
+                <th class="col-id">ID (editable)</th>
+                <th class="col-status">Status</th>
+              </tr>
+            </thead>
+            <tbody id="bulk-preview-tbody"></tbody>
+          </table>
+        </div>
+
+        <div class="form-row form-attest">
+          <label class="form-checkbox">
+            <input id="bulk-attest" type="checkbox" />
+            <span><strong>I attest</strong> I own all targets selected above, control their DNS/network, or hold written authorization to scan them. Scanning unauthorized targets may violate applicable law (CFAA in the US, similar elsewhere).</span>
+          </label>
+        </div>
+
+        <div id="bulk-preview-feedback" class="form-feedback" hidden></div>
+
+        <div class="modal-footer">
+          <button type="button" id="bulk-preview-cancel-btn" class="btn-ghost">Cancel</button>
+          <button type="button" id="bulk-submit-btn" class="btn-accent" disabled>Commit batch & queue scans</button>
+        </div>
+      </div>
+
+      <!-- Stage 3: result -->
+      <div id="bulk-stage-result" hidden></div>
+
+    </div>
   </div>
 </div>
 

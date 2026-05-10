@@ -24,6 +24,13 @@
   status = 200
   force  = true
 
+# Friendly URL alias: /api/bulk-add-targets → /.netlify/functions/bulk-add-targets
+[[redirects]]
+  from   = "/api/bulk-add-targets"
+  to     = "/.netlify/functions/bulk-add-targets"
+  status = 200
+  force  = true
+
 # Lock down basics for an internal security tool.
 [[headers]]
   for = "/*"

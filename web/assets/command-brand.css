@@ -1439,3 +1439,255 @@ input[type="search"]:focus,
   .grid { grid-template-columns: 1fr; }
   input[type="search"] { min-width: unset; width: 100%; }
 }
+
+/* ═════════════════════════════════════════════════════════════
+   Bulk Add modal — wider panel, tabs, preview table
+   ═════════════════════════════════════════════════════════════ */
+
+.modal-panel-wide {
+  width: min(960px, 96vw);
+}
+
+.bulk-tabs {
+  display: flex; gap: 4px;
+  border-bottom: 1px solid var(--ink-10);
+  margin-bottom: var(--s4);
+}
+.bulk-tab {
+  background: transparent;
+  border: none;
+  padding: 10px 16px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-60);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 120ms, border-color 120ms;
+}
+.bulk-tab:hover { color: var(--ink); }
+.bulk-tab.active {
+  color: var(--copper);
+  border-bottom-color: var(--copper);
+  font-weight: 600;
+}
+
+.bulk-pane { display: none; }
+.bulk-pane.active { display: block; }
+
+.bulk-pane label {
+  display: block;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+.bulk-pane input[type="text"],
+.bulk-pane input[type="file"],
+.bulk-pane textarea {
+  width: 100%;
+  background: #fff;
+  border: 1px solid var(--paper-rule);
+  color: var(--ink);
+  padding: 9px 12px;
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+}
+.bulk-pane textarea { font-family: var(--font-mono); resize: vertical; }
+.bulk-pane input[type="text"]:focus,
+.bulk-pane textarea:focus {
+  outline: none;
+  border-color: var(--copper);
+}
+.bulk-pane .form-help { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-60); }
+
+.bulk-rule {
+  border: none;
+  border-top: 1px solid var(--ink-10);
+  margin: var(--s5) 0 var(--s4);
+}
+
+.bulk-shared-meta h4 {
+  margin: 0 0 var(--s3);
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -0.005em;
+}
+
+.bulk-shared-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s4);
+}
+.bulk-shared-grid > div { display: flex; flex-direction: column; }
+.bulk-shared-grid > .bulk-grid-full { grid-column: 1 / -1; }
+.bulk-shared-grid label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+.bulk-shared-grid input[type="text"],
+.bulk-shared-grid select {
+  background: #fff;
+  border: 1px solid var(--paper-rule);
+  color: var(--ink);
+  padding: 8px 11px;
+  border-radius: var(--r-sm);
+  font-family: var(--font-body);
+  font-size: 13.5px;
+}
+.bulk-shared-grid input:focus,
+.bulk-shared-grid select:focus {
+  outline: none;
+  border-color: var(--copper);
+}
+.bulk-shared-grid .form-help { margin: 4px 0 0; font-size: 12px; color: var(--ink-60); }
+
+/* ─── Preview stage ─────────────────────────────────── */
+.bulk-preview-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: var(--s3);
+}
+.bulk-preview-header h4 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.bulk-preview-table-wrap {
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid var(--paper-rule);
+  border-radius: var(--r-sm);
+  margin-bottom: var(--s4);
+  background: #fff;
+}
+.bulk-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-body);
+  font-size: 13px;
+}
+.bulk-preview-table thead {
+  position: sticky; top: 0;
+  background: var(--paper-2);
+  z-index: 1;
+}
+.bulk-preview-table th {
+  text-align: left;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+  font-weight: 600;
+  border-bottom: 1px solid var(--paper-rule);
+}
+.bulk-preview-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--ink-05);
+  vertical-align: middle;
+}
+.bulk-preview-table tr:hover td { background: var(--ink-05); }
+.bulk-preview-table .col-check { width: 32px; text-align: center; }
+.bulk-preview-table .col-type  { width: 60px; }
+.bulk-preview-table .col-value { width: 30%; }
+.bulk-preview-table .col-id    { width: 28%; }
+.bulk-preview-table .col-status { width: 14%; }
+.bulk-preview-table .td-mono   { font-family: var(--font-mono); font-size: 12.5px; }
+
+.bulk-type-pill {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  background: var(--ink-10);
+  color: var(--ink-80);
+  padding: 2px 7px;
+  border-radius: var(--r-sm);
+  font-weight: 600;
+}
+
+.bulk-id-input {
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 4px 7px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  transition: background 120ms, border-color 120ms;
+}
+.bulk-id-input:hover { background: var(--ink-05); border-color: var(--ink-10); }
+.bulk-id-input:focus {
+  outline: none;
+  background: #fff;
+  border-color: var(--copper);
+}
+.bulk-id-invalid {
+  background: var(--danger-soft) !important;
+  border-color: var(--danger) !important;
+}
+
+.bulk-status-ready {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ok);
+  letter-spacing: 0.04em;
+}
+.bulk-status-error {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--danger);
+}
+.bulk-row-error td { background: var(--danger-soft); opacity: 0.85; }
+
+/* ─── Result stage chips ─────────────────────────────── */
+.bulk-result-section {
+  margin-top: var(--s4);
+}
+.bulk-result-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+  margin-bottom: var(--s2);
+}
+.bulk-result-chips {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.bulk-id-chip {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--ok-soft);
+  color: var(--ok);
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--ok);
+}
+.bulk-id-chip-skip {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: var(--warn);
+}
+.bulk-id-chip em {
+  font-style: italic;
+  font-size: 11px;
+  opacity: 0.85;
+  margin-left: 4px;
+}
+
+/* ─── Add target button extras (keep accent button visually primary) */
+.top-nav .meta .btn-ghost { font-weight: 500; }

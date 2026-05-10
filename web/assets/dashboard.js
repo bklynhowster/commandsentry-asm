@@ -1076,4 +1076,449 @@
     const body = document.querySelector("#add-modal .modal-body");
     if (body) ORIGINAL_ADD_FORM_HTML = body.innerHTML;
   });
+
+  // ─── Bulk Add modal ─────────────────────────────────────
+  // Three input modes (range / paste / file) → parsed targets array → preview
+  // (per-row checkbox + inline ID edit) → batch commit via /api/bulk-add-targets.
+  let bulkParsedTargets = [];   // [{type, value, id, owner, tags, notes, _checked, _error?}]
+  let bulkInputMode = "range";  // "range" | "paste" | "file"
+
+  function openBulkModal() {
+    const m = document.getElementById("bulk-modal");
+    m.classList.add("open"); m.setAttribute("aria-hidden", "false");
+    showBulkStage("input");
+    document.getElementById("bulk-input-feedback").hidden = true;
+    setTimeout(() => document.getElementById("bulk-range-input").focus(), 50);
+  }
+  function closeBulkModal() {
+    const m = document.getElementById("bulk-modal");
+    m.classList.remove("open"); m.setAttribute("aria-hidden", "true");
+    bulkParsedTargets = [];
+    // Reset stage visibility for next open
+    showBulkStage("input");
+  }
+  function showBulkStage(stage) {
+    document.getElementById("bulk-stage-input").hidden    = (stage !== "input");
+    document.getElementById("bulk-stage-preview").hidden  = (stage !== "preview");
+    document.getElementById("bulk-stage-result").hidden   = (stage !== "result");
+  }
+
+  function bindBulkUI() {
+    document.getElementById("bulk-add-btn").addEventListener("click", openBulkModal);
+    document.getElementById("bulk-modal-close").addEventListener("click", closeBulkModal);
+    document.getElementById("bulk-cancel-btn").addEventListener("click", closeBulkModal);
+    document.getElementById("bulk-preview-cancel-btn").addEventListener("click", closeBulkModal);
+    document.querySelector("#bulk-modal .modal-backdrop").addEventListener("click", closeBulkModal);
+    document.getElementById("bulk-back-btn").addEventListener("click", () => showBulkStage("input"));
+
+    // Tab switching
+    document.querySelectorAll(".bulk-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        bulkInputMode = tab.dataset.mode;
+        document.querySelectorAll(".bulk-tab").forEach((t) => t.classList.toggle("active", t === tab));
+        document.querySelectorAll(".bulk-pane").forEach((p) => p.classList.toggle("active", p.dataset.pane === bulkInputMode));
+      });
+    });
+
+    // File mode → read into the paste textarea on selection
+    document.getElementById("bulk-file-input").addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (file.size > 100 * 1024) {
+        showBulkInputFeedback("file too large — max 100 KB", "error");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        // Stash file contents into the paste textarea + switch to paste mode visually
+        document.getElementById("bulk-paste-input").value = String(reader.result || "");
+        document.querySelector('.bulk-tab[data-mode="paste"]').click();
+        showBulkInputFeedback(`loaded ${file.name} (${file.size} bytes) — review in Paste tab, then click Preview`, "info");
+      };
+      reader.readAsText(file);
+    });
+
+    document.getElementById("bulk-preview-btn").addEventListener("click", handleBulkPreview);
+    document.getElementById("bulk-submit-btn").addEventListener("click", handleBulkSubmit);
+
+    document.getElementById("bulk-attest").addEventListener("change", () => {
+      const anyChecked = bulkParsedTargets.some((t) => t._checked && !t._error);
+      const attested = document.getElementById("bulk-attest").checked;
+      document.getElementById("bulk-submit-btn").disabled = !(anyChecked && attested);
+    });
+
+    document.getElementById("bulk-check-all").addEventListener("change", (e) => {
+      const checked = e.target.checked;
+      bulkParsedTargets.forEach((t) => { if (!t._error) t._checked = checked; });
+      renderBulkPreview();
+      updateBulkSubmitState();
+    });
+  }
+
+  function showBulkInputFeedback(msg, kind) {
+    const el = document.getElementById("bulk-input-feedback");
+    el.hidden = false;
+    // Map "error" → CSS class "err" to match the existing scale
+    const cls = (kind === "error") ? "err" : (kind || "info");
+    el.className = `form-feedback ${cls}`;
+    el.textContent = msg;
+  }
+
+  function updateBulkSubmitState() {
+    const attested = document.getElementById("bulk-attest").checked;
+    const anyChecked = bulkParsedTargets.some((t) => t._checked && !t._error);
+    document.getElementById("bulk-submit-btn").disabled = !(anyChecked && attested);
+    const count = bulkParsedTargets.filter((t) => t._checked && !t._error).length;
+    document.getElementById("bulk-preview-count").textContent =
+      `${count} target${count === 1 ? "" : "s"} to add (${bulkParsedTargets.length} parsed)`;
+  }
+
+  // ─── Parsing ─────────────────────────────────────────────
+  // Returns array of {type, value} (or {error}) — NOT yet enriched with metadata.
+  function bulkParseRangeExpression(expr) {
+    const out = [];
+    const s = expr.trim();
+    if (!s) return out;
+
+    // CIDR
+    if (/^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/.test(s)) {
+      const [base, prefStr] = s.split("/");
+      const pref = parseInt(prefStr, 10);
+      if (pref < 16 || pref > 32) {
+        return [{ error: `CIDR prefix /${pref} not allowed (use /16 to /32)`, value: s }];
+      }
+      const ips = expandCidrToIps(base, pref);
+      if (!ips) return [{ error: `invalid CIDR: ${s}`, value: s }];
+      ips.forEach((ip) => out.push({ type: "ip", value: ip }));
+      return out;
+    }
+
+    // Dash range with last-octet shorthand: 24.38.70.5-14
+    let m = s.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})-(\d{1,3})$/);
+    if (m) {
+      const [, a, b, c, d1, d2] = m;
+      const start = parseInt(d1, 10), end = parseInt(d2, 10);
+      if (start > end || end > 255) return [{ error: `invalid range: ${s}`, value: s }];
+      for (let i = start; i <= end; i++) out.push({ type: "ip", value: `${a}.${b}.${c}.${i}` });
+      return out;
+    }
+
+    // Dash range with full second IP: 24.38.70.5-24.38.70.14
+    m = s.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d{1,3})-(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d{1,3})$/);
+    if (m) {
+      const [, base1, d1, base2, d2] = m;
+      if (base1 !== base2) return [{ error: `dash range only supports same /24 base — got ${base1} vs ${base2}`, value: s }];
+      const start = parseInt(d1, 10), end = parseInt(d2, 10);
+      if (start > end) return [{ error: `invalid range: ${s}`, value: s }];
+      for (let i = start; i <= end; i++) out.push({ type: "ip", value: `${base1}.${i}` });
+      return out;
+    }
+
+    // Comma list — first must be full IP, subsequent can be just last octet
+    if (s.includes(",")) {
+      const parts = s.split(/\s*,\s*/);
+      const first = parts[0];
+      const baseMatch = first.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d{1,3})$/);
+      if (!baseMatch) return [{ error: `comma list must start with a full IP, got "${first}"`, value: s }];
+      const base = baseMatch[1];
+      out.push({ type: "ip", value: first });
+      for (let i = 1; i < parts.length; i++) {
+        const p = parts[i].trim();
+        if (/^\d{1,3}$/.test(p)) {
+          out.push({ type: "ip", value: `${base}.${p}` });
+        } else if (/^(\d{1,3}\.){3}\d{1,3}$/.test(p)) {
+          out.push({ type: "ip", value: p });
+        } else {
+          out.push({ error: `bad entry "${p}" in comma list — expect last octet or full IP`, value: p });
+        }
+      }
+      return out;
+    }
+
+    // Single IP
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(s)) {
+      return [{ type: "ip", value: s }];
+    }
+
+    return [{ error: `unrecognized range syntax: "${s}"`, value: s }];
+  }
+
+  function bulkParseList(text) {
+    const lines = String(text || "").split(/\r?\n/);
+    const out = [];
+    for (let raw of lines) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      // Each line can be: IP, FQDN, CIDR, or a range expression
+      // CIDR / dash-range / comma list → expand via parseRangeExpression
+      if (line.includes("/") || line.includes("-") || line.includes(",")) {
+        const expanded = bulkParseRangeExpression(line);
+        out.push(...expanded);
+        continue;
+      }
+      // Single IP
+      if (/^(\d{1,3}\.){3}\d{1,3}$/.test(line)) {
+        out.push({ type: "ip", value: line });
+        continue;
+      }
+      // FQDN (very loose check — backend validates strictly)
+      if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(line)) {
+        // Heuristic: if exactly two labels (e.g. "example.com") → apex; else fqdn
+        const labels = line.split(".").length;
+        out.push({ type: labels === 2 ? "apex" : "fqdn", value: line.toLowerCase() });
+        continue;
+      }
+      out.push({ error: `unrecognized entry: "${line}"`, value: line });
+    }
+    return out;
+  }
+
+  // CIDR expansion helper. Returns array of dotted-quad strings, or null if invalid.
+  // Excludes network and broadcast addresses for /24 and shorter prefixes (so /28 = 14 hosts).
+  // For /31 and /32 we keep all addresses (RFC 3021 / single-host).
+  function expandCidrToIps(base, pref) {
+    const octets = base.split(".").map(Number);
+    if (octets.length !== 4 || octets.some((o) => o < 0 || o > 255 || isNaN(o))) return null;
+    const baseInt = (octets[0] << 24 >>> 0) + (octets[1] << 16) + (octets[2] << 8) + octets[3];
+    const hostBits = 32 - pref;
+    const blockSize = 1 << hostBits;
+    const networkInt = baseInt - (baseInt % blockSize);
+    const out = [];
+    const skipNetBcast = (pref <= 30);  // skip first + last for /16-/30; keep all for /31, /32
+    const start = skipNetBcast ? 1 : 0;
+    const end = skipNetBcast ? blockSize - 1 : blockSize;
+    for (let i = start; i < end; i++) {
+      const n = networkInt + i;
+      out.push([(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join("."));
+    }
+    return out;
+  }
+
+  // Apply ID prefix + counter (or from-value) to parsed targets, fill in metadata
+  function bulkEnrichTargets(parsed, opts) {
+    const { prefix, strategy, owner, tags, notesTpl } = opts;
+    const total = parsed.filter((t) => !t.error).length;
+    const padWidth = String(total).length;  // 22 → "01".."22", 5 → "1".."5"
+    let counter = 0;
+    return parsed.map((t) => {
+      if (t.error) return { ...t, _error: t.error, _checked: false };
+      counter++;
+      const num = String(counter).padStart(padWidth, "0");
+      let id;
+      if (strategy === "from-value") {
+        id = t.value.replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-|-$/g, "").slice(0, 64);
+      } else {
+        const p = (prefix || "ip-").replace(/[^a-z0-9-]/gi, "-").toLowerCase();
+        id = `${p}${num}`.slice(0, 64);
+      }
+      const notes = (notesTpl || "").replace(/\$\{IP\}|\$\{VALUE\}/g, t.value);
+      return {
+        type:    t.type,
+        value:   t.value,
+        id,
+        owner:   (owner || "command_digital").trim(),
+        tags:    (tags || "").split(",").map((s) => s.trim()).filter(Boolean),
+        notes,
+        _checked: true,
+      };
+    });
+  }
+
+  function handleBulkPreview() {
+    const fb = document.getElementById("bulk-input-feedback");
+    fb.hidden = true;
+
+    let parsed = [];
+    if (bulkInputMode === "range") {
+      const expr = document.getElementById("bulk-range-input").value;
+      parsed = bulkParseRangeExpression(expr);
+    } else {
+      // Both "paste" and "file" mode read from the textarea
+      const text = document.getElementById("bulk-paste-input").value;
+      parsed = bulkParseList(text);
+    }
+
+    if (!parsed.length) {
+      showBulkInputFeedback("nothing parsed — enter a range, list, or upload a file", "error");
+      return;
+    }
+
+    const opts = {
+      prefix:   document.getElementById("bulk-id-prefix").value || "ip-",
+      strategy: document.getElementById("bulk-id-strategy").value || "counter",
+      owner:    document.getElementById("bulk-owner").value || "command_digital",
+      tags:     document.getElementById("bulk-tags").value || "",
+      notesTpl: document.getElementById("bulk-notes").value || "",
+    };
+
+    bulkParsedTargets = bulkEnrichTargets(parsed, opts);
+
+    // Sanity cap mirrors backend
+    if (bulkParsedTargets.length > 100) {
+      showBulkInputFeedback(`parsed ${bulkParsedTargets.length} entries — max 100 per batch. Trim your input and try again.`, "error");
+      return;
+    }
+
+    // Reset attestation + render preview
+    document.getElementById("bulk-attest").checked = false;
+    document.getElementById("bulk-check-all").checked = true;
+    document.getElementById("bulk-preview-feedback").hidden = true;
+    showBulkStage("preview");
+    renderBulkPreview();
+    updateBulkSubmitState();
+  }
+
+  function renderBulkPreview() {
+    const tbody = document.getElementById("bulk-preview-tbody");
+    const html = bulkParsedTargets.map((t, i) => {
+      if (t._error) {
+        return `
+          <tr class="bulk-row-error">
+            <td class="col-check">—</td>
+            <td class="col-type">—</td>
+            <td class="col-value td-mono">${escapeHtml(t.value || "")}</td>
+            <td class="col-id">—</td>
+            <td class="col-status"><span class="bulk-status-error">${escapeHtml(t._error)}</span></td>
+          </tr>
+        `;
+      }
+      return `
+        <tr data-idx="${i}">
+          <td class="col-check"><input type="checkbox" class="bulk-row-check" data-idx="${i}" ${t._checked ? "checked" : ""} /></td>
+          <td class="col-type"><span class="bulk-type-pill">${escapeHtml(t.type.toUpperCase())}</span></td>
+          <td class="col-value td-mono">${escapeHtml(t.value)}</td>
+          <td class="col-id">
+            <input type="text" class="bulk-id-input" data-idx="${i}" value="${escapeAttr(t.id)}" pattern="^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$" />
+          </td>
+          <td class="col-status"><span class="bulk-status-ready">ready</span></td>
+        </tr>
+      `;
+    }).join("");
+    tbody.innerHTML = html;
+
+    // Wire up per-row controls
+    tbody.querySelectorAll(".bulk-row-check").forEach((el) => {
+      el.addEventListener("change", (e) => {
+        const idx = Number(e.target.dataset.idx);
+        bulkParsedTargets[idx]._checked = e.target.checked;
+        updateBulkSubmitState();
+      });
+    });
+    tbody.querySelectorAll(".bulk-id-input").forEach((el) => {
+      el.addEventListener("input", (e) => {
+        const idx = Number(e.target.dataset.idx);
+        bulkParsedTargets[idx].id = e.target.value.trim();
+        // visual hint: invalid pattern → red border
+        e.target.classList.toggle("bulk-id-invalid", !/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(bulkParsedTargets[idx].id));
+      });
+    });
+  }
+
+  async function handleBulkSubmit() {
+    const submitBtn = document.getElementById("bulk-submit-btn");
+    const fb = document.getElementById("bulk-preview-feedback");
+    fb.hidden = false; fb.className = "form-feedback info"; fb.textContent = "Submitting batch…";
+    submitBtn.disabled = true;
+
+    // Pre-flight: any checked row with invalid ID? Bail.
+    const selected = bulkParsedTargets.filter((t) => t._checked && !t._error);
+    const badIds = selected.filter((t) => !/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(t.id));
+    if (badIds.length) {
+      fb.className = "form-feedback err";
+      fb.textContent = `${badIds.length} ID(s) invalid — fix highlighted rows. Pattern: lowercase letters/digits/hyphens, 3-64 chars.`;
+      submitBtn.disabled = false;
+      return;
+    }
+
+    const payload = {
+      attest: true,
+      targets: selected.map((t) => ({
+        id:    t.id,
+        type:  t.type,
+        value: t.value,
+        owner: t.owner,
+        tags:  t.tags,
+        notes: t.notes,
+      })),
+    };
+
+    try {
+      const r = await fetch("/api/bulk-add-targets", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(payload),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        fb.className = "form-feedback err";
+        const detail = Array.isArray(data.details) ? `\n  - ${data.details.join("\n  - ")}` : "";
+        fb.textContent = `Failed: ${data.error || `HTTP ${r.status}`}${detail}`;
+        submitBtn.disabled = false;
+        return;
+      }
+      // Success → switch to result stage
+      renderBulkResult(data, payload);
+      // Kick off the global watcher so the top-bar pill picks up the run
+    } catch (e) {
+      fb.className = "form-feedback err";
+      fb.textContent = `Network error: ${e.message}`;
+      submitBtn.disabled = false;
+    }
+  }
+
+  function renderBulkResult(data, payload) {
+    showBulkStage("result");
+    const sha = data.commit?.sha?.slice(0, 7) || "";
+    const commitUrl = data.commit?.url || "";
+    const actionsUrl = "https://github.com/bklynhowster/commandsentry-asm/actions/workflows/asm-discover.yml";
+    const idChips = (data.target_ids || []).map((id) => `<span class="bulk-id-chip">${escapeHtml(id)}</span>`).join("");
+    const skippedChips = (data.skipped || []).map((s) => `<span class="bulk-id-chip bulk-id-chip-skip">${escapeHtml(s.id)} <em>(${escapeHtml(s.reason)})</em></span>`).join("");
+    document.getElementById("bulk-stage-result").innerHTML = `
+      <div class="add-success">
+        <div class="add-success-head">
+          <div class="add-success-checkmark">✓</div>
+          <div>
+            <div class="add-success-title">Batch committed — ${data.added_count} target${data.added_count === 1 ? "" : "s"} queued</div>
+            <div class="add-success-subtitle">Single diff-aware run will scan all newly-added IDs.</div>
+          </div>
+        </div>
+
+        <div class="bulk-result-section">
+          <div class="bulk-result-label">Added (${data.added_count})</div>
+          <div class="bulk-result-chips">${idChips || "<span class='muted'>none</span>"}</div>
+        </div>
+
+        ${(data.skipped || []).length ? `
+          <div class="bulk-result-section">
+            <div class="bulk-result-label">Skipped (${data.skipped.length})</div>
+            <div class="bulk-result-chips">${skippedChips}</div>
+          </div>
+        ` : ""}
+
+        <div class="add-success-footnote">
+          Watch the top-bar pill for live status. Each target's asset card will appear in the inventory once its scan completes (~12 min per target, serial).
+        </div>
+
+        <div class="add-success-actions">
+          ${commitUrl ? `<a href="${escapeAttr(commitUrl)}" target="_blank" rel="noopener" class="btn-link">View commit on GitHub →</a>` : ""}
+          <a href="${escapeAttr(actionsUrl)}" target="_blank" rel="noopener" class="btn-link">Watch workflow run →</a>
+          <div class="add-success-actions-buttons">
+            <button type="button" id="bulk-add-more-btn" class="btn-ghost">Add another batch</button>
+            <button type="button" id="bulk-done-btn" class="btn-accent">Done</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.getElementById("bulk-done-btn").addEventListener("click", closeBulkModal);
+    document.getElementById("bulk-add-more-btn").addEventListener("click", () => {
+      bulkParsedTargets = [];
+      document.getElementById("bulk-range-input").value = "";
+      document.getElementById("bulk-paste-input").value = "";
+      document.getElementById("bulk-file-input").value = "";
+      showBulkStage("input");
+    });
+  }
+
+  // Bind bulk UI on DOM ready
+  document.addEventListener("DOMContentLoaded", bindBulkUI);
 })();
