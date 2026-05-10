@@ -1293,6 +1293,122 @@ input[type="search"]:focus,
   border-color: var(--copper);
 }
 
+/* ─── Live status block (in success modal) ──────────── */
+.live-status {
+  background: linear-gradient(180deg, var(--ink) 0%, #14273A 100%);
+  color: #fff;
+  border-radius: var(--r-sm);
+  padding: var(--s4) var(--s5);
+  margin-bottom: var(--s5);
+  position: relative;
+  overflow: hidden;
+}
+.live-status-row {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: var(--s3);
+  margin-bottom: var(--s2);
+}
+.live-status-pulse-block {
+  display: flex; align-items: center; gap: 12px;
+  flex: 1; min-width: 0;
+}
+.live-status-pulse-dot {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--ink-40);
+  flex-shrink: 0;
+  position: relative;
+}
+.live-status-pulse-dot.running {
+  background: var(--copper);
+  animation: pulse-running 1.4s ease-out infinite;
+}
+.live-status-pulse-dot.done    { background: var(--ok); }
+.live-status-pulse-dot.error   { background: var(--danger); }
+.live-status-pulse-dot.pending { background: var(--ink-40); animation: pulse-running 2.4s ease-out infinite; }
+@keyframes pulse-running {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(200, 99, 42, 0.6); }
+  50%      { box-shadow: 0 0 0 8px rgba(200, 99, 42, 0); }
+}
+.live-status-headline {
+  font-family: var(--font-body);
+  font-size: 14.5px;
+  font-weight: 500;
+  color: #fff;
+  word-break: break-word;
+}
+.live-status-elapsed {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--copper);
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.live-status-substep {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: var(--s3);
+}
+.live-status-progress {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.live-status-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--copper), var(--copper-ink));
+  width: 0%;
+  transition: width 600ms ease-out;
+  border-radius: 2px;
+}
+
+/* step-error state for the timeline */
+.step-error .step-icon { background: var(--danger); color: #fff; }
+.step-error .step-label { color: var(--danger); }
+
+/* ─── Global top-bar scan pill ──────────────────────── */
+.global-scan-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 12px;
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.9);
+  white-space: nowrap;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.global-scan-pill .g-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--copper);
+}
+.global-scan-pill.running { border-color: rgba(200, 99, 42, 0.5); }
+.global-scan-pill.running .g-dot {
+  animation: pulse-running 1.4s ease-out infinite;
+}
+.global-scan-pill.done {
+  border-color: rgba(47, 107, 79, 0.5);
+}
+.global-scan-pill.done .g-dot { background: var(--ok); }
+.global-scan-pill strong {
+  font-weight: 600;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ─── Footer ──────────────────────────────────────── */
 .bottom {
   text-align: center;

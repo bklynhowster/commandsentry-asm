@@ -24,7 +24,67 @@
     catch (e) { return showLoadError(e); }
     setView(state.activeView);
     render();
+    startGlobalScanWatch();
   });
+
+  // ─── Global scan-status watcher (top-bar pill) ───────────
+  // Polls every 20s regardless of modal state. Shows a pill in the top bar
+  // when any scan is running, hides when idle. If a scan completes, refreshes
+  // the dashboard data after a 60s grace period (allows deploy to finish).
+  let globalScanTimer = null;
+  let lastGlobalRunId = null;
+  let lastGlobalStatus = null;
+
+  function startGlobalScanWatch() {
+    pollGlobalScan();
+    globalScanTimer = setInterval(pollGlobalScan, 20000);
+  }
+
+  async function pollGlobalScan() {
+    try {
+      const r = await fetch("/api/scan-status", { cache: "no-store" });
+      if (!r.ok) return hideGlobalPill();
+      const data = await r.json();
+      if (!data.ok) return hideGlobalPill();
+
+      const pill = document.getElementById("global-scan-pill");
+      if (!pill) return;
+
+      // If status is queued or in_progress → show "scanning" pill
+      if (data.status === "queued" || data.status === "in_progress") {
+        const phase = data.status === "queued" ? "Queued" : (data.job?.current_step || "Running");
+        pill.hidden = false;
+        pill.className = "global-scan-pill running";
+        pill.innerHTML = `<span class="g-dot"></span> Scan in progress · <strong>${escapeHtml(formatElapsed(data.elapsed_seconds))}</strong> · ${escapeHtml(phase)}`;
+        pill.title = `Run #${data.run_id} · ${data.event}`;
+        lastGlobalRunId = data.run_id;
+        lastGlobalStatus = data.status;
+      } else if (data.status === "completed") {
+        // If we previously saw it running and now it's done → flash success briefly + auto-refresh
+        if (lastGlobalRunId === data.run_id && lastGlobalStatus !== "completed") {
+          pill.hidden = false;
+          pill.className = "global-scan-pill done";
+          pill.innerHTML = `<span class="g-dot"></span> Scan complete · refreshing in 60s`;
+          setTimeout(() => {
+            loadAll().then(render).catch(() => {});
+            hideGlobalPill();
+          }, 60000);
+        } else {
+          hideGlobalPill();
+        }
+        lastGlobalStatus = data.status;
+      } else {
+        hideGlobalPill();
+      }
+    } catch {
+      hideGlobalPill();
+    }
+  }
+
+  function hideGlobalPill() {
+    const pill = document.getElementById("global-scan-pill");
+    if (pill) pill.hidden = true;
+  }
 
   // ─── data loading ────────────────────────────────────────
   async function loadAll() {
@@ -712,40 +772,16 @@
     }
   }
 
-  // Replace the form body with a clear success state — what just happened,
-  // what's happening now, what to expect, with action buttons.
+  // Replace the form body with a live success state. Polls /api/scan-status
+  // every 8 seconds while the modal is open and updates the timeline in real time.
   function showAddSuccess(payload, data) {
     const body = document.querySelector("#add-modal .modal-body");
     const sha = (data.commit?.sha || "").slice(0, 7);
     const commitUrl = data.commit?.url || "";
     const actionsUrl = "https://github.com/bklynhowster/commandsentry-asm/actions/workflows/asm-discover.yml";
-    const isApex = payload.type === "apex";
-
-    const expectedTime = isApex
-      ? "10–30 minutes"
-      : payload.type === "cidr" ? "15–45 minutes" : "8–12 minutes";
-
-    const timeline = isApex ? [
-      { state: "done",    label: "Target committed to repo",                      detail: sha ? `commit ${sha}` : "" },
-      { state: "running", label: "Scan workflow triggered",                       detail: "GitHub Actions queueing" },
-      { state: "pending", label: "Subdomain enumeration (subfinder)",             detail: "passive sources — crt.sh, BufferOver, etc." },
-      { state: "pending", label: "Liveness check (httpx) on each candidate",      detail: "filters to subs that respond" },
-      { state: "pending", label: "Per-subdomain deep scan",                       detail: "DNS, ports, services, cert, fingerprint, WAF — ~5–7 min each" },
-      { state: "pending", label: "Asset JSON committed",                          detail: "bot pushes results back to main" },
-      { state: "pending", label: "Dashboard auto-deploys",                        detail: "Netlify rebuild ~1–2 min" },
-      { state: "pending", label: "Email alert sent",                              detail: "first-scan notification" },
-    ] : [
-      { state: "done",    label: "Target committed to repo",                      detail: sha ? `commit ${sha}` : "" },
-      { state: "running", label: "Scan workflow triggered",                       detail: "GitHub Actions queueing" },
-      { state: "pending", label: "DNS resolution + WHOIS",                        detail: "" },
-      { state: "pending", label: "Port discovery + service fingerprinting",       detail: "" },
-      { state: "pending", label: "HTTP probe + cert + WAF detection",             detail: "" },
-      { state: "pending", label: "Asset JSON committed",                          detail: "" },
-      { state: "pending", label: "Dashboard auto-deploys + email alert",          detail: "" },
-    ];
 
     body.innerHTML = `
-      <div class="add-success">
+      <div class="add-success" data-target-id="${escapeAttr(payload.id)}">
         <div class="add-success-header">
           <div class="add-success-check">✓</div>
           <div class="add-success-title-block">
@@ -757,37 +793,44 @@
           </div>
         </div>
 
-        <div class="add-success-timing">
-          <div class="add-success-timing-label">Expected total time</div>
-          <div class="add-success-timing-value">${escapeHtml(expectedTime)}</div>
-          <div class="add-success-timing-note">
-            ${isApex
-              ? "Apex scans depend on how many live subdomains subfinder uncovers — each one gets its own deep scan."
-              : "Single-target scan, runs the full discovery flow once."}
+        <div class="live-status" id="live-status">
+          <div class="live-status-row">
+            <div class="live-status-pulse-block">
+              <div class="live-status-pulse-dot pending"></div>
+              <div class="live-status-headline" id="live-status-headline">Waiting for GitHub Actions to register the scan…</div>
+            </div>
+            <div class="live-status-elapsed" id="live-status-elapsed">—</div>
+          </div>
+          <div class="live-status-substep" id="live-status-substep">Polling every 8 seconds.</div>
+          <div class="live-status-progress">
+            <div class="live-status-progress-bar" id="live-status-progress-bar" style="width: 0%"></div>
           </div>
         </div>
 
-        <div class="add-success-timeline">
-          <div class="add-success-timeline-label">What happens next</div>
-          ${timeline.map((step) => `
-            <div class="step-row step-${step.state}">
-              <div class="step-icon">${step.state === "done" ? "✓" : step.state === "running" ? "●" : "○"}</div>
-              <div class="step-body">
-                <div class="step-label">${escapeHtml(step.label)}</div>
-                ${step.detail ? `<div class="step-detail">${escapeHtml(step.detail)}</div>` : ""}
-              </div>
+        <div class="add-success-timeline" id="live-timeline">
+          <div class="add-success-timeline-label">Pipeline steps</div>
+          <div class="step-row step-done">
+            <div class="step-icon">✓</div>
+            <div class="step-body">
+              <div class="step-label">Target committed to repo</div>
+              <div class="step-detail">${sha ? `commit ${escapeHtml(sha)}` : ""}</div>
             </div>
-          `).join("")}
+          </div>
+          <div class="step-row step-pending" id="step-rows-placeholder">
+            <div class="step-icon">○</div>
+            <div class="step-body">
+              <div class="step-label">Loading workflow steps from GitHub…</div>
+            </div>
+          </div>
         </div>
 
         <div class="add-success-footnote">
-          You don't need to keep this open. The dashboard refreshes itself when the scan finishes.
-          You'll also get an email when it's done.
+          Safe to close — the scan keeps running on GitHub. The dashboard refreshes itself when it's done, and you'll get an email.
         </div>
 
         <div class="add-success-actions">
           ${commitUrl ? `<a href="${escapeAttr(commitUrl)}" target="_blank" rel="noopener" class="btn-link">View commit on GitHub →</a>` : ""}
-          <a href="${escapeAttr(actionsUrl)}" target="_blank" rel="noopener" class="btn-link">Watch workflow run →</a>
+          <a id="run-link" href="${escapeAttr(actionsUrl)}" target="_blank" rel="noopener" class="btn-link">Watch workflow run →</a>
           <div class="add-success-actions-buttons">
             <button type="button" id="add-another-btn" class="btn-ghost">Add another target</button>
             <button type="button" id="add-done-btn" class="btn-accent">Done</button>
@@ -796,11 +839,162 @@
       </div>
     `;
 
-    document.getElementById("add-done-btn").addEventListener("click", closeAddModal);
+    document.getElementById("add-done-btn").addEventListener("click", () => {
+      stopScanPolling();
+      closeAddModal();
+    });
     document.getElementById("add-another-btn").addEventListener("click", () => {
-      // Restore the form for another add
+      stopScanPolling();
       restoreAddForm();
     });
+
+    startScanPolling(payload.id);
+  }
+
+  // ─── Live scan polling ──────────────────────────────────
+  let scanPollTimer = null;
+  let scanPollAttempts = 0;
+  const SCAN_POLL_INTERVAL_MS = 8000;
+
+  function startScanPolling(targetId) {
+    stopScanPolling();
+    scanPollAttempts = 0;
+    pollScanStatus(targetId);
+    scanPollTimer = setInterval(() => pollScanStatus(targetId), SCAN_POLL_INTERVAL_MS);
+  }
+
+  function stopScanPolling() {
+    if (scanPollTimer) {
+      clearInterval(scanPollTimer);
+      scanPollTimer = null;
+    }
+  }
+
+  async function pollScanStatus(targetId) {
+    scanPollAttempts++;
+    try {
+      const r = await fetch(`/api/scan-status?target_id=${encodeURIComponent(targetId)}`, { cache: "no-store" });
+      if (!r.ok) {
+        renderScanStatusError(`API ${r.status}`);
+        return;
+      }
+      const data = await r.json();
+      if (!data.ok) {
+        renderScanStatusError(data.error || "unknown");
+        return;
+      }
+      // Stop polling if the relevant run is older than ~1h (probably not our run)
+      // or if status is "completed"
+      renderScanStatus(data);
+      if (data.status === "completed") {
+        stopScanPolling();
+        // Refresh dashboard data after a delay (allows deploy to complete)
+        setTimeout(() => loadAll().then(render).catch(() => {}), 90000);
+      }
+      // Bail out if we've polled for >30 min with no completion (safety)
+      if (scanPollAttempts > 250) stopScanPolling();
+    } catch (e) {
+      renderScanStatusError(e.message);
+    }
+  }
+
+  function renderScanStatusError(msg) {
+    const headline = document.getElementById("live-status-headline");
+    const substep  = document.getElementById("live-status-substep");
+    const dot      = document.querySelector(".live-status-pulse-dot");
+    if (!headline) return;
+    headline.textContent = "Couldn't reach scan-status API";
+    substep.textContent  = String(msg).slice(0, 200);
+    if (dot) dot.className = "live-status-pulse-dot error";
+  }
+
+  function renderScanStatus(data) {
+    const headline = document.getElementById("live-status-headline");
+    const substep  = document.getElementById("live-status-substep");
+    const elapsed  = document.getElementById("live-status-elapsed");
+    const dot      = document.querySelector(".live-status-pulse-dot");
+    const progressBar = document.getElementById("live-status-progress-bar");
+    const timeline = document.getElementById("live-timeline");
+    const runLink  = document.getElementById("run-link");
+
+    if (runLink && data.html_url) runLink.href = data.html_url;
+
+    // Headline + dot state
+    let phase = "pending", text = "";
+    if (data.status === "queued") {
+      phase = "pending";
+      text  = "Queued — waiting for an available runner";
+    } else if (data.status === "in_progress") {
+      phase = "running";
+      text  = data.job?.current_step ? `Running: ${data.job.current_step}` : "Running…";
+    } else if (data.status === "completed") {
+      if (data.conclusion === "success") {
+        phase = "done";
+        text  = data.mode === "scan" || data.mode === "single" || data.mode === "diff" || data.mode === "all"
+          ? "Scan complete — dashboard will refresh shortly"
+          : (data.mode === "skipped" ? "Workflow ran (skipped — no new targets to scan)" : "Workflow complete");
+      } else {
+        phase = "error";
+        text  = `Workflow ${data.conclusion}`;
+      }
+    }
+    headline.textContent = text;
+    if (dot) dot.className = `live-status-pulse-dot ${phase}`;
+
+    // Substep (extra context)
+    if (data.job) {
+      const c = data.job.completed_steps;
+      const t = data.job.total_steps;
+      substep.textContent = `Step ${Math.min(c + (data.status === "in_progress" ? 1 : 0), t)} of ${t} · event: ${data.event} · run #${data.run_id}`;
+    } else {
+      substep.textContent = "Polling every 8 seconds.";
+    }
+
+    // Elapsed clock
+    elapsed.textContent = formatElapsed(data.elapsed_seconds);
+
+    // Progress bar
+    const pct = data.job?.progress_pct ?? 0;
+    if (progressBar) progressBar.style.width = `${pct}%`;
+
+    // Step timeline — replace placeholder with real steps once we have them
+    if (data.job?.step_timeline?.length) {
+      const placeholder = document.getElementById("step-rows-placeholder");
+      const stepsHtml = data.job.step_timeline.map((s) => {
+        let state = "pending", icon = "○";
+        if (s.status === "completed" && s.conclusion === "success") { state = "done"; icon = "✓"; }
+        else if (s.status === "completed" && s.conclusion !== "success") { state = "error"; icon = "✗"; }
+        else if (s.status === "in_progress") { state = "running"; icon = "●"; }
+        else if (s.status === "queued") { state = "pending"; icon = "○"; }
+
+        const detail = s.completed_at && s.started_at
+          ? `${Math.max(0, Math.round((new Date(s.completed_at) - new Date(s.started_at)) / 1000))}s`
+          : (s.status === "in_progress" ? "running" : "");
+
+        return `
+          <div class="step-row step-${state}">
+            <div class="step-icon">${icon}</div>
+            <div class="step-body">
+              <div class="step-label">${escapeHtml(s.name)}</div>
+              ${detail ? `<div class="step-detail">${escapeHtml(detail)}</div>` : ""}
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      // Replace placeholder section, keep the original "Target committed to repo" first row
+      const firstRow = timeline.querySelector(".step-done");
+      timeline.innerHTML = '<div class="add-success-timeline-label">Pipeline steps</div>';
+      if (firstRow) timeline.appendChild(firstRow);
+      timeline.insertAdjacentHTML("beforeend", stepsHtml);
+    }
+  }
+
+  function formatElapsed(sec) {
+    if (!sec || sec < 0) return "—";
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return m > 0 ? `${m}m ${String(s).padStart(2, "0")}s` : `${s}s`;
   }
 
   // Restore the original form into the modal body

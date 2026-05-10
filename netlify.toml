@@ -17,6 +17,13 @@
   status = 200
   force  = true
 
+# Friendly URL alias: /api/scan-status → /.netlify/functions/scan-status
+[[redirects]]
+  from   = "/api/scan-status"
+  to     = "/.netlify/functions/scan-status"
+  status = 200
+  force  = true
+
 # Lock down basics for an internal security tool.
 [[headers]]
   for = "/*"
