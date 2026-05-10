@@ -1,0 +1,105 @@
+{
+  "schema_version": "3.0",
+  "asset": {
+    "id": "sciimage",
+    "type": "apex",
+    "value": "sciimage.com",
+    "owner": "unknown",
+    "tags": [],
+    "notes": "",
+    "discovered_via": "manual"
+  },
+  "scan": {
+    "id": "scan_2026-05-10T00:10:27Z_f77dd492",
+    "started_at": "2026-05-10T00:10:27Z",
+    "completed_at": "2026-05-10T00:11:01Z",
+    "duration_seconds": 34,
+    "engine_version": "3.0.0",
+    "scanner_origin": "github-actions-ubuntu-azure",
+    "tools_run": [
+      "dnsx",
+      "subfinder",
+      "whois"
+    ]
+  },
+  "registration": {},
+  "summary": {
+    "subdomain_count": 1,
+    "live_subdomain_count": 1,
+    "host_count": 0,
+    "service_count": 0,
+    "newest_cert_expiry_days": null,
+    "top_hosting_org": null,
+    "platforms": []
+  },
+  "subdomains": [
+    {
+      "name": "sciimage.com",
+      "alive": true,
+      "is_root": true,
+      "discovered_via": "dnsx",
+      "first_discovered": "2026-05-10T00:11:02Z",
+      "last_seen": "2026-05-10T00:11:02Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "hosts": [],
+      "services": [],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [
+          "ns01.sciimage.com"
+        ],
+        "txt": [
+          "0ed1fe018a578bb877e8354235b4b5eb5a2f99c17c",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+          "v=verifydomain MS=2796493"
+        ],
+        "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    }
+  ],
+  "deltas": {
+    "since_scan": null,
+    "added": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "removed": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "changed": {
+      "fingerprint": [],
+      "cert": []
+    }
+  },
+  "history": [
+    {
+      "scan_id": "scan_2026-05-10T00:10:27Z_f77dd492",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 0,
+      "service_count": 0
+    }
+  ]
+}

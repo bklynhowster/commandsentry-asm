@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-09T23:10:42Z_b672ef98",
-    "started_at": "2026-05-09T23:10:42Z",
-    "completed_at": "2026-05-09T23:34:30Z",
-    "duration_seconds": 1428,
+    "id": "scan_2026-05-09T23:43:02Z_6cf2cdcd",
+    "started_at": "2026-05-09T23:43:02Z",
+    "completed_at": "2026-05-10T00:06:01Z",
+    "duration_seconds": 1379,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -45,8 +45,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-09T23:34:31Z",
-      "last_seen": "2026-05-09T23:34:31Z",
+      "first_discovered": "2026-05-10T00:06:01Z",
+      "last_seen": "2026-05-10T00:06:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -146,12 +146,12 @@
           "ns36.domaincontrol.com"
         ],
         "txt": [
-          "sek942qd3nt1s4lqh1h2ovmmai",
           "k15vdsovvom4v46fi4r4rivts6",
-          "2o6gse9gno2mv04ik7f14kssfq",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
           "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
-          "MS=ms33269626"
+          "2o6gse9gno2mv04ik7f14kssfq",
+          "MS=ms33269626",
+          "sek942qd3nt1s4lqh1h2ovmmai"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -179,6 +179,11 @@
             "name": "HSTS",
             "version": null,
             "category": "security"
+          },
+          {
+            "name": "HTTP/3",
+            "version": null,
+            "category": "transport"
           },
           {
             "name": "Imagely NextGEN Gallery",
@@ -258,8 +263,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-09T23:34:31Z",
-      "last_seen": "2026-05-09T23:34:31Z",
+      "first_discovered": "2026-05-10T00:06:01Z",
+      "last_seen": "2026-05-10T00:06:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -364,11 +369,6 @@
         "platform_label": null,
         "tech": [
           {
-            "name": "HTTP/3",
-            "version": null,
-            "category": "transport"
-          },
-          {
             "name": "Nginx",
             "version": null,
             "category": "webserver"
@@ -386,8 +386,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-09T23:34:31Z",
-      "last_seen": "2026-05-09T23:34:31Z",
+      "first_discovered": "2026-05-10T00:06:01Z",
+      "last_seen": "2026-05-10T00:06:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -431,7 +431,7 @@
             "not_before": "2026-02-23T00:00:00Z",
             "not_after": "2026-08-23T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 106
+            "days_to_expiry": 105
           }
         }
       ],
@@ -484,8 +484,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-09T23:34:31Z",
-      "last_seen": "2026-05-09T23:34:31Z",
+      "first_discovered": "2026-05-10T00:06:01Z",
+      "last_seen": "2026-05-10T00:06:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -529,7 +529,7 @@
             "not_before": "2026-02-23T00:00:00Z",
             "not_after": "2026-08-23T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 106
+            "days_to_expiry": 105
           }
         }
       ],
@@ -582,8 +582,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-09T23:34:31Z",
-      "last_seen": "2026-05-09T23:34:31Z",
+      "first_discovered": "2026-05-10T00:06:01Z",
+      "last_seen": "2026-05-10T00:06:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -627,7 +627,7 @@
             "not_before": "2026-02-23T00:00:00Z",
             "not_after": "2026-08-23T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 106
+            "days_to_expiry": 105
           }
         }
       ],
@@ -685,8 +685,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-09T23:34:31Z",
-      "last_seen": "2026-05-09T23:34:31Z",
+      "first_discovered": "2026-05-10T00:06:01Z",
+      "last_seen": "2026-05-10T00:06:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -730,7 +730,7 @@
             "not_before": "2026-02-19T00:00:00Z",
             "not_after": "2026-08-19T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 102
+            "days_to_expiry": 101
           }
         }
       ],
@@ -783,8 +783,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-09T23:34:31Z",
-      "last_seen": "2026-05-09T23:34:31Z",
+      "first_discovered": "2026-05-10T00:06:01Z",
+      "last_seen": "2026-05-10T00:06:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -828,7 +828,7 @@
             "not_before": "2026-02-23T00:00:00Z",
             "not_after": "2026-08-23T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 106
+            "days_to_expiry": 105
           }
         }
       ],
@@ -896,8 +896,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-09T23:34:31Z",
-      "last_seen": "2026-05-09T23:34:31Z",
+      "first_discovered": "2026-05-10T00:06:01Z",
+      "last_seen": "2026-05-10T00:06:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -997,12 +997,12 @@
           "ns36.domaincontrol.com"
         ],
         "txt": [
-          "sek942qd3nt1s4lqh1h2ovmmai",
           "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
+          "sek942qd3nt1s4lqh1h2ovmmai",
           "MS=ms33269626",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
           "k15vdsovvom4v46fi4r4rivts6",
-          "2o6gse9gno2mv04ik7f14kssfq"
+          "2o6gse9gno2mv04ik7f14kssfq",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -1030,11 +1030,6 @@
             "name": "HSTS",
             "version": null,
             "category": "security"
-          },
-          {
-            "name": "HTTP/3",
-            "version": null,
-            "category": "transport"
           },
           {
             "name": "Imagely NextGEN Gallery",
@@ -1114,8 +1109,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-09T23:34:31Z",
-      "last_seen": "2026-05-09T23:34:31Z",
+      "first_discovered": "2026-05-10T00:06:01Z",
+      "last_seen": "2026-05-10T00:06:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1242,8 +1237,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-09T23:34:31Z",
-      "last_seen": "2026-05-09T23:34:31Z",
+      "first_discovered": "2026-05-10T00:06:01Z",
+      "last_seen": "2026-05-10T00:06:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1287,7 +1282,7 @@
             "not_before": "2026-02-19T00:00:00Z",
             "not_after": "2026-08-19T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 102
+            "days_to_expiry": 101
           }
         }
       ],
@@ -1369,7 +1364,7 @@
       "service_count": 28
     },
     {
-      "scan_id": "scan_2026-05-09T23:10:42Z_b672ef98",
+      "scan_id": "scan_2026-05-09T23:43:02Z_6cf2cdcd",
       "subdomain_count": 10,
       "live_subdomain_count": 10,
       "host_count": 3,
