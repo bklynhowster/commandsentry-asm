@@ -774,11 +774,14 @@ input[type="search"]:focus,
 }
 
 /* ─── Verdict strip (top of drawer) ─────────────────── */
+/* Bleeds left/right to drawer edges via negative side margin. Top margin MUST
+   be 0 — combined with drawer-body padding-top:0, any negative top margin pulls
+   the pill row UP into the dark header zone and clips the top of the pills. */
 .verdict-strip {
   background: linear-gradient(180deg, var(--paper-2) 0%, var(--paper) 100%);
   border-bottom: 1px solid var(--paper-rule);
   padding: var(--s5) var(--s6);
-  margin: calc(var(--s6) * -1) calc(var(--s6) * -1) var(--s6);
+  margin: 0 calc(var(--s6) * -1) var(--s6);
 }
 .verdict-row {
   display: flex; flex-wrap: wrap; gap: var(--s2);
