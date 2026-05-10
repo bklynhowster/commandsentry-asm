@@ -94,28 +94,90 @@ jobs:
 
       - name: Determine targets to scan
         id: targets
+        # Diff-aware: push events only scan NEW targets added in this commit
+        # (not every target in the file). Cron and manual still scan all/explicit.
+        # No errexit so the empty-scan-list "exit 0" path doesn't fail the job.
+        shell: bash {0}
         run: |
+          set -uo pipefail
+
           if [[ ! -f data/targets.yml ]]; then
-            echo "::error::data/targets.yml is missing from the repo. Either commit it, or rename targets.yml.example."
+            echo "::error::data/targets.yml is missing from the repo."
             exit 1
           fi
 
           INPUT_TARGET="${{ github.event.inputs.target }}"
-          if [[ -z "$INPUT_TARGET" || "$INPUT_TARGET" == "all" ]]; then
-            echo "mode=all" >> "$GITHUB_OUTPUT"
-            yq '.targets[] | select(.enabled != false) | .id' data/targets.yml | tr -d '"' | head -50 > /tmp/scan_list
-          else
-            echo "mode=single" >> "$GITHUB_OUTPUT"
+          EVENT_NAME="${{ github.event_name }}"
+          MODE=""
+          : > /tmp/scan_list
+
+          # ─── Branch 1: explicit single target via workflow_dispatch ──
+          if [[ -n "$INPUT_TARGET" && "$INPUT_TARGET" != "all" ]]; then
+            MODE="single"
             echo "$INPUT_TARGET" > /tmp/scan_list
+            echo "Mode: single target ($INPUT_TARGET) — manual dispatch"
+
+          # ─── Branch 2: explicit "all" or scheduled cron ──
+          elif [[ "$INPUT_TARGET" == "all" || "$EVENT_NAME" == "schedule" ]]; then
+            MODE="all"
+            yq '.targets[] | select(.enabled != false) | .id' data/targets.yml | tr -d '"' | head -50 > /tmp/scan_list
+            echo "Mode: all enabled targets — $EVENT_NAME"
+
+          # ─── Branch 3: push event — diff-aware ──
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+            echo "Files changed in this push:"
+            echo "$CHANGED" | sed 's/^/  /'
+
+            # 3a: if scanner code or workflow itself changed → scan all (engine moved)
+            if echo "$CHANGED" | grep -qE '^(scanner/|\.github/workflows/asm-discover\.yml)'; then
+              MODE="all"
+              yq '.targets[] | select(.enabled != false) | .id' data/targets.yml | tr -d '"' | head -50 > /tmp/scan_list
+              echo "Mode: all (engine code changed — re-scanning everything to detect any output differences)"
+
+            # 3b: if only targets.yml changed → diff to find newly-added IDs
+            elif echo "$CHANGED" | grep -qE '^data/targets\.yml$'; then
+              MODE="diff"
+              git show HEAD~1:data/targets.yml 2>/dev/null > /tmp/old-targets.yml || echo "targets: []" > /tmp/old-targets.yml
+              yq '.targets[]? | .id' /tmp/old-targets.yml 2>/dev/null | tr -d '"' | sort -u > /tmp/old-ids
+              yq '.targets[]? | .id' data/targets.yml | tr -d '"' | sort -u > /tmp/new-ids
+              # IDs in new but not in old
+              comm -13 /tmp/old-ids /tmp/new-ids > /tmp/scan_list
+
+              ADDED_COUNT=$(wc -l < /tmp/scan_list | tr -d ' ')
+              REMOVED_COUNT=$(comm -23 /tmp/old-ids /tmp/new-ids | wc -l | tr -d ' ')
+              echo "Diff result: $ADDED_COUNT added, $REMOVED_COUNT removed"
+
+              if [[ ! -s /tmp/scan_list ]]; then
+                echo "::notice::No new targets in this commit (only removals or metadata edits). Skipping scan."
+                echo "mode=skipped" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "Mode: diff — only scanning newly-added target(s)"
+
+            # 3c: push touched some other path (probably bot's own data commit) → skip
+            else
+              echo "::notice::Push didn't touch scanner code or targets.yml. Nothing to scan."
+              echo "mode=skipped" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+          # ─── Branch 4: unknown event → safe fallback to scan-all ──
+          else
+            MODE="all"
+            yq '.targets[] | select(.enabled != false) | .id' data/targets.yml | tr -d '"' | head -50 > /tmp/scan_list
+            echo "Mode: all (unknown event $EVENT_NAME — defaulting to scan-all)"
           fi
 
           if [[ ! -s /tmp/scan_list ]]; then
-            echo "::error::No enabled targets found in data/targets.yml — workflow has nothing to scan."
+            echo "::error::Scan list is empty after determination — bug in branch logic"
             exit 1
           fi
 
-          echo "Targets queued for scan:"
-          cat /tmp/scan_list
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo ""
+          echo "Targets queued for scan ($MODE):"
+          cat /tmp/scan_list | sed 's/^/  • /'
 
       - name: Run ASM discovery
         # NO errexit — phases run independently.
@@ -123,6 +185,7 @@ jobs:
         # stdin from this loop (bound to /tmp/scan_list), and any subprocess
         # inside (testssl.sh, wafw00f, etc.) that reads stdin will consume the
         # rest of our target list, killing the loop after iteration 1.
+        if: steps.targets.outputs.mode != 'skipped'
         shell: bash {0}
         run: |
           chmod +x scanner/asm-discover.sh
@@ -134,11 +197,13 @@ jobs:
           done < /tmp/scan_list
 
       - name: Sync dashboard data
+        if: steps.targets.outputs.mode != 'skipped'
         run: |
           chmod +x web/sync-data.sh
           web/sync-data.sh
 
       - name: Send email alerts (changes only)
+        if: steps.targets.outputs.mode != 'skipped'
         # Graceful no-op if RESEND_API_KEY isn't set, so workflow doesn't fail
         # before the operator has wired email alerts.
         env:
@@ -153,6 +218,7 @@ jobs:
         # No errexit so we can handle push race conditions cleanly.
         # Strategy on push race: soft-reset to origin/main and re-stage,
         # since our just-scanned JSON is authoritative.
+        if: steps.targets.outputs.mode != 'skipped'
         shell: bash {0}
         run: |
           set -uo pipefail
@@ -203,7 +269,7 @@ jobs:
           exit 1
 
       - name: Trigger Netlify deploy (chain past GITHUB_TOKEN anti-recursion)
-        if: success()
+        if: success() && steps.targets.outputs.mode != 'skipped'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -219,20 +285,29 @@ jobs:
       - name: Summarize run
         if: always()
         run: |
+          MODE="${{ steps.targets.outputs.mode }}"
           echo "## ASM scan summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Mode:** ${{ steps.targets.outputs.mode }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Triggered by:** ${{ github.event_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Mode:** \`$MODE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Triggered by:** \`${{ github.event_name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$MODE" == "skipped" ]]; then
+            echo "_No new targets to scan in this push (only removals or metadata edits). Skipping the scan saved compute time._" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           echo "### Assets scanned" >> "$GITHUB_STEP_SUMMARY"
-          while IFS= read -r tid; do
-            [[ -z "$tid" ]] && continue
-            FILE="data/assets/${tid}.json"
-            if [[ -f "$FILE" ]]; then
-              EXP=$(jq '.exposures | length' "$FILE" 2>/dev/null || echo "?")
-              WATCH=$(jq '[.exposures[] | select(.severity=="watch")] | length' "$FILE" 2>/dev/null || echo "?")
-              echo "- \`${tid}\` — ${EXP} exposure(s), **${WATCH}** watch-severity" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "- \`${tid}\` — no output file (scan may have failed)" >> "$GITHUB_STEP_SUMMARY"
-            fi
-          done < /tmp/scan_list
+          if [[ -f /tmp/scan_list ]]; then
+            while IFS= read -r tid; do
+              [[ -z "$tid" ]] && continue
+              FILE="data/assets/${tid}.json"
+              if [[ -f "$FILE" ]]; then
+                SUBS=$(jq '.summary.live_subdomain_count // 0' "$FILE" 2>/dev/null || echo "?")
+                SVCS=$(jq '.summary.service_count // 0' "$FILE" 2>/dev/null || echo "?")
+                echo "- \`${tid}\` — ${SUBS} live subdomain(s), ${SVCS} service(s)" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "- \`${tid}\` — no output file (scan may have failed)" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            done < /tmp/scan_list
+          fi
