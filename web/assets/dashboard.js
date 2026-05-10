@@ -50,13 +50,14 @@
       const pill = document.getElementById("global-scan-pill");
       if (!pill) return;
 
-      // If status is queued or in_progress → show "scanning" pill
+      // If status is queued or in_progress → show compact "scanning" pill with ETA
       if (data.status === "queued" || data.status === "in_progress") {
-        const phase = data.status === "queued" ? "Queued" : (data.job?.current_step || "Running");
+        const phase = data.status === "queued" ? "queued" : abbreviateStep(data.job?.current_step || "running");
+        const etaTxt = formatEtaShort(data);  // "~6m left" / "running long" / ""
         pill.hidden = false;
         pill.className = "global-scan-pill running";
-        pill.innerHTML = `<span class="g-dot"></span> Scan in progress · <strong>${escapeHtml(formatElapsed(data.elapsed_seconds))}</strong> · ${escapeHtml(phase)}`;
-        pill.title = `Run #${data.run_id} · ${data.event}`;
+        pill.innerHTML = `<span class="g-dot"></span><strong>${escapeHtml(formatElapsed(data.elapsed_seconds))}</strong>&nbsp;·&nbsp;${escapeHtml(phase)}${etaTxt ? `&nbsp;·&nbsp;<span class="g-eta">${escapeHtml(etaTxt)}</span>` : ""}`;
+        pill.title = `Scan in progress · run #${data.run_id} · ${data.event} · current step: ${data.job?.current_step || "—"}${data.historical_avg_seconds ? ` · avg run: ${formatElapsed(data.historical_avg_seconds)}` : ""}`;
         lastGlobalRunId = data.run_id;
         lastGlobalStatus = data.status;
       } else if (data.status === "completed") {
@@ -64,7 +65,8 @@
         if (lastGlobalRunId === data.run_id && lastGlobalStatus !== "completed") {
           pill.hidden = false;
           pill.className = "global-scan-pill done";
-          pill.innerHTML = `<span class="g-dot"></span> Scan complete · refreshing in 60s`;
+          pill.innerHTML = `<span class="g-dot"></span>scan complete · refreshing…`;
+          pill.title = "Dashboard will reload shortly to pick up the new data";
           setTimeout(() => {
             loadAll().then(render).catch(() => {});
             hideGlobalPill();
@@ -941,11 +943,13 @@
     headline.textContent = text;
     if (dot) dot.className = `live-status-pulse-dot ${phase}`;
 
-    // Substep (extra context)
+    // Substep (extra context — appends ETA when we have historical data)
+    const etaLabel = formatEtaLong(data);  // "ETA ~6m 30s" / "running long (~2m over avg)" / ""
     if (data.job) {
       const c = data.job.completed_steps;
       const t = data.job.total_steps;
-      substep.textContent = `Step ${Math.min(c + (data.status === "in_progress" ? 1 : 0), t)} of ${t} · event: ${data.event} · run #${data.run_id}`;
+      const stepInfo = `Step ${Math.min(c + (data.status === "in_progress" ? 1 : 0), t)} of ${t} · event: ${data.event} · run #${data.run_id}`;
+      substep.textContent = etaLabel ? `${stepInfo} · ${etaLabel}` : stepInfo;
     } else {
       substep.textContent = "Polling every 8 seconds.";
     }
@@ -953,8 +957,13 @@
     // Elapsed clock
     elapsed.textContent = formatElapsed(data.elapsed_seconds);
 
-    // Progress bar
-    const pct = data.job?.progress_pct ?? 0;
+    // Progress bar — use the larger of step-based and time-based progress, capped at 95%
+    // until completion (so it can't fake 100% while still running). On success → 100%.
+    const stepPct = data.job?.progress_pct ?? 0;
+    const timePct = computeTimePct(data);
+    let pct = Math.max(stepPct, timePct);
+    if (data.status !== "completed") pct = Math.min(pct, 95);
+    else if (data.conclusion === "success") pct = 100;
     if (progressBar) progressBar.style.width = `${pct}%`;
 
     // Step timeline — replace placeholder with real steps once we have them
@@ -995,6 +1004,57 @@
     const m = Math.floor(sec / 60);
     const s = sec % 60;
     return m > 0 ? `${m}m ${String(s).padStart(2, "0")}s` : `${s}s`;
+  }
+
+  // Compact step labels for the global pill so it fits in the top-bar
+  function abbreviateStep(name) {
+    if (!name) return "running";
+    const n = name.toLowerCase();
+    if (n.includes("install asm tool"))   return "installing tools";
+    if (n.includes("install"))            return "installing";
+    if (n.includes("set up"))             return "setting up";
+    if (n.includes("checkout"))           return "checkout";
+    if (n.includes("determine targets"))  return "planning";
+    if (n.includes("run asm discovery"))  return "scanning";
+    if (n.includes("sync dashboard"))     return "syncing data";
+    if (n.includes("send email"))         return "alerting";
+    if (n.includes("commit scan"))        return "committing";
+    if (n.includes("trigger netlify"))    return "deploying";
+    if (n.includes("summarize"))          return "summarizing";
+    if (n.includes("verify"))             return "verifying";
+    if (n.includes("cache"))              return "caching";
+    return name.length > 24 ? name.slice(0, 22) + "…" : name;
+  }
+
+  // ─── ETA helpers (time-aware progress) ───────────────────
+  // Compute time-based completion percentage from elapsed vs historical avg.
+  // Returns 0 if no historical data yet.
+  function computeTimePct(data) {
+    const avg = data.historical_avg_seconds;
+    const el  = data.elapsed_seconds;
+    if (!avg || !el || avg <= 0) return 0;
+    return Math.max(0, Math.min(100, Math.round((el / avg) * 100)));
+  }
+
+  // Long-form ETA for the modal substep line.
+  function formatEtaLong(data) {
+    const avg = data.historical_avg_seconds;
+    const el  = data.elapsed_seconds;
+    if (data.status !== "in_progress" && data.status !== "queued") return "";
+    if (!avg || !el) return "";
+    const remaining = avg - el;
+    if (remaining > 0) return `ETA ~${formatElapsed(remaining)} (avg ${formatElapsed(avg)})`;
+    return `running long (~${formatElapsed(Math.abs(remaining))} over avg ${formatElapsed(avg)})`;
+  }
+
+  // Short-form ETA for the top-bar pill.
+  function formatEtaShort(data) {
+    const avg = data.historical_avg_seconds;
+    const el  = data.elapsed_seconds;
+    if (!avg || !el) return "";
+    const remaining = avg - el;
+    if (remaining > 0) return `~${formatElapsed(remaining)} left`;
+    return "running long";
   }
 
   // Restore the original form into the modal body

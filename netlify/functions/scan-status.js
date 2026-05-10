@@ -106,6 +106,29 @@ async function latestRun() {
   return (data.workflow_runs || [])[0];
 }
 
+// Historical average duration from recent successful runs.
+// Used as ETA basis for the time-aware progress bar.
+async function historicalAvgSeconds() {
+  try {
+    const data = await gh(`/repos/${REPO}/actions/workflows/${WORKFLOW_FILE}/runs?status=success&per_page=10`);
+    const runs = data.workflow_runs || [];
+    const durations = runs
+      .map((r) => {
+        const start = new Date(r.run_started_at || r.created_at);
+        const end   = new Date(r.updated_at);
+        return Math.max(0, Math.floor((end - start) / 1000));
+      })
+      .filter((d) => d > 30 && d < 7200);  // ignore <30s (skipped) and >2h (outliers)
+    if (!durations.length) return null;
+    durations.sort((a, b) => a - b);
+    // Trimmed mean — drop top + bottom, average the rest. Robust to outliers.
+    const trimmed = durations.length > 4 ? durations.slice(1, -1) : durations;
+    return Math.round(trimmed.reduce((a, b) => a + b, 0) / trimmed.length);
+  } catch {
+    return null;
+  }
+}
+
 async function getRunById(runId) {
   return gh(`/repos/${REPO}/actions/runs/${runId}`);
 }
@@ -152,6 +175,9 @@ exports.handler = async (event) => {
     const jobsResp = await gh(`/repos/${REPO}/actions/runs/${run.id}/jobs`);
     const jobSummary = buildJobSummary(jobsResp);
 
+    // Historical avg duration — used by dashboard for ETA / time-based progress bar
+    const histAvg = await historicalAvgSeconds();
+
     // Try to extract mode from job output (if the run has completed and we got a step summary)
     // We don't have a clean way to read step outputs via API, so we infer mode from commit
     // message patterns. asm-scan: commits indicate scan happened; everything else is skip.
@@ -174,6 +200,7 @@ exports.handler = async (event) => {
       updated_at:    run.updated_at,
       completed_at:  (run.status === "completed") ? run.updated_at : null,
       elapsed_seconds: elapsedSeconds(run),
+      historical_avg_seconds: histAvg,  // null if no successful runs yet
       event:         run.event,
       commit_sha:    run.head_sha,
       commit_message: run.head_commit?.message?.split("\n")[0] || run.display_title,
