@@ -1,0 +1,158 @@
+{
+  "schema_version": "3.0",
+  "asset": {
+    "id": "ftp",
+    "type": "fqdn",
+    "value": "ftp.sciimage.com",
+    "owner": "unknown",
+    "tags": [],
+    "notes": "",
+    "discovered_via": "manual"
+  },
+  "scan": {
+    "id": "scan_2026-05-10T01:06:39Z_b8f037aa",
+    "started_at": "2026-05-10T01:06:39Z",
+    "completed_at": "2026-05-10T01:08:12Z",
+    "duration_seconds": 93,
+    "engine_version": "3.0.0",
+    "scanner_origin": "github-actions-ubuntu-azure",
+    "tools_run": [
+      "dnsx",
+      "httpx",
+      "naabu",
+      "testssl",
+      "wafw00f",
+      "whois"
+    ]
+  },
+  "registration": {},
+  "summary": {
+    "subdomain_count": 1,
+    "live_subdomain_count": 1,
+    "host_count": 1,
+    "service_count": 3,
+    "newest_cert_expiry_days": 269,
+    "top_hosting_org": "Cablevision Systems Corp.",
+    "platforms": []
+  },
+  "subdomains": [
+    {
+      "name": "ftp.sciimage.com",
+      "alive": true,
+      "is_root": true,
+      "discovered_via": "dnsx",
+      "first_discovered": "2026-05-10T01:08:12Z",
+      "last_seen": "2026-05-10T01:08:12Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 200,
+        "title": "Server Login"
+      },
+      "hosts": [
+        {
+          "ip": "24.157.51.76",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
+          "country": "US",
+          "region": "New Jersey",
+          "city": "Allentown",
+          "reverse_dns": "189d334c.cst.lightpath.net",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "24.157.51.76",
+          "port": 22,
+          "protocol": "tcp",
+          "service": "ssh",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "24.157.51.76",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "24.157.51.76",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=*.sciimage.com, O=Strategic Content Imaging, L=Secaucus, ST=New Jersey, C=US",
+            "issuer": "CN=Go Daddy Secure Certificate Authority - G2, OU=http://certs.godaddy.com/repository/, O=GoDaddy.com\\, Inc., L=Scottsdale, ST=Arizona, C=US",
+            "san": [
+              "*.sciimage.com",
+              "sciimage.com"
+            ],
+            "not_before": "2026-01-02T18:09:45Z",
+            "not_after": "2027-02-03T18:09:45Z",
+            "self_signed": false,
+            "days_to_expiry": 269
+          }
+        }
+      ],
+      "dns": {
+        "a": [
+          "24.157.51.76"
+        ],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": [
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          }
+        ]
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "Generic",
+        "confidence": "high"
+      }
+    }
+  ],
+  "deltas": {
+    "since_scan": null,
+    "added": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "removed": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "changed": {
+      "fingerprint": [],
+      "cert": []
+    }
+  },
+  "history": [
+    {
+      "scan_id": "scan_2026-05-10T01:06:39Z_b8f037aa",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 3
+    }
+  ]
+}
