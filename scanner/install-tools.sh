@@ -46,7 +46,8 @@ mkdir -p "$INSTALL_DIR"
 echo "[1/5] System packages..."
 if [[ "$PLATFORM" == "ubuntu" ]]; then
   sudo apt-get update -qq
-  sudo apt-get install -y -qq whois jq python3-pip git ca-certificates curl
+  sudo apt-get install -y -qq whois jq python3-pip git ca-certificates curl dnsutils
+  # dnsutils gives us `dig` for DNS-derived subdomain enumeration
   # yq via binary (apt version is too old)
   if ! command -v yq &>/dev/null; then
     sudo curl -sLo /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
@@ -55,6 +56,7 @@ if [[ "$PLATFORM" == "ubuntu" ]]; then
 elif [[ "$PLATFORM" == "mac" ]]; then
   command -v brew &>/dev/null || { echo "Install Homebrew first"; exit 1; }
   brew install whois jq yq python git --quiet 2>/dev/null || true
+  # macOS ships with dig in BIND utilities (built-in) — no install needed
 fi
 
 # ─── Go (required for ProjectDiscovery tools) ────────────────────

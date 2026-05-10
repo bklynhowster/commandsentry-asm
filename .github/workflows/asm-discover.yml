@@ -84,7 +84,7 @@ jobs:
 
       - name: Verify tools installed
         run: |
-          for t in subfinder dnsx httpx naabu fingerprintx nuclei wafw00f whois jq yq python3; do
+          for t in subfinder dnsx httpx naabu fingerprintx nuclei wafw00f whois jq yq python3 dig; do
             if ! command -v "$t" >/dev/null 2>&1; then
               echo "::error::Required tool not found: $t"
               exit 1

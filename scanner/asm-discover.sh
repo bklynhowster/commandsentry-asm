@@ -227,26 +227,87 @@ discover_fqdn() {
   log "FQDN phases complete for $target"
 }
 
-# ─── Phase: Apex discovery (v3 — subdomain enum + per-sub deep scan) ─
+# ─── Phase: Apex discovery (v3 — multi-source enum + per-sub deep scan) ─
+# Three discovery sources merged & deduped before liveness check:
+#   1. subfinder         — passive (CT logs, public aggregators)
+#   2. DNS-derived       — MX, NS, SPF includes, DMARC rua hostnames within the apex
+#   3. wordlist resolve  — dnsx brute-force against ~200 common sub names
 # For each live subdomain, runs the full FQDN scan flow into a per-sub
 # subdirectory. normalize.py walks all per-sub dirs to build the nested
 # v3 asset record.
 discover_apex() {
   local apex="$1" wd="$2"
 
-  phase "Subdomain enumeration (subfinder)"
+  # ─── Source 1: passive (subfinder) ─────────────────────────
+  phase "Subdomain enum source 1/3: passive (subfinder)"
   subfinder -d "$apex" -silent -json \
     -t "${SUBFINDER_CONCURRENCY:-10}" \
     > "$wd/subfinder.json" 2> "$wd/subfinder.err" </dev/null || warn "subfinder had errors"
+  jq -r '.host' "$wd/subfinder.json" 2>/dev/null | sort -u > "$wd/_src_passive.txt"
+  log "  passive: $(wc -l < "$wd/_src_passive.txt" | tr -d ' ') candidates"
 
-  # Build the candidate sub list: apex + everything subfinder found
-  jq -r '.host' "$wd/subfinder.json" 2>/dev/null | sort -u > "$wd/_subdomains.txt"
-  echo "$apex" >> "$wd/_subdomains.txt"
-  sort -u -o "$wd/_subdomains.txt" "$wd/_subdomains.txt"
+  # ─── Source 2: DNS-derived (MX/NS/SPF/DMARC) ──────────────
+  # Catches subs hidden behind wildcard certs (which subfinder misses) when
+  # they're referenced in the apex zone records (e.g. mail.apex from MX).
+  phase "Subdomain enum source 2/3: DNS-derived (MX/NS/SPF/DMARC)"
+  if command -v dig >/dev/null 2>&1; then
+    {
+      # MX records → mail server hostnames
+      dig +short MX "$apex" 2>/dev/null | awk '{print $NF}' | sed 's/\.$//'
+      # NS records → nameservers (often within apex if self-hosted)
+      dig +short NS "$apex" 2>/dev/null | sed 's/\.$//'
+      # SPF (TXT) → extract hostnames after a:, mx:, include: directives
+      dig +short TXT "$apex" 2>/dev/null | tr -d '"' | grep -iE 'v=spf1' | tr ' ' '\n' | \
+        grep -iE '^(a|mx|include|ptr):' | sed -E 's/^[a-zA-Z]+://'
+      # DMARC TXT → rua/ruf addresses can reveal a reporting subdomain
+      dig +short TXT "_dmarc.$apex" 2>/dev/null | tr -d '"' | tr ';' '\n' | \
+        grep -iE 'rua|ruf' | grep -oiE 'mailto:[^,]+' | sed -E 's/mailto:[^@]+@//'
+    } 2>/dev/null \
+      | tr '[:upper:]' '[:lower:]' \
+      | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+      | grep -E "(^|\.)${apex}$" \
+      | sort -u > "$wd/_src_dns_derived.txt" 2>/dev/null
+  else
+    warn "dig not installed — DNS-derived enum skipped (install dnsutils)"
+    : > "$wd/_src_dns_derived.txt"
+  fi
+  log "  DNS-derived: $(wc -l < "$wd/_src_dns_derived.txt" | tr -d ' ') candidates"
+
+  # ─── Source 3: wordlist brute-force (dnsx) ────────────────
+  # Catches the predictable names (test., dev., api., vpn., etc.) when both
+  # CT logs and DNS records hide them. Keep wordlist size bounded — this is
+  # apex_count × wordlist_size DNS queries per scan.
+  phase "Subdomain enum source 3/3: wordlist brute-force (dnsx)"
+  local wordlist="$REPO_ROOT/scanner/wordlists/subdomains-asm.txt"
+  if [[ -f "$wordlist" ]]; then
+    # Strip comments and blanks, prefix every name with the apex
+    grep -vE '^[[:space:]]*(#|$)' "$wordlist" \
+      | awk -v apex="$apex" '{print $1 "." apex}' \
+      | dnsx -silent -a -resp \
+          -t "${DNSX_BRUTE_THREADS:-50}" \
+          -timeout "${DNSX_BRUTE_TIMEOUT:-3}" \
+          > "$wd/_src_wordlist.raw" 2> "$wd/dnsx_brute.err" </dev/null || warn "wordlist brute had errors"
+    # dnsx -resp output: "sub.apex.com [1.2.3.4]" — strip the bracketed IP
+    awk '{print $1}' "$wd/_src_wordlist.raw" | sort -u > "$wd/_src_wordlist.txt"
+  else
+    warn "wordlist not found at $wordlist — brute-force enum skipped"
+    : > "$wd/_src_wordlist.txt"
+  fi
+  log "  wordlist: $(wc -l < "$wd/_src_wordlist.txt" | tr -d ' ') candidates"
+
+  # ─── Merge + dedupe across all sources ────────────────────
+  {
+    cat "$wd/_src_passive.txt"
+    cat "$wd/_src_dns_derived.txt"
+    cat "$wd/_src_wordlist.txt"
+    echo "$apex"
+  } | tr '[:upper:]' '[:lower:]' \
+    | grep -E "(^|\.)${apex}$" \
+    | sort -u > "$wd/_subdomains.txt"
 
   local sub_count
   sub_count=$(wc -l < "$wd/_subdomains.txt" | tr -d ' ')
-  log "Discovered $sub_count candidate subdomain(s) (including apex)"
+  log "Multi-source enum total: $sub_count unique candidates (including apex)"
 
   phase "Liveness check (httpx) on all subdomains"
   httpx -list "$wd/_subdomains.txt" -silent -json \
@@ -254,17 +315,37 @@ discover_apex() {
     -threads "${HTTPX_THREADS:-25}" \
     > "$wd/httpx_apex.json" 2> "$wd/httpx_apex.err" </dev/null || warn "httpx apex had errors"
 
-  # Determine which subdomains are alive
+  # Determine which subdomains are "live for scanning purposes". Three lanes:
+  #   1. Anything that responded to HTTP via httpx
+  #   2. Apex always (even if HTTP-dead — naabu still profiles its ports)
+  #   3. DNS-derived subs (mail.*, ns.*, etc.) — these are real infra that
+  #      doesn't speak HTTP. Without this, the new MX/NS/SPF source would
+  #      add candidates that get filtered out by the HTTP-only liveness gate.
   jq -r 'select(.status_code != null) | (.input // .host // .url)' "$wd/httpx_apex.json" 2>/dev/null \
     | sed -E 's#https?://##; s#/.*##' \
     | sort -u > "$wd/_live_subdomains.txt"
-  # Apex always considered "live for scanning purposes" even if httpx didn't report it
   echo "$apex" >> "$wd/_live_subdomains.txt"
+  [[ -s "$wd/_src_dns_derived.txt" ]] && cat "$wd/_src_dns_derived.txt" >> "$wd/_live_subdomains.txt"
   sort -u -o "$wd/_live_subdomains.txt" "$wd/_live_subdomains.txt"
+
+  # Sanity cap — runaway sub counts blow the workflow's 90-min timeout.
+  # Each sub deep-scan is ~3-5 min (naabu+httpx+wafw00f+testssl), so 40 subs
+  # ≈ 2-3 hours wall-clock which is the real ceiling. Override per-target via
+  # MAX_LIVE_SUBS in the rate profile if needed.
+  local max_subs="${MAX_LIVE_SUBS:-40}"
+  local raw_count=$(wc -l < "$wd/_live_subdomains.txt" | tr -d ' ')
+  if [[ $raw_count -gt $max_subs ]]; then
+    warn "$raw_count live subs exceeds cap ($max_subs) — keeping apex + first $max_subs alphabetical, dropping the rest"
+    {
+      echo "$apex"
+      grep -vF "$apex" "$wd/_live_subdomains.txt" | head -n "$max_subs"
+    } | sort -u > "$wd/_live_subdomains.txt.capped"
+    mv "$wd/_live_subdomains.txt.capped" "$wd/_live_subdomains.txt"
+  fi
 
   local live_count
   live_count=$(wc -l < "$wd/_live_subdomains.txt" | tr -d ' ')
-  log "$live_count subdomain(s) to deep-scan"
+  log "$live_count subdomain(s) to deep-scan (cap=$max_subs)"
 
   # Per-sub deep scan — each gets its own subdirectory under $wd/subs/{sub}/
   mkdir -p "$wd/subs"
