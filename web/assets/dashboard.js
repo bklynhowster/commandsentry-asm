@@ -280,6 +280,13 @@
     if (o.includes("godaddy"))     return "h-godaddy";
     if (o.includes("digitalocean"))return "h-do";
     if (o.includes("sci"))         return "h-sci";
+    // Eyeball networks / ISPs — these show up for office uplinks, not hosting
+    if (o.includes("cablevision") || o.includes("charter") || o.includes("spectrum") ||
+        o.includes("verizon") || o.includes("comcast") || o.includes("optimum") ||
+        o.includes("at&t") || o.includes("att inc") || o.includes("cox") ||
+        o.includes("centurylink") || o.includes("lumen")) {
+      return "h-isp";
+    }
     return "h-other";
   }
 

@@ -413,7 +413,7 @@ input[type="search"]:focus,
 
 .drawer-header {
   display: flex; align-items: center; gap: var(--s3);
-  padding: var(--s4) var(--s5);
+  padding: var(--s5) var(--s5) var(--s4);  /* extra top breathing room so title doesn't hug the edge */
   background: var(--ink);
   color: #fff;
   border-bottom: var(--rule) solid var(--copper);
@@ -423,6 +423,7 @@ input[type="search"]:focus,
   font-family: var(--font-mono);
   font-size: 16px;
   font-weight: 500;
+  line-height: 1.2;     /* tighter than inherited 1.6 so it sits visually centered with the X button */
   word-break: break-all;
 }
 .drawer-header .btn-ghost {
@@ -740,8 +741,10 @@ input[type="search"]:focus,
 .hosting-pill.h-google     { background: #E2ECFD; color: #1A4DAB; border-color: #97B7E8; }
 .hosting-pill.h-pressable  { background: #E0E5EA; color: #1B2C3F; border-color: #98A6B4; }
 .hosting-pill.h-wpengine   { background: #F1E1D3; color: #8C3E10; border-color: #D8A78A; }
-.hosting-pill.h-godaddy    { background: #E5F3DC; color: #2D5C18; border-color: #9FCB85; }
+.hosting-pill.h-godaddy    { background: #E8DEC4; color: #5C4A1E; border-color: #C4B384; } /* sand/khaki — was brand-green, swapped so green = status only */
 .hosting-pill.h-do         { background: #DCEAFA; color: #163C82; border-color: #92B6E5; }
+.hosting-pill.h-sci        { background: #DCD3E8; color: #4A2587; border-color: #A993C9; } /* mauve — SCI hosting */
+.hosting-pill.h-isp        { background: #E0E5EA; color: #1B2C3F; border-color: #98A6B4; } /* slate — generic ISP/eyeball network */
 .hosting-pill.h-other      { background: var(--ink-05); color: var(--ink-80); border-color: var(--ink-20); }
 
 /* ─── WAF / platform pills ──────────────────────────── */
@@ -876,14 +879,18 @@ input[type="search"]:focus,
   color: #fff;
   font-weight: 600;
 }
-.service-badge.svc-web      { background: #E5F3DC; color: #2D5C18; border-color: #9FCB85; }
-.service-badge.svc-web-tls  { background: #DDF1D2; color: #1F4D0E; border-color: #84B96A; }
-.service-badge.svc-shell    { background: #F8E0E0; color: #7B1F1F; border-color: #D89393; }
-.service-badge.svc-file     { background: #FCE8B7; color: #6E5113; border-color: #E5BA45; }
-.service-badge.svc-mail     { background: #DCE8F8; color: #1F4E8F; border-color: #95B6E0; }
-.service-badge.svc-net      { background: #EAE7DF; color: #2A3A4B; border-color: var(--ink-20); }
-.service-badge.svc-db       { background: #E2D6F4; color: #4A2587; border-color: #B59CDC; }
-.service-badge.svc-unknown  { background: var(--ink-05); color: var(--ink-60); border-color: var(--ink-20); }
+/* Service badges — categorical only. NO red/green/amber semantics here.
+   Red/amber/green are reserved for engine-assigned risk verdicts (see severity-pill).
+   Each category gets a distinct hue from the neutral / cool palette so a glance still
+   tells you "shell vs web vs db" without implying "good or bad". */
+.service-badge.svc-web      { background: #DCE8F8; color: #1F4E8F; border-color: #95B6E0; } /* slate-blue */
+.service-badge.svc-web-tls  { background: #C9DAEF; color: #163C82; border-color: #7BA0D2; } /* slate-blue darker */
+.service-badge.svc-shell    { background: #E0E5EA; color: #1B2C3F; border-color: #98A6B4; } /* slate-grey (neutral) */
+.service-badge.svc-file     { background: #E8E0F0; color: #3F2670; border-color: #B59CDC; } /* lavender */
+.service-badge.svc-mail     { background: #E2ECFD; color: #1A4DAB; border-color: #97B7E8; } /* periwinkle */
+.service-badge.svc-net      { background: #EAE7DF; color: #2A3A4B; border-color: var(--ink-20); } /* warm grey */
+.service-badge.svc-db       { background: #DCD3E8; color: #4A2587; border-color: #A993C9; } /* mauve */
+.service-badge.svc-unknown  { background: var(--ink-05); color: var(--ink-60); border-color: var(--ink-20); } /* light grey */
 
 /* port number cell */
 .port-cell {
