@@ -277,9 +277,23 @@ discover_apex() {
   # Catches the predictable names (test., dev., api., vpn., etc.) when both
   # CT logs and DNS records hide them. Keep wordlist size bounded — this is
   # apex_count × wordlist_size DNS queries per scan.
+  #
+  # Wildcard-DNS detection FIRST: if `*.apex` returns an A record for any
+  # random name, every wordlist query "succeeds" and we'd flood the live list
+  # with phantom subs. Detect by querying a junk name and skip wordlist if
+  # it resolves.
   phase "Subdomain enum source 3/3: wordlist brute-force (dnsx)"
   local wordlist="$REPO_ROOT/scanner/wordlists/subdomains-asm.txt"
-  if [[ -f "$wordlist" ]]; then
+  local wildcard_test_name="zzznonexistent$(date +%s).${apex}"
+  local has_wildcard=0
+  if command -v dig >/dev/null 2>&1; then
+    if [[ -n "$(dig +short A "$wildcard_test_name" 2>/dev/null | head -1)" ]]; then
+      has_wildcard=1
+      warn "Wildcard DNS detected on $apex (junk name resolves) — skipping wordlist brute-force to avoid phantom hits"
+    fi
+  fi
+
+  if [[ -f "$wordlist" && $has_wildcard -eq 0 ]]; then
     # Strip comments and blanks, prefix every name with the apex
     grep -vE '^[[:space:]]*(#|$)' "$wordlist" \
       | awk -v apex="$apex" '{print $1 "." apex}' \
@@ -289,11 +303,13 @@ discover_apex() {
           > "$wd/_src_wordlist.raw" 2> "$wd/dnsx_brute.err" </dev/null || warn "wordlist brute had errors"
     # dnsx -resp output: "sub.apex.com [1.2.3.4]" — strip the bracketed IP
     awk '{print $1}' "$wd/_src_wordlist.raw" | sort -u > "$wd/_src_wordlist.txt"
-  else
+  elif [[ ! -f "$wordlist" ]]; then
     warn "wordlist not found at $wordlist — brute-force enum skipped"
     : > "$wd/_src_wordlist.txt"
+  else
+    : > "$wd/_src_wordlist.txt"   # wildcard detected, skip
   fi
-  log "  wordlist: $(wc -l < "$wd/_src_wordlist.txt" | tr -d ' ') candidates"
+  log "  wordlist: $(wc -l < "$wd/_src_wordlist.txt" | tr -d ' ') candidates (wildcard_dns=$has_wildcard)"
 
   # ─── Merge + dedupe across all sources ────────────────────
   {
@@ -315,17 +331,20 @@ discover_apex() {
     -threads "${HTTPX_THREADS:-25}" \
     > "$wd/httpx_apex.json" 2> "$wd/httpx_apex.err" </dev/null || warn "httpx apex had errors"
 
-  # Determine which subdomains are "live for scanning purposes". Three lanes:
+  # Determine which subdomains are "live for scanning purposes". Four lanes:
   #   1. Anything that responded to HTTP via httpx
   #   2. Apex always (even if HTTP-dead — naabu still profiles its ports)
-  #   3. DNS-derived subs (mail.*, ns.*, etc.) — these are real infra that
-  #      doesn't speak HTTP. Without this, the new MX/NS/SPF source would
-  #      add candidates that get filtered out by the HTTP-only liveness gate.
+  #   3. DNS-derived subs (mail.*, ns.*, etc.) — real infra that may not speak HTTP
+  #   4. Wordlist hits that resolved in DNS — they're real hosts even if httpx
+  #      didn't get a 2xx (could be HTTP on non-standard port, blocked from the
+  #      runner IP, or non-web service). Wildcard-DNS apexes already excluded
+  #      this source upstream so this won't flood with phantoms.
   jq -r 'select(.status_code != null) | (.input // .host // .url)' "$wd/httpx_apex.json" 2>/dev/null \
     | sed -E 's#https?://##; s#/.*##' \
     | sort -u > "$wd/_live_subdomains.txt"
   echo "$apex" >> "$wd/_live_subdomains.txt"
   [[ -s "$wd/_src_dns_derived.txt" ]] && cat "$wd/_src_dns_derived.txt" >> "$wd/_live_subdomains.txt"
+  [[ -s "$wd/_src_wordlist.txt"    ]] && cat "$wd/_src_wordlist.txt"    >> "$wd/_live_subdomains.txt"
   sort -u -o "$wd/_live_subdomains.txt" "$wd/_live_subdomains.txt"
 
   # Sanity cap — runaway sub counts blow the workflow's 90-min timeout.
