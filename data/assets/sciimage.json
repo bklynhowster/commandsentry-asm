@@ -10,14 +10,15 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-10T22:10:37Z_2aa56f7a",
-    "started_at": "2026-05-10T22:10:37Z",
-    "completed_at": "2026-05-10T22:11:38Z",
-    "duration_seconds": 61,
+    "id": "scan_2026-05-11T14:23:26Z_db1eb897",
+    "started_at": "2026-05-11T14:23:26Z",
+    "completed_at": "2026-05-11T14:25:54Z",
+    "duration_seconds": 148,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
       "dnsx",
+      "httpx",
       "naabu",
       "subfinder",
       "wafw00f",
@@ -26,12 +27,12 @@
   },
   "registration": {},
   "summary": {
-    "subdomain_count": 3,
-    "live_subdomain_count": 3,
-    "host_count": 1,
-    "service_count": 1,
-    "newest_cert_expiry_days": null,
-    "top_hosting_org": "Amazon.com, Inc.",
+    "subdomain_count": 7,
+    "live_subdomain_count": 7,
+    "host_count": 20,
+    "service_count": 14,
+    "newest_cert_expiry_days": 268,
+    "top_hosting_org": "Microsoft Corporation",
     "platforms": []
   },
   "subdomains": [
@@ -40,8 +41,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-10T22:11:38Z",
-      "last_seen": "2026-05-10T22:11:38Z",
+      "first_discovered": "2026-05-11T14:25:56Z",
+      "last_seen": "2026-05-11T14:25:56Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -78,12 +79,395 @@
       }
     },
     {
+      "name": "autodiscover.sciimage.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-05-11T14:25:54Z",
+      "last_seen": "2026-05-11T14:25:54Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 403,
+        "title": null
+      },
+      "hosts": [
+        {
+          "ip": "2603:1036:30c:818::8",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Arizona",
+          "city": "Phoenix",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "2603:1036:30c:90d::8",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Arizona",
+          "city": "Phoenix",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "2603:1036:30c:90e::8",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Arizona",
+          "city": "Phoenix",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "2603:1036:30c:90f::8",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Arizona",
+          "city": "Phoenix",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "2603:1036:30c:c75::8",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Arizona",
+          "city": "Phoenix",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "2603:1036:30c:c84::8",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Arizona",
+          "city": "Phoenix",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "2603:1036:30c:c85::8",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Arizona",
+          "city": "Phoenix",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "2603:1036:903:47::1",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Arizona",
+          "city": "Phoenix",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "40.97.222.200",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.110.120",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.110.40",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.110.56",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.165.72",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.190.200",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.46.72",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.59.232",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "40.97.222.200",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.110.120",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.110.40",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.110.56",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.165.72",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.190.200",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.46.72",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.59.232",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        }
+      ],
+      "dns": {
+        "a": [
+          "40.97.222.200",
+          "52.96.46.72",
+          "52.96.59.232",
+          "52.96.110.40",
+          "52.96.110.56",
+          "52.96.110.120",
+          "52.96.165.72",
+          "52.96.190.200"
+        ],
+        "aaaa": [
+          "2603:1036:30c:c84::8",
+          "2603:1036:30c:c85::8",
+          "2603:1036:30c:90e::8",
+          "2603:1036:903:47::1",
+          "2603:1036:30c:818::8",
+          "2603:1036:30c:c75::8",
+          "2603:1036:30c:90f::8",
+          "2603:1036:30c:90d::8"
+        ],
+        "cname": "autodiscover.outlook.com",
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": "Microsoft-HTTPAPI/2.0",
+        "platform_label": null,
+        "tech": [
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          },
+          {
+            "name": "Microsoft HTTPAPI",
+            "version": "2.0",
+            "category": null
+          }
+        ]
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
+      "name": "ftp.sciimage.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-05-11T14:25:56Z",
+      "last_seen": "2026-05-11T14:25:56Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 200,
+        "title": "Server Login"
+      },
+      "hosts": [
+        {
+          "ip": "24.157.51.76",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
+          "country": "US",
+          "region": "New Jersey",
+          "city": "Allentown",
+          "reverse_dns": "189d334c.cst.lightpath.net",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "24.157.51.76",
+          "port": 22,
+          "protocol": "tcp",
+          "service": "ssh",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "24.157.51.76",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "24.157.51.76",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=*.sciimage.com, O=Strategic Content Imaging, L=Secaucus, ST=New Jersey, C=US",
+            "issuer": "CN=Go Daddy Secure Certificate Authority - G2, OU=http://certs.godaddy.com/repository/, O=GoDaddy.com\\, Inc., L=Scottsdale, ST=Arizona, C=US",
+            "san": [
+              "*.sciimage.com",
+              "sciimage.com"
+            ],
+            "not_before": "2026-01-02T18:09:45Z",
+            "not_after": "2027-02-03T18:09:45Z",
+            "self_signed": false,
+            "days_to_expiry": 268
+          }
+        }
+      ],
+      "dns": {
+        "a": [
+          "24.157.51.76"
+        ],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": [
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          }
+        ]
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "Generic",
+        "confidence": "high"
+      }
+    },
+    {
       "name": "ns01.sciimage.com",
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-10T22:11:38Z",
-      "last_seen": "2026-05-10T22:11:38Z",
+      "first_discovered": "2026-05-11T14:25:56Z",
+      "last_seen": "2026-05-11T14:25:56Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -140,8 +524,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-10T22:11:38Z",
-      "last_seen": "2026-05-10T22:11:38Z",
+      "first_discovered": "2026-05-11T14:25:56Z",
+      "last_seen": "2026-05-11T14:25:56Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -170,14 +554,327 @@
         "vendor": null,
         "confidence": "unknown"
       }
+    },
+    {
+      "name": "vpn.sciimage.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-05-11T14:25:56Z",
+      "last_seen": "2026-05-11T14:25:56Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 200,
+        "title": null
+      },
+      "hosts": [
+        {
+          "ip": "24.157.51.66",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
+          "country": "US",
+          "region": "New Jersey",
+          "city": "Allentown",
+          "reverse_dns": "189d3342.cst.lightpath.net",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "24.157.51.66",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=*.sciimage.com, O=Strategic Content Imaging, L=Secaucus, ST=New Jersey, C=US",
+            "issuer": "CN=Go Daddy Secure Certificate Authority - G2, OU=http://certs.godaddy.com/repository/, O=GoDaddy.com\\, Inc., L=Scottsdale, ST=Arizona, C=US",
+            "san": [
+              "*.sciimage.com",
+              "sciimage.com"
+            ],
+            "not_before": "2026-01-02T18:09:45Z",
+            "not_after": "2027-02-03T18:09:45Z",
+            "self_signed": false,
+            "days_to_expiry": 268
+          }
+        }
+      ],
+      "dns": {
+        "a": [
+          "24.157.51.66"
+        ],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": [
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          }
+        ]
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "None",
+        "confidence": "high"
+      }
+    },
+    {
+      "name": "vpn2.sciimage.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-05-11T14:25:56Z",
+      "last_seen": "2026-05-11T14:25:56Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 200,
+        "title": null
+      },
+      "hosts": [
+        {
+          "ip": "52.119.65.2",
+          "asn": "AS18616",
+          "asn_org": "Natural Wireless, LLC",
+          "country": "US",
+          "region": "New York",
+          "city": "New York City",
+          "reverse_dns": "2.65.119.52.naturalwireless.com",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "52.119.65.2",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=*.sciimage.com, O=Strategic Content Imaging, L=Secaucus, ST=New Jersey, C=US",
+            "issuer": "CN=Go Daddy Secure Certificate Authority - G2, OU=http://certs.godaddy.com/repository/, O=GoDaddy.com\\, Inc., L=Scottsdale, ST=Arizona, C=US",
+            "san": [
+              "*.sciimage.com",
+              "sciimage.com"
+            ],
+            "not_before": "2026-01-02T18:09:45Z",
+            "not_after": "2027-02-03T18:09:45Z",
+            "self_signed": false,
+            "days_to_expiry": 268
+          }
+        }
+      ],
+      "dns": {
+        "a": [
+          "52.119.65.2"
+        ],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": [
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          }
+        ]
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "None",
+        "confidence": "high"
+      }
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-10T19:45:29Z_675ab216",
+    "since_scan": "scan_2026-05-10T22:10:37Z_2aa56f7a",
     "added": {
-      "subdomains": [],
-      "services": [],
-      "hosts": []
+      "subdomains": [
+        "autodiscover.sciimage.com",
+        "ftp.sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "services": [
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "40.97.222.200",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.110.120",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.110.40",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.110.56",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.165.72",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.190.200",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.46.72",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.59.232",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "ftp.sciimage.com",
+          "ip": "24.157.51.76",
+          "port": 22,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "ftp.sciimage.com",
+          "ip": "24.157.51.76",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "ftp.sciimage.com",
+          "ip": "24.157.51.76",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "vpn.sciimage.com",
+          "ip": "24.157.51.66",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "vpn2.sciimage.com",
+          "ip": "52.119.65.2",
+          "port": 443,
+          "protocol": "tcp"
+        }
+      ],
+      "hosts": [
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "2603:1036:30c:818::8"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "2603:1036:30c:90d::8"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "2603:1036:30c:90e::8"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "2603:1036:30c:90f::8"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "2603:1036:30c:c75::8"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "2603:1036:30c:c84::8"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "2603:1036:30c:c85::8"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "2603:1036:903:47::1"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "40.97.222.200"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.110.120"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.110.40"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.110.56"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.165.72"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.190.200"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.46.72"
+        },
+        {
+          "subdomain": "autodiscover.sciimage.com",
+          "ip": "52.96.59.232"
+        },
+        {
+          "subdomain": "ftp.sciimage.com",
+          "ip": "24.157.51.76"
+        },
+        {
+          "subdomain": "vpn.sciimage.com",
+          "ip": "24.157.51.66"
+        },
+        {
+          "subdomain": "vpn2.sciimage.com",
+          "ip": "52.119.65.2"
+        }
+      ]
     },
     "removed": {
       "subdomains": [],
@@ -231,6 +928,13 @@
       "live_subdomain_count": 3,
       "host_count": 1,
       "service_count": 1
+    },
+    {
+      "scan_id": "scan_2026-05-11T14:23:26Z_db1eb897",
+      "subdomain_count": 7,
+      "live_subdomain_count": 7,
+      "host_count": 20,
+      "service_count": 14
     }
   ]
 }
