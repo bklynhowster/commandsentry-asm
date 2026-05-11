@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-11T14:12:36Z_46e8cb7a",
-    "started_at": "2026-05-11T14:12:36Z",
-    "completed_at": "2026-05-11T14:14:52Z",
-    "duration_seconds": 136,
+    "id": "scan_2026-05-11T15:29:40Z_717ba441",
+    "started_at": "2026-05-11T15:29:40Z",
+    "completed_at": "2026-05-11T15:31:43Z",
+    "duration_seconds": 123,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -30,7 +30,7 @@
   "summary": {
     "subdomain_count": 3,
     "live_subdomain_count": 3,
-    "host_count": 9,
+    "host_count": 13,
     "service_count": 8,
     "newest_cert_expiry_days": 38,
     "top_hosting_org": "Microsoft Corporation",
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-11T14:14:53Z",
-      "last_seen": "2026-05-11T14:14:53Z",
+      "first_discovered": "2026-05-11T15:31:44Z",
+      "last_seen": "2026-05-11T15:31:44Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -106,10 +106,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
-          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "MS=ms93622757",
-          "apple-domain-verification=cWkfjNKuM61a3EZ6"
+          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
+          "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "MS=ms93622757"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -137,6 +137,11 @@
             "name": "HSTS",
             "version": null,
             "category": "security"
+          },
+          {
+            "name": "HTTP/3",
+            "version": null,
+            "category": "transport"
           },
           {
             "name": "MySQL",
@@ -221,8 +226,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T14:14:52Z",
-      "last_seen": "2026-05-11T14:14:52Z",
+      "first_discovered": "2026-05-11T15:31:43Z",
+      "last_seen": "2026-05-11T15:31:43Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -231,89 +236,129 @@
       },
       "hosts": [
         {
-          "ip": "2603:1036:30c:901::8",
+          "ip": "2603:1036:206:40::8",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Arizona",
-          "city": "Phoenix",
+          "region": "Virginia",
+          "city": "Washington",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:30c:902::8",
+          "ip": "2603:1036:207:455::8",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Arizona",
-          "city": "Phoenix",
+          "region": "Virginia",
+          "city": "Washington",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:30c:907::8",
+          "ip": "2603:1036:207:458::8",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Arizona",
-          "city": "Phoenix",
+          "region": "Virginia",
+          "city": "Washington",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:903:48::1",
+          "ip": "2603:1036:207:869::8",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Arizona",
-          "city": "Phoenix",
+          "region": "Virginia",
+          "city": "Washington",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "40.104.2.40",
+          "ip": "2603:1036:302:40e0::8",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Arizona",
-          "city": "Phoenix",
+          "region": "Virginia",
+          "city": "Washington",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "40.104.23.136",
+          "ip": "2603:1036:302:4840::8",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Arizona",
-          "city": "Phoenix",
+          "region": "Virginia",
+          "city": "Washington",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "40.97.72.1",
+          "ip": "2603:1036:302:505a::8",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Arizona",
-          "city": "Phoenix",
+          "region": "Virginia",
+          "city": "Washington",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "52.97.104.104",
+          "ip": "2603:1036:302:874::8",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Arizona",
-          "city": "Phoenix",
+          "region": "Virginia",
+          "city": "Washington",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "40.97.188.232",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Washington",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.109.200",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Washington",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.111.72",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Washington",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.88.104",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Washington",
           "reverse_dns": null,
           "is_private": false
         }
       ],
       "services": [
         {
-          "ip": "40.104.2.40",
+          "ip": "40.97.188.232",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -321,7 +366,7 @@
           "tls": false
         },
         {
-          "ip": "40.104.23.136",
+          "ip": "52.96.109.200",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -329,7 +374,7 @@
           "tls": false
         },
         {
-          "ip": "40.97.72.1",
+          "ip": "52.96.111.72",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -337,7 +382,7 @@
           "tls": false
         },
         {
-          "ip": "52.97.104.104",
+          "ip": "52.96.88.104",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -347,16 +392,20 @@
       ],
       "dns": {
         "a": [
-          "40.97.72.1",
-          "52.97.104.104",
-          "40.104.23.136",
-          "40.104.2.40"
+          "52.96.111.72",
+          "40.97.188.232",
+          "52.96.109.200",
+          "52.96.88.104"
         ],
         "aaaa": [
-          "2603:1036:903:48::1",
-          "2603:1036:30c:907::8",
-          "2603:1036:30c:901::8",
-          "2603:1036:30c:902::8"
+          "2603:1036:207:455::8",
+          "2603:1036:302:4840::8",
+          "2603:1036:207:869::8",
+          "2603:1036:206:40::8",
+          "2603:1036:302:505a::8",
+          "2603:1036:302:40e0::8",
+          "2603:1036:302:874::8",
+          "2603:1036:207:458::8"
         ],
         "cname": "autodiscover.outlook.com",
         "mx": [],
@@ -392,8 +441,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T14:14:53Z",
-      "last_seen": "2026-05-11T14:14:53Z",
+      "first_discovered": "2026-05-11T15:31:44Z",
+      "last_seen": "2026-05-11T15:31:44Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -558,11 +607,88 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-10T21:40:51Z_5336ffea",
+    "since_scan": "scan_2026-05-11T14:12:36Z_46e8cb7a",
     "added": {
-      "subdomains": [
-        "autodiscover.commandcompanies.com"
+      "subdomains": [],
+      "services": [
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "40.97.188.232",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "52.96.109.200",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "52.96.111.72",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "52.96.88.104",
+          "port": 80,
+          "protocol": "tcp"
+        }
       ],
+      "hosts": [
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "2603:1036:206:40::8"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "2603:1036:207:455::8"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "2603:1036:207:458::8"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "2603:1036:207:869::8"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "2603:1036:302:40e0::8"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "2603:1036:302:4840::8"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "2603:1036:302:505a::8"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "2603:1036:302:874::8"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "40.97.188.232"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "52.96.109.200"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "52.96.111.72"
+        },
+        {
+          "subdomain": "autodiscover.commandcompanies.com",
+          "ip": "52.96.88.104"
+        }
+      ]
+    },
+    "removed": {
+      "subdomains": [],
       "services": [
         {
           "subdomain": "autodiscover.commandcompanies.com",
@@ -623,11 +749,6 @@
           "ip": "52.97.104.104"
         }
       ]
-    },
-    "removed": {
-      "subdomains": [],
-      "services": [],
-      "hosts": []
     },
     "changed": {
       "fingerprint": [],
@@ -696,6 +817,13 @@
       "subdomain_count": 3,
       "live_subdomain_count": 3,
       "host_count": 9,
+      "service_count": 8
+    },
+    {
+      "scan_id": "scan_2026-05-11T15:29:40Z_717ba441",
+      "subdomain_count": 3,
+      "live_subdomain_count": 3,
+      "host_count": 13,
       "service_count": 8
     }
   ]
