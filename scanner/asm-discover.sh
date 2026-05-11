@@ -273,57 +273,81 @@ discover_apex() {
   fi
   log "  DNS-derived: $(wc -l < "$wd/_src_dns_derived.txt" | tr -d ' ') candidates"
 
-  # ─── Source 3: wordlist brute-force (dnsx) ────────────────
-  # Catches the predictable names (test., dev., api., vpn., etc.) when both
-  # CT logs and DNS records hide them. Keep wordlist size bounded — this is
-  # apex_count × wordlist_size DNS queries per scan.
+  # ─── Source 3: wordlist brute-force (dig in parallel) ──────
+  # Replaces dnsx. dnsx empirically failed to resolve names from GH Actions
+  # runners even with explicit -r resolvers (Azure DNS view differs, or some
+  # other env quirk). dig is rock-solid and we proved it resolves the missing
+  # names from any standard env. Parallelize via xargs -P 30 to keep wall-clock
+  # ~10 seconds for ~250 names.
   #
   # Wildcard-DNS detection FIRST: if `*.apex` returns an A record for any
   # random name, every wordlist query "succeeds" and we'd flood the live list
   # with phantom subs. Detect by querying a junk name and skip wordlist if
   # it resolves.
-  phase "Subdomain enum source 3/3: wordlist brute-force (dnsx)"
+  phase "Subdomain enum source 3/4: wordlist brute-force (dig)"
   local wordlist="$REPO_ROOT/scanner/wordlists/subdomains-asm.txt"
   local wildcard_test_name="zzznonexistent$(date +%s).${apex}"
   local has_wildcard=0
-  if command -v dig >/dev/null 2>&1; then
-    if [[ -n "$(dig +short A "$wildcard_test_name" 2>/dev/null | head -1)" ]]; then
-      has_wildcard=1
-      warn "Wildcard DNS detected on $apex (junk name resolves) — skipping wordlist brute-force to avoid phantom hits"
-    fi
+  # Use the system resolver. Forcing @1.1.1.1 was failing in sandboxed and
+  # cloud-runner environments where outbound DNS to public resolvers is
+  # restricted. The system resolver (Azure DNS on GH runners) reaches the
+  # authoritative servers fine.
+  if [[ -n "$(dig +short +time=2 +tries=1 A "$wildcard_test_name" 2>/dev/null | head -1)" ]]; then
+    has_wildcard=1
+    warn "Wildcard DNS detected on $apex (junk name '$wildcard_test_name' resolves) — skipping wordlist brute-force to avoid phantom hits"
   fi
 
   if [[ -f "$wordlist" && $has_wildcard -eq 0 ]]; then
-    # Build the candidate list to a temp file FIRST, then feed via -list.
-    # Critical: NEVER use </dev/null on a piped dnsx call — it overrides the
-    # pipe and dnsx reads nothing. This is exactly the bug the prior version
-    # had: `... | dnsx ... </dev/null` made dnsx read /dev/null instead of
-    # the wordlist pipe, returning zero hits every run.
     grep -vE '^[[:space:]]*(#|$)' "$wordlist" \
       | awk -v apex="$apex" '{print $1 "." apex}' \
       > "$wd/_wordlist_candidates.txt"
-    log "  wordlist candidates: $(wc -l < "$wd/_wordlist_candidates.txt" | tr -d ' ')"
-    dnsx -silent -a -resp \
-        -l "$wd/_wordlist_candidates.txt" \
-        -t "${DNSX_BRUTE_THREADS:-50}" \
-        -timeout "${DNSX_BRUTE_TIMEOUT:-3}" \
-        -r "1.1.1.1,8.8.8.8,9.9.9.9" \
-        > "$wd/_src_wordlist.raw" 2> "$wd/dnsx_brute.err" || warn "wordlist brute had errors"
-    # dnsx -resp output: "sub.apex.com [1.2.3.4]" — strip the bracketed IP
-    awk '{print $1}' "$wd/_src_wordlist.raw" | sort -u > "$wd/_src_wordlist.txt"
+    local cand_count
+    cand_count=$(wc -l < "$wd/_wordlist_candidates.txt" | tr -d ' ')
+    log "  wordlist candidates: $cand_count"
+
+    # Parallel dig via system resolver. 30 workers, 2s timeout, 1 retry.
+    # ~250 names finish in ~10-15 seconds wall-clock.
+    cat "$wd/_wordlist_candidates.txt" | xargs -P 30 -I'{}' bash -c '
+      ip=$(dig +short +time=2 +tries=1 "{}" 2>/dev/null | head -1)
+      [[ -n "$ip" ]] && echo "{}"
+    ' > "$wd/_src_wordlist.txt" 2> "$wd/wordlist_dig.err"
   elif [[ ! -f "$wordlist" ]]; then
     warn "wordlist not found at $wordlist — brute-force enum skipped"
     : > "$wd/_src_wordlist.txt"
   else
     : > "$wd/_src_wordlist.txt"   # wildcard detected, skip
   fi
-  log "  wordlist: $(wc -l < "$wd/_src_wordlist.txt" | tr -d ' ') candidates (wildcard_dns=$has_wildcard)"
+  log "  wordlist hits: $(wc -l < "$wd/_src_wordlist.txt" | tr -d ' ') (wildcard_dns=$has_wildcard)"
+
+  # ─── Source 4: TLS cert SAN harvesting ────────────────────
+  # Connect to the apex on :443, dump the cert, parse subjectAltName.
+  # Even wildcard certs sometimes have specific SANs for things like
+  # 'test.example.com'. Especially useful when the host is fronted by a CDN
+  # that serves multiple sites from one cert.
+  phase "Subdomain enum source 4/4: TLS cert SAN harvesting"
+  : > "$wd/_src_cert_sans.txt"
+  if command -v openssl >/dev/null 2>&1; then
+    # Try apex on :443. -servername for SNI, -connect for the target IP+port.
+    # Timeout the whole thing in case the host hangs. 2>&1 to ignore TLS warnings.
+    timeout 10 openssl s_client -showcerts -servername "$apex" -connect "$apex:443" </dev/null 2>/dev/null \
+      | openssl x509 -noout -ext subjectAltName 2>/dev/null \
+      | grep -oE 'DNS:[A-Za-z0-9._*-]+' \
+      | sed 's/^DNS://' \
+      | tr '[:upper:]' '[:lower:]' \
+      | grep -E "(^|\.)${apex}$" \
+      | grep -v '\*' \
+      | sort -u > "$wd/_src_cert_sans.txt"
+  else
+    warn "openssl not installed — cert SAN harvesting skipped"
+  fi
+  log "  cert SAN hits: $(wc -l < "$wd/_src_cert_sans.txt" | tr -d ' ')"
 
   # ─── Merge + dedupe across all sources ────────────────────
   {
     cat "$wd/_src_passive.txt"
     cat "$wd/_src_dns_derived.txt"
     cat "$wd/_src_wordlist.txt"
+    cat "$wd/_src_cert_sans.txt"
     echo "$apex"
   } | tr '[:upper:]' '[:lower:]' \
     | grep -E "(^|\.)${apex}$" \
@@ -331,7 +355,7 @@ discover_apex() {
 
   local sub_count
   sub_count=$(wc -l < "$wd/_subdomains.txt" | tr -d ' ')
-  log "Multi-source enum total: $sub_count unique candidates (including apex)"
+  log "Multi-source enum total: $sub_count unique candidates (passive=$(wc -l < "$wd/_src_passive.txt" | tr -d ' '), dns=$(wc -l < "$wd/_src_dns_derived.txt" | tr -d ' '), wordlist=$(wc -l < "$wd/_src_wordlist.txt" | tr -d ' '), certSAN=$(wc -l < "$wd/_src_cert_sans.txt" | tr -d ' '))"
 
   phase "Liveness check (httpx) on all subdomains"
   httpx -list "$wd/_subdomains.txt" -silent -json \
@@ -339,7 +363,7 @@ discover_apex() {
     -threads "${HTTPX_THREADS:-25}" \
     > "$wd/httpx_apex.json" 2> "$wd/httpx_apex.err" </dev/null || warn "httpx apex had errors"
 
-  # Determine which subdomains are "live for scanning purposes". Four lanes:
+  # Determine which subdomains are "live for scanning purposes". Five lanes:
   #   1. Anything that responded to HTTP via httpx
   #   2. Apex always (even if HTTP-dead — naabu still profiles its ports)
   #   3. DNS-derived subs (mail.*, ns.*, etc.) — real infra that may not speak HTTP
@@ -347,12 +371,15 @@ discover_apex() {
   #      didn't get a 2xx (could be HTTP on non-standard port, blocked from the
   #      runner IP, or non-web service). Wildcard-DNS apexes already excluded
   #      this source upstream so this won't flood with phantoms.
+  #   5. Cert SAN hits — names the TLS cert advertises = names the operator
+  #      explicitly intended to serve. High signal even if HTTP probe fails.
   jq -r 'select(.status_code != null) | (.input // .host // .url)' "$wd/httpx_apex.json" 2>/dev/null \
     | sed -E 's#https?://##; s#/.*##' \
     | sort -u > "$wd/_live_subdomains.txt"
   echo "$apex" >> "$wd/_live_subdomains.txt"
   [[ -s "$wd/_src_dns_derived.txt" ]] && cat "$wd/_src_dns_derived.txt" >> "$wd/_live_subdomains.txt"
   [[ -s "$wd/_src_wordlist.txt"    ]] && cat "$wd/_src_wordlist.txt"    >> "$wd/_live_subdomains.txt"
+  [[ -s "$wd/_src_cert_sans.txt"   ]] && cat "$wd/_src_cert_sans.txt"   >> "$wd/_live_subdomains.txt"
   sort -u -o "$wd/_live_subdomains.txt" "$wd/_live_subdomains.txt"
 
   # Sanity cap — runaway sub counts blow the workflow's 90-min timeout.
