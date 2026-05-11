@@ -469,8 +469,12 @@
     const svcCount = (sub.services || []).length;
 
     return `
+      <button class="back-to-overview" aria-label="Back to ${escapeHtml(asset.asset.value)}">
+        <span class="back-chevron">←</span>
+        <span class="back-label-prefix">Back to</span>
+        <span class="back-label-target td-mono">${escapeHtml(asset.asset.value)}</span>
+      </button>
       <div class="sub-detail-header">
-        <button class="back-to-overview">← Back to ${escapeHtml(asset.asset.value)}</button>
         <div class="sub-detail-name">
           <span class="status-dot ${live ? "live" : "down"}"></span>
           <span class="td-mono">${escapeHtml(sub.name)}</span>
