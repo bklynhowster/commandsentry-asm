@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-11T15:39:30Z_f91aa466",
-    "started_at": "2026-05-11T15:39:30Z",
-    "completed_at": "2026-05-11T15:41:32Z",
-    "duration_seconds": 122,
+    "id": "scan_2026-05-11T17:35:08Z_0a6fc1bd",
+    "started_at": "2026-05-11T17:35:08Z",
+    "completed_at": "2026-05-11T17:36:53Z",
+    "duration_seconds": 105,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -27,12 +27,12 @@
   },
   "registration": {},
   "summary": {
-    "subdomain_count": 7,
-    "live_subdomain_count": 7,
-    "host_count": 16,
-    "service_count": 14,
+    "subdomain_count": 6,
+    "live_subdomain_count": 6,
+    "host_count": 4,
+    "service_count": 6,
     "newest_cert_expiry_days": 268,
-    "top_hosting_org": "Microsoft Corporation",
+    "top_hosting_org": "Cablevision Systems Corp.",
     "platforms": []
   },
   "subdomains": [
@@ -41,8 +41,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-11T15:41:33Z",
-      "last_seen": "2026-05-11T15:41:33Z",
+      "first_discovered": "2026-05-11T17:36:53Z",
+      "last_seen": "2026-05-11T17:36:53Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -60,9 +60,9 @@
           "ns01.sciimage.com"
         ],
         "txt": [
+          "0ed1fe018a578bb877e8354235b4b5eb5a2f99c17c",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "v=verifydomain MS=2796493",
-          "0ed1fe018a578bb877e8354235b4b5eb5a2f99c17c"
+          "v=verifydomain MS=2796493"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -79,259 +79,12 @@
       }
     },
     {
-      "name": "autodiscover.sciimage.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T15:41:32Z",
-      "last_seen": "2026-05-11T15:41:32Z",
-      "tags": [],
-      "reachability": {
-        "live": true,
-        "http_status": 403,
-        "title": null
-      },
-      "hosts": [
-        {
-          "ip": "2603:1036:302:415d::8",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "2603:1036:302:4843::8",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "2603:1036:303:3801::8",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Boydton",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "2603:1036:303:3839::8",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Boydton",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "40.104.46.40",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "40.97.190.8",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "52.96.111.104",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "52.96.179.120",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "52.96.87.200",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "52.96.88.104",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "52.96.88.40",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "52.96.88.56",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
-          "is_private": false
-        }
-      ],
-      "services": [
-        {
-          "ip": "40.104.46.40",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "40.97.190.8",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "52.96.111.104",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "52.96.179.120",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "52.96.87.200",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "52.96.88.104",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "52.96.88.40",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "52.96.88.56",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        }
-      ],
-      "dns": {
-        "a": [
-          "40.97.190.8",
-          "40.104.46.40",
-          "52.96.87.200",
-          "52.96.88.40",
-          "52.96.88.56",
-          "52.96.88.104",
-          "52.96.111.104",
-          "52.96.179.120"
-        ],
-        "aaaa": [
-          "2603:1036:302:415d::8",
-          "2603:1036:303:3801::8",
-          "2603:1036:303:3839::8",
-          "2603:1036:302:4843::8"
-        ],
-        "cname": "autodiscover.outlook.com",
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": "Microsoft-HTTPAPI/2.0",
-        "platform_label": null,
-        "tech": [
-          {
-            "name": "HSTS",
-            "version": null,
-            "category": "security"
-          },
-          {
-            "name": "Microsoft HTTPAPI",
-            "version": "2.0",
-            "category": null
-          }
-        ]
-      },
-      "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
-      }
-    },
-    {
       "name": "ftp.sciimage.com",
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T15:41:33Z",
-      "last_seen": "2026-05-11T15:41:33Z",
+      "first_discovered": "2026-05-11T17:36:53Z",
+      "last_seen": "2026-05-11T17:36:53Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -422,8 +175,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T15:41:33Z",
-      "last_seen": "2026-05-11T15:41:33Z",
+      "first_discovered": "2026-05-11T17:36:53Z",
+      "last_seen": "2026-05-11T17:36:53Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -480,8 +233,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T15:41:33Z",
-      "last_seen": "2026-05-11T15:41:33Z",
+      "first_discovered": "2026-05-11T17:36:53Z",
+      "last_seen": "2026-05-11T17:36:53Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -516,8 +269,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T15:41:33Z",
-      "last_seen": "2026-05-11T15:41:33Z",
+      "first_discovered": "2026-05-11T17:36:53Z",
+      "last_seen": "2026-05-11T17:36:53Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -592,8 +345,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T15:41:33Z",
-      "last_seen": "2026-05-11T15:41:33Z",
+      "first_discovered": "2026-05-11T17:36:53Z",
+      "last_seen": "2026-05-11T17:36:53Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -665,9 +418,16 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-11T14:23:26Z_db1eb897",
+    "since_scan": "scan_2026-05-11T15:39:30Z_f91aa466",
     "added": {
       "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "removed": {
+      "subdomains": [
+        "autodiscover.sciimage.com"
+      ],
       "services": [
         {
           "subdomain": "autodiscover.sciimage.com",
@@ -769,125 +529,6 @@
         }
       ]
     },
-    "removed": {
-      "subdomains": [],
-      "services": [
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "40.97.222.200",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.110.120",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.110.40",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.110.56",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.165.72",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.190.200",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.46.72",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.59.232",
-          "port": 80,
-          "protocol": "tcp"
-        }
-      ],
-      "hosts": [
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "2603:1036:30c:818::8"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "2603:1036:30c:90d::8"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "2603:1036:30c:90e::8"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "2603:1036:30c:90f::8"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "2603:1036:30c:c75::8"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "2603:1036:30c:c84::8"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "2603:1036:30c:c85::8"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "2603:1036:903:47::1"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "40.97.222.200"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.110.120"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.110.40"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.110.56"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.165.72"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.190.200"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.46.72"
-        },
-        {
-          "subdomain": "autodiscover.sciimage.com",
-          "ip": "52.96.59.232"
-        }
-      ]
-    },
     "changed": {
       "fingerprint": [],
       "cert": []
@@ -949,6 +590,13 @@
       "live_subdomain_count": 7,
       "host_count": 16,
       "service_count": 14
+    },
+    {
+      "scan_id": "scan_2026-05-11T17:35:08Z_0a6fc1bd",
+      "subdomain_count": 6,
+      "live_subdomain_count": 6,
+      "host_count": 4,
+      "service_count": 6
     }
   ]
 }
