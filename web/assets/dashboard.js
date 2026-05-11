@@ -255,7 +255,6 @@
         </div>
 
         <div class="asset-card-row">
-          ${topOrg ? `<span class="hosting-pill ${hostingClassFor(topOrg)}">${escapeHtml(topOrg)}</span>` : ""}
           ${platforms.slice(0, 2).map((p) => `<span class="platform-pill">${escapeHtml(p)}</span>`).join("")}
         </div>
 
@@ -402,7 +401,6 @@
             <span class="status-dot ${live ? "live" : "down"}"></span>
             ${live ? "Live surface" : "All offline"}
           </div>
-          ${sm.top_hosting_org ? `<div class="verdict-pill v-info hosting-pill ${hostingClassFor(sm.top_hosting_org)}">${escapeHtml(sm.top_hosting_org)}</div>` : ""}
           ${certBadge ? `<div class="verdict-pill ${certBadge.cls}"><span class="v-icon">🔒</span>${escapeHtml(certBadge.label)}</div>` : ""}
           ${(sm.platforms || []).map((p) => `<div class="verdict-pill v-info platform-pill">${escapeHtml(p)}</div>`).join("")}
         </div>
@@ -426,7 +424,6 @@
       const live = s.reachability?.live;
       const hostCount = (s.hosts || []).length;
       const svcCount = (s.services || []).length;
-      const topOrg = s.hosts?.[0]?.asn_org;
       const waf = s.waf?.detected ? s.waf.vendor : null;
       const platform = s.fingerprint?.platform_label;
       const certDays = s.services?.find((x) => x.cert?.days_to_expiry !== undefined)?.cert?.days_to_expiry;
@@ -442,7 +439,6 @@
           </td>
           <td>${hostCount > 0 ? `<span class="kv-num">${hostCount}</span>` : "<span class='muted'>0</span>"}</td>
           <td>${svcCount > 0 ? `<span class="kv-num">${svcCount}</span>` : "<span class='muted'>0</span>"}</td>
-          <td>${topOrg ? `<span class="hosting-pill ${hostingClassFor(topOrg)}">${escapeHtml(topOrg)}</span>` : "<span class='muted'>—</span>"}</td>
           <td>${waf ? `<span class="waf-pill"><span class="waf-pill-icon">⛨</span>${escapeHtml(waf)}</span>` : "<span class='muted'>—</span>"}</td>
           <td>${typeof certDays === "number" ? renderCertDaysBadge(certDays) : "<span class='muted'>—</span>"}</td>
           <td class="td-arrow">→</td>
@@ -450,7 +446,7 @@
     }).join("");
     return section(`Subdomains (${subs.length})`, `
       <table class="data-table sub-table">
-        <thead><tr><th>Name</th><th>Hosts</th><th>Svcs</th><th>Hosting</th><th>WAF</th><th>Cert</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Hosts</th><th>Svcs</th><th>WAF</th><th>Cert</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
       <div class="sub-table-hint">Click any row to drill into that subdomain</div>
@@ -489,7 +485,6 @@
             <span class="status-dot ${live ? "live" : "down"}"></span>
             ${live ? `Live · HTTP ${status || "?"}` : "Offline"}
           </div>
-          ${topOrg ? `<div class="verdict-pill v-info hosting-pill ${hostingClassFor(topOrg)}">${escapeHtml(topOrg)}</div>` : ""}
           ${wafVendor ? `<div class="verdict-pill v-info waf-pill"><span class="waf-pill-icon">⛨</span>${escapeHtml(wafVendor)}</div>` : ""}
           ${certNearest !== null ? `<div class="verdict-pill ${certNearest < 7 ? "v-bad" : certNearest < 30 ? "v-warn" : "v-good"}"><span class="v-icon">🔒</span>Cert ${certNearest}d</div>` : ""}
           ${sub.fingerprint?.platform_label ? `<div class="verdict-pill v-info platform-pill">${escapeHtml(sub.fingerprint.platform_label)}</div>` : ""}
