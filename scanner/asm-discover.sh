@@ -168,6 +168,7 @@ discover_one() {
 # ─── Phase: FQDN discovery ─────────────────────────────────────────
 discover_fqdn() {
   local target="$1" wd="$2"
+  local mode="${3:-full}"    # "full" (default) or "fast" — fast skips testssl
 
   phase "DNS resolution + records (dnsx)"
   echo "$target" | dnsx -silent -resp -a -aaaa -cname -mx -ns -txt -json \
@@ -213,8 +214,15 @@ discover_fqdn() {
   phase "WAF detection (wafw00f)"
   wafw00f "$target" -a -o "$wd/wafw00f.json" -f json 2> "$wd/wafw00f.err" || warn "wafw00f had errors"
 
-  phase "TLS posture (testssl)"
-  if grep -q '"port":443' "$wd/naabu.json" 2>/dev/null; then
+  # testssl is the slowest single phase (~60-120s per host). Run it only on
+  # apexes / FQDN-type targets where we want a real TLS audit. For per-sub
+  # deep scans launched from discover_apex, mode="fast" skips testssl since
+  # httpx -tls-grab above already captured the cert basics (issuer, dates,
+  # SANs). Saves ~90s × N subs which is what blew the 90-min timeout.
+  if [[ "$mode" == "fast" ]]; then
+    log "Skipping testssl (mode=fast — per-sub deep scan)"
+  elif grep -q '"port":443' "$wd/naabu.json" 2>/dev/null; then
+    phase "TLS posture (testssl)"
     testssl.sh --jsonfile "$wd/testssl.json" --quiet --warnings off \
       --severity LOW "$target:443" > "$wd/testssl.log" 2>&1 || warn "testssl had errors"
   else
@@ -401,14 +409,18 @@ discover_apex() {
   live_count=$(wc -l < "$wd/_live_subdomains.txt" | tr -d ' ')
   log "$live_count subdomain(s) to deep-scan (cap=$max_subs)"
 
-  # Per-sub deep scan — each gets its own subdirectory under $wd/subs/{sub}/
+  # Per-sub deep scan — each gets its own subdirectory under $wd/subs/{sub}/.
+  # Apex gets "full" mode (with testssl); non-apex subs get "fast" (no testssl
+  # — saves ~90s per sub, which adds up across 20+ subs).
   mkdir -p "$wd/subs"
   while IFS= read -r sub; do
     [[ -z "$sub" ]] && continue
-    phase "Deep scan: $sub"
+    local sub_mode="fast"
+    [[ "$sub" == "$apex" ]] && sub_mode="full"
+    phase "Deep scan: $sub (mode=$sub_mode)"
     local sub_dir="$wd/subs/$sub"
     mkdir -p "$sub_dir"
-    discover_fqdn "$sub" "$sub_dir" </dev/null
+    discover_fqdn "$sub" "$sub_dir" "$sub_mode" </dev/null
   done < "$wd/_live_subdomains.txt"
 
   log "Apex deep-scan complete: $live_count sub(s) profiled under $wd/subs/"

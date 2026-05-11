@@ -42,7 +42,10 @@ concurrency:
 jobs:
   discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 90       # well under GH's 6h ceiling
+    timeout-minutes: 180      # 3h, well under GH's 6h ceiling. Bumped from 90
+                              # after multi-source enum found 23 total subs which
+                              # took ~92 min in per-sub deep-scan loop and killed
+                              # the workflow before commit could run.
 
     steps:
       - name: Checkout
