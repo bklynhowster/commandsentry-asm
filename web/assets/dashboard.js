@@ -43,49 +43,112 @@
   async function pollGlobalScan() {
     try {
       const r = await fetch("/api/scan-status", { cache: "no-store" });
-      if (!r.ok) return hideGlobalPill();
+      if (!r.ok) return hideScanBanner();
       const data = await r.json();
-      if (!data.ok) return hideGlobalPill();
+      if (!data.ok) return hideScanBanner();
 
-      const pill = document.getElementById("global-scan-pill");
-      if (!pill) return;
+      const banner = document.getElementById("scan-banner");
+      if (!banner) return;
 
-      // If status is queued or in_progress → show compact "scanning" pill with ETA
       if (data.status === "queued" || data.status === "in_progress") {
-        const phase = data.status === "queued" ? "queued" : abbreviateStep(data.job?.current_step || "running");
-        const etaTxt = formatEtaShort(data);  // "~6m left" / "running long" / ""
-        pill.hidden = false;
-        pill.className = "global-scan-pill running";
-        pill.innerHTML = `<span class="g-dot"></span><strong>${escapeHtml(formatElapsed(data.elapsed_seconds))}</strong>&nbsp;·&nbsp;${escapeHtml(phase)}${etaTxt ? `&nbsp;·&nbsp;<span class="g-eta">${escapeHtml(etaTxt)}</span>` : ""}`;
-        pill.title = `Scan in progress · run #${data.run_id} · ${data.event} · current step: ${data.job?.current_step || "—"}${data.historical_avg_seconds ? ` · avg run: ${formatElapsed(data.historical_avg_seconds)}` : ""}`;
+        renderScanBanner(banner, data, "running");
         lastGlobalRunId = data.run_id;
         lastGlobalStatus = data.status;
       } else if (data.status === "completed") {
         // If we previously saw it running and now it's done → flash success briefly + auto-refresh
         if (lastGlobalRunId === data.run_id && lastGlobalStatus !== "completed") {
-          pill.hidden = false;
-          pill.className = "global-scan-pill done";
-          pill.innerHTML = `<span class="g-dot"></span>scan complete · refreshing…`;
-          pill.title = "Dashboard will reload shortly to pick up the new data";
+          renderScanBanner(banner, data, "done");
           setTimeout(() => {
             loadAll().then(render).catch(() => {});
-            hideGlobalPill();
+            hideScanBanner();
           }, 60000);
         } else {
-          hideGlobalPill();
+          hideScanBanner();
         }
         lastGlobalStatus = data.status;
       } else {
-        hideGlobalPill();
+        hideScanBanner();
       }
     } catch {
-      hideGlobalPill();
+      hideScanBanner();
     }
   }
 
-  function hideGlobalPill() {
-    const pill = document.getElementById("global-scan-pill");
-    if (pill) pill.hidden = true;
+  function hideScanBanner() {
+    const banner = document.getElementById("scan-banner");
+    if (banner) banner.hidden = true;
+  }
+
+  // Render the live scan banner from a scan-status API response.
+  function renderScanBanner(banner, data, mode) {
+    const headline = document.getElementById("scan-banner-headline");
+    const substep  = document.getElementById("scan-banner-substep");
+    const elapsedEl = document.getElementById("scan-banner-elapsed");
+    const etaEl    = document.getElementById("scan-banner-eta");
+    const fill     = document.getElementById("scan-banner-progress-fill");
+    const link     = document.getElementById("scan-banner-link");
+
+    banner.hidden = false;
+    banner.className = `scan-banner ${mode}`;
+
+    if (mode === "done") {
+      headline.textContent = data.conclusion === "success"
+        ? "Scan complete — refreshing dashboard…"
+        : `Scan ${data.conclusion || "ended"}`;
+      const mode_label = data.mode === "diff" ? "diff-aware run"
+                       : data.mode === "all"  ? "full sweep"
+                       : data.mode === "scan" ? "scan"
+                       : data.mode === "skipped" ? "no targets to scan"
+                       : "run";
+      substep.textContent = `${mode_label} · ${formatElapsed(data.elapsed_seconds)} total · run #${data.run_id}`;
+      elapsedEl.textContent = formatElapsed(data.elapsed_seconds);
+      etaEl.textContent = "";
+      fill.style.width = "100%";
+    } else {
+      // queued or in_progress
+      const stepName = data.status === "queued" ? "Queued — waiting for runner" : describeStep(data.job?.current_step);
+      headline.textContent = data.status === "queued"
+        ? "Scan queued"
+        : "Scan in progress";
+      const progressTotal = (data.job?.completed_steps != null && data.job?.total_steps)
+        ? `step ${Math.min(data.job.completed_steps + 1, data.job.total_steps)} of ${data.job.total_steps}`
+        : "";
+      substep.textContent = progressTotal ? `${stepName} · ${progressTotal}` : stepName;
+      elapsedEl.textContent = `${formatElapsed(data.elapsed_seconds)} elapsed`;
+      etaEl.textContent = formatEtaShort(data) ? `· ${formatEtaShort(data)}` : "";
+
+      // Time-aware progress (capped 95% until completion). Falls back to step pct if no historical avg.
+      const stepPct = data.job?.progress_pct ?? 0;
+      const timePct = computeTimePct(data);
+      let pct = Math.max(stepPct, timePct);
+      pct = Math.min(pct, 95);
+      fill.style.width = `${pct}%`;
+    }
+
+    if (data.html_url) link.href = data.html_url;
+  }
+
+  // Human-readable description of the current workflow step
+  function describeStep(stepName) {
+    if (!stepName) return "Initializing…";
+    const n = stepName.toLowerCase();
+    if (n.includes("set up job"))         return "Setting up runner";
+    if (n.includes("checkout"))           return "Checking out repo";
+    if (n.includes("set up go"))          return "Installing Go runtime";
+    if (n.includes("set up python"))      return "Installing Python";
+    if (n.includes("cache"))              return "Restoring tool cache";
+    if (n.includes("install asm tool"))   return "Installing scan tools";
+    if (n.includes("verify tools"))       return "Verifying tools";
+    if (n.includes("determine targets"))  return "Planning scan";
+    if (n.includes("run asm discovery"))  return "Scanning targets (port + service discovery)";
+    if (n.includes("sync dashboard"))     return "Building dashboard data";
+    if (n.includes("send email"))         return "Sending email alerts";
+    if (n.includes("commit"))             return "Committing results";
+    if (n.includes("trigger netlify"))    return "Triggering Netlify deploy";
+    if (n.includes("summarize"))          return "Wrapping up";
+    if (n.includes("post "))              return "Cleaning up";
+    if (n.includes("complete job"))       return "Finalizing";
+    return stepName;
   }
 
   // ─── data loading ────────────────────────────────────────
