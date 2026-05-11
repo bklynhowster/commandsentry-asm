@@ -1,0 +1,139 @@
+{
+  "schema_version": "3.0",
+  "asset": {
+    "id": "52-119-65-5",
+    "type": "ip",
+    "value": "52.119.65.5",
+    "owner": "unknown",
+    "tags": [],
+    "notes": "",
+    "discovered_via": "manual"
+  },
+  "scan": {
+    "id": "scan_2026-05-11T23:41:36Z_e58d90e0",
+    "started_at": "2026-05-11T23:41:36Z",
+    "completed_at": "2026-05-11T23:43:30Z",
+    "duration_seconds": 114,
+    "engine_version": "3.0.0",
+    "scanner_origin": "github-actions-ubuntu-azure",
+    "tools_run": [
+      "httpx",
+      "naabu",
+      "testssl",
+      "wafw00f",
+      "whois"
+    ]
+  },
+  "registration": {},
+  "summary": {
+    "subdomain_count": 1,
+    "live_subdomain_count": 1,
+    "host_count": 1,
+    "service_count": 2,
+    "newest_cert_expiry_days": null,
+    "top_hosting_org": "Natural Wireless, LLC",
+    "platforms": []
+  },
+  "subdomains": [
+    {
+      "name": "52.119.65.5",
+      "alive": true,
+      "is_root": true,
+      "discovered_via": "manual",
+      "first_discovered": "2026-05-11T23:43:30Z",
+      "last_seen": "2026-05-11T23:43:30Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 500,
+        "title": "The URL you requested has been blocked"
+      },
+      "hosts": [
+        {
+          "ip": "52.119.65.5",
+          "asn": "AS18616",
+          "asn_org": "Natural Wireless, LLC",
+          "country": "US",
+          "region": "New York",
+          "city": "New York City",
+          "reverse_dns": "5.65.119.52.naturalwireless.com",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "52.119.65.5",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.119.65.5",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "san": [
+              "No",
+              "SAN,",
+              "browsers",
+              "are",
+              "complaining"
+            ],
+            "self_signed": false
+          }
+        }
+      ],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "FortiWeb",
+        "confidence": "high"
+      }
+    }
+  ],
+  "deltas": {
+    "since_scan": null,
+    "added": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "removed": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "changed": {
+      "fingerprint": [],
+      "cert": []
+    }
+  },
+  "history": [
+    {
+      "scan_id": "scan_2026-05-11T23:41:36Z_e58d90e0",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2
+    }
+  ]
+}

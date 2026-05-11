@@ -1,0 +1,141 @@
+{
+  "schema_version": "3.0",
+  "asset": {
+    "id": "24-157-51-88",
+    "type": "ip",
+    "value": "24.157.51.88",
+    "owner": "unknown",
+    "tags": [],
+    "notes": "",
+    "discovered_via": "manual"
+  },
+  "scan": {
+    "id": "scan_2026-05-11T23:35:08Z_9b9dca25",
+    "started_at": "2026-05-11T23:35:08Z",
+    "completed_at": "2026-05-11T23:37:07Z",
+    "duration_seconds": 119,
+    "engine_version": "3.0.0",
+    "scanner_origin": "github-actions-ubuntu-azure",
+    "tools_run": [
+      "httpx",
+      "naabu",
+      "testssl",
+      "wafw00f",
+      "whois"
+    ]
+  },
+  "registration": {},
+  "summary": {
+    "subdomain_count": 1,
+    "live_subdomain_count": 1,
+    "host_count": 1,
+    "service_count": 2,
+    "newest_cert_expiry_days": 293,
+    "top_hosting_org": "Cablevision Systems Corp.",
+    "platforms": []
+  },
+  "subdomains": [
+    {
+      "name": "24.157.51.88",
+      "alive": true,
+      "is_root": true,
+      "discovered_via": "manual",
+      "first_discovered": "2026-05-11T23:37:07Z",
+      "last_seen": "2026-05-11T23:37:07Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 500,
+        "title": "The URL you requested has been blocked"
+      },
+      "hosts": [
+        {
+          "ip": "24.157.51.88",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
+          "country": "US",
+          "region": "New Jersey",
+          "city": "Allentown",
+          "reverse_dns": "189d3358.cst.lightpath.net",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "24.157.51.88",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "24.157.51.88",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=enrollment2.edelivery-bessemer.com, O=Bessemer Trust Company National Association, ST=New York, C=US",
+            "issuer": "CN=Sectigo Public Server Authentication CA OV R36, O=Sectigo Limited, C=GB",
+            "san": [
+              "enrollment2.edelivery-bessemer.com",
+              "www.enrollment2.edelivery-bessemer.com"
+            ],
+            "not_before": "2026-02-28T00:00:00Z",
+            "not_after": "2027-02-28T23:59:59Z",
+            "self_signed": false,
+            "days_to_expiry": 293
+          }
+        }
+      ],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "FortiWeb",
+        "confidence": "high"
+      }
+    }
+  ],
+  "deltas": {
+    "since_scan": null,
+    "added": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "removed": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "changed": {
+      "fingerprint": [],
+      "cert": []
+    }
+  },
+  "history": [
+    {
+      "scan_id": "scan_2026-05-11T23:35:08Z_9b9dca25",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2
+    }
+  ]
+}

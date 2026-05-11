@@ -25,32 +25,10 @@
   <div class="spacer"></div>
   <div class="meta">
     <span id="last-scan-summary">—</span>
+    <span id="global-scan-pill" class="global-scan-pill" hidden></span>
     <button id="add-target-btn" class="btn-accent" title="Add a single new target to scan">＋ Add target</button>
     <button id="bulk-add-btn" class="btn-ghost" title="Add multiple targets at once (range, list, or file)">＋＋ Bulk add</button>
     <button id="refresh-btn" class="btn-ghost" title="Reload data">↻ Reload</button>
-  </div>
-</div>
-
-<!-- Live scan banner — slides in when a scan is running, replaces the old cramped pill -->
-<div id="scan-banner" class="scan-banner" hidden>
-  <div class="scan-banner-inner">
-    <div class="scan-banner-status">
-      <div class="scan-banner-dot"></div>
-      <div class="scan-banner-text">
-        <div class="scan-banner-headline" id="scan-banner-headline">Scanning…</div>
-        <div class="scan-banner-substep" id="scan-banner-substep">Starting up</div>
-      </div>
-    </div>
-    <div class="scan-banner-progress-block">
-      <div class="scan-banner-progress">
-        <div class="scan-banner-progress-fill" id="scan-banner-progress-fill" style="width: 0%"></div>
-      </div>
-      <div class="scan-banner-progress-labels">
-        <span class="scan-banner-elapsed" id="scan-banner-elapsed">—</span>
-        <span class="scan-banner-eta" id="scan-banner-eta"></span>
-      </div>
-    </div>
-    <a id="scan-banner-link" class="scan-banner-link" href="#" target="_blank" rel="noopener" title="View workflow run on GitHub">View on GitHub →</a>
   </div>
 </div>
 

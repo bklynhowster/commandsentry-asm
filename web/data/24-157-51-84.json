@@ -1,0 +1,139 @@
+{
+  "schema_version": "3.0",
+  "asset": {
+    "id": "24-157-51-84",
+    "type": "ip",
+    "value": "24.157.51.84",
+    "owner": "unknown",
+    "tags": [],
+    "notes": "",
+    "discovered_via": "manual"
+  },
+  "scan": {
+    "id": "scan_2026-05-11T23:31:18Z_806ddce0",
+    "started_at": "2026-05-11T23:31:18Z",
+    "completed_at": "2026-05-11T23:33:10Z",
+    "duration_seconds": 112,
+    "engine_version": "3.0.0",
+    "scanner_origin": "github-actions-ubuntu-azure",
+    "tools_run": [
+      "httpx",
+      "naabu",
+      "testssl",
+      "wafw00f",
+      "whois"
+    ]
+  },
+  "registration": {},
+  "summary": {
+    "subdomain_count": 1,
+    "live_subdomain_count": 1,
+    "host_count": 1,
+    "service_count": 1,
+    "newest_cert_expiry_days": 267,
+    "top_hosting_org": "Cablevision Systems Corp.",
+    "platforms": []
+  },
+  "subdomains": [
+    {
+      "name": "24.157.51.84",
+      "alive": true,
+      "is_root": true,
+      "discovered_via": "manual",
+      "first_discovered": "2026-05-11T23:33:10Z",
+      "last_seen": "2026-05-11T23:33:10Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 404,
+        "title": null
+      },
+      "hosts": [
+        {
+          "ip": "24.157.51.84",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
+          "country": "US",
+          "region": "New Jersey",
+          "city": "Allentown",
+          "reverse_dns": "189d3354.cst.lightpath.net",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "24.157.51.84",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=*.sciimage.com, O=Strategic Content Imaging, L=Secaucus, ST=New Jersey, C=US",
+            "issuer": "CN=Go Daddy Secure Certificate Authority - G2, OU=http://certs.godaddy.com/repository/, O=GoDaddy.com\\, Inc., L=Scottsdale, ST=Arizona, C=US",
+            "san": [
+              "*.sciimage.com",
+              "sciimage.com"
+            ],
+            "not_before": "2026-01-02T18:09:45Z",
+            "not_after": "2027-02-03T18:09:45Z",
+            "self_signed": false,
+            "days_to_expiry": 267
+          }
+        }
+      ],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": [
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          }
+        ]
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "None",
+        "confidence": "high"
+      }
+    }
+  ],
+  "deltas": {
+    "since_scan": null,
+    "added": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "removed": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "changed": {
+      "fingerprint": [],
+      "cert": []
+    }
+  },
+  "history": [
+    {
+      "scan_id": "scan_2026-05-11T23:31:18Z_806ddce0",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 1
+    }
+  ]
+}

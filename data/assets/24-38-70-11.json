@@ -1,0 +1,108 @@
+{
+  "schema_version": "3.0",
+  "asset": {
+    "id": "24-38-70-11",
+    "type": "ip",
+    "value": "24.38.70.11",
+    "owner": "unknown",
+    "tags": [],
+    "notes": "",
+    "discovered_via": "manual"
+  },
+  "scan": {
+    "id": "scan_2026-05-11T23:37:20Z_08db8afc",
+    "started_at": "2026-05-11T23:37:20Z",
+    "completed_at": "2026-05-11T23:37:26Z",
+    "duration_seconds": 6,
+    "engine_version": "3.0.0",
+    "scanner_origin": "github-actions-ubuntu-azure",
+    "tools_run": [
+      "whois"
+    ]
+  },
+  "registration": {},
+  "summary": {
+    "subdomain_count": 1,
+    "live_subdomain_count": 1,
+    "host_count": 1,
+    "service_count": 0,
+    "newest_cert_expiry_days": null,
+    "top_hosting_org": "Cablevision Systems Corp.",
+    "platforms": []
+  },
+  "subdomains": [
+    {
+      "name": "24.38.70.11",
+      "alive": true,
+      "is_root": true,
+      "discovered_via": "manual",
+      "first_discovered": "2026-05-11T23:37:26Z",
+      "last_seen": "2026-05-11T23:37:26Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "hosts": [
+        {
+          "ip": "24.38.70.11",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
+          "country": "US",
+          "region": "New York",
+          "city": "New York City",
+          "reverse_dns": "1826460b.cst.lightpath.net",
+          "is_private": false
+        }
+      ],
+      "services": [],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    }
+  ],
+  "deltas": {
+    "since_scan": null,
+    "added": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "removed": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "changed": {
+      "fingerprint": [],
+      "cert": []
+    }
+  },
+  "history": [
+    {
+      "scan_id": "scan_2026-05-11T23:37:20Z_08db8afc",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 0
+    }
+  ]
+}

@@ -1,0 +1,139 @@
+{
+  "schema_version": "3.0",
+  "asset": {
+    "id": "24-38-70-9",
+    "type": "ip",
+    "value": "24.38.70.9",
+    "owner": "unknown",
+    "tags": [],
+    "notes": "",
+    "discovered_via": "manual"
+  },
+  "scan": {
+    "id": "scan_2026-05-11T23:39:42Z_90129a9d",
+    "started_at": "2026-05-11T23:39:42Z",
+    "completed_at": "2026-05-11T23:41:36Z",
+    "duration_seconds": 114,
+    "engine_version": "3.0.0",
+    "scanner_origin": "github-actions-ubuntu-azure",
+    "tools_run": [
+      "httpx",
+      "naabu",
+      "testssl",
+      "wafw00f",
+      "whois"
+    ]
+  },
+  "registration": {},
+  "summary": {
+    "subdomain_count": 1,
+    "live_subdomain_count": 1,
+    "host_count": 1,
+    "service_count": 2,
+    "newest_cert_expiry_days": null,
+    "top_hosting_org": "Cablevision Systems Corp.",
+    "platforms": []
+  },
+  "subdomains": [
+    {
+      "name": "24.38.70.9",
+      "alive": true,
+      "is_root": true,
+      "discovered_via": "manual",
+      "first_discovered": "2026-05-11T23:41:36Z",
+      "last_seen": "2026-05-11T23:41:36Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 500,
+        "title": "The URL you requested has been blocked"
+      },
+      "hosts": [
+        {
+          "ip": "24.38.70.9",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
+          "country": "US",
+          "region": "New York",
+          "city": "New York City",
+          "reverse_dns": "18264609.cst.lightpath.net",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "24.38.70.9",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "24.38.70.9",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "san": [
+              "No",
+              "SAN,",
+              "browsers",
+              "are",
+              "complaining"
+            ],
+            "self_signed": false
+          }
+        }
+      ],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "FortiWeb",
+        "confidence": "high"
+      }
+    }
+  ],
+  "deltas": {
+    "since_scan": null,
+    "added": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "removed": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "changed": {
+      "fingerprint": [],
+      "cert": []
+    }
+  },
+  "history": [
+    {
+      "scan_id": "scan_2026-05-11T23:39:42Z_90129a9d",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2
+    }
+  ]
+}
