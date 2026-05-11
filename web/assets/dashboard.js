@@ -516,11 +516,9 @@
     if (!hosts.length) return section("Hosts", "<div class='muted'>No IP attribution available.</div>");
     const rows = hosts.map((h) => {
       const geo = [h.city, h.region, h.country].filter(Boolean).join(", ");
-      const cls = hostingClassFor(h.asn_org);
       return `
         <tr>
           <td class="td-mono">${escapeHtml(h.ip || "")}</td>
-          <td>${h.asn_org ? `<span class="hosting-pill ${cls}">${escapeHtml(h.asn_org)}</span>` : "<span class='muted'>—</span>"}</td>
           <td class="td-mono muted">${escapeHtml(h.asn || "—")}</td>
           <td>${escapeHtml(geo) || "<span class='muted'>—</span>"}</td>
           <td class="td-mono muted">${escapeHtml(h.reverse_dns || "—")}</td>
@@ -528,7 +526,7 @@
     }).join("");
     return section("Hosts", `
       <table class="data-table">
-        <thead><tr><th>IP</th><th>Hosting</th><th>ASN</th><th>Location</th><th>Reverse DNS</th></tr></thead>
+        <thead><tr><th>IP</th><th>ASN</th><th>Location</th><th>Reverse DNS</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     `);
