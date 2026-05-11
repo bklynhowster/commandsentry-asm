@@ -136,7 +136,14 @@ async function getRunById(runId) {
 function elapsedSeconds(run) {
   const start = run.run_started_at || run.created_at;
   if (!start) return 0;
-  const end = run.updated_at || new Date().toISOString();
+  // For in-progress runs, GitHub's `updated_at` field only changes when a step
+  // transitions — it doesn't advance second-by-second. Using it as the end time
+  // makes the elapsed counter permanently stuck at "the time of the last step
+  // change". Use wall-clock time for in-progress runs; only use updated_at as
+  // the end time once the run is completed.
+  const end = (run.status === "completed")
+    ? (run.updated_at || new Date().toISOString())
+    : new Date().toISOString();
   return Math.max(0, Math.floor((new Date(end) - new Date(start)) / 1000));
 }
 
