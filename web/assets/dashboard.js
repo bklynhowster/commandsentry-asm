@@ -229,6 +229,31 @@
     return true;
   }
 
+  // ─── IP cross-reference helpers ───────────────────────
+  // Walk all loaded apex/FQDN assets and return every hostname whose host
+  // records list this IP. Used to answer "what IS this IP?" without making
+  // the user drill into every apex looking for it.
+  function findHostnamesForIp(ip) {
+    if (!ip) return [];
+    const out = [];
+    const seen = new Set();
+    for (const a of state.assets) {
+      const apexId = a.asset?.id || "";
+      const apexVal = a.asset?.value || apexId;
+      for (const sub of (a.subdomains || [])) {
+        const hostMatch = (sub.hosts || []).some((h) => h.ip === ip);
+        if (!hostMatch) continue;
+        const key = sub.name;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ name: sub.name, apex_id: apexId, apex_value: apexVal, is_root: !!sub.is_root });
+      }
+    }
+    // Sort: root names first, then alphabetical
+    out.sort((x, y) => (y.is_root - x.is_root) || x.name.localeCompare(y.name));
+    return out;
+  }
+
   function renderAssetCard(a) {
     const sm = a.summary || {};
     const subCount = sm.live_subdomain_count || 0;
@@ -237,6 +262,13 @@
     const topOrg = sm.top_hosting_org;
     const platforms = sm.platforms || [];
     const live = a.subdomains?.some((s) => s.reachability?.live);
+    const isIpAsset = a.asset?.type === "ip";
+
+    // For IP-type assets, cross-reference our other scans to surface known FQDNs
+    const xrefHostnames = isIpAsset ? findHostnamesForIp(a.asset?.value) : [];
+    const xrefSummary = xrefHostnames.length === 0 ? "" :
+      xrefHostnames.length === 1 ? xrefHostnames[0].name :
+      `${xrefHostnames[0].name} <span class="xref-more">+${xrefHostnames.length - 1} more</span>`;
 
     return `
       <div class="asset-card asset-card-v3" data-id="${escapeAttr(a.asset?.id || "")}">
@@ -247,6 +279,13 @@
           </div>
           <span class="asset-card-type">${escapeHtml((a.asset?.type || "").toUpperCase())}</span>
         </div>
+
+        ${isIpAsset && xrefHostnames.length ? `
+        <div class="asset-card-xref">
+          <span class="xref-label">Resolved by:</span>
+          <span class="xref-value td-mono">${xrefSummary}</span>
+        </div>
+        ` : ""}
 
         <div class="asset-stats">
           <div class="stat"><span class="stat-num" data-count="${subCount}">0</span><span class="stat-label">sub${subCount === 1 ? "" : "s"}</span></div>
@@ -372,6 +411,25 @@
       bindDrawerInteractions(a);
       setTimeout(() => animateCounters(document.getElementById("drawer-body")), 50);
     });
+    // IP cross-reference chips → navigate to that hostname's apex + sub detail
+    document.querySelectorAll(".ip-xref-chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const apexId = chip.dataset.apex;
+        const subName = chip.dataset.sub;
+        const targetAsset = state.assets.find((x) => x.asset?.id === apexId);
+        if (!targetAsset) return;
+        // Repoint the drawer at the apex, then drill into the matching sub
+        state.activeAsset = apexId;
+        state.activeSub = null;
+        document.getElementById("drawer-title").textContent = targetAsset.asset?.value || apexId;
+        document.getElementById("drawer-body").innerHTML = renderApexOverview(targetAsset);
+        bindDrawerInteractions(targetAsset);
+        // If the chip targets a specific sub (not just the apex itself), drill into it
+        if (subName && subName !== targetAsset.asset?.value) {
+          showSubDetail(targetAsset, subName);
+        }
+      });
+    });
   }
 
   function showSubDetail(asset, subName) {
@@ -388,13 +446,38 @@
   function renderApexOverview(a) {
     const sm = a.summary || {};
     const live = a.subdomains?.some((s) => s.reachability?.live);
+    const isIpAsset = a.asset?.type === "ip";
+    const xrefHostnames = isIpAsset ? findHostnamesForIp(a.asset?.value) : [];
     const certDays = sm.newest_cert_expiry_days;
     const certBadge = certDays === null || certDays === undefined ? null
       : certDays < 7 ? { label: `Cert expires in ${certDays}d`, cls: "v-bad" }
       : certDays < 30 ? { label: `Cert expires in ${certDays}d`, cls: "v-warn" }
       : { label: `Nearest cert ${certDays}d`, cls: "v-good" };
 
+    // For IP assets, prominent cross-reference block above the verdict strip —
+    // answers "what is this IP" without making the user drill across apexes.
+    const xrefBlock = (isIpAsset && xrefHostnames.length) ? `
+      <div class="ip-xref-card">
+        <div class="ip-xref-label">Resolved by ${xrefHostnames.length} known hostname${xrefHostnames.length === 1 ? "" : "s"} in your inventory</div>
+        <div class="ip-xref-chips">
+          ${xrefHostnames.map((h) => `
+            <button class="ip-xref-chip" data-apex="${escapeAttr(h.apex_id)}" data-sub="${escapeAttr(h.name)}" title="Open ${escapeHtml(h.name)} on ${escapeHtml(h.apex_value)}">
+              ${h.is_root ? "<span class='xref-root-badge'>root</span>" : ""}
+              <span class="td-mono">${escapeHtml(h.name)}</span>
+              <span class="xref-arrow">→</span>
+            </button>
+          `).join("")}
+        </div>
+      </div>
+    ` : (isIpAsset ? `
+      <div class="ip-xref-card empty">
+        <div class="ip-xref-label muted">No known hostnames in your inventory resolve here.</div>
+        <div class="ip-xref-hint">This IP is reachable directly but no FQDN we've scanned points to it. Could be a bare-IP service, a firewall WAN interface, or a vendor endpoint.</div>
+      </div>
+    ` : "");
+
     return `
+      ${xrefBlock}
       <div class="verdict-strip">
         <div class="verdict-row">
           <div class="verdict-pill ${live ? "v-good" : "v-bad"}">

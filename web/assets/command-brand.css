@@ -1745,3 +1745,129 @@ input[type="search"]:focus,
 
 /* ─── Add target button extras (keep accent button visually primary) */
 .top-nav .meta .btn-ghost { font-weight: 500; }
+
+/* ─── IP cross-reference UI ─────────────────────────────
+   Answers "what IS this IP" by walking all apex scans and surfacing
+   every hostname in the inventory whose host records list this IP. */
+
+/* Compact version on the inventory grid card */
+.asset-card-xref {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--copper-soft);
+  border-left: 3px solid var(--copper);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  margin-bottom: var(--s3);
+}
+.asset-card-xref .xref-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--copper-ink);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.asset-card-xref .xref-value {
+  font-size: 13px;
+  color: var(--ink);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.asset-card-xref .xref-more {
+  color: var(--copper-ink);
+  font-weight: 500;
+  font-size: 11.5px;
+  margin-left: 4px;
+}
+
+/* Prominent version at the top of the IP drill-down */
+.ip-xref-card {
+  background: linear-gradient(180deg, var(--copper-soft) 0%, var(--paper-2) 100%);
+  border: 1px solid var(--copper);
+  border-left: 4px solid var(--copper);
+  border-radius: var(--r-sm);
+  padding: var(--s4) var(--s5);
+  margin-bottom: var(--s5);
+}
+.ip-xref-card.empty {
+  background: var(--ink-05);
+  border-color: var(--ink-20);
+  border-left-color: var(--ink-40);
+}
+.ip-xref-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--copper-ink);
+  font-weight: 600;
+  margin-bottom: var(--s3);
+}
+.ip-xref-card.empty .ip-xref-label {
+  color: var(--ink-60);
+}
+.ip-xref-hint {
+  font-size: 13px;
+  color: var(--ink-60);
+  line-height: 1.4;
+  margin-top: 6px;
+}
+.ip-xref-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ip-xref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 8px 14px;
+  background: #fff;
+  border: 1px solid var(--copper);
+  border-radius: var(--r-sm);
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  color: var(--ink);
+  cursor: pointer;
+  transition: all 140ms;
+}
+.ip-xref-chip:hover {
+  background: var(--copper);
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px -2px rgba(200, 99, 42, 0.4);
+}
+.ip-xref-chip .td-mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.ip-xref-chip .xref-root-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  background: var(--ink);
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+.ip-xref-chip:hover .xref-root-badge {
+  background: #fff;
+  color: var(--copper-ink);
+}
+.ip-xref-chip .xref-arrow {
+  font-size: 14px;
+  color: var(--copper);
+  font-weight: 700;
+  margin-left: 2px;
+  transition: transform 140ms;
+}
+.ip-xref-chip:hover .xref-arrow {
+  color: #fff;
+  transform: translateX(2px);
+}
