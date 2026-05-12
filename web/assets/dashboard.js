@@ -277,7 +277,6 @@
             <div class="status-dot ${live ? "live" : "down"}" aria-label="${live ? "live" : "offline"}"></div>
             <div class="asset-card-title">${escapeHtml(a.asset?.value || a.asset?.id || "?")}</div>
           </div>
-          <span class="asset-card-type">${escapeHtml((a.asset?.type || "").toUpperCase())}</span>
         </div>
 
         ${isIpAsset && xrefHostnames.length ? `
@@ -801,10 +800,10 @@
     const help = document.getElementById("t-type-help");
     const valueInput = document.getElementById("t-value");
     const ph = {
-      fqdn: { help: "Single hostname (legacy) — scans just this host", ph: "www.example.com" },
-      apex: { help: "Apex domain (recommended) — enumerates subdomains, scans each", ph: "example.com" },
-      ip:   { help: "Single IP — port + service discovery, no DNS context", ph: "198.51.100.42" },
-      cidr: { help: "CIDR range — sweep for live hosts", ph: "198.51.100.0/29" },
+      apex: { help: "Domain — automatically discovers and scans subdomains", ph: "example.com" },
+      fqdn: { help: "Single host — scans just this specific hostname, no subdomain discovery", ph: "specific.example.com" },
+      ip:   { help: "Single IP — port + service discovery at this address", ph: "198.51.100.42" },
+      cidr: { help: "IP range — sweep for live hosts across a CIDR block", ph: "198.51.100.0/29" },
     };
     help.innerHTML = ph[t].help;
     valueInput.placeholder = ph[t].ph;
