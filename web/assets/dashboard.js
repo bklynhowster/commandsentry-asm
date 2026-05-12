@@ -126,6 +126,13 @@
       await loadAll().catch(showLoadError);
       render();
     });
+    document.getElementById("rescan-all-btn").addEventListener("click", (e) => {
+      // Confirm before kicking off all targets — non-trivial work
+      const targetCount = state.assets.length;
+      const ok = confirm(`Trigger a re-scan of all ${targetCount} targets?\n\nEach scan takes a few minutes; total runtime depends on how many subdomains are discovered. The live scan banner will appear at the top once the workflow starts.`);
+      if (!ok) return;
+      triggerRescan("all", e.currentTarget);
+    });
     document.getElementById("filter-input").addEventListener("input", (e) => {
       state.filterText = e.target.value.toLowerCase();
       renderInventory();
@@ -207,9 +214,76 @@
     grid.innerHTML = filtered.map(renderAssetCard).join("");
     grid.querySelectorAll(".asset-card").forEach((card, i) => {
       card.style.animationDelay = `${i * 60}ms`;
-      card.addEventListener("click", () => openDrawer(card.dataset.id));
+      card.addEventListener("click", (e) => {
+        // Don't open the drawer if the click was on the rescan button
+        if (e.target.closest(".card-rescan-btn")) return;
+        openDrawer(card.dataset.id);
+      });
+    });
+    // Per-card rescan button — stops propagation so it doesn't open the drawer
+    grid.querySelectorAll(".card-rescan-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        triggerRescan(btn.dataset.rescanTarget, btn);
+      });
     });
     setTimeout(() => animateCounters(grid), 50);
+  }
+
+  // ─── Rescan trigger ──────────────────────────────────
+  // POSTs to /api/trigger-scan and gives visual feedback on the button.
+  // Backend enforces cooldown + reports if a scan is already in flight.
+  async function triggerRescan(targetId, btn) {
+    if (!targetId) return;
+    const originalText = btn?.textContent || "↻ Rescan";
+    if (btn) { btn.disabled = true; btn.textContent = "Queuing…"; }
+    try {
+      const r = await fetch("/api/trigger-scan", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ target: targetId }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        // Cooldown / already-running / API errors — surface message inline
+        if (btn) {
+          btn.textContent = data.error?.includes("cooldown") ? "⏱ Wait a sec"
+                          : data.error?.includes("already running") ? "Already scanning"
+                          : "Failed";
+          btn.classList.add("rescan-btn-err");
+          setTimeout(() => {
+            btn.textContent = originalText;
+            btn.classList.remove("rescan-btn-err");
+            btn.disabled = false;
+          }, 4000);
+        }
+        // Show toast / log for debugging
+        console.warn("Rescan failed:", data.error || `HTTP ${r.status}`);
+        return;
+      }
+      // Success — button flashes "Queued" then resets. The scan banner will
+      // pick up the new run within ~20 seconds via its polling.
+      if (btn) {
+        btn.textContent = "✓ Queued";
+        btn.classList.add("rescan-btn-ok");
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.classList.remove("rescan-btn-ok");
+          btn.disabled = false;
+        }, 4000);
+      }
+    } catch (e) {
+      console.error("Rescan trigger error:", e);
+      if (btn) {
+        btn.textContent = "Network error";
+        btn.classList.add("rescan-btn-err");
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.classList.remove("rescan-btn-err");
+          btn.disabled = false;
+        }, 4000);
+      }
+    }
   }
 
   function matchesFilter(a) {
@@ -227,6 +301,43 @@
       if (!hay.includes(state.filterText)) return false;
     }
     return true;
+  }
+
+  // ─── IP role inference ──────────────────────────────
+  // Infer a human-readable role for any asset based on the services / ports
+  // we detected. Helps the inventory grid read at a glance — "this is a VPN,
+  // this is a mail relay" instead of "this is an IP, click to find out."
+  // Returns { label, cls } or null if there's nothing meaningful to infer yet.
+  function inferAssetRole(a) {
+    const subs = a.subdomains || [];
+    // Flatten all services across all subs (for IP assets, there's just one sub = the IP itself)
+    const services = subs.flatMap((s) => s.services || []);
+    if (!services.length) return null;
+    const ports = new Set(services.map((s) => s.port).filter(Boolean));
+    const names = new Set(services.map((s) => (s.name || "").toLowerCase()).filter(Boolean));
+    const hasWaf = subs.some((s) => s.waf?.detected);
+
+    // Multi-category check — bucket the open ports
+    const isWeb   = ports.has(80) || ports.has(443) || ports.has(8080) || ports.has(8443) || names.has("http") || names.has("https");
+    const isMail  = ports.has(25) || ports.has(587) || ports.has(465) || ports.has(143) || ports.has(993) || ports.has(110) || ports.has(995) || names.has("smtp");
+    const isVpn   = ports.has(500) || ports.has(4500) || ports.has(1194) || ports.has(1701) || ports.has(1723);
+    const isShell = ports.has(22) || ports.has(3389) || ports.has(23) || names.has("ssh") || names.has("rdp") || names.has("telnet");
+    const isDns   = ports.has(53);
+    const isFile  = ports.has(21) || names.has("ftp") || names.has("sftp");
+    const isDb    = ports.has(3306) || ports.has(5432) || ports.has(1433) || ports.has(27017) || ports.has(6379);
+
+    // Priority order — most specific wins. Web + WAF is a more useful label
+    // than just Web. VPN/mail/db are highly specific and trump web.
+    if (isVpn)                          return { label: "VPN endpoint",         cls: "role-vpn" };
+    if (isMail)                         return { label: "Mail relay",           cls: "role-mail" };
+    if (isDb)                           return { label: "Database exposed",     cls: "role-db" };
+    if (isWeb && hasWaf)                return { label: "Web edge · WAF",       cls: "role-web-waf" };
+    if (isWeb)                          return { label: "Web server",           cls: "role-web" };
+    if (isShell && !isWeb)              return { label: "Remote management",    cls: "role-shell" };
+    if (isDns && !isWeb && !isMail)     return { label: "DNS server",           cls: "role-dns" };
+    if (isFile && !isWeb)               return { label: "File transfer",        cls: "role-file" };
+    if (services.length === 0)          return { label: "Silent",               cls: "role-silent" };
+    return { label: "Mixed services", cls: "role-mixed" };
   }
 
   // ─── IP cross-reference helpers ───────────────────────
@@ -270,6 +381,10 @@
       xrefHostnames.length === 1 ? xrefHostnames[0].name :
       `${xrefHostnames[0].name} <span class="xref-more">+${xrefHostnames.length - 1} more</span>`;
 
+    // Inferred role badge — only meaningful for IP assets (domains naturally
+    // have many subs serving different roles, so a single role label muddles it)
+    const role = isIpAsset ? inferAssetRole(a) : null;
+
     return `
       <div class="asset-card asset-card-v3" data-id="${escapeAttr(a.asset?.id || "")}">
         <div class="asset-card-head">
@@ -277,6 +392,7 @@
             <div class="status-dot ${live ? "live" : "down"}" aria-label="${live ? "live" : "offline"}"></div>
             <div class="asset-card-title">${escapeHtml(a.asset?.value || a.asset?.id || "?")}</div>
           </div>
+          ${role ? `<span class="role-badge ${role.cls}">${escapeHtml(role.label)}</span>` : ""}
         </div>
 
         ${isIpAsset && xrefHostnames.length ? `
@@ -300,6 +416,7 @@
 
         <div class="asset-card-footer">
           <span class="card-drill-hint">${subCount} subdomain${subCount === 1 ? "" : "s"} →</span>
+          <button class="card-rescan-btn" data-rescan-target="${escapeAttr(a.asset?.id || "")}" title="Re-scan this target now">↻ Rescan</button>
         </div>
       </div>
     `;
@@ -447,6 +564,7 @@
     const live = a.subdomains?.some((s) => s.reachability?.live);
     const isIpAsset = a.asset?.type === "ip";
     const xrefHostnames = isIpAsset ? findHostnamesForIp(a.asset?.value) : [];
+    const role = isIpAsset ? inferAssetRole(a) : null;
     const certDays = sm.newest_cert_expiry_days;
     const certBadge = certDays === null || certDays === undefined ? null
       : certDays < 7 ? { label: `Cert expires in ${certDays}d`, cls: "v-bad" }
@@ -483,6 +601,7 @@
             <span class="status-dot ${live ? "live" : "down"}"></span>
             ${live ? "Live surface" : "All offline"}
           </div>
+          ${role ? `<div class="verdict-pill role-badge ${role.cls}">${escapeHtml(role.label)}</div>` : ""}
           ${certBadge ? `<div class="verdict-pill ${certBadge.cls}"><span class="v-icon">🔒</span>${escapeHtml(certBadge.label)}</div>` : ""}
           ${(sm.platforms || []).map((p) => `<div class="verdict-pill v-info platform-pill">${escapeHtml(p)}</div>`).join("")}
         </div>
@@ -1278,6 +1397,20 @@
         document.querySelectorAll(".bulk-pane").forEach((p) => p.classList.toggle("active", p.dataset.pane === bulkInputMode));
       });
     });
+
+    // ID strategy → show/hide the prefix input. "From value" generates IDs
+    // directly from each entry's value (e.g. 24.38.70.5 → 24-38-70-5) and the
+    // prefix is irrelevant; hiding it removes friction for the common case.
+    const strategySelect = document.getElementById("bulk-id-strategy");
+    const prefixWrap = document.getElementById("bulk-prefix-wrap");
+    const syncPrefixVisibility = () => {
+      if (!prefixWrap || !strategySelect) return;
+      prefixWrap.hidden = (strategySelect.value !== "counter");
+    };
+    if (strategySelect) {
+      strategySelect.addEventListener("change", syncPrefixVisibility);
+      syncPrefixVisibility();
+    }
 
     // File mode → read into the paste textarea on selection
     document.getElementById("bulk-file-input").addEventListener("change", (e) => {

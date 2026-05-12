@@ -31,6 +31,13 @@
   status = 200
   force  = true
 
+# Friendly URL alias: /api/trigger-scan → /.netlify/functions/trigger-scan
+[[redirects]]
+  from   = "/api/trigger-scan"
+  to     = "/.netlify/functions/trigger-scan"
+  status = 200
+  force  = true
+
 # Lock down basics for an internal security tool.
 [[headers]]
   for = "/*"

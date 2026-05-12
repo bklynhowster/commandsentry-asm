@@ -1746,6 +1746,129 @@ input[type="search"]:focus,
 /* ─── Add target button extras (keep accent button visually primary) */
 .top-nav .meta .btn-ghost { font-weight: 500; }
 
+/* ─── Per-card rescan button ───────────────────────────
+   Tucked into the card footer next to the drill hint. Stops click
+   propagation so it doesn't accidentally open the drawer. */
+.card-rescan-btn {
+  background: transparent;
+  border: 1px solid var(--ink-20);
+  color: var(--ink-60);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: all 120ms;
+}
+.card-rescan-btn:hover {
+  background: var(--copper-soft);
+  border-color: var(--copper);
+  color: var(--copper-ink);
+}
+.card-rescan-btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+.card-rescan-btn.rescan-btn-ok {
+  background: var(--ok-soft);
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.card-rescan-btn.rescan-btn-err {
+  background: var(--warn-soft);
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+/* Make the card footer two-column so the rescan button sits flush right */
+.asset-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s2);
+}
+
+/* ─── Inferred role badge (mostly for IP assets) ───────
+   Auto-categorizes assets by what's exposed: VPN, Mail, Web edge, etc.
+   Used both as a card pill (on inventory grid) and inline in the verdict
+   strip on drill-downs. Neutral palette only — risk semantics are reserved
+   for verdict-pill colors (see D-013 in the decisions log). */
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.role-badge.role-vpn       { background: #DCE8F8; color: #1F4E8F; border-color: #95B6E0; } /* slate-blue */
+.role-badge.role-mail      { background: #E2ECFD; color: #1A4DAB; border-color: #97B7E8; } /* periwinkle */
+.role-badge.role-db        { background: #DCD3E8; color: #4A2587; border-color: #A993C9; } /* mauve */
+.role-badge.role-web-waf   { background: #F1E1D3; color: #8C3E10; border-color: #D8A78A; } /* peach */
+.role-badge.role-web       { background: #E0E5EA; color: #1B2C3F; border-color: #98A6B4; } /* slate */
+.role-badge.role-shell     { background: #E8DEC4; color: #5C4A1E; border-color: #C4B384; } /* sand */
+.role-badge.role-dns       { background: #EAE7DF; color: #2A3A4B; border-color: var(--ink-20); } /* warm grey */
+.role-badge.role-file      { background: #E8E0F0; color: #3F2670; border-color: #B59CDC; } /* lavender */
+.role-badge.role-silent    { background: var(--ink-05); color: var(--ink-60); border-color: var(--ink-20); }
+.role-badge.role-mixed     { background: var(--ink-05); color: var(--ink-80); border-color: var(--ink-20); }
+
+/* When used inside the verdict-strip, override pill padding/font to match */
+.verdict-pill.role-badge {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+/* ─── Bulk Add: optional metadata disclosure ─────────── */
+/* Collapse Owner/Tags/Notes/ID-strategy into a details element so the
+   default flow is just paste-and-go for the common case. */
+.bulk-meta-details {
+  border: 1px solid var(--paper-rule);
+  border-radius: var(--r-sm);
+  background: var(--paper-2);
+}
+.bulk-meta-details summary {
+  cursor: pointer;
+  padding: 10px 14px;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
+  user-select: none;
+  list-style: none;
+  position: relative;
+}
+.bulk-meta-details summary::-webkit-details-marker { display: none; }
+.bulk-meta-details summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 8px;
+  color: var(--copper);
+  font-size: 11px;
+  transition: transform 140ms;
+}
+.bulk-meta-details[open] summary::before {
+  transform: rotate(90deg);
+}
+.bulk-meta-details[open] summary {
+  border-bottom: 1px solid var(--paper-rule);
+}
+.bulk-meta-details .bulk-shared-grid {
+  padding: var(--s4);
+}
+.bulk-meta-hint {
+  color: var(--ink-60);
+  font-weight: 400;
+  font-size: 12.5px;
+  margin-left: 4px;
+}
+
 /* ─── Hostname source hint in Host table ─────────────── */
 /* Tiny badge after the hostname value telling the user where the name
    came from. 'cert' = operator-set TLS cert hostname (high signal),

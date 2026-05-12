@@ -28,7 +28,8 @@
     <span id="global-scan-pill" class="global-scan-pill" hidden></span>
     <button id="add-target-btn" class="btn-accent" title="Add a single new target to scan">＋ Add target</button>
     <button id="bulk-add-btn" class="btn-ghost" title="Add multiple targets at once (range, list, or file)">＋＋ Bulk add</button>
-    <button id="refresh-btn" class="btn-ghost" title="Reload data">↻ Reload</button>
+    <button id="rescan-all-btn" class="btn-ghost" title="Trigger a full re-scan of all targets">↻ Rescan all</button>
+    <button id="refresh-btn" class="btn-ghost" title="Reload dashboard data (does NOT trigger a new scan)">↻ Reload</button>
   </div>
 </div>
 
@@ -162,34 +163,36 @@
         <hr class="bulk-rule" />
 
         <div class="bulk-shared-meta">
-          <h4>Shared metadata (applied to all targets)</h4>
-          <div class="bulk-shared-grid">
-            <div>
-              <label for="bulk-id-prefix">ID prefix</label>
-              <input id="bulk-id-prefix" type="text" autocomplete="off" placeholder="spectrum-bk-" value="ip-" />
-              <p class="form-help">IDs become <code>{prefix}01</code>, <code>{prefix}02</code>, etc. Editable per-row in preview.</p>
+          <details class="bulk-meta-details">
+            <summary>Optional metadata <span class="bulk-meta-hint">— owner, tags, notes, ID strategy</span></summary>
+            <div class="bulk-shared-grid">
+              <div>
+                <label for="bulk-id-strategy">ID strategy</label>
+                <select id="bulk-id-strategy" class="select-pill">
+                  <option value="from-value" selected>From value (24-38-70-5)</option>
+                  <option value="counter">Prefix + counter (spectrum-bk-01)</option>
+                </select>
+              </div>
+              <div id="bulk-prefix-wrap" hidden>
+                <label for="bulk-id-prefix">ID prefix</label>
+                <input id="bulk-id-prefix" type="text" autocomplete="off" placeholder="spectrum-bk-" value="ip-" />
+                <p class="form-help">IDs become <code>{prefix}01</code>, <code>{prefix}02</code>, etc.</p>
+              </div>
+              <div>
+                <label for="bulk-owner">Owner</label>
+                <input id="bulk-owner" type="text" autocomplete="off" value="command_digital" />
+              </div>
+              <div>
+                <label for="bulk-tags">Tags</label>
+                <input id="bulk-tags" type="text" autocomplete="off" placeholder="perimeter, brooklyn" />
+              </div>
+              <div class="bulk-grid-full">
+                <label for="bulk-notes">Notes (template)</label>
+                <input id="bulk-notes" type="text" autocomplete="off" placeholder="Office perimeter IP ${IP}" />
+                <p class="form-help"><code>${IP}</code> is replaced with each entry's value. Optional.</p>
+              </div>
             </div>
-            <div>
-              <label for="bulk-id-strategy">ID strategy</label>
-              <select id="bulk-id-strategy" class="select-pill">
-                <option value="counter" selected>Prefix + counter (spectrum-bk-01)</option>
-                <option value="from-value">From value (ip-24-38-70-5)</option>
-              </select>
-            </div>
-            <div>
-              <label for="bulk-owner">Owner</label>
-              <input id="bulk-owner" type="text" autocomplete="off" value="command_digital" />
-            </div>
-            <div>
-              <label for="bulk-tags">Tags</label>
-              <input id="bulk-tags" type="text" autocomplete="off" placeholder="spectrum, brooklyn-uplink" />
-            </div>
-            <div class="bulk-grid-full">
-              <label for="bulk-notes">Notes (template)</label>
-              <input id="bulk-notes" type="text" autocomplete="off" placeholder="Spectrum office uplink ${IP}" />
-              <p class="form-help"><code>${IP}</code> is replaced with each entry's value. Optional.</p>
-            </div>
-          </div>
+          </details>
         </div>
 
         <div id="bulk-input-feedback" class="form-feedback" hidden></div>
