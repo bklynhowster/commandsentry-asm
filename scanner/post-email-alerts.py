@@ -126,7 +126,7 @@ def collect_alerts() -> list[Alert]:
         for sub in (added.get("subdomains") or []):
             out.append(Alert("notice", aname, "new_subdomain",
                              f"New subdomain discovered: {sub}",
-                             "Surfaced via subfinder passive enumeration."))
+                             "Surfaced via multi-source enumeration (passive CT logs, DNS records, wordlist brute-force, or TLS cert SANs)."))
         for sub in (removed.get("subdomains") or []):
             out.append(Alert("notice", aname, "subdomain_gone",
                              f"Subdomain went away: {sub}", ""))
@@ -166,19 +166,27 @@ def collect_alerts() -> list[Alert]:
                     out.append(Alert("notice", aname, "cert_expiring_soon",
                                      f"Cert on {label} expires in {int(days)} day(s)", ""))
 
-        # WATCH: root went offline — but ONLY for domain-type assets where HTTP
-        # liveness is a meaningful signal. For IP-type assets the HTTP probe
-        # is irrelevant (most perimeter IPs — FortiGate WAN, mail relays, VPN
-        # endpoints — don't serve HTTP at the bare IP, and that's correct
-        # behavior, not an outage). The 'port-level changes' alerts above
-        # (new_service / service_closed) are the right signal for IPs.
+        # WATCH/notice: root liveness TRANSITIONS — only for domain-type assets
+        # where HTTP liveness is a meaningful signal. Two important fixes vs
+        # the prior implementation:
+        #   1. Asset-type gate (apex/fqdn only) — IP assets don't speak HTTP
+        #      at the bare IP, so 'not live' is normal, not an outage.
+        #   2. CHANGE-based, not STATE-based — we fire on the transition
+        #      (live → offline or offline → live), not on persistent state.
+        #      The reachability change feed is computed in normalize.py.
         asset_type = (asset.get("asset") or {}).get("type") or ""
         if asset_type in ("apex", "fqdn"):
-            for sub in (asset.get("subdomains") or []):
-                if sub.get("reachability", {}).get("live") is False and sub.get("is_root"):
+            for r in (changed.get("reachability") or []):
+                if not r.get("is_root"):
+                    continue
+                if r.get("from") is True and r.get("to") is False:
                     out.append(Alert("watch", aname, "asset_offline",
-                                     f"Domain {aname} root not responding to HTTP",
-                                     "The root hostname returned no HTTP response on this scan."))
+                                     f"Domain {aname} root went offline",
+                                     "Root was responding to HTTP in the previous scan, now it isn't."))
+                elif r.get("from") is False and r.get("to") is True:
+                    out.append(Alert("notice", aname, "asset_back_online",
+                                     f"Domain {aname} root came back online",
+                                     "Root was not responding to HTTP in the previous scan, now it is."))
 
     return out
 

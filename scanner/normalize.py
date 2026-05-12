@@ -425,7 +425,7 @@ def compute_deltas(prev: dict | None, current: dict) -> dict:
         "since_scan": None,
         "added":   {"subdomains": [], "services": [], "hosts": []},
         "removed": {"subdomains": [], "services": [], "hosts": []},
-        "changed": {"fingerprint": [], "cert": []},
+        "changed": {"fingerprint": [], "cert": [], "reachability": []},
     }
     if not prev:
         return out
@@ -479,6 +479,35 @@ def compute_deltas(prev: dict | None, current: dict) -> dict:
             out["changed"]["fingerprint"].append({
                 "subdomain": sub, "name": name,
                 "from": prev_tech[(sub, name)], "to": ver,
+            })
+
+    # Reachability changes — track sub-level liveness transitions so the alerter
+    # can fire CHANGE-based alerts ('went offline', 'came back online') instead
+    # of STATE-based alerts ('still offline every scan'). Per-sub history so we
+    # can detect both root-level and individual sub transitions if needed later.
+    def reach_index(record: dict) -> dict[str, dict]:
+        bag = {}
+        for s in record.get("subdomains", []):
+            sub = s.get("name")
+            if not sub:
+                continue
+            bag[sub] = {
+                "live":    s.get("reachability", {}).get("live"),
+                "is_root": bool(s.get("is_root")),
+            }
+        return bag
+    prev_reach = reach_index(prev)
+    curr_reach = reach_index(current)
+    for sub, curr_state in curr_reach.items():
+        prev_state = prev_reach.get(sub)
+        if not prev_state:
+            continue  # new sub; new_subdomain alert handles that case
+        if prev_state["live"] != curr_state["live"]:
+            out["changed"]["reachability"].append({
+                "subdomain": sub,
+                "from":      prev_state["live"],
+                "to":        curr_state["live"],
+                "is_root":   curr_state["is_root"],
             })
 
     return out
