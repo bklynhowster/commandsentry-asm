@@ -695,15 +695,44 @@ def main():
 
     asset_json["deltas"] = compute_deltas(prev, asset_json)
 
+    # ─── History: 30-day rolling window of scan summaries + per-host port lists ─
+    # Each entry captures enough state to reconstruct "what was open on which
+    # host at this point in time" without needing to re-scan or dig through
+    # git. Service-history view in the dashboard reads this to render the
+    # ports-over-time timeline and detect flapping services.
+    #
+    # Retention: 120 entries = 30 days at the 6-hour scan cadence. Tweak
+    # HISTORY_RETENTION_ENTRIES if cadence changes.
+    HISTORY_RETENTION_ENTRIES = 120
+
+    # Build per-host port map: { ip: [sorted unique ports] }
+    ports_by_host: dict[str, list[int]] = {}
+    for sub in asset_json.get("subdomains", []):
+        for svc in sub.get("services", []):
+            ip = svc.get("ip")
+            port = svc.get("port")
+            if not ip or not isinstance(port, int):
+                continue
+            ports_by_host.setdefault(ip, [])
+            if port not in ports_by_host[ip]:
+                ports_by_host[ip].append(port)
+    for ip in ports_by_host:
+        ports_by_host[ip].sort()
+
     prev_history = (prev.get("history", []) if prev else [])
     summary = asset_json["summary"]
-    asset_json["history"] = prev_history[-89:] + [{
+    new_entry = {
         "scan_id":              args.scan_id,
+        "started_at":           asset_json["scan"].get("started_at"),
+        "completed_at":         asset_json["scan"].get("completed_at"),
         "subdomain_count":      summary["subdomain_count"],
         "live_subdomain_count": summary["live_subdomain_count"],
         "host_count":           summary["host_count"],
         "service_count":        summary["service_count"],
-    }]
+        "ports_by_host":        ports_by_host,
+    }
+    # Keep the last (RETENTION - 1) prior entries + this new one = RETENTION total
+    asset_json["history"] = prev_history[-(HISTORY_RETENTION_ENTRIES - 1):] + [new_entry]
 
     errors = validate(asset_json)
     if errors:

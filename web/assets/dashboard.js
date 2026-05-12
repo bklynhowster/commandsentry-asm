@@ -613,6 +613,7 @@
       </div>
 
       ${renderSubdomainsTable(a)}
+      ${renderServiceHistorySection(a)}
       ${renderRegistrationSection(a)}
       ${renderProvenanceSection(a)}
     `;
@@ -920,6 +921,169 @@
       transport: "Transport", security: "Security", uncategorized: "Other",
     };
     return map[cat] || cat;
+  }
+
+  // ─── Service History (30-day port timeline) ──────────────
+  // Renders the per-host port-over-time timeline plus a derived
+  // change log (opened/closed events). Sourced from the `history`
+  // array in the asset JSON — each entry has ports_by_host populated
+  // by normalize.py.
+  function renderServiceHistorySection(a) {
+    const history = a.history || [];
+    if (history.length < 2) return "";   // Need at least 2 scans for a timeline to be meaningful
+
+    // Collect all hosts ever seen across history + their port history
+    // hostPortMatrix: { ip: { port: [boolean, boolean, ...] } } parallel to history[]
+    const hostPortMatrix = {};
+    const allPortsPerHost = {};
+    history.forEach((entry, idx) => {
+      const pbh = entry.ports_by_host || {};
+      for (const [ip, ports] of Object.entries(pbh)) {
+        if (!hostPortMatrix[ip]) hostPortMatrix[ip] = {};
+        if (!allPortsPerHost[ip]) allPortsPerHost[ip] = new Set();
+        for (const port of ports) {
+          if (!hostPortMatrix[ip][port]) {
+            // Backfill with false for the scans we haven't seen this port in yet
+            hostPortMatrix[ip][port] = new Array(idx).fill(false);
+          }
+          allPortsPerHost[ip].add(port);
+        }
+        // For this scan index, mark each port we've ever seen as either true or false
+      }
+    });
+    // Now do a second pass to fill in each port-row's true/false per scan
+    for (const ip of Object.keys(hostPortMatrix)) {
+      for (const port of Object.keys(hostPortMatrix[ip])) {
+        const series = [];
+        history.forEach((entry) => {
+          const portsThisScan = (entry.ports_by_host || {})[ip] || [];
+          series.push(portsThisScan.includes(Number(port)));
+        });
+        hostPortMatrix[ip][port] = series;
+      }
+    }
+
+    const hostIps = Object.keys(hostPortMatrix).sort();
+    if (!hostIps.length) {
+      return section("Service history", "<div class='muted'>No service history captured yet. Build up over the next few scans.</div>");
+    }
+
+    // Detect flap: a port that changed state at least once in the last 10 scans
+    const flapWindow = Math.min(10, history.length);
+    const isFlapping = (series) => {
+      const recent = series.slice(-flapWindow);
+      for (let i = 1; i < recent.length; i++) {
+        if (recent[i] !== recent[i - 1]) return true;
+      }
+      return false;
+    };
+
+    // Render the timeline as a grid: rows = port (grouped by host), cols = scans
+    // Use abbreviated scan timestamps as column labels — only show every Nth label
+    // to avoid horizontal overflow when there are many scans
+    const colCount = history.length;
+    const labelStride = Math.max(1, Math.ceil(colCount / 12));  // ~12 visible labels max
+    const colHeaders = history.map((entry, idx) => {
+      const ts = entry.started_at || entry.completed_at || "";
+      const m = ts.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):/);
+      const label = m ? `${m[2]}/${m[3]} ${m[4]}h` : "";
+      const show = (idx % labelStride === 0) || idx === colCount - 1;
+      return `<th class="hist-col-header ${show ? "" : "muted"}" title="${escapeAttr(ts)}">${show ? escapeHtml(label) : "·"}</th>`;
+    }).join("");
+
+    const rows = [];
+    for (const ip of hostIps) {
+      const ports = Object.keys(hostPortMatrix[ip]).map(Number).sort((a, b) => a - b);
+      ports.forEach((port, pIdx) => {
+        const series = hostPortMatrix[ip][port];
+        const flap = isFlapping(series);
+        const cells = series.map((open) =>
+          `<td class="hist-cell ${open ? "open" : "closed"}" title="${open ? "open" : "closed"}"></td>`
+        ).join("");
+        const hostLabel = pIdx === 0
+          ? `<td class="hist-host-label td-mono" rowspan="${ports.length}">${escapeHtml(ip)}</td>`
+          : "";
+        rows.push(`
+          <tr class="hist-row ${flap ? "hist-row-flap" : ""}">
+            ${hostLabel}
+            <td class="hist-port td-mono">${port}${flap ? '<span class="hist-flap-badge" title="Port state changed within the last 10 scans">flap</span>' : ""}</td>
+            ${cells}
+          </tr>`);
+      });
+    }
+
+    // Derived change log — opened/closed events with timestamps
+    const events = [];
+    for (const ip of hostIps) {
+      for (const port of Object.keys(hostPortMatrix[ip])) {
+        const series = hostPortMatrix[ip][port];
+        for (let i = 1; i < series.length; i++) {
+          if (series[i] !== series[i - 1]) {
+            events.push({
+              when: history[i].started_at || history[i].completed_at || history[i].scan_id,
+              ip,
+              port: Number(port),
+              kind: series[i] ? "opened" : "closed",
+            });
+          }
+        }
+      }
+    }
+    events.sort((a, b) => (b.when || "").localeCompare(a.when || ""));
+    const recentEvents = events.slice(0, 20);
+    const eventList = recentEvents.length === 0
+      ? `<div class="muted">No port-state changes in the retained history window.</div>`
+      : `<ul class="hist-events">
+          ${recentEvents.map((e) => `
+            <li class="hist-event hist-event-${e.kind}">
+              <span class="hist-event-time">${escapeHtml(formatRelTimeShort(e.when))}</span>
+              <span class="hist-event-kind">${e.kind.toUpperCase()}</span>
+              <span class="td-mono">${escapeHtml(e.ip)}:${e.port}</span>
+            </li>
+          `).join("")}
+        </ul>`;
+
+    const body = `
+      <div class="hist-meta">
+        ${history.length} scan${history.length === 1 ? "" : "s"} retained · oldest:
+        <span class="td-mono">${escapeHtml(history[0].started_at || history[0].scan_id)}</span>
+      </div>
+      <div class="hist-table-wrap">
+        <table class="hist-table">
+          <thead>
+            <tr>
+              <th class="hist-corner">Host</th>
+              <th class="hist-corner">Port</th>
+              ${colHeaders}
+            </tr>
+          </thead>
+          <tbody>${rows.join("")}</tbody>
+        </table>
+      </div>
+      <div class="hist-legend">
+        <span><span class="hist-cell open"></span> open</span>
+        <span><span class="hist-cell closed"></span> closed</span>
+        <span><span class="hist-flap-badge">flap</span> state changed in last ${flapWindow} scans</span>
+      </div>
+      <h5 class="hist-events-title">Recent port changes</h5>
+      ${eventList}
+    `;
+    return section("Service history", body);
+  }
+
+  // Helper for short relative time labels in the event list
+  function formatRelTimeShort(iso) {
+    if (!iso) return "—";
+    const t = new Date(iso).getTime();
+    if (isNaN(t)) return iso;
+    const diff = Date.now() - t;
+    const m = Math.floor(diff / 60000);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    if (d < 30) return `${d}d ago`;
+    return iso.slice(0, 10);
   }
 
   function renderRegistrationSection(a) {
