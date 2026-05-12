@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-12T14:49:24Z_bc40c592",
-    "started_at": "2026-05-12T14:49:24Z",
-    "completed_at": "2026-05-12T14:53:43Z",
-    "duration_seconds": 259,
+    "id": "scan_2026-05-12T15:18:31Z_2beaa795",
+    "started_at": "2026-05-12T15:18:31Z",
+    "completed_at": "2026-05-12T15:23:06Z",
+    "duration_seconds": 275,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -45,8 +45,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-12T14:53:44Z",
-      "last_seen": "2026-05-12T14:53:44Z",
+      "first_discovered": "2026-05-12T15:23:06Z",
+      "last_seen": "2026-05-12T15:23:06Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -56,12 +56,6 @@
       "hosts": [
         {
           "ip": "199.16.172.68",
-          "asn": "AS2635",
-          "asn_org": "Automattic, Inc",
-          "country": "US",
-          "region": "California",
-          "city": "San Francisco",
-          "reverse_dns": null,
           "is_private": false
         },
         {
@@ -147,11 +141,11 @@
         ],
         "txt": [
           "MS=ms33269626",
-          "sek942qd3nt1s4lqh1h2ovmmai",
           "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
           "2o6gse9gno2mv04ik7f14kssfq",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "k15vdsovvom4v46fi4r4rivts6"
+          "k15vdsovvom4v46fi4r4rivts6",
+          "sek942qd3nt1s4lqh1h2ovmmai",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -263,23 +257,17 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:53:43Z",
-      "last_seen": "2026-05-12T14:53:43Z",
+      "first_discovered": "2026-05-12T15:23:06Z",
+      "last_seen": "2026-05-12T15:23:06Z",
       "tags": [],
       "reachability": {
-        "live": true,
-        "http_status": 404,
+        "live": false,
+        "http_status": null,
         "title": null
       },
       "hosts": [
         {
           "ip": "199.16.172.68",
-          "asn": "AS2635",
-          "asn_org": "Automattic, Inc",
-          "country": "US",
-          "region": "California",
-          "city": "San Francisco",
-          "reverse_dns": null,
           "is_private": false
         },
         {
@@ -308,19 +296,7 @@
           "protocol": "tcp",
           "service": "https",
           "banner": null,
-          "tls": true,
-          "cert": {
-            "subject": "CN=pressable.com",
-            "issuer": "CN=E8, O=Let's Encrypt, C=US",
-            "san": [
-              "*.pressable.com",
-              "pressable.com"
-            ],
-            "not_before": "2026-03-31T19:45:18Z",
-            "not_after": "2026-06-29T19:45:17Z",
-            "self_signed": false,
-            "days_to_expiry": 48
-          }
+          "tls": true
         },
         {
           "ip": "199.16.173.113",
@@ -336,19 +312,7 @@
           "protocol": "tcp",
           "service": "https",
           "banner": null,
-          "tls": true,
-          "cert": {
-            "subject": "CN=pressable.com",
-            "issuer": "CN=E8, O=Let's Encrypt, C=US",
-            "san": [
-              "*.pressable.com",
-              "pressable.com"
-            ],
-            "not_before": "2026-03-31T19:45:18Z",
-            "not_after": "2026-06-29T19:45:17Z",
-            "self_signed": false,
-            "days_to_expiry": 48
-          }
+          "tls": true
         }
       ],
       "dns": {
@@ -365,20 +329,9 @@
         "dnssec": false
       },
       "fingerprint": {
-        "server": "nginx",
+        "server": null,
         "platform_label": null,
-        "tech": [
-          {
-            "name": "HTTP/3",
-            "version": null,
-            "category": "transport"
-          },
-          {
-            "name": "Nginx",
-            "version": null,
-            "category": "webserver"
-          }
-        ]
+        "tech": []
       },
       "waf": {
         "detected": true,
@@ -391,8 +344,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:53:44Z",
-      "last_seen": "2026-05-12T14:53:44Z",
+      "first_discovered": "2026-05-12T15:23:06Z",
+      "last_seen": "2026-05-12T15:23:06Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -402,12 +355,6 @@
       "hosts": [
         {
           "ip": "40.71.11.138",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
           "is_private": false
         }
       ],
@@ -489,8 +436,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:53:44Z",
-      "last_seen": "2026-05-12T14:53:44Z",
+      "first_discovered": "2026-05-12T15:23:06Z",
+      "last_seen": "2026-05-12T15:23:06Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -500,12 +447,6 @@
       "hosts": [
         {
           "ip": "40.71.11.138",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
           "is_private": false
         }
       ],
@@ -587,8 +528,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:53:44Z",
-      "last_seen": "2026-05-12T14:53:44Z",
+      "first_discovered": "2026-05-12T15:23:06Z",
+      "last_seen": "2026-05-12T15:23:06Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -598,12 +539,6 @@
       "hosts": [
         {
           "ip": "40.71.11.138",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
           "is_private": false
         }
       ],
@@ -690,8 +625,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:53:44Z",
-      "last_seen": "2026-05-12T14:53:44Z",
+      "first_discovered": "2026-05-12T15:23:06Z",
+      "last_seen": "2026-05-12T15:23:06Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -701,12 +636,6 @@
       "hosts": [
         {
           "ip": "40.71.11.138",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
           "is_private": false
         }
       ],
@@ -788,8 +717,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:53:44Z",
-      "last_seen": "2026-05-12T14:53:44Z",
+      "first_discovered": "2026-05-12T15:23:06Z",
+      "last_seen": "2026-05-12T15:23:06Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -799,12 +728,6 @@
       "hosts": [
         {
           "ip": "40.71.11.138",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
           "is_private": false
         }
       ],
@@ -901,8 +824,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:53:44Z",
-      "last_seen": "2026-05-12T14:53:44Z",
+      "first_discovered": "2026-05-12T15:23:06Z",
+      "last_seen": "2026-05-12T15:23:06Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -912,12 +835,6 @@
       "hosts": [
         {
           "ip": "199.16.172.68",
-          "asn": "AS2635",
-          "asn_org": "Automattic, Inc",
-          "country": "US",
-          "region": "California",
-          "city": "San Francisco",
-          "reverse_dns": null,
           "is_private": false
         },
         {
@@ -1002,12 +919,12 @@
           "ns36.domaincontrol.com"
         ],
         "txt": [
-          "MS=ms33269626",
-          "2o6gse9gno2mv04ik7f14kssfq",
           "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
           "k15vdsovvom4v46fi4r4rivts6",
+          "MS=ms33269626",
           "sek942qd3nt1s4lqh1h2ovmmai",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+          "2o6gse9gno2mv04ik7f14kssfq"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -1035,6 +952,11 @@
             "name": "HSTS",
             "version": null,
             "category": "security"
+          },
+          {
+            "name": "HTTP/3",
+            "version": null,
+            "category": "transport"
           },
           {
             "name": "Imagely NextGEN Gallery",
@@ -1114,8 +1036,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:53:44Z",
-      "last_seen": "2026-05-12T14:53:44Z",
+      "first_discovered": "2026-05-12T15:23:06Z",
+      "last_seen": "2026-05-12T15:23:06Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1125,12 +1047,6 @@
       "hosts": [
         {
           "ip": "199.16.172.68",
-          "asn": "AS2635",
-          "asn_org": "Automattic, Inc",
-          "country": "US",
-          "region": "California",
-          "city": "San Francisco",
-          "reverse_dns": null,
           "is_private": false
         },
         {
@@ -1159,7 +1075,19 @@
           "protocol": "tcp",
           "service": "https",
           "banner": null,
-          "tls": true
+          "tls": true,
+          "cert": {
+            "subject": "CN=pressable.com",
+            "issuer": "CN=E8, O=Let's Encrypt, C=US",
+            "san": [
+              "*.pressable.com",
+              "pressable.com"
+            ],
+            "not_before": "2026-03-31T19:45:18Z",
+            "not_after": "2026-06-29T19:45:17Z",
+            "self_signed": false,
+            "days_to_expiry": 48
+          }
         },
         {
           "ip": "199.16.173.113",
@@ -1175,7 +1103,19 @@
           "protocol": "tcp",
           "service": "https",
           "banner": null,
-          "tls": true
+          "tls": true,
+          "cert": {
+            "subject": "CN=pressable.com",
+            "issuer": "CN=E8, O=Let's Encrypt, C=US",
+            "san": [
+              "*.pressable.com",
+              "pressable.com"
+            ],
+            "not_before": "2026-03-31T19:45:18Z",
+            "not_after": "2026-06-29T19:45:17Z",
+            "self_signed": false,
+            "days_to_expiry": 48
+          }
         }
       ],
       "dns": {
@@ -1218,8 +1158,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:53:44Z",
-      "last_seen": "2026-05-12T14:53:44Z",
+      "first_discovered": "2026-05-12T15:23:06Z",
+      "last_seen": "2026-05-12T15:23:06Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1229,12 +1169,6 @@
       "hosts": [
         {
           "ip": "40.71.11.138",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
           "is_private": false
         }
       ],
@@ -1340,7 +1274,14 @@
         }
       ],
       "cert": [],
-      "reachability": []
+      "reachability": [
+        {
+          "subdomain": "mail.unimacgraphics.com",
+          "from": true,
+          "to": false,
+          "is_root": false
+        }
+      ]
     }
   },
   "history": [
@@ -1352,19 +1293,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1375,19 +1392,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1398,19 +1491,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1421,19 +1590,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1444,19 +1689,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1467,19 +1788,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1490,19 +1887,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1513,19 +1986,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1536,19 +2085,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1559,19 +2184,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1582,19 +2283,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1605,19 +2382,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1628,19 +2481,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1651,19 +2580,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1674,19 +2679,95 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -1697,42 +2778,194 @@
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
-      "scan_id": "scan_2026-05-12T14:49:24Z_bc40c592",
-      "started_at": "2026-05-12T14:49:24Z",
-      "completed_at": "2026-05-12T14:53:43Z",
+      "scan_id": "scan_2026-05-12T15:18:31Z_2beaa795",
+      "started_at": "2026-05-12T15:18:31Z",
+      "completed_at": "2026-05-12T15:23:06Z",
       "subdomain_count": 10,
       "live_subdomain_count": 10,
       "host_count": 3,
       "service_count": 28,
-      "ports_by_host": {
-        "199.16.172.68": [
-          80,
-          443
-        ],
-        "199.16.173.113": [
-          80,
-          443
-        ],
-        "40.71.11.138": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
       }
     }
   ]

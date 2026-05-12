@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-12T14:47:58Z_b613d9c1",
-    "started_at": "2026-05-12T14:47:58Z",
-    "completed_at": "2026-05-12T14:49:24Z",
-    "duration_seconds": 86,
+    "id": "scan_2026-05-12T15:16:58Z_7afd3827",
+    "started_at": "2026-05-12T15:16:58Z",
+    "completed_at": "2026-05-12T15:18:31Z",
+    "duration_seconds": 93,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-12T14:49:24Z",
-      "last_seen": "2026-05-12T14:49:24Z",
+      "first_discovered": "2026-05-12T15:18:31Z",
+      "last_seen": "2026-05-12T15:18:31Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -106,10 +106,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
-          "apple-domain-verification=cWkfjNKuM61a3EZ6",
-          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "MS=ms93622757"
+          "MS=ms93622757",
+          "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -137,6 +137,11 @@
             "name": "HSTS",
             "version": null,
             "category": "security"
+          },
+          {
+            "name": "HTTP/3",
+            "version": null,
+            "category": "transport"
           },
           {
             "name": "MySQL",
@@ -221,8 +226,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:49:24Z",
-      "last_seen": "2026-05-12T14:49:24Z",
+      "first_discovered": "2026-05-12T15:18:31Z",
+      "last_seen": "2026-05-12T15:18:31Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -426,11 +431,23 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -441,11 +458,23 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -456,11 +485,23 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -471,11 +512,23 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -486,11 +539,23 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -501,11 +566,23 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -516,11 +593,23 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -531,11 +620,23 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -546,11 +647,23 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -561,23 +674,38 @@
       "live_subdomain_count": 3,
       "host_count": 9,
       "service_count": 8,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ],
-        "40.104.2.40": [
-          80
-        ],
-        "40.104.23.136": [
-          80
-        ],
-        "40.97.72.1": [
-          80
-        ],
-        "52.97.104.104": [
-          80
-        ]
+      "subdomain_names": [
+        "autodiscover.commandcompanies.com",
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "autodiscover.commandcompanies.com": {
+          "40.104.2.40": [
+            80
+          ],
+          "40.104.23.136": [
+            80
+          ],
+          "40.97.72.1": [
+            80
+          ],
+          "52.97.104.104": [
+            80
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -588,23 +716,38 @@
       "live_subdomain_count": 3,
       "host_count": 13,
       "service_count": 8,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ],
-        "40.97.188.232": [
-          80
-        ],
-        "52.96.109.200": [
-          80
-        ],
-        "52.96.111.72": [
-          80
-        ],
-        "52.96.88.104": [
-          80
-        ]
+      "subdomain_names": [
+        "autodiscover.commandcompanies.com",
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "autodiscover.commandcompanies.com": {
+          "40.97.188.232": [
+            80
+          ],
+          "52.96.109.200": [
+            80
+          ],
+          "52.96.111.72": [
+            80
+          ],
+          "52.96.88.104": [
+            80
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -615,11 +758,23 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -630,11 +785,23 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -645,11 +812,23 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -660,11 +839,23 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
@@ -675,26 +866,50 @@
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     },
     {
-      "scan_id": "scan_2026-05-12T14:47:58Z_b613d9c1",
-      "started_at": "2026-05-12T14:47:58Z",
-      "completed_at": "2026-05-12T14:49:24Z",
+      "scan_id": "scan_2026-05-12T15:16:58Z_7afd3827",
+      "started_at": "2026-05-12T15:16:58Z",
+      "completed_at": "2026-05-12T15:18:31Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 1,
       "service_count": 4,
-      "ports_by_host": {
-        "199.16.172.54": [
-          80,
-          443
-        ]
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
       }
     }
   ]

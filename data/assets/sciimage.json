@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-12T14:57:27Z_f30a0580",
-    "started_at": "2026-05-12T14:57:28Z",
-    "completed_at": "2026-05-12T14:59:22Z",
-    "duration_seconds": 114,
+    "id": "scan_2026-05-12T15:26:40Z_4dff89ad",
+    "started_at": "2026-05-12T15:26:40Z",
+    "completed_at": "2026-05-12T15:28:47Z",
+    "duration_seconds": 127,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -27,8 +27,8 @@
   },
   "registration": {},
   "summary": {
-    "subdomain_count": 6,
-    "live_subdomain_count": 6,
+    "subdomain_count": 7,
+    "live_subdomain_count": 7,
     "host_count": 4,
     "service_count": 6,
     "newest_cert_expiry_days": 267,
@@ -41,8 +41,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-12T14:59:22Z",
-      "last_seen": "2026-05-12T14:59:22Z",
+      "first_discovered": "2026-05-12T15:28:47Z",
+      "last_seen": "2026-05-12T15:28:47Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -60,11 +60,47 @@
           "ns01.sciimage.com"
         ],
         "txt": [
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
           "0ed1fe018a578bb877e8354235b4b5eb5a2f99c17c",
-          "v=verifydomain MS=2796493",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
+          "v=verifydomain MS=2796493"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
+      "name": "demo1.sciimage.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-05-12T15:28:47Z",
+      "last_seen": "2026-05-12T15:28:47Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "hosts": [],
+      "services": [],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
         "dnssec": false
       },
       "fingerprint": {
@@ -83,8 +119,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:59:22Z",
-      "last_seen": "2026-05-12T14:59:22Z",
+      "first_discovered": "2026-05-12T15:28:47Z",
+      "last_seen": "2026-05-12T15:28:47Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -175,8 +211,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:59:22Z",
-      "last_seen": "2026-05-12T14:59:22Z",
+      "first_discovered": "2026-05-12T15:28:47Z",
+      "last_seen": "2026-05-12T15:28:47Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -233,8 +269,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:59:22Z",
-      "last_seen": "2026-05-12T14:59:22Z",
+      "first_discovered": "2026-05-12T15:28:47Z",
+      "last_seen": "2026-05-12T15:28:47Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -269,8 +305,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:59:22Z",
-      "last_seen": "2026-05-12T14:59:22Z",
+      "first_discovered": "2026-05-12T15:28:47Z",
+      "last_seen": "2026-05-12T15:28:47Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -345,8 +381,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-12T14:59:22Z",
-      "last_seen": "2026-05-12T14:59:22Z",
+      "first_discovered": "2026-05-12T15:28:47Z",
+      "last_seen": "2026-05-12T15:28:47Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -420,7 +456,9 @@
   "deltas": {
     "since_scan": "scan_2026-05-12T11:59:08Z_a7cc0ef2",
     "added": {
-      "subdomains": [],
+      "subdomains": [
+        "demo1.sciimage.com"
+      ],
       "services": [],
       "hosts": []
     },
@@ -446,7 +484,12 @@
       "live_subdomain_count": 1,
       "host_count": 0,
       "service_count": 0,
-      "ports_by_host": {}
+      "subdomain_names": [
+        "sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {}
+      }
     },
     {
       "scan_id": "scan_2026-05-10T04:30:08Z_aed245b1",
@@ -456,7 +499,12 @@
       "live_subdomain_count": 1,
       "host_count": 0,
       "service_count": 0,
-      "ports_by_host": {}
+      "subdomain_names": [
+        "sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {}
+      }
     },
     {
       "scan_id": "scan_2026-05-10T08:49:38Z_a23aad23",
@@ -466,7 +514,12 @@
       "live_subdomain_count": 1,
       "host_count": 0,
       "service_count": 0,
-      "ports_by_host": {}
+      "subdomain_names": [
+        "sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {}
+      }
     },
     {
       "scan_id": "scan_2026-05-10T14:14:58Z_5170864e",
@@ -476,7 +529,12 @@
       "live_subdomain_count": 1,
       "host_count": 0,
       "service_count": 0,
-      "ports_by_host": {}
+      "subdomain_names": [
+        "sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {}
+      }
     },
     {
       "scan_id": "scan_2026-05-10T19:45:29Z_675ab216",
@@ -486,10 +544,19 @@
       "live_subdomain_count": 3,
       "host_count": 1,
       "service_count": 1,
-      "ports_by_host": {
-        "13.248.212.206": [
-          53
-        ]
+      "subdomain_names": [
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {},
+        "ns01.sciimage.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.sciimage.com": {}
       }
     },
     {
@@ -500,10 +567,19 @@
       "live_subdomain_count": 3,
       "host_count": 1,
       "service_count": 1,
-      "ports_by_host": {
-        "13.248.212.206": [
-          53
-        ]
+      "subdomain_names": [
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {},
+        "ns01.sciimage.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.sciimage.com": {}
       }
     },
     {
@@ -514,45 +590,66 @@
       "live_subdomain_count": 7,
       "host_count": 20,
       "service_count": 14,
-      "ports_by_host": {
-        "40.97.222.200": [
-          80
-        ],
-        "52.96.110.120": [
-          80
-        ],
-        "52.96.110.40": [
-          80
-        ],
-        "52.96.110.56": [
-          80
-        ],
-        "52.96.165.72": [
-          80
-        ],
-        "52.96.190.200": [
-          80
-        ],
-        "52.96.46.72": [
-          80
-        ],
-        "52.96.59.232": [
-          80
-        ],
-        "24.157.51.76": [
-          22,
-          80,
-          443
-        ],
-        "13.248.212.206": [
-          53
-        ],
-        "24.157.51.66": [
-          443
-        ],
-        "52.119.65.2": [
-          443
-        ]
+      "subdomain_names": [
+        "autodiscover.sciimage.com",
+        "ftp.sciimage.com",
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {},
+        "autodiscover.sciimage.com": {
+          "40.97.222.200": [
+            80
+          ],
+          "52.96.110.120": [
+            80
+          ],
+          "52.96.110.40": [
+            80
+          ],
+          "52.96.110.56": [
+            80
+          ],
+          "52.96.165.72": [
+            80
+          ],
+          "52.96.190.200": [
+            80
+          ],
+          "52.96.46.72": [
+            80
+          ],
+          "52.96.59.232": [
+            80
+          ]
+        },
+        "ftp.sciimage.com": {
+          "24.157.51.76": [
+            22,
+            80,
+            443
+          ]
+        },
+        "ns01.sciimage.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.sciimage.com": {},
+        "vpn.sciimage.com": {
+          "24.157.51.66": [
+            443
+          ]
+        },
+        "vpn2.sciimage.com": {
+          "52.119.65.2": [
+            443
+          ]
+        }
       }
     },
     {
@@ -563,45 +660,66 @@
       "live_subdomain_count": 7,
       "host_count": 16,
       "service_count": 14,
-      "ports_by_host": {
-        "40.104.46.40": [
-          80
-        ],
-        "40.97.190.8": [
-          80
-        ],
-        "52.96.111.104": [
-          80
-        ],
-        "52.96.179.120": [
-          80
-        ],
-        "52.96.87.200": [
-          80
-        ],
-        "52.96.88.104": [
-          80
-        ],
-        "52.96.88.40": [
-          80
-        ],
-        "52.96.88.56": [
-          80
-        ],
-        "24.157.51.76": [
-          22,
-          80,
-          443
-        ],
-        "13.248.212.206": [
-          53
-        ],
-        "24.157.51.66": [
-          443
-        ],
-        "52.119.65.2": [
-          443
-        ]
+      "subdomain_names": [
+        "autodiscover.sciimage.com",
+        "ftp.sciimage.com",
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {},
+        "autodiscover.sciimage.com": {
+          "40.104.46.40": [
+            80
+          ],
+          "40.97.190.8": [
+            80
+          ],
+          "52.96.111.104": [
+            80
+          ],
+          "52.96.179.120": [
+            80
+          ],
+          "52.96.87.200": [
+            80
+          ],
+          "52.96.88.104": [
+            80
+          ],
+          "52.96.88.40": [
+            80
+          ],
+          "52.96.88.56": [
+            80
+          ]
+        },
+        "ftp.sciimage.com": {
+          "24.157.51.76": [
+            22,
+            80,
+            443
+          ]
+        },
+        "ns01.sciimage.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.sciimage.com": {},
+        "vpn.sciimage.com": {
+          "24.157.51.66": [
+            443
+          ]
+        },
+        "vpn2.sciimage.com": {
+          "52.119.65.2": [
+            443
+          ]
+        }
       }
     },
     {
@@ -612,21 +730,39 @@
       "live_subdomain_count": 6,
       "host_count": 4,
       "service_count": 6,
-      "ports_by_host": {
-        "24.157.51.76": [
-          22,
-          80,
-          443
-        ],
-        "13.248.212.206": [
-          53
-        ],
-        "24.157.51.66": [
-          443
-        ],
-        "52.119.65.2": [
-          443
-        ]
+      "subdomain_names": [
+        "ftp.sciimage.com",
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {},
+        "ftp.sciimage.com": {
+          "24.157.51.76": [
+            22,
+            80,
+            443
+          ]
+        },
+        "ns01.sciimage.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.sciimage.com": {},
+        "vpn.sciimage.com": {
+          "24.157.51.66": [
+            443
+          ]
+        },
+        "vpn2.sciimage.com": {
+          "52.119.65.2": [
+            443
+          ]
+        }
       }
     },
     {
@@ -637,21 +773,39 @@
       "live_subdomain_count": 6,
       "host_count": 4,
       "service_count": 6,
-      "ports_by_host": {
-        "24.157.51.76": [
-          22,
-          80,
-          443
-        ],
-        "13.248.212.206": [
-          53
-        ],
-        "24.157.51.66": [
-          443
-        ],
-        "52.119.65.2": [
-          443
-        ]
+      "subdomain_names": [
+        "ftp.sciimage.com",
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {},
+        "ftp.sciimage.com": {
+          "24.157.51.76": [
+            22,
+            80,
+            443
+          ]
+        },
+        "ns01.sciimage.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.sciimage.com": {},
+        "vpn.sciimage.com": {
+          "24.157.51.66": [
+            443
+          ]
+        },
+        "vpn2.sciimage.com": {
+          "52.119.65.2": [
+            443
+          ]
+        }
       }
     },
     {
@@ -662,21 +816,39 @@
       "live_subdomain_count": 6,
       "host_count": 4,
       "service_count": 6,
-      "ports_by_host": {
-        "24.157.51.76": [
-          22,
-          80,
-          443
-        ],
-        "13.248.212.206": [
-          53
-        ],
-        "24.157.51.66": [
-          443
-        ],
-        "52.119.65.2": [
-          443
-        ]
+      "subdomain_names": [
+        "ftp.sciimage.com",
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {},
+        "ftp.sciimage.com": {
+          "24.157.51.76": [
+            22,
+            80,
+            443
+          ]
+        },
+        "ns01.sciimage.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.sciimage.com": {},
+        "vpn.sciimage.com": {
+          "24.157.51.66": [
+            443
+          ]
+        },
+        "vpn2.sciimage.com": {
+          "52.119.65.2": [
+            443
+          ]
+        }
       }
     },
     {
@@ -687,21 +859,39 @@
       "live_subdomain_count": 6,
       "host_count": 4,
       "service_count": 6,
-      "ports_by_host": {
-        "24.157.51.76": [
-          22,
-          80,
-          443
-        ],
-        "13.248.212.206": [
-          53
-        ],
-        "24.157.51.66": [
-          443
-        ],
-        "52.119.65.2": [
-          443
-        ]
+      "subdomain_names": [
+        "ftp.sciimage.com",
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {},
+        "ftp.sciimage.com": {
+          "24.157.51.76": [
+            22,
+            80,
+            443
+          ]
+        },
+        "ns01.sciimage.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.sciimage.com": {},
+        "vpn.sciimage.com": {
+          "24.157.51.66": [
+            443
+          ]
+        },
+        "vpn2.sciimage.com": {
+          "52.119.65.2": [
+            443
+          ]
+        }
       }
     },
     {
@@ -712,46 +902,86 @@
       "live_subdomain_count": 7,
       "host_count": 4,
       "service_count": 6,
-      "ports_by_host": {
-        "24.157.51.76": [
-          22,
-          80,
-          443
-        ],
-        "13.248.212.206": [
-          53
-        ],
-        "24.157.51.66": [
-          443
-        ],
-        "52.119.65.2": [
-          443
-        ]
+      "subdomain_names": [
+        "ftp.sciimage.com",
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "sciimage.com",
+        "stage2.sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {},
+        "ftp.sciimage.com": {
+          "24.157.51.76": [
+            22,
+            80,
+            443
+          ]
+        },
+        "ns01.sciimage.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.sciimage.com": {},
+        "stage2.sciimage.com": {},
+        "vpn.sciimage.com": {
+          "24.157.51.66": [
+            443
+          ]
+        },
+        "vpn2.sciimage.com": {
+          "52.119.65.2": [
+            443
+          ]
+        }
       }
     },
     {
-      "scan_id": "scan_2026-05-12T14:57:27Z_f30a0580",
-      "started_at": "2026-05-12T14:57:28Z",
-      "completed_at": "2026-05-12T14:59:22Z",
-      "subdomain_count": 6,
-      "live_subdomain_count": 6,
+      "scan_id": "scan_2026-05-12T15:26:40Z_4dff89ad",
+      "started_at": "2026-05-12T15:26:40Z",
+      "completed_at": "2026-05-12T15:28:47Z",
+      "subdomain_count": 7,
+      "live_subdomain_count": 7,
       "host_count": 4,
       "service_count": 6,
-      "ports_by_host": {
-        "24.157.51.76": [
-          22,
-          80,
-          443
-        ],
-        "13.248.212.206": [
-          53
-        ],
-        "24.157.51.66": [
-          443
-        ],
-        "52.119.65.2": [
-          443
-        ]
+      "subdomain_names": [
+        "demo1.sciimage.com",
+        "ftp.sciimage.com",
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {},
+        "demo1.sciimage.com": {},
+        "ftp.sciimage.com": {
+          "24.157.51.76": [
+            22,
+            80,
+            443
+          ]
+        },
+        "ns01.sciimage.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.sciimage.com": {},
+        "vpn.sciimage.com": {
+          "24.157.51.66": [
+            443
+          ]
+        },
+        "vpn2.sciimage.com": {
+          "52.119.65.2": [
+            443
+          ]
+        }
       }
     }
   ]

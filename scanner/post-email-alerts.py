@@ -122,23 +122,56 @@ def collect_alerts() -> list[Alert]:
             out.append(Alert("notice", aname, "service_closed",
                              f"Service closed on {sub}: {s.get('port')}/{s.get('protocol')}", ""))
 
-        # NOTICE: subdomain churn
+        # NOTICE: new subdomain
         for sub in (added.get("subdomains") or []):
             out.append(Alert("notice", aname, "new_subdomain",
                              f"New subdomain discovered: {sub}",
                              "Surfaced via multi-source enumeration (passive CT logs, DNS records, wordlist brute-force, or TLS cert SANs)."))
-        for sub in (removed.get("subdomains") or []):
-            out.append(Alert("notice", aname, "subdomain_gone",
-                             f"Subdomain went away: {sub}", ""))
 
-        # NOTICE: tech version changes (per subdomain)
+        # NOTICE: subdomain went away — but ONLY fire if it's been absent for
+        # 3+ consecutive scans. The wordlist enum is probabilistic (parallel
+        # dig with 2-sec timeout); a single network blip can make a sub appear
+        # 'missing' from one scan even though it still resolves fine. Requires
+        # the new 'subdomain_names' field in each history entry (populated by
+        # normalize.py and the backfill script).
+        ABSENCE_THRESHOLD = 3
+        history = asset.get("history") or []
+        recent = history[-ABSENCE_THRESHOLD:] if len(history) >= ABSENCE_THRESHOLD else history
+        for sub in (removed.get("subdomains") or []):
+            # Skip the alert if any of the last N scans (including the current
+            # one which is at history[-1]) had this sub present.
+            absent_streak = 0
+            for entry in reversed(history):
+                names = entry.get("subdomain_names") or []
+                if sub in names:
+                    break
+                absent_streak += 1
+                if absent_streak >= ABSENCE_THRESHOLD:
+                    break
+            if absent_streak >= ABSENCE_THRESHOLD:
+                out.append(Alert("notice", aname, "subdomain_gone",
+                                 f"Subdomain went away: {sub}",
+                                 f"Not seen in the last {ABSENCE_THRESHOLD} consecutive scans."))
+
+        # NOTICE: tech version changes — DEDUPED within an asset by (name, from, to).
+        # Same tech update on multiple subs that share a backend (e.g. apex + www
+        # both running the same WordPress install) gets collapsed into one alert
+        # with the sub list rolled into the detail string.
+        tech_groups: dict[tuple[str, str, str], list[str]] = {}
         for t in (changed.get("fingerprint") or []):
-            sub = t.get("subdomain") or "?"
-            out.append(Alert(
-                "notice", aname, "tech_changed",
-                f"{sub}: {t.get('name')} {t.get('from') or '?'} → {t.get('to') or '?'}",
-                "Detected version change in tech fingerprint."
-            ))
+            key = (t.get("name") or "?", str(t.get("from") or "?"), str(t.get("to") or "?"))
+            tech_groups.setdefault(key, []).append(t.get("subdomain") or "?")
+        for (name, frm, to), subs in tech_groups.items():
+            subs_unique = sorted(set(subs))
+            count = len(subs_unique)
+            title = f"{name} {frm} → {to}"
+            if count == 1:
+                title = f"{subs_unique[0]}: {title}"
+                detail = "Detected version change in tech fingerprint."
+            else:
+                title = f"{title} (on {count} subs)"
+                detail = f"Detected version change in tech fingerprint. Affected: {', '.join(subs_unique)}"
+            out.append(Alert("notice", aname, "tech_changed", title, detail))
 
         # WATCH: cert chain changed (per subdomain)
         for c in (changed.get("cert") or []):
