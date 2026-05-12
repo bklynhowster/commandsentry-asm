@@ -235,7 +235,7 @@
   // Backend enforces cooldown + reports if a scan is already in flight.
   async function triggerRescan(targetId, btn) {
     if (!targetId) return;
-    const originalText = btn?.textContent || "↻ Rescan";
+    const originalText = btn?.textContent || "↻ Re-scan";
     if (btn) { btn.disabled = true; btn.textContent = "Queuing…"; }
     try {
       const r = await fetch("/api/trigger-scan", {
@@ -416,7 +416,7 @@
 
         <div class="asset-card-footer">
           <span class="card-drill-hint">${subCount} subdomain${subCount === 1 ? "" : "s"} →</span>
-          <button class="card-rescan-btn" data-rescan-target="${escapeAttr(a.asset?.id || "")}" title="Re-scan this target now">↻ Rescan</button>
+          <button class="card-rescan-btn" data-rescan-target="${escapeAttr(a.asset?.id || "")}" title="Trigger a fresh ASM scan of this asset only">↻ Re-scan this asset</button>
         </div>
       </div>
     `;
