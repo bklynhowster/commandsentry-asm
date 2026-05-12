@@ -966,13 +966,16 @@
       }
     }
 
-    const subNames = Object.keys(subPortMatrix).sort((a, b) => {
-      // Sort: apex/root entries first, then alphabetical
-      const aRoot = a === (a.asset?.value || ""), bRoot = b === (b.asset?.value || "");
-      if (aRoot && !bRoot) return -1;
-      if (!aRoot && bRoot) return 1;
-      return a.localeCompare(b);
-    });
+    // Only show subs that are present in the MOST RECENT scan — i.e. things
+    // that still exist as of right now. Subs that flickered through history
+    // (e.g. names we found before tightening the wordlist, like autodiscover)
+    // would otherwise clutter the timeline with rows that no longer matter
+    // operationally. Their historical port-state changes still surface in
+    // the "Recent port changes" event log below, just not as primary rows.
+    const currentSubs = new Set(history[history.length - 1]?.subdomain_names || []);
+    const subNames = Object.keys(subPortMatrix)
+      .filter(sub => currentSubs.has(sub))
+      .sort((a, b) => a.localeCompare(b));
     if (!subNames.length) {
       return section("Service history", "<div class='muted'>No service history captured yet. Build up over the next few scans.</div>");
     }
