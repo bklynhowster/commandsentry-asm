@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-12T20:21:46Z_a824d613",
-    "started_at": "2026-05-12T20:21:46Z",
-    "completed_at": "2026-05-12T20:23:18Z",
-    "duration_seconds": 92,
+    "id": "scan_2026-05-12T22:13:24Z_8089d6f9",
+    "started_at": "2026-05-12T22:13:24Z",
+    "completed_at": "2026-05-12T22:15:16Z",
+    "duration_seconds": 112,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -31,7 +31,7 @@
     "host_count": 1,
     "service_count": 2,
     "newest_cert_expiry_days": 292,
-    "top_hosting_org": null,
+    "top_hosting_org": "Cablevision Systems Corp.",
     "platforms": []
   },
   "subdomains": [
@@ -40,8 +40,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-05-12T20:23:18Z",
-      "last_seen": "2026-05-12T20:23:18Z",
+      "first_discovered": "2026-05-12T22:15:16Z",
+      "last_seen": "2026-05-12T22:15:16Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -51,6 +51,12 @@
       "hosts": [
         {
           "ip": "24.157.51.88",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
+          "country": "US",
+          "region": "New Jersey",
+          "city": "Allentown",
+          "reverse_dns": "189d3358.cst.lightpath.net",
           "is_private": false
         }
       ],
@@ -107,7 +113,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-12T15:37:55Z_4e8b7eef",
+    "since_scan": "scan_2026-05-12T20:21:46Z_a824d613",
     "added": {
       "subdomains": [],
       "services": [],
@@ -229,6 +235,26 @@
       "scan_id": "scan_2026-05-12T20:21:46Z_a824d613",
       "started_at": "2026-05-12T20:21:46Z",
       "completed_at": "2026-05-12T20:23:18Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_names": [
+        "24.157.51.88"
+      ],
+      "ports_by_sub": {
+        "24.157.51.88": {
+          "24.157.51.88": [
+            80,
+            443
+          ]
+        }
+      }
+    },
+    {
+      "scan_id": "scan_2026-05-12T22:13:24Z_8089d6f9",
+      "started_at": "2026-05-12T22:13:24Z",
+      "completed_at": "2026-05-12T22:15:16Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 1,

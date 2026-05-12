@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-12T20:23:25Z_53cb99f3",
-    "started_at": "2026-05-12T20:23:25Z",
-    "completed_at": "2026-05-12T20:24:54Z",
-    "duration_seconds": 89,
+    "id": "scan_2026-05-12T22:15:22Z_ea89cb3f",
+    "started_at": "2026-05-12T22:15:22Z",
+    "completed_at": "2026-05-12T22:17:08Z",
+    "duration_seconds": 106,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -31,7 +31,7 @@
     "host_count": 1,
     "service_count": 2,
     "newest_cert_expiry_days": null,
-    "top_hosting_org": null,
+    "top_hosting_org": "Natural Wireless, LLC",
     "platforms": []
   },
   "subdomains": [
@@ -40,8 +40,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-05-12T20:24:54Z",
-      "last_seen": "2026-05-12T20:24:54Z",
+      "first_discovered": "2026-05-12T22:17:08Z",
+      "last_seen": "2026-05-12T22:17:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -51,6 +51,12 @@
       "hosts": [
         {
           "ip": "52.119.65.5",
+          "asn": "AS18616",
+          "asn_org": "Natural Wireless, LLC",
+          "country": "US",
+          "region": "New York",
+          "city": "New York City",
+          "reverse_dns": "5.65.119.52.naturalwireless.com",
           "is_private": false
         }
       ],
@@ -105,7 +111,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-12T15:39:54Z_b566e8e5",
+    "since_scan": "scan_2026-05-12T20:23:25Z_53cb99f3",
     "added": {
       "subdomains": [],
       "services": [],
@@ -227,6 +233,26 @@
       "scan_id": "scan_2026-05-12T20:23:25Z_53cb99f3",
       "started_at": "2026-05-12T20:23:25Z",
       "completed_at": "2026-05-12T20:24:54Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_names": [
+        "52.119.65.5"
+      ],
+      "ports_by_sub": {
+        "52.119.65.5": {
+          "52.119.65.5": [
+            80,
+            443
+          ]
+        }
+      }
+    },
+    {
+      "scan_id": "scan_2026-05-12T22:15:22Z_ea89cb3f",
+      "started_at": "2026-05-12T22:15:22Z",
+      "completed_at": "2026-05-12T22:17:08Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 1,
