@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-11T20:06:40Z_1e004779",
-    "started_at": "2026-05-11T20:06:40Z",
-    "completed_at": "2026-05-11T20:08:39Z",
-    "duration_seconds": 119,
+    "id": "scan_2026-05-12T04:03:30Z_5efceebc",
+    "started_at": "2026-05-12T04:03:30Z",
+    "completed_at": "2026-05-12T04:05:32Z",
+    "duration_seconds": 122,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -41,8 +41,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-11T20:08:39Z",
-      "last_seen": "2026-05-11T20:08:39Z",
+      "first_discovered": "2026-05-12T04:05:33Z",
+      "last_seen": "2026-05-12T04:05:33Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -60,9 +60,9 @@
           "ns01.sciimage.com"
         ],
         "txt": [
-          "v=verifydomain MS=2796493",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "0ed1fe018a578bb877e8354235b4b5eb5a2f99c17c"
+          "0ed1fe018a578bb877e8354235b4b5eb5a2f99c17c",
+          "v=verifydomain MS=2796493"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -83,8 +83,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T20:08:39Z",
-      "last_seen": "2026-05-11T20:08:39Z",
+      "first_discovered": "2026-05-12T04:05:32Z",
+      "last_seen": "2026-05-12T04:05:32Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -175,8 +175,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T20:08:39Z",
-      "last_seen": "2026-05-11T20:08:39Z",
+      "first_discovered": "2026-05-12T04:05:33Z",
+      "last_seen": "2026-05-12T04:05:33Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -233,8 +233,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T20:08:39Z",
-      "last_seen": "2026-05-11T20:08:39Z",
+      "first_discovered": "2026-05-12T04:05:33Z",
+      "last_seen": "2026-05-12T04:05:33Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -269,8 +269,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T20:08:39Z",
-      "last_seen": "2026-05-11T20:08:39Z",
+      "first_discovered": "2026-05-12T04:05:33Z",
+      "last_seen": "2026-05-12T04:05:33Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -345,8 +345,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T20:08:40Z",
-      "last_seen": "2026-05-11T20:08:40Z",
+      "first_discovered": "2026-05-12T04:05:33Z",
+      "last_seen": "2026-05-12T04:05:33Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -418,7 +418,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-11T17:35:08Z_0a6fc1bd",
+    "since_scan": "scan_2026-05-11T20:06:40Z_1e004779",
     "added": {
       "subdomains": [],
       "services": [],
@@ -500,6 +500,13 @@
     },
     {
       "scan_id": "scan_2026-05-11T20:06:40Z_1e004779",
+      "subdomain_count": 6,
+      "live_subdomain_count": 6,
+      "host_count": 4,
+      "service_count": 6
+    },
+    {
+      "scan_id": "scan_2026-05-12T04:03:30Z_5efceebc",
       "subdomain_count": 6,
       "live_subdomain_count": 6,
       "host_count": 4,

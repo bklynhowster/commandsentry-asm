@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-11T20:03:26Z_513a80eb",
-    "started_at": "2026-05-11T20:03:26Z",
-    "completed_at": "2026-05-11T20:06:39Z",
-    "duration_seconds": 193,
+    "id": "scan_2026-05-12T04:00:06Z_641f8dab",
+    "started_at": "2026-05-12T04:00:06Z",
+    "completed_at": "2026-05-12T04:03:29Z",
+    "duration_seconds": 203,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -28,8 +28,8 @@
   },
   "registration": {},
   "summary": {
-    "subdomain_count": 7,
-    "live_subdomain_count": 7,
+    "subdomain_count": 6,
+    "live_subdomain_count": 6,
     "host_count": 4,
     "service_count": 9,
     "newest_cert_expiry_days": 267,
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-11T20:06:39Z",
-      "last_seen": "2026-05-11T20:06:39Z",
+      "first_discovered": "2026-05-12T04:03:29Z",
+      "last_seen": "2026-05-12T04:03:29Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -155,8 +155,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T20:06:39Z",
-      "last_seen": "2026-05-11T20:06:39Z",
+      "first_discovered": "2026-05-12T04:03:29Z",
+      "last_seen": "2026-05-12T04:03:29Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -250,48 +250,12 @@
       }
     },
     {
-      "name": "ns.commandcommcentral.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T20:06:39Z",
-      "last_seen": "2026-05-11T20:06:39Z",
-      "tags": [],
-      "reachability": {
-        "live": false,
-        "http_status": null,
-        "title": null
-      },
-      "hosts": [],
-      "services": [],
-      "dns": {
-        "a": [],
-        "aaaa": [],
-        "cname": null,
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": null,
-        "platform_label": null,
-        "tech": []
-      },
-      "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
-      }
-    },
-    {
       "name": "ns01.commandcommcentral.com",
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T20:06:39Z",
-      "last_seen": "2026-05-11T20:06:39Z",
+      "first_discovered": "2026-05-12T04:03:29Z",
+      "last_seen": "2026-05-12T04:03:29Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -348,8 +312,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T20:06:39Z",
-      "last_seen": "2026-05-11T20:06:39Z",
+      "first_discovered": "2026-05-12T04:03:30Z",
+      "last_seen": "2026-05-12T04:03:30Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -384,8 +348,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T20:06:39Z",
-      "last_seen": "2026-05-11T20:06:39Z",
+      "first_discovered": "2026-05-12T04:03:30Z",
+      "last_seen": "2026-05-12T04:03:30Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -493,8 +457,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-11T20:06:40Z",
-      "last_seen": "2026-05-11T20:06:40Z",
+      "first_discovered": "2026-05-12T04:03:30Z",
+      "last_seen": "2026-05-12T04:03:30Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -599,16 +563,16 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-11T17:31:30Z_f0ee28a4",
+    "since_scan": "scan_2026-05-11T20:03:26Z_513a80eb",
     "added": {
-      "subdomains": [
-        "ns.commandcommcentral.com"
-      ],
+      "subdomains": [],
       "services": [],
       "hosts": []
     },
     "removed": {
-      "subdomains": [],
+      "subdomains": [
+        "ns.commandcommcentral.com"
+      ],
       "services": [],
       "hosts": []
     },
@@ -699,6 +663,13 @@
       "scan_id": "scan_2026-05-11T20:03:26Z_513a80eb",
       "subdomain_count": 7,
       "live_subdomain_count": 7,
+      "host_count": 4,
+      "service_count": 9
+    },
+    {
+      "scan_id": "scan_2026-05-12T04:00:06Z_641f8dab",
+      "subdomain_count": 6,
+      "live_subdomain_count": 6,
       "host_count": 4,
       "service_count": 9
     }
