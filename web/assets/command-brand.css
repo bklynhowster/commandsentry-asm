@@ -1795,10 +1795,13 @@ input[type="search"]:focus,
   text-align: left;
   padding: 6px 10px;
   position: sticky;
-  left: 0;
   background: var(--paper-2);
   z-index: 2;
 }
+/* Two sticky corner headers — first sticks at left:0, second at left:220px
+   so they don't overlap. Widths matched to the body rows below. */
+.hist-table .hist-corner:nth-child(1) { left: 0;     width: 220px; }
+.hist-table .hist-corner:nth-child(2) { left: 220px; width: 56px;  }
 .hist-col-header.muted {
   color: var(--ink-40);
   font-size: 9px;
@@ -1817,6 +1820,12 @@ input[type="search"]:focus,
   left: 0;
   background: #fff;
   white-space: nowrap;
+  width: 220px;        /* explicit so the port column knows where to stick */
+  min-width: 220px;
+  max-width: 220px;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .hist-row:hover .hist-host-label {
   background: var(--ink-05);
@@ -1837,8 +1846,15 @@ input[type="search"]:focus,
   border-right: 1px solid var(--paper-rule);
   white-space: nowrap;
   position: sticky;
-  left: 110px;
-  background: inherit;
+  left: 220px;          /* sticks immediately after the host-label column */
+  background: #fff;     /* opaque — 'inherit' was transparent and let cells bleed through */
+  width: 56px;
+  min-width: 56px;
+  text-align: right;
+  z-index: 1;
+}
+.hist-row:hover .hist-port {
+  background: var(--ink-05);
 }
 .hist-cell {
   display: inline-block;
