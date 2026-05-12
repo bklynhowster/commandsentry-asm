@@ -1851,6 +1851,12 @@ input[type="search"]:focus,
   vertical-align: middle;
 }
 td.hist-cell {
+  /* CRITICAL: the .hist-cell base class uses display: inline-block (for the
+     legend chip-style usage). When the same class lands on a <td>, that
+     inline-block declaration breaks table layout — all TDs end up stacked
+     at the same X coordinate instead of flowing into columns. Force back
+     to table-cell so the table's auto-layout works. */
+  display: table-cell;
   width: 16px;
   padding: 3px 1px;
 }
