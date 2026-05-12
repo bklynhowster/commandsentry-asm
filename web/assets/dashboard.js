@@ -993,6 +993,19 @@
       return `<th class="hist-col-header ${show ? "" : "muted"}" title="${escapeAttr(ts)}">${show ? escapeHtml(label) : "·"}</th>`;
     }).join("");
 
+    // Strip the apex suffix from sub names — when you're inside the
+    // unimacgraphics.com drawer, repeating ".unimacgraphics.com" on every
+    // row is redundant clutter. Show the leading sub part only; the apex
+    // itself gets a 'root' badge instead.
+    const apexValue = (a.asset?.value || "").toLowerCase();
+    const displaySubName = (sub) => {
+      if (sub === apexValue) return `<span class="hist-root-pill">root</span>`;
+      if (sub.endsWith("." + apexValue)) {
+        return `<span class="hist-sub-prefix">${escapeHtml(sub.slice(0, -apexValue.length - 1))}</span>`;
+      }
+      return escapeHtml(sub);
+    };
+
     const rows = [];
     for (const sub of subNames) {
       const ports = Object.keys(subPortMatrix[sub]).map(Number).sort((a, b) => a - b);
@@ -1007,7 +1020,7 @@
         ).join("");
         const subLabel = pIdx === 0
           ? `<td class="hist-host-label" rowspan="${ports.length}">
-               <div class="hist-sub-name td-mono">${escapeHtml(sub)}</div>
+               <div class="hist-sub-name td-mono">${displaySubName(sub)}</div>
                ${ipLabel ? `<div class="hist-sub-ip td-mono muted">${escapeHtml(ipLabel)}</div>` : ""}
              </td>`
           : "";

@@ -1800,8 +1800,8 @@ input[type="search"]:focus,
 }
 /* Two sticky corner headers — first sticks at left:0, second at left:220px
    so they don't overlap. Widths matched to the body rows below. */
-.hist-table .hist-corner:nth-child(1) { left: 0;     width: 220px; }
-.hist-table .hist-corner:nth-child(2) { left: 220px; width: 56px;  }
+.hist-table .hist-corner:nth-child(1) { left: 0;     width: 170px; }
+.hist-table .hist-corner:nth-child(2) { left: 170px; width: 48px;  }
 .hist-col-header.muted {
   color: var(--ink-40);
   font-size: 9px;
@@ -1813,16 +1813,16 @@ input[type="search"]:focus,
   background: var(--ink-05);
 }
 .hist-host-label {
-  padding: 8px 10px;
-  vertical-align: top;
+  padding: 6px 10px;
+  vertical-align: middle;
   border-right: 1px solid var(--paper-rule);
   position: sticky;
   left: 0;
   background: #fff;
   white-space: nowrap;
-  width: 220px;        /* explicit so the port column knows where to stick */
-  min-width: 220px;
-  max-width: 220px;
+  width: 170px;
+  min-width: 170px;
+  max-width: 170px;
   box-sizing: border-box;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1834,22 +1834,41 @@ input[type="search"]:focus,
   font-size: 12.5px;
   color: var(--ink);
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .hist-sub-ip {
-  font-size: 10.5px;
+  font-size: 10px;
   margin-top: 2px;
+  color: var(--ink-40);
+}
+.hist-root-pill {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: var(--ink);
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+.hist-sub-prefix {
+  /* Just inherit normal font — no decoration. The leading sub name
+     is the focus; visual quietness is the goal. */
 }
 .hist-port {
-  padding: 4px 10px;
-  font-size: 12px;
-  color: var(--ink);
+  padding: 3px 10px;
+  font-size: 11.5px;
+  color: var(--ink-60);
   border-right: 1px solid var(--paper-rule);
   white-space: nowrap;
   position: sticky;
-  left: 220px;          /* sticks immediately after the host-label column */
-  background: #fff;     /* opaque — 'inherit' was transparent and let cells bleed through */
-  width: 56px;
-  min-width: 56px;
+  left: 170px;          /* sticks immediately after the host-label column */
+  background: #fff;
+  width: 48px;
+  min-width: 48px;
   text-align: right;
   z-index: 1;
 }
