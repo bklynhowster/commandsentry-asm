@@ -166,13 +166,19 @@ def collect_alerts() -> list[Alert]:
                     out.append(Alert("notice", aname, "cert_expiring_soon",
                                      f"Cert on {label} expires in {int(days)} day(s)", ""))
 
-        # WATCH: any subdomain went offline that was previously live
-        # (best-effort — we don't store per-sub history yet, just flag dead-when-expected)
-        for sub in (asset.get("subdomains") or []):
-            if sub.get("reachability", {}).get("live") is False and sub.get("is_root"):
-                out.append(Alert("watch", aname, "asset_offline",
-                                 f"Apex {aname} is offline",
-                                 "Root subdomain not responding."))
+        # WATCH: root went offline — but ONLY for domain-type assets where HTTP
+        # liveness is a meaningful signal. For IP-type assets the HTTP probe
+        # is irrelevant (most perimeter IPs — FortiGate WAN, mail relays, VPN
+        # endpoints — don't serve HTTP at the bare IP, and that's correct
+        # behavior, not an outage). The 'port-level changes' alerts above
+        # (new_service / service_closed) are the right signal for IPs.
+        asset_type = (asset.get("asset") or {}).get("type") or ""
+        if asset_type in ("apex", "fqdn"):
+            for sub in (asset.get("subdomains") or []):
+                if sub.get("reachability", {}).get("live") is False and sub.get("is_root"):
+                    out.append(Alert("watch", aname, "asset_offline",
+                                     f"Domain {aname} root not responding to HTTP",
+                                     "The root hostname returned no HTTP response on this scan."))
 
     return out
 
