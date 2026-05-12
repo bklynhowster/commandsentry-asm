@@ -581,7 +581,7 @@
         </div>
       </div>
 
-      ${renderHostsSection(sub)}
+      ${renderHostsSection(sub, asset.asset?.value)}
       ${renderServicesSection(sub)}
       ${renderDnsSection(sub)}
       ${renderFingerprintSection(sub)}
@@ -626,9 +626,19 @@
   }
 
   // Aggregate cert hostnames from any service on a given host IP.
-  // Cert CN/SAN represents what the OPERATOR configured the server to serve,
-  // which is way more informative than the carrier's auto-generated PTR.
-  function certHostnamesForHostIp(sub, ip) {
+  // Cert CN/SAN represents what the OPERATOR configured the server to serve.
+  //
+  // Wildcard certs are the trap: a `*.example.com` cert typically has
+  // SANs = ['*.example.com', 'example.com']. Filtering `*` leaves just the
+  // apex, which we'd then show as the hostname for EVERY sub on that cert —
+  // useless and misleading.
+  //
+  // So: drop wildcards AND drop the parent apex itself. If the cert has
+  // ONLY wildcard-and-apex, we return [] and the caller falls back to PTR.
+  // If the cert has specific names beyond the apex (e.g. an explicit SAN
+  // for `test.example.com` or for a different domain entirely), those are
+  // the operator-intent we want to surface.
+  function certHostnamesForHostIp(sub, ip, parentApex) {
     const services = sub.services || [];
     const names = new Set();
     for (const svc of services) {
@@ -639,18 +649,19 @@
         if (san) names.add(san);
       }
     }
-    // Drop wildcards (they're "*.example.com" which is operator intent but
-    // not as informative as a specific name) and dedupe.
+    const apexLower = (parentApex || "").toLowerCase();
     return Array.from(names)
-      .filter((n) => typeof n === "string" && n.length && !n.startsWith("*"))
+      .filter((n) => typeof n === "string" && n.length)
+      .filter((n) => !n.startsWith("*"))                // drop wildcards
+      .filter((n) => n.toLowerCase() !== apexLower)     // drop parent apex (redundant)
       .sort();
   }
 
-  function renderHostsSection(sub) {
+  function renderHostsSection(sub, parentApex) {
     const hosts = sub.hosts || [];
     if (!hosts.length) return section("Hosts", "<div class='muted'>No IP attribution available.</div>");
     const rows = hosts.map((h) => {
-      const certNames = certHostnamesForHostIp(sub, h.ip);
+      const certNames = certHostnamesForHostIp(sub, h.ip, parentApex);
       // Hostname priority: TLS cert (operator intent) > non-generic PTR > nothing
       let hostnameCell;
       let hostnameHint = "";
