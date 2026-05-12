@@ -1072,6 +1072,17 @@
       <h5 class="hist-events-title">Recent port changes</h5>
       ${eventList}
     `;
+    // Auto-scroll the timeline to the RIGHT end on next render tick so the
+    // most-recent scans are visible without the user realizing they need to
+    // scroll. Otherwise wide timelines look like "we only have old scans"
+    // because the leftmost (oldest) columns are what's in view by default.
+    setTimeout(() => {
+      const wrap = document.querySelector(".hist-table-wrap");
+      if (wrap && wrap.scrollWidth > wrap.clientWidth) {
+        wrap.scrollLeft = wrap.scrollWidth;
+      }
+    }, 80);
+
     return section("Service history", body);
   }
 

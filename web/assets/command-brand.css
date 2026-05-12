@@ -1761,6 +1761,15 @@ input[type="search"]:focus,
   border-radius: var(--r-sm);
   background: #fff;
   max-width: 100%;
+  position: relative;
+
+  /* Subtle gradient hint at the LEFT edge to suggest there's older history
+     to scroll left to. (We auto-scroll right on render to show newest scans
+     first, so the user starts looking at the right side and the left is
+     where the older data lives.) */
+  background-image: linear-gradient(to right, rgba(11, 27, 43, 0.08) 0, rgba(255, 255, 255, 0) 24px);
+  background-repeat: no-repeat;
+  background-attachment: local;
 }
 .hist-table {
   border-collapse: collapse;
