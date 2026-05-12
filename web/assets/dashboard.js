@@ -597,22 +597,84 @@
     return nearest;
   }
 
+  // ─── Hostname helpers for the Host table ─────────────────
+  // Returns true if the PTR / reverse-DNS name is one of the well-known
+  // carrier-auto-generated patterns that tells you nothing about the actual
+  // operator (e.g. Cablevision's *.cst.lightpath.net, AWS EC2 reverse names,
+  // Cloudfront/Akamai/CDN endpoints). Used to suppress useless reverse-DNS.
+  function isGenericCarrierPtr(name) {
+    if (!name) return true;
+    const n = name.toLowerCase();
+    return (
+      /\.cst\.lightpath\.net$/.test(n) ||                      // Cablevision business
+      /\.compute(-\d+)?\.amazonaws\.com$/.test(n) ||           // AWS EC2
+      /\.compute\.internal$/.test(n) ||                        // AWS internal
+      /^ec2-[\d-]+\.compute-\d+\.amazonaws\.com$/.test(n) ||   // AWS EC2 numeric
+      /\.cloudfront\.net$/.test(n) ||                          // AWS CloudFront
+      /\.googleusercontent\.com$/.test(n) ||                   // GCP
+      /\.bc\.googleusercontent\.com$/.test(n) ||
+      /\.deploy\.static\.akamaitechnologies\.com$/.test(n) ||  // Akamai
+      /\.akamaiedge\.net$/.test(n) ||
+      /\.cloudflare\.com$/.test(n) ||
+      /\.outlook\.com$/.test(n) ||                             // M365 mail edges
+      /\.protection\.outlook\.com$/.test(n) ||
+      /\.hwsrv-\d+\.hostwindsdns\.com$/.test(n) ||
+      /\.iphmx\.com$/.test(n) ||                               // Cisco Email Security (hosted)
+      /\.[a-z0-9]+\.dynamic\..+/.test(n) ||                    // generic dynamic ISP
+      /^[\d-]+\.[a-z]+\..+/.test(n) && /^\d+/.test(n.replace(/[^a-z0-9]/g, '')) // numeric-leading (most ISPs)
+    );
+  }
+
+  // Aggregate cert hostnames from any service on a given host IP.
+  // Cert CN/SAN represents what the OPERATOR configured the server to serve,
+  // which is way more informative than the carrier's auto-generated PTR.
+  function certHostnamesForHostIp(sub, ip) {
+    const services = sub.services || [];
+    const names = new Set();
+    for (const svc of services) {
+      if (svc.ip && svc.ip !== ip) continue;
+      const cn = svc.cert?.subject_cn || svc.cert?.subject || null;
+      if (cn) names.add(cn);
+      for (const san of (svc.cert?.sans || svc.cert?.subject_alt_names || [])) {
+        if (san) names.add(san);
+      }
+    }
+    // Drop wildcards (they're "*.example.com" which is operator intent but
+    // not as informative as a specific name) and dedupe.
+    return Array.from(names)
+      .filter((n) => typeof n === "string" && n.length && !n.startsWith("*"))
+      .sort();
+  }
+
   function renderHostsSection(sub) {
     const hosts = sub.hosts || [];
     if (!hosts.length) return section("Hosts", "<div class='muted'>No IP attribution available.</div>");
     const rows = hosts.map((h) => {
-      const geo = [h.city, h.region, h.country].filter(Boolean).join(", ");
+      const certNames = certHostnamesForHostIp(sub, h.ip);
+      // Hostname priority: TLS cert (operator intent) > non-generic PTR > nothing
+      let hostnameCell;
+      let hostnameHint = "";
+      if (certNames.length) {
+        const first = certNames[0];
+        const more = certNames.length > 1 ? ` <span class="muted">+${certNames.length - 1}</span>` : "";
+        hostnameCell = `<span class="td-mono" title="${escapeAttr(certNames.join('\n'))}">${escapeHtml(first)}${more}</span>`;
+        hostnameHint = '<span class="hostname-source" title="From TLS certificate (subject CN / SAN)">cert</span>';
+      } else if (h.reverse_dns && !isGenericCarrierPtr(h.reverse_dns)) {
+        hostnameCell = `<span class="td-mono muted">${escapeHtml(h.reverse_dns)}</span>`;
+        hostnameHint = '<span class="hostname-source" title="From reverse DNS (PTR record)">PTR</span>';
+      } else {
+        hostnameCell = '<span class="muted">—</span>';
+      }
       return `
         <tr>
           <td class="td-mono">${escapeHtml(h.ip || "")}</td>
           <td class="td-mono muted">${escapeHtml(h.asn || "—")}</td>
-          <td>${escapeHtml(geo) || "<span class='muted'>—</span>"}</td>
-          <td class="td-mono muted">${escapeHtml(h.reverse_dns || "—")}</td>
+          <td>${hostnameCell} ${hostnameHint}</td>
         </tr>`;
     }).join("");
     return section("Hosts", `
       <table class="data-table">
-        <thead><tr><th>IP</th><th>ASN</th><th>Location</th><th>Reverse DNS</th></tr></thead>
+        <thead><tr><th>IP</th><th>ASN</th><th>Hostname</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     `);

@@ -1746,6 +1746,25 @@ input[type="search"]:focus,
 /* ─── Add target button extras (keep accent button visually primary) */
 .top-nav .meta .btn-ghost { font-weight: 500; }
 
+/* ─── Hostname source hint in Host table ─────────────── */
+/* Tiny badge after the hostname value telling the user where the name
+   came from. 'cert' = operator-set TLS cert hostname (high signal),
+   'PTR' = reverse DNS (lower signal but non-generic). */
+.hostname-source {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  margin-left: 6px;
+  border-radius: 3px;
+  background: var(--ink-10);
+  color: var(--ink-60);
+  vertical-align: middle;
+  cursor: help;
+}
+
 /* ─── IP cross-reference UI ─────────────────────────────
    Answers "what IS this IP" by walking all apex scans and surfacing
    every hostname in the inventory whose host records list this IP. */
