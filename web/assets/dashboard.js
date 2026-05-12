@@ -613,6 +613,7 @@
       </div>
 
       ${renderSubdomainsTable(a)}
+      ${renderServiceHistorySection(a)}
       ${renderRegistrationSection(a)}
       ${renderProvenanceSection(a)}
     `;
@@ -920,6 +921,173 @@
       transport: "Transport", security: "Security", uncategorized: "Other",
     };
     return map[cat] || cat;
+  }
+
+  // ─── Service History (30-day port timeline) ──────────────
+  // Renders the per-host port-over-time timeline plus a derived
+  // change log (opened/closed events). Sourced from the `history`
+  // array in the asset JSON — each entry has ports_by_host populated
+  // by normalize.py.
+  function renderServiceHistorySection(a) {
+    const history = a.history || [];
+    if (history.length < 2) return "";   // Need at least 2 scans for a timeline to be meaningful
+
+    // Walk history grouped by SUBDOMAIN NAME (not IP) — names are stable
+    // identifiers users recognize. IPs surface as a secondary label per row.
+    // subPortMatrix: { sub_name: { port: [boolean per scan] } }
+    // ipsBySub:      { sub_name: Set<ip> } (for the per-row IP label)
+    const subPortMatrix = {};
+    const ipsBySub = {};
+    history.forEach((entry) => {
+      const pbs = entry.ports_by_sub || {};
+      for (const [sub, ipMap] of Object.entries(pbs)) {
+        if (!subPortMatrix[sub]) subPortMatrix[sub] = {};
+        if (!ipsBySub[sub]) ipsBySub[sub] = new Set();
+        for (const [ip, ports] of Object.entries(ipMap)) {
+          ipsBySub[sub].add(ip);
+          for (const port of ports) {
+            if (!subPortMatrix[sub][port]) subPortMatrix[sub][port] = null;  // placeholder; series built below
+          }
+        }
+      }
+    });
+    // Second pass: build the boolean series per (sub, port) across history
+    for (const sub of Object.keys(subPortMatrix)) {
+      for (const port of Object.keys(subPortMatrix[sub])) {
+        const series = history.map((entry) => {
+          const ipMap = (entry.ports_by_sub || {})[sub] || {};
+          // Flatten all ports across all IPs this sub had this scan
+          for (const portList of Object.values(ipMap)) {
+            if (portList.includes(Number(port))) return true;
+          }
+          return false;
+        });
+        subPortMatrix[sub][port] = series;
+      }
+    }
+
+    const subNames = Object.keys(subPortMatrix).sort((a, b) => {
+      // Sort: apex/root entries first, then alphabetical
+      const aRoot = a === (a.asset?.value || ""), bRoot = b === (b.asset?.value || "");
+      if (aRoot && !bRoot) return -1;
+      if (!aRoot && bRoot) return 1;
+      return a.localeCompare(b);
+    });
+    if (!subNames.length) {
+      return section("Service history", "<div class='muted'>No service history captured yet. Build up over the next few scans.</div>");
+    }
+
+    // Render the timeline as a grid: rows = port (grouped by host), cols = scans
+    // Use abbreviated scan timestamps as column labels — only show every Nth label
+    // to avoid horizontal overflow when there are many scans
+    const colCount = history.length;
+    const labelStride = Math.max(1, Math.ceil(colCount / 12));  // ~12 visible labels max
+    const colHeaders = history.map((entry, idx) => {
+      const ts = entry.started_at || entry.completed_at || "";
+      const m = ts.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):/);
+      const label = m ? `${m[2]}/${m[3]} ${m[4]}h` : "";
+      const show = (idx % labelStride === 0) || idx === colCount - 1;
+      return `<th class="hist-col-header ${show ? "" : "muted"}" title="${escapeAttr(ts)}">${show ? escapeHtml(label) : "·"}</th>`;
+    }).join("");
+
+    const rows = [];
+    for (const sub of subNames) {
+      const ports = Object.keys(subPortMatrix[sub]).map(Number).sort((a, b) => a - b);
+      const ipList = Array.from(ipsBySub[sub] || []).sort();
+      const ipLabel = ipList.length === 0 ? "" :
+                      ipList.length === 1 ? ipList[0] :
+                      `${ipList[0]} +${ipList.length - 1}`;
+      ports.forEach((port, pIdx) => {
+        const series = subPortMatrix[sub][port];
+        const cells = series.map((open) =>
+          `<td class="hist-cell ${open ? "open" : "closed"}" title="${open ? "open" : "closed"}"></td>`
+        ).join("");
+        const subLabel = pIdx === 0
+          ? `<td class="hist-host-label" rowspan="${ports.length}">
+               <div class="hist-sub-name td-mono">${escapeHtml(sub)}</div>
+               ${ipLabel ? `<div class="hist-sub-ip td-mono muted">${escapeHtml(ipLabel)}</div>` : ""}
+             </td>`
+          : "";
+        rows.push(`
+          <tr class="hist-row">
+            ${subLabel}
+            <td class="hist-port td-mono">${port}</td>
+            ${cells}
+          </tr>`);
+      });
+    }
+
+    // Derived change log — opened/closed events with timestamps, keyed by sub
+    const events = [];
+    for (const sub of subNames) {
+      for (const port of Object.keys(subPortMatrix[sub])) {
+        const series = subPortMatrix[sub][port];
+        for (let i = 1; i < series.length; i++) {
+          if (series[i] !== series[i - 1]) {
+            events.push({
+              when: history[i].started_at || history[i].completed_at || history[i].scan_id,
+              sub,
+              port: Number(port),
+              kind: series[i] ? "opened" : "closed",
+            });
+          }
+        }
+      }
+    }
+    events.sort((a, b) => (b.when || "").localeCompare(a.when || ""));
+    const recentEvents = events.slice(0, 20);
+    const eventList = recentEvents.length === 0
+      ? `<div class="muted">No port-state changes in the retained history window.</div>`
+      : `<ul class="hist-events">
+          ${recentEvents.map((e) => `
+            <li class="hist-event hist-event-${e.kind}">
+              <span class="hist-event-time">${escapeHtml(formatRelTimeShort(e.when))}</span>
+              <span class="hist-event-kind">${e.kind.toUpperCase()}</span>
+              <span class="td-mono">${escapeHtml(e.sub)}:${e.port}</span>
+            </li>
+          `).join("")}
+        </ul>`;
+
+    const body = `
+      <div class="hist-meta">
+        ${history.length} scan${history.length === 1 ? "" : "s"} retained · oldest:
+        <span class="td-mono">${escapeHtml(history[0].started_at || history[0].scan_id)}</span>
+      </div>
+      <div class="hist-table-wrap">
+        <table class="hist-table">
+          <thead>
+            <tr>
+              <th class="hist-corner">Subdomain</th>
+              <th class="hist-corner">Port</th>
+              ${colHeaders}
+            </tr>
+          </thead>
+          <tbody>${rows.join("")}</tbody>
+        </table>
+      </div>
+      <div class="hist-legend">
+        <span><span class="hist-cell open"></span> open</span>
+        <span><span class="hist-cell closed"></span> closed</span>
+      </div>
+      <h5 class="hist-events-title">Recent port changes</h5>
+      ${eventList}
+    `;
+    return section("Service history", body);
+  }
+
+  // Helper for short relative time labels in the event list
+  function formatRelTimeShort(iso) {
+    if (!iso) return "—";
+    const t = new Date(iso).getTime();
+    if (isNaN(t)) return iso;
+    const diff = Date.now() - t;
+    const m = Math.floor(diff / 60000);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    if (d < 30) return `${d}d ago`;
+    return iso.slice(0, 10);
   }
 
   function renderRegistrationSection(a) {

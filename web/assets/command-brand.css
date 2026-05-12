@@ -1746,6 +1746,184 @@ input[type="search"]:focus,
 /* ─── Add target button extras (keep accent button visually primary) */
 .top-nav .meta .btn-ghost { font-weight: 500; }
 
+/* ─── Service History (30-day port timeline) ───────────
+   Grid of port-state-over-scans for each host on an asset.
+   Each cell = one scan; color = open/closed. Flap badge marks
+   ports that changed state in the recent window. */
+.hist-meta {
+  font-size: 12.5px;
+  color: var(--ink-60);
+  margin-bottom: var(--s3);
+}
+.hist-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--paper-rule);
+  border-radius: var(--r-sm);
+  background: #fff;
+  max-width: 100%;
+}
+.hist-table {
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.hist-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--paper-2);
+  border-bottom: 1px solid var(--paper-rule);
+  padding: 6px 4px;
+  color: var(--ink-60);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 10px;
+  text-align: center;
+  white-space: nowrap;
+  z-index: 1;
+}
+.hist-table .hist-corner {
+  text-align: left;
+  padding: 6px 10px;
+  position: sticky;
+  left: 0;
+  background: var(--paper-2);
+  z-index: 2;
+}
+.hist-col-header.muted {
+  color: var(--ink-40);
+  font-size: 9px;
+}
+.hist-row {
+  border-bottom: 1px solid var(--ink-05);
+}
+.hist-row:hover {
+  background: var(--ink-05);
+}
+.hist-host-label {
+  padding: 8px 10px;
+  vertical-align: top;
+  border-right: 1px solid var(--paper-rule);
+  position: sticky;
+  left: 0;
+  background: #fff;
+  white-space: nowrap;
+}
+.hist-row:hover .hist-host-label {
+  background: var(--ink-05);
+}
+.hist-sub-name {
+  font-size: 12.5px;
+  color: var(--ink);
+  font-weight: 500;
+}
+.hist-sub-ip {
+  font-size: 10.5px;
+  margin-top: 2px;
+}
+.hist-port {
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--ink);
+  border-right: 1px solid var(--paper-rule);
+  white-space: nowrap;
+  position: sticky;
+  left: 110px;
+  background: inherit;
+}
+.hist-cell {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin: 1px;
+  border-radius: 2px;
+  border: 1px solid transparent;
+  vertical-align: middle;
+}
+td.hist-cell {
+  width: 16px;
+  padding: 3px 1px;
+}
+.hist-cell.open {
+  background: var(--copper);
+  border-color: var(--copper-ink);
+}
+.hist-cell.closed {
+  background: var(--ink-05);
+  border-color: var(--ink-10);
+}
+.hist-legend {
+  display: flex;
+  gap: var(--s4);
+  align-items: center;
+  font-size: 12px;
+  color: var(--ink-60);
+  margin: var(--s3) 0;
+}
+.hist-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Change log under the timeline */
+.hist-events-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+  margin: var(--s4) 0 var(--s3);
+  font-weight: 600;
+}
+.hist-events {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--paper-rule);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  max-height: 280px;
+  overflow-y: auto;
+}
+.hist-event {
+  display: grid;
+  grid-template-columns: 100px 80px 1fr;
+  gap: var(--s3);
+  align-items: center;
+  padding: 8px 12px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  border-bottom: 1px solid var(--ink-05);
+}
+.hist-event:last-child {
+  border-bottom: 0;
+}
+.hist-event-time {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-60);
+}
+.hist-event-kind {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 3px;
+  text-align: center;
+  text-transform: uppercase;
+}
+.hist-event-opened .hist-event-kind {
+  background: var(--copper-soft);
+  color: var(--copper-ink);
+}
+.hist-event-closed .hist-event-kind {
+  background: var(--ink-10);
+  color: var(--ink-80);
+}
+
 /* ─── Per-card rescan button ───────────────────────────
    Tucked into the card footer next to the drill hint. Stops click
    propagation so it doesn't accidentally open the drawer. */
