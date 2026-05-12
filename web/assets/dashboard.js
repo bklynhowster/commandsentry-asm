@@ -932,50 +932,51 @@
     const history = a.history || [];
     if (history.length < 2) return "";   // Need at least 2 scans for a timeline to be meaningful
 
-    // Walk history grouped by SUBDOMAIN NAME (not IP) — names are stable
-    // identifiers users recognize. IPs surface as a secondary label per row.
-    // subPortMatrix: { sub_name: { port: [boolean per scan] } }
-    // ipsBySub:      { sub_name: Set<ip> } (for the per-row IP label)
-    const subPortMatrix = {};
-    const ipsBySub = {};
-    history.forEach((entry) => {
-      const pbs = entry.ports_by_sub || {};
-      for (const [sub, ipMap] of Object.entries(pbs)) {
-        if (!subPortMatrix[sub]) subPortMatrix[sub] = {};
-        if (!ipsBySub[sub]) ipsBySub[sub] = new Set();
-        for (const [ip, ports] of Object.entries(ipMap)) {
-          ipsBySub[sub].add(ip);
-          for (const port of ports) {
-            if (!subPortMatrix[sub][port]) subPortMatrix[sub][port] = null;  // placeholder; series built below
+    // Collect all hosts ever seen across history + their port history
+    // hostPortMatrix: { ip: { port: [boolean, boolean, ...] } } parallel to history[]
+    const hostPortMatrix = {};
+    const allPortsPerHost = {};
+    history.forEach((entry, idx) => {
+      const pbh = entry.ports_by_host || {};
+      for (const [ip, ports] of Object.entries(pbh)) {
+        if (!hostPortMatrix[ip]) hostPortMatrix[ip] = {};
+        if (!allPortsPerHost[ip]) allPortsPerHost[ip] = new Set();
+        for (const port of ports) {
+          if (!hostPortMatrix[ip][port]) {
+            // Backfill with false for the scans we haven't seen this port in yet
+            hostPortMatrix[ip][port] = new Array(idx).fill(false);
           }
+          allPortsPerHost[ip].add(port);
         }
+        // For this scan index, mark each port we've ever seen as either true or false
       }
     });
-    // Second pass: build the boolean series per (sub, port) across history
-    for (const sub of Object.keys(subPortMatrix)) {
-      for (const port of Object.keys(subPortMatrix[sub])) {
-        const series = history.map((entry) => {
-          const ipMap = (entry.ports_by_sub || {})[sub] || {};
-          // Flatten all ports across all IPs this sub had this scan
-          for (const portList of Object.values(ipMap)) {
-            if (portList.includes(Number(port))) return true;
-          }
-          return false;
+    // Now do a second pass to fill in each port-row's true/false per scan
+    for (const ip of Object.keys(hostPortMatrix)) {
+      for (const port of Object.keys(hostPortMatrix[ip])) {
+        const series = [];
+        history.forEach((entry) => {
+          const portsThisScan = (entry.ports_by_host || {})[ip] || [];
+          series.push(portsThisScan.includes(Number(port)));
         });
-        subPortMatrix[sub][port] = series;
+        hostPortMatrix[ip][port] = series;
       }
     }
 
-    const subNames = Object.keys(subPortMatrix).sort((a, b) => {
-      // Sort: apex/root entries first, then alphabetical
-      const aRoot = a === (a.asset?.value || ""), bRoot = b === (b.asset?.value || "");
-      if (aRoot && !bRoot) return -1;
-      if (!aRoot && bRoot) return 1;
-      return a.localeCompare(b);
-    });
-    if (!subNames.length) {
+    const hostIps = Object.keys(hostPortMatrix).sort();
+    if (!hostIps.length) {
       return section("Service history", "<div class='muted'>No service history captured yet. Build up over the next few scans.</div>");
     }
+
+    // Detect flap: a port that changed state at least once in the last 10 scans
+    const flapWindow = Math.min(10, history.length);
+    const isFlapping = (series) => {
+      const recent = series.slice(-flapWindow);
+      for (let i = 1; i < recent.length; i++) {
+        if (recent[i] !== recent[i - 1]) return true;
+      }
+      return false;
+    };
 
     // Render the timeline as a grid: rows = port (grouped by host), cols = scans
     // Use abbreviated scan timestamps as column labels — only show every Nth label
@@ -991,42 +992,36 @@
     }).join("");
 
     const rows = [];
-    for (const sub of subNames) {
-      const ports = Object.keys(subPortMatrix[sub]).map(Number).sort((a, b) => a - b);
-      const ipList = Array.from(ipsBySub[sub] || []).sort();
-      const ipLabel = ipList.length === 0 ? "" :
-                      ipList.length === 1 ? ipList[0] :
-                      `${ipList[0]} +${ipList.length - 1}`;
+    for (const ip of hostIps) {
+      const ports = Object.keys(hostPortMatrix[ip]).map(Number).sort((a, b) => a - b);
       ports.forEach((port, pIdx) => {
-        const series = subPortMatrix[sub][port];
+        const series = hostPortMatrix[ip][port];
+        const flap = isFlapping(series);
         const cells = series.map((open) =>
           `<td class="hist-cell ${open ? "open" : "closed"}" title="${open ? "open" : "closed"}"></td>`
         ).join("");
-        const subLabel = pIdx === 0
-          ? `<td class="hist-host-label" rowspan="${ports.length}">
-               <div class="hist-sub-name td-mono">${escapeHtml(sub)}</div>
-               ${ipLabel ? `<div class="hist-sub-ip td-mono muted">${escapeHtml(ipLabel)}</div>` : ""}
-             </td>`
+        const hostLabel = pIdx === 0
+          ? `<td class="hist-host-label td-mono" rowspan="${ports.length}">${escapeHtml(ip)}</td>`
           : "";
         rows.push(`
-          <tr class="hist-row">
-            ${subLabel}
-            <td class="hist-port td-mono">${port}</td>
+          <tr class="hist-row ${flap ? "hist-row-flap" : ""}">
+            ${hostLabel}
+            <td class="hist-port td-mono">${port}${flap ? '<span class="hist-flap-badge" title="Port state changed within the last 10 scans">flap</span>' : ""}</td>
             ${cells}
           </tr>`);
       });
     }
 
-    // Derived change log — opened/closed events with timestamps, keyed by sub
+    // Derived change log — opened/closed events with timestamps
     const events = [];
-    for (const sub of subNames) {
-      for (const port of Object.keys(subPortMatrix[sub])) {
-        const series = subPortMatrix[sub][port];
+    for (const ip of hostIps) {
+      for (const port of Object.keys(hostPortMatrix[ip])) {
+        const series = hostPortMatrix[ip][port];
         for (let i = 1; i < series.length; i++) {
           if (series[i] !== series[i - 1]) {
             events.push({
               when: history[i].started_at || history[i].completed_at || history[i].scan_id,
-              sub,
+              ip,
               port: Number(port),
               kind: series[i] ? "opened" : "closed",
             });
@@ -1043,7 +1038,7 @@
             <li class="hist-event hist-event-${e.kind}">
               <span class="hist-event-time">${escapeHtml(formatRelTimeShort(e.when))}</span>
               <span class="hist-event-kind">${e.kind.toUpperCase()}</span>
-              <span class="td-mono">${escapeHtml(e.sub)}:${e.port}</span>
+              <span class="td-mono">${escapeHtml(e.ip)}:${e.port}</span>
             </li>
           `).join("")}
         </ul>`;
@@ -1057,7 +1052,7 @@
         <table class="hist-table">
           <thead>
             <tr>
-              <th class="hist-corner">Subdomain</th>
+              <th class="hist-corner">Host</th>
               <th class="hist-corner">Port</th>
               ${colHeaders}
             </tr>
@@ -1068,6 +1063,7 @@
       <div class="hist-legend">
         <span><span class="hist-cell open"></span> open</span>
         <span><span class="hist-cell closed"></span> closed</span>
+        <span><span class="hist-flap-badge">flap</span> state changed in last ${flapWindow} scans</span>
       </div>
       <h5 class="hist-events-title">Recent port changes</h5>
       ${eventList}

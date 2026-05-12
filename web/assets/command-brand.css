@@ -1800,26 +1800,22 @@ input[type="search"]:focus,
 .hist-row:hover {
   background: var(--ink-05);
 }
+.hist-row-flap {
+  background: rgba(200, 99, 42, 0.04);
+}
+.hist-row-flap:hover {
+  background: rgba(200, 99, 42, 0.10);
+}
 .hist-host-label {
-  padding: 8px 10px;
+  padding: 6px 10px;
   vertical-align: top;
+  font-size: 12px;
+  color: var(--ink);
   border-right: 1px solid var(--paper-rule);
   position: sticky;
   left: 0;
-  background: #fff;
+  background: inherit;
   white-space: nowrap;
-}
-.hist-row:hover .hist-host-label {
-  background: var(--ink-05);
-}
-.hist-sub-name {
-  font-size: 12.5px;
-  color: var(--ink);
-  font-weight: 500;
-}
-.hist-sub-ip {
-  font-size: 10.5px;
-  margin-top: 2px;
 }
 .hist-port {
   padding: 4px 10px;
@@ -1852,6 +1848,21 @@ td.hist-cell {
 .hist-cell.closed {
   background: var(--ink-05);
   border-color: var(--ink-10);
+}
+.hist-flap-badge {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  margin-left: 6px;
+  background: var(--copper-soft);
+  color: var(--copper-ink);
+  border: 1px solid var(--copper);
+  border-radius: 3px;
+  vertical-align: middle;
 }
 .hist-legend {
   display: flex;

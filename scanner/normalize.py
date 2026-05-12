@@ -705,35 +705,19 @@ def main():
     # HISTORY_RETENTION_ENTRIES if cadence changes.
     HISTORY_RETENTION_ENTRIES = 120
 
-    # Build per-sub port map: { sub_name: { ip: [sorted unique ports] } }
-    # Indexing by HOSTNAME (not IP) so the dashboard timeline shows
-    # 'test.commandcommcentral.com' rather than '24.38.70.8' — names are
-    # stable identifiers users recognize, IPs are implementation detail.
-    # Nested ip dimension preserves IP attribution so the dashboard can
-    # still display 'this sub was on IP X' as a sub-label.
-    ports_by_sub: dict[str, dict[str, list[int]]] = {}
+    # Build per-host port map: { ip: [sorted unique ports] }
+    ports_by_host: dict[str, list[int]] = {}
     for sub in asset_json.get("subdomains", []):
-        sub_name = sub.get("name")
-        if not sub_name:
-            continue
-        ports_by_sub[sub_name] = {}
         for svc in sub.get("services", []):
             ip = svc.get("ip")
             port = svc.get("port")
             if not ip or not isinstance(port, int):
                 continue
-            ports_by_sub[sub_name].setdefault(ip, [])
-            if port not in ports_by_sub[sub_name][ip]:
-                ports_by_sub[sub_name][ip].append(port)
-        for ip in ports_by_sub[sub_name]:
-            ports_by_sub[sub_name][ip].sort()
-
-    # Sorted list of subdomain names this scan saw — used by the alerter to
-    # detect 'N consecutive absences' before firing 'subdomain went away'
-    # alerts (avoids false positives from wordlist enum hiccups).
-    subdomain_names = sorted({
-        s.get("name") for s in asset_json.get("subdomains", []) if s.get("name")
-    })
+            ports_by_host.setdefault(ip, [])
+            if port not in ports_by_host[ip]:
+                ports_by_host[ip].append(port)
+    for ip in ports_by_host:
+        ports_by_host[ip].sort()
 
     prev_history = (prev.get("history", []) if prev else [])
     summary = asset_json["summary"]
@@ -745,8 +729,7 @@ def main():
         "live_subdomain_count": summary["live_subdomain_count"],
         "host_count":           summary["host_count"],
         "service_count":        summary["service_count"],
-        "subdomain_names":      subdomain_names,
-        "ports_by_sub":         ports_by_sub,
+        "ports_by_host":        ports_by_host,
     }
     # Keep the last (RETENTION - 1) prior entries + this new one = RETENTION total
     asset_json["history"] = prev_history[-(HISTORY_RETENTION_ENTRIES - 1):] + [new_entry]
