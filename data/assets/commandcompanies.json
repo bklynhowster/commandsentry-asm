@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-13T01:25:14Z_df715c43",
-    "started_at": "2026-05-13T01:25:14Z",
-    "completed_at": "2026-05-13T01:26:45Z",
-    "duration_seconds": 91,
+    "id": "scan_2026-05-13T04:02:32Z_056dc41d",
+    "started_at": "2026-05-13T04:02:32Z",
+    "completed_at": "2026-05-13T04:04:22Z",
+    "duration_seconds": 110,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -32,7 +32,7 @@
     "live_subdomain_count": 2,
     "host_count": 1,
     "service_count": 4,
-    "newest_cert_expiry_days": 37,
+    "newest_cert_expiry_days": 36,
     "top_hosting_org": "Automattic, Inc",
     "platforms": [
       "WordPress on wp.cloud (Pressable)"
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-13T01:26:45Z",
-      "last_seen": "2026-05-13T01:26:45Z",
+      "first_discovered": "2026-05-13T04:04:22Z",
+      "last_seen": "2026-05-13T04:04:22Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -90,7 +90,7 @@
             "not_before": "2026-03-21T02:43:26Z",
             "not_after": "2026-06-19T02:43:25Z",
             "self_signed": false,
-            "days_to_expiry": 37
+            "days_to_expiry": 36
           }
         }
       ],
@@ -106,10 +106,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
-          "MS=ms93622757",
-          "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430"
+          "MS=ms93622757",
+          "apple-domain-verification=cWkfjNKuM61a3EZ6"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -137,6 +137,11 @@
             "name": "HSTS",
             "version": null,
             "category": "security"
+          },
+          {
+            "name": "HTTP/3",
+            "version": null,
+            "category": "transport"
           },
           {
             "name": "MySQL",
@@ -221,8 +226,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-13T01:26:45Z",
-      "last_seen": "2026-05-13T01:26:45Z",
+      "first_discovered": "2026-05-13T04:04:22Z",
+      "last_seen": "2026-05-13T04:04:22Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -267,7 +272,7 @@
             "not_before": "2026-03-21T02:43:26Z",
             "not_after": "2026-06-19T02:43:25Z",
             "self_signed": false,
-            "days_to_expiry": 37
+            "days_to_expiry": 36
           }
         }
       ],
@@ -392,7 +397,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-13T00:45:03Z_a482fff4",
+    "since_scan": "scan_2026-05-13T01:25:14Z_df715c43",
     "added": {
       "subdomains": [],
       "services": [],
@@ -984,6 +989,33 @@
       "scan_id": "scan_2026-05-13T01:25:14Z_df715c43",
       "started_at": "2026-05-13T01:25:14Z",
       "completed_at": "2026-05-13T01:26:45Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 1,
+      "service_count": 4,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
+      }
+    },
+    {
+      "scan_id": "scan_2026-05-13T04:02:32Z_056dc41d",
+      "started_at": "2026-05-13T04:02:32Z",
+      "completed_at": "2026-05-13T04:04:22Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 1,
