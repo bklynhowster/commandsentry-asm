@@ -96,12 +96,50 @@ def collect_alerts() -> list[Alert]:
                 f"{sc} live subdomain(s), {hc} host(s), {vc} service(s)."
             ))
 
-        # WATCH: new IPs (per subdomain)
+        # Reusable absence check — was X present in any of the last N scans?
+        # If yes, this isn't really 'new', it's a flapping return. Use the same
+        # N=3 threshold as the "subdomain went away" suppression for symmetry.
+        # The wordlist enum is probabilistic (parallel dig + 2-sec timeout),
+        # so a sub/host/service can flicker out and back across single scans
+        # purely from network noise — those should be silent, not a 7-alert
+        # cascade every time it returns.
+        ABSENCE_THRESHOLD = 3
+        history = asset.get("history") or []
+        # Walk backwards through the prior N entries (skipping the current scan
+        # which is history[-1] — we only care about whether it was present
+        # BEFORE this scan).
+        recent_prior = history[-(ABSENCE_THRESHOLD + 1):-1] if len(history) > 1 else []
+
+        def was_sub_recent(sub_name: str) -> bool:
+            for entry in recent_prior:
+                if sub_name in (entry.get("subdomain_names") or []):
+                    return True
+            return False
+
+        def was_host_recent(sub_name: str, ip: str) -> bool:
+            for entry in recent_prior:
+                ip_map = (entry.get("ports_by_sub") or {}).get(sub_name) or {}
+                if ip in ip_map:
+                    return True
+            return False
+
+        def was_service_recent(sub_name: str, ip: str, port) -> bool:
+            for entry in recent_prior:
+                ip_map = (entry.get("ports_by_sub") or {}).get(sub_name) or {}
+                if port in (ip_map.get(ip) or []):
+                    return True
+            return False
+
+        # WATCH: new IPs (per subdomain) — only if the (sub, ip) pair is
+        # genuinely new (not in the last 3 prior scans).
         for h in (added.get("hosts") or []):
             sub = h.get("subdomain") or "?"
+            ip = h.get("ip")
+            if was_host_recent(sub, ip):
+                continue  # flapping return, not actually new
             out.append(Alert(
                 "watch", aname, "new_host",
-                f"New host IP {h.get('ip')} on {sub}",
+                f"New host IP {ip} on {sub}",
                 "Hosting expanded or moved."
             ))
         for h in (removed.get("hosts") or []):
@@ -109,21 +147,29 @@ def collect_alerts() -> list[Alert]:
             out.append(Alert("notice", aname, "host_removed",
                              f"Host IP {h.get('ip')} removed from {sub}", ""))
 
-        # WATCH: new services (per subdomain)
+        # WATCH: new services (per subdomain) — only if (sub, ip, port) is
+        # genuinely new.
         for s in (added.get("services") or []):
             sub = s.get("subdomain") or "?"
+            ip = s.get("ip")
+            port = s.get("port")
+            if was_service_recent(sub, ip, port):
+                continue
             out.append(Alert(
                 "watch", aname, "new_service",
-                f"New service open on {sub}: {s.get('port')}/{s.get('protocol')}",
-                f"On host {s.get('ip')}. Port wasn't open in the previous scan."
+                f"New service open on {sub}: {port}/{s.get('protocol')}",
+                f"On host {ip}. Port wasn't open in the last {ABSENCE_THRESHOLD} scans."
             ))
         for s in (removed.get("services") or []):
             sub = s.get("subdomain") or "?"
             out.append(Alert("notice", aname, "service_closed",
                              f"Service closed on {sub}: {s.get('port')}/{s.get('protocol')}", ""))
 
-        # NOTICE: new subdomain
+        # NOTICE: new subdomain — only if the sub is genuinely new
+        # (not seen in the last 3 prior scans).
         for sub in (added.get("subdomains") or []):
+            if was_sub_recent(sub):
+                continue
             out.append(Alert("notice", aname, "new_subdomain",
                              f"New subdomain discovered: {sub}",
                              "Surfaced via multi-source enumeration (passive CT logs, DNS records, wordlist brute-force, or TLS cert SANs)."))
