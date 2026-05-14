@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-14T01:36:18Z_1b0e8b51",
-    "started_at": "2026-05-14T01:36:18Z",
-    "completed_at": "2026-05-14T01:37:46Z",
-    "duration_seconds": 88,
+    "id": "scan_2026-05-14T04:13:22Z_5c405683",
+    "started_at": "2026-05-14T04:13:22Z",
+    "completed_at": "2026-05-14T04:15:25Z",
+    "duration_seconds": 123,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -40,8 +40,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-05-14T01:37:47Z",
-      "last_seen": "2026-05-14T01:37:47Z",
+      "first_discovered": "2026-05-14T04:15:25Z",
+      "last_seen": "2026-05-14T04:15:25Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -111,7 +111,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-14T00:47:38Z_ecc33ee2",
+    "since_scan": "scan_2026-05-14T01:36:18Z_1b0e8b51",
     "added": {
       "subdomains": [],
       "services": [],
@@ -413,6 +413,26 @@
       "scan_id": "scan_2026-05-14T01:36:18Z_1b0e8b51",
       "started_at": "2026-05-14T01:36:18Z",
       "completed_at": "2026-05-14T01:37:46Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_names": [
+        "24.38.70.9"
+      ],
+      "ports_by_sub": {
+        "24.38.70.9": {
+          "24.38.70.9": [
+            80,
+            443
+          ]
+        }
+      }
+    },
+    {
+      "scan_id": "scan_2026-05-14T04:13:22Z_5c405683",
+      "started_at": "2026-05-14T04:13:22Z",
+      "completed_at": "2026-05-14T04:15:25Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 1,
