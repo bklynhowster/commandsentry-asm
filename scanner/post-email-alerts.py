@@ -96,83 +96,103 @@ def collect_alerts() -> list[Alert]:
                 f"{sc} live subdomain(s), {hc} host(s), {vc} service(s)."
             ))
 
-        # Reusable absence check — was X present in any of the last N scans?
-        # If yes, this isn't really 'new', it's a flapping return. Use the same
-        # N=3 threshold as the "subdomain went away" suppression for symmetry.
-        # The wordlist enum is probabilistic (parallel dig + 2-sec timeout),
-        # so a sub/host/service can flicker out and back across single scans
-        # purely from network noise — those should be silent, not a 7-alert
-        # cascade every time it returns.
-        ABSENCE_THRESHOLD = 3
+        # Two-scan-confirmation logic for 'new' alerts. The previous version
+        # of this code suppressed alerts when X appeared in the prior 3 scans
+        # (handles 'X went away then came back'). But it still fired on the
+        # FIRST sighting — which catches single-scan wordlist flickers as
+        # false positives (e.g. accounts.sciimage.com surfaced once via dig
+        # then never resolved again).
+        #
+        # New approach: a sub / (sub,ip) / (sub,ip,port) only fires its 'new'
+        # alert when present in BOTH the current scan AND the immediately
+        # previous scan, AND absent from all retained earlier scans. This:
+        #   1. Silences single-scan flickers (false positives) — they never
+        #      get the 2-scan confirmation
+        #   2. Delays legit alerts by one scan (~6h at default cadence) —
+        #      acceptable trade for filtered noise
+        #   3. Subsumes the prior 'recent absence' check — a sub seen earlier
+        #      then re-found is in earlier_set, so it's filtered out
         history = asset.get("history") or []
-        # Walk backwards through the prior N entries (skipping the current scan
-        # which is history[-1] — we only care about whether it was present
-        # BEFORE this scan).
-        recent_prior = history[-(ABSENCE_THRESHOLD + 1):-1] if len(history) > 1 else []
+        if len(history) < 2:
+            # Not enough history yet to do 2-scan confirmation — skip the
+            # 'new' alerts entirely. (The first-scan alert is handled
+            # separately as 'first_scan' above.)
+            confirmed_new_subs = set()
+            confirmed_new_hosts = set()        # set of (sub, ip)
+            confirmed_new_services = set()     # set of (sub, ip, port)
+        else:
+            current = history[-1]
+            prev = history[-2]
+            earlier = history[:-2]
 
-        def was_sub_recent(sub_name: str) -> bool:
-            for entry in recent_prior:
-                if sub_name in (entry.get("subdomain_names") or []):
-                    return True
-            return False
+            # Build subdomain sets
+            current_subs  = set(current.get("subdomain_names") or [])
+            prev_subs     = set(prev.get("subdomain_names") or [])
+            earlier_subs  = set()
+            for entry in earlier:
+                earlier_subs.update(entry.get("subdomain_names") or [])
+            confirmed_new_subs = (current_subs & prev_subs) - earlier_subs
 
-        def was_host_recent(sub_name: str, ip: str) -> bool:
-            for entry in recent_prior:
-                ip_map = (entry.get("ports_by_sub") or {}).get(sub_name) or {}
-                if ip in ip_map:
-                    return True
-            return False
+            # Build (sub, ip) sets from ports_by_sub
+            def host_set(entry: dict) -> set:
+                bag = set()
+                for sub_name, ip_map in (entry.get("ports_by_sub") or {}).items():
+                    for ip in (ip_map or {}).keys():
+                        bag.add((sub_name, ip))
+                return bag
+            current_hosts = host_set(current)
+            prev_hosts    = host_set(prev)
+            earlier_hosts = set()
+            for entry in earlier:
+                earlier_hosts.update(host_set(entry))
+            confirmed_new_hosts = (current_hosts & prev_hosts) - earlier_hosts
 
-        def was_service_recent(sub_name: str, ip: str, port) -> bool:
-            for entry in recent_prior:
-                ip_map = (entry.get("ports_by_sub") or {}).get(sub_name) or {}
-                if port in (ip_map.get(ip) or []):
-                    return True
-            return False
+            # Build (sub, ip, port) sets from ports_by_sub
+            def service_set(entry: dict) -> set:
+                bag = set()
+                for sub_name, ip_map in (entry.get("ports_by_sub") or {}).items():
+                    for ip, ports in (ip_map or {}).items():
+                        for port in ports:
+                            bag.add((sub_name, ip, port))
+                return bag
+            current_svcs = service_set(current)
+            prev_svcs    = service_set(prev)
+            earlier_svcs = set()
+            for entry in earlier:
+                earlier_svcs.update(service_set(entry))
+            confirmed_new_services = (current_svcs & prev_svcs) - earlier_svcs
 
-        # WATCH: new IPs (per subdomain) — only if the (sub, ip) pair is
-        # genuinely new (not in the last 3 prior scans).
-        for h in (added.get("hosts") or []):
-            sub = h.get("subdomain") or "?"
-            ip = h.get("ip")
-            if was_host_recent(sub, ip):
-                continue  # flapping return, not actually new
+        # WATCH: new hosts — confirmed by 2 consecutive scans, never seen before
+        for (sub, ip) in sorted(confirmed_new_hosts):
             out.append(Alert(
                 "watch", aname, "new_host",
                 f"New host IP {ip} on {sub}",
-                "Hosting expanded or moved."
+                "Confirmed by 2 consecutive scans. Hosting expanded or moved."
             ))
+        # Removals still come from deltas — single-scan removal is fine,
+        # the symmetric 'gone' suppression handled below uses its own threshold.
         for h in (removed.get("hosts") or []):
             sub = h.get("subdomain") or "?"
             out.append(Alert("notice", aname, "host_removed",
                              f"Host IP {h.get('ip')} removed from {sub}", ""))
 
-        # WATCH: new services (per subdomain) — only if (sub, ip, port) is
-        # genuinely new.
-        for s in (added.get("services") or []):
-            sub = s.get("subdomain") or "?"
-            ip = s.get("ip")
-            port = s.get("port")
-            if was_service_recent(sub, ip, port):
-                continue
+        # WATCH: new services — confirmed by 2 consecutive scans, never seen before
+        for (sub, ip, port) in sorted(confirmed_new_services):
             out.append(Alert(
                 "watch", aname, "new_service",
-                f"New service open on {sub}: {port}/{s.get('protocol')}",
-                f"On host {ip}. Port wasn't open in the last {ABSENCE_THRESHOLD} scans."
+                f"New service open on {sub}: {port}/tcp",
+                f"On host {ip}. Confirmed by 2 consecutive scans."
             ))
         for s in (removed.get("services") or []):
             sub = s.get("subdomain") or "?"
             out.append(Alert("notice", aname, "service_closed",
                              f"Service closed on {sub}: {s.get('port')}/{s.get('protocol')}", ""))
 
-        # NOTICE: new subdomain — only if the sub is genuinely new
-        # (not seen in the last 3 prior scans).
-        for sub in (added.get("subdomains") or []):
-            if was_sub_recent(sub):
-                continue
+        # NOTICE: new subdomain — confirmed by 2 consecutive scans, never seen before
+        for sub in sorted(confirmed_new_subs):
             out.append(Alert("notice", aname, "new_subdomain",
                              f"New subdomain discovered: {sub}",
-                             "Surfaced via multi-source enumeration (passive CT logs, DNS records, wordlist brute-force, or TLS cert SANs)."))
+                             "Confirmed by 2 consecutive scans. Surfaced via multi-source enumeration (passive CT logs, DNS records, wordlist brute-force, or TLS cert SANs)."))
 
         # NOTICE: subdomain went away — but ONLY fire if it's been absent for
         # 3+ consecutive scans. The wordlist enum is probabilistic (parallel
