@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-15T14:25:16Z_27b3924a",
-    "started_at": "2026-05-15T14:25:16Z",
-    "completed_at": "2026-05-15T14:26:39Z",
-    "duration_seconds": 83,
+    "id": "scan_2026-05-15T19:48:56Z_9ec9df3d",
+    "started_at": "2026-05-15T19:48:56Z",
+    "completed_at": "2026-05-15T19:50:50Z",
+    "duration_seconds": 114,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-15T14:26:39Z",
-      "last_seen": "2026-05-15T14:26:39Z",
+      "first_discovered": "2026-05-15T19:50:50Z",
+      "last_seen": "2026-05-15T19:50:50Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -106,10 +106,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
           "MS=ms93622757",
+          "apple-domain-verification=cWkfjNKuM61a3EZ6",
           "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
-          "apple-domain-verification=cWkfjNKuM61a3EZ6"
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -120,7 +120,7 @@
         "tech": [
           {
             "name": "Contact Form 7",
-            "version": "6.1.5",
+            "version": "6.1.6",
             "category": null
           },
           {
@@ -137,11 +137,6 @@
             "name": "HSTS",
             "version": null,
             "category": "security"
-          },
-          {
-            "name": "HTTP/3",
-            "version": null,
-            "category": "transport"
           },
           {
             "name": "MySQL",
@@ -226,8 +221,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-15T14:26:39Z",
-      "last_seen": "2026-05-15T14:26:39Z",
+      "first_discovered": "2026-05-15T19:50:50Z",
+      "last_seen": "2026-05-15T19:50:50Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -294,7 +289,7 @@
         "tech": [
           {
             "name": "Contact Form 7",
-            "version": "6.1.5",
+            "version": "6.1.6",
             "category": null
           },
           {
@@ -311,11 +306,6 @@
             "name": "HSTS",
             "version": null,
             "category": "security"
-          },
-          {
-            "name": "HTTP/3",
-            "version": null,
-            "category": "transport"
           },
           {
             "name": "MySQL",
@@ -397,7 +387,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-15T09:19:53Z_41fc056d",
+    "since_scan": "scan_2026-05-15T14:25:16Z_27b3924a",
     "added": {
       "subdomains": [],
       "services": [],
@@ -409,7 +399,20 @@
       "hosts": []
     },
     "changed": {
-      "fingerprint": [],
+      "fingerprint": [
+        {
+          "subdomain": "commandcompanies.com",
+          "name": "Contact Form 7",
+          "from": "6.1.5",
+          "to": "6.1.6"
+        },
+        {
+          "subdomain": "www.commandcompanies.com",
+          "name": "Contact Form 7",
+          "from": "6.1.5",
+          "to": "6.1.6"
+        }
+      ],
       "cert": [],
       "reachability": []
     }
@@ -1361,6 +1364,42 @@
             443
           ]
         }
+      }
+    },
+    {
+      "scan_id": "scan_2026-05-15T19:48:56Z_9ec9df3d",
+      "started_at": "2026-05-15T19:48:56Z",
+      "completed_at": "2026-05-15T19:50:50Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 1,
+      "service_count": 4,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Contact Form 7": "6.1.6",
+        "Slider Revolution": "6.7.41",
+        "WP Google Map Plugin": "4.9.4",
+        "WPMU DEV Smush": "4.0.3",
+        "Yoast SEO": "27.6",
+        "imagesLoaded": "5.0.0",
+        "jQuery Migrate": "3.4.1"
       }
     }
   ]
