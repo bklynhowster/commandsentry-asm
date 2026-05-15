@@ -735,6 +735,25 @@ def main():
         s.get("name") for s in asset_json.get("subdomains", []) if s.get("name")
     })
 
+    # Per-scan tech version snapshot: { tech_name: version_string }.
+    # Collapses all subdomain fingerprints into one canonical map so the
+    # alerter can apply 2-scan-confirmation to 'tech version change' alerts
+    # the same way it does to 'new subdomain/host/service' alerts. Without
+    # this, single-scan flickers from detection drift (e.g. Pressable cache
+    # nodes briefly disagreeing on a Yoast readme version) fire false-positive
+    # alert emails. Only versions with a non-empty value are recorded —
+    # tech with version=None gets dropped (we can't meaningfully alert on
+    # 'unknown → unknown'). Last sub wins on collision, which is fine for
+    # the typical apex+www same-install case.
+    tech_versions: dict[str, str] = {}
+    for sub in asset_json.get("subdomains", []):
+        fp = sub.get("fingerprint") or {}
+        for t in (fp.get("tech") or []):
+            name = t.get("name")
+            ver = t.get("version")
+            if name and ver:
+                tech_versions[name] = str(ver)
+
     prev_history = (prev.get("history", []) if prev else [])
     summary = asset_json["summary"]
     new_entry = {
@@ -747,6 +766,7 @@ def main():
         "service_count":        summary["service_count"],
         "subdomain_names":      subdomain_names,
         "ports_by_sub":         ports_by_sub,
+        "tech_versions":        tech_versions,
     }
     # Keep the last (RETENTION - 1) prior entries + this new one = RETENTION total
     asset_json["history"] = prev_history[-(HISTORY_RETENTION_ENTRIES - 1):] + [new_entry]

@@ -219,25 +219,66 @@ def collect_alerts() -> list[Alert]:
                                  f"Subdomain went away: {sub}",
                                  f"Not seen in the last {ABSENCE_THRESHOLD} consecutive scans."))
 
-        # NOTICE: tech version changes — DEDUPED within an asset by (name, from, to).
-        # Same tech update on multiple subs that share a backend (e.g. apex + www
-        # both running the same WordPress install) gets collapsed into one alert
-        # with the sub list rolled into the detail string.
-        tech_groups: dict[tuple[str, str, str], list[str]] = {}
-        for t in (changed.get("fingerprint") or []):
-            key = (t.get("name") or "?", str(t.get("from") or "?"), str(t.get("to") or "?"))
-            tech_groups.setdefault(key, []).append(t.get("subdomain") or "?")
-        for (name, frm, to), subs in tech_groups.items():
-            subs_unique = sorted(set(subs))
-            count = len(subs_unique)
-            title = f"{name} {frm} → {to}"
-            if count == 1:
-                title = f"{subs_unique[0]}: {title}"
-                detail = "Detected version change in tech fingerprint."
-            else:
-                title = f"{title} (on {count} subs)"
-                detail = f"Detected version change in tech fingerprint. Affected: {', '.join(subs_unique)}"
-            out.append(Alert("notice", aname, "tech_changed", title, detail))
+        # NOTICE: tech version changes — 2-scan-confirmation required.
+        #
+        # Single-scan flickers (e.g. Pressable cache nodes briefly disagreeing
+        # on a plugin readme version, or a probabilistic fingerprint resolver
+        # pulling from a different source) used to fire false-positive alert
+        # emails. Classic case: Yoast SEO 27.6 → 27.5 → 27.6 flip-flop across
+        # consecutive scans. The old code path read `changed.fingerprint`
+        # directly from this scan's deltas with no stability gate.
+        #
+        # New gate: a version change only fires if the new value persists
+        # across 2 consecutive scans AND a different known prior value
+        # existed in the scan before that. State machine:
+        #   N-2: A    N-1: B    N: B   → fire "A → B" (B confirmed stable)
+        #   N-2: A    N-1: B    N: A   → flicker, suppress
+        #   N-2: A    N-1: A    N: A   → no change
+        # Real upgrades fire on the scan immediately after they stabilize
+        # (~6h max delay at our cadence). Cold start: assets with fewer than
+        # 3 history entries with tech_versions populated get no tech_change
+        # alerts (only affects first ~18h after this code ships, since
+        # existing history entries lack the tech_versions field).
+        history = asset.get("history") or []
+        if len(history) >= 3:
+            current_tv = (history[-1].get("tech_versions") or {})
+            prev_tv = (history[-2].get("tech_versions") or {})
+            prev_prev_tv = (history[-3].get("tech_versions") or {})
+            for name, cur_v in current_tv.items():
+                prv_v = prev_tv.get(name)
+                old_v = prev_prev_tv.get(name)
+                if not (cur_v and prv_v and old_v):
+                    continue  # missing data — can't confirm
+                if cur_v != prv_v:
+                    continue  # new value hasn't stabilized across 2 scans
+                if old_v == cur_v:
+                    continue  # no actual change
+                # Confirmed version transition: old_v → cur_v.
+                # Attribute to current subs running this name+version.
+                subs_with: list[str] = []
+                for sub in (asset.get("subdomains") or []):
+                    fp = sub.get("fingerprint") or {}
+                    for t in (fp.get("tech") or []):
+                        if t.get("name") == name and str(t.get("version") or "") == cur_v:
+                            sn = sub.get("name")
+                            if sn:
+                                subs_with.append(sn)
+                            break
+                subs_with = sorted(set(subs_with))
+                count = len(subs_with)
+                title = f"{name} {old_v} → {cur_v}"
+                if count == 1:
+                    title = f"{subs_with[0]}: {title}"
+                    detail = "Detected version change in tech fingerprint. Confirmed by 2 consecutive scans."
+                elif count > 1:
+                    title = f"{title} (on {count} subs)"
+                    detail = (
+                        "Detected version change in tech fingerprint. "
+                        f"Confirmed by 2 consecutive scans. Affected: {', '.join(subs_with)}"
+                    )
+                else:
+                    detail = "Detected version change in tech fingerprint. Confirmed by 2 consecutive scans."
+                out.append(Alert("notice", aname, "tech_changed", title, detail))
 
         # WATCH: cert chain changed (per subdomain)
         for c in (changed.get("cert") or []):
