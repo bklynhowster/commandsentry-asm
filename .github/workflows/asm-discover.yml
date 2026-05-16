@@ -250,14 +250,23 @@ jobs:
               exit 0
             fi
 
-            echo "Push rejected on attempt $attempt — soft-resetting to origin/main and re-applying"
+            echo "Push rejected on attempt $attempt — resetting to origin/main and re-applying"
             git fetch origin main
-            # Soft-reset: HEAD moves to origin/main, working tree + index keep our scan data
-            git reset --soft origin/main
+            # Mixed reset (default): HEAD AND index move to origin/main; working
+            # tree keeps our scan data. Critical fix vs --soft: with --soft,
+            # the index stayed frozen at the runner's old commit, so any files
+            # that existed in the new origin/main but not in the runner's old
+            # commit (e.g. recently-pushed scripts) got recorded as STAGED
+            # DELETIONS and committed away on the next `git commit`. --mixed
+            # resets the index to match the new HEAD, then `git add` re-stages
+            # only the scan files we explicitly want to commit. Bug discovered
+            # 2026-05-16 after scripts/normalize/run_normalize.py disappeared
+            # from a runner commit.
+            git reset --mixed origin/main
             git add data/assets/ web/data/
 
             if git diff --staged --quiet; then
-              echo "No changes left to commit after soft-reset (concurrent scan covered it)."
+              echo "No changes left to commit after reset (concurrent scan covered it)."
               exit 0
             fi
 
