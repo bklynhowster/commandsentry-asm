@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://commandsentry/schemas/finding_history.schema.json",
+  "title": "FindingHistoryEntry",
+  "description": "An append-only state-change record for a finding. One per scan that observed (or failed to observe) the finding.",
+  "type": "object",
+  "required": ["scan_id", "observed_at", "status"],
+  "properties": {
+    "scan_id":         { "type": "string" },
+    "observed_at":     { "type": "string", "format": "date-time" },
+    "status":          { "type": "string", "enum": ["detected", "confirmed", "remediated", "validated_remediated", "regressed", "false_positive", "absent"] },
+    "severity_at_scan":{ "type": "string", "enum": ["CRITICAL", "HIGH", "MODERATE-HIGH", "MODERATE", "LOW", "INFO"] },
+    "matched_at":      { "type": "string", "description": "URL/host/path that triggered the detection." },
+    "raw_excerpt":     { "type": "string", "description": "Short excerpt from the tool output (truncated to ~2KB)." },
+    "notes":           { "type": "string" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://commandsentry/schemas/evidence_artifact.schema.json",
+  "title": "EvidenceArtifact",
+  "description": "A raw evidence file captured during a scan: response body, headers, screenshot, PoC HTML, etc. Initially pointer + hash only. Phase 2 will mirror files to Supabase Storage and populate cloud_url.",
+  "type": "object",
+  "required": ["artifact_id", "finding_id", "artifact_type", "local_path", "sha256"],
+  "properties": {
+    "artifact_id":   { "type": "string", "description": "Stable identifier: <finding_id>__<sha256_prefix>" },
+    "finding_id":    { "type": "string" },
+    "scan_id":       { "type": "string", "description": "The scan that produced this artifact." },
+    "artifact_type": { "type": "string", "enum": ["response_body", "response_headers", "request", "meta", "log_excerpt", "screenshot", "poc_html", "tool_output", "raw_evidence"] },
+    "local_path":    { "type": "string", "description": "Absolute path on the originating Mac. Provenance / audit trail. Survives even after cloud_url is populated." },
+    "cloud_url":     { "type": ["string", "null"], "description": "Supabase Storage URL once uploaded. Null until Phase 2 uploader runs." },
+    "sha256":        { "type": "string", "description": "Content hash for integrity check." },
+    "mime_type":     { "type": "string" },
+    "byte_size":     { "type": "integer" },
+    "uploaded_at":   { "type": ["string", "null"], "format": "date-time" },
+    "preview_4kb":   { "type": ["string", "null"], "description": "Optional first 4KB of content for inline previews. Plain-text only; never populated for binary." },
+    "captured_at":   { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

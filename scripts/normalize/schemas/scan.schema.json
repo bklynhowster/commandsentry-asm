@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://commandsentry/schemas/scan.schema.json",
+  "title": "Scan",
+  "description": "One scan event. Each dated scan-run subdirectory under a target produces one of these.",
+  "type": "object",
+  "required": ["scan_id", "asset_id", "scan_type", "started_at"],
+  "properties": {
+    "scan_id":          { "type": "string", "description": "Stable identifier. Convention: <asset_short>__<scan-run-dirname>. Example: ccc__comprehensive-scan-20260502-1313" },
+    "asset_id":         { "type": "string" },
+    "scan_type":        {
+      "type": "string",
+      "enum": [
+        "asm_enumeration",
+        "vuln_quick_recon",
+        "vuln_full_assessment",
+        "vuln_full_aggressive",
+        "authenticated_scan",
+        "authenticated_scan_prod",
+        "authenticated_gapfill",
+        "auth_bypass_probe",
+        "remediation_verification",
+        "surgical_validation",
+        "dast",
+        "api_external",
+        "api_hardcore",
+        "api_dotnet_probe",
+        "wp_stealth_scan",
+        "sast_sca",
+        "tls_audit",
+        "cross_target_recon"
+      ]
+    },
+    "started_at":       { "type": "string", "format": "date-time" },
+    "completed_at":     { "type": "string", "format": "date-time" },
+    "command_line":     { "type": "string", "description": "Original script + args used to run the scan, if known." },
+    "exit_code":        { "type": "integer" },
+    "output_dir":       { "type": "string", "description": "Absolute path to the original scan-run output directory on disk. Forensic provenance." },
+    "tools_run":        { "type": "array", "items": { "$ref": "scan_tool_run.schema.json" } },
+    "source":           { "type": "string", "enum": ["commandsentry_asm", "mac_local_scan", "manual"] },
+    "notes":            { "type": "string" }
+  },
+  "additionalProperties": false
+}
