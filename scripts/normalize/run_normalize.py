@@ -50,9 +50,9 @@ from pathlib import Path
 THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(THIS_DIR))
 
-from parsers import nuclei, nuclei_text, summary_md, testssl, sslyze, nikto, wpscan  # noqa: E402
-from parsers.common import FindingEvent, now_iso  # noqa: E402
-from importers import commandsentry_assets  # noqa: E402
+from cs_parsers import nuclei, nuclei_text, summary_md, testssl, sslyze, nikto, wpscan  # noqa: E402
+from cs_parsers.common import FindingEvent, now_iso  # noqa: E402
+from cs_importers import commandsentry_assets  # noqa: E402
 
 
 # ─── parser registry ──────────────────────────────────────────────────────────
@@ -231,7 +231,7 @@ def classify_scan_type(scan_run_dir: str, tools_run: list[str]) -> str:
 
 # ─── main ─────────────────────────────────────────────────────────────────────
 def main() -> int:
-    from parsers.common import infer_asset_id  # local import to avoid early sys.path race
+    from cs_parsers.common import infer_asset_id  # local import to avoid early sys.path race
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--manifest", required=True)
@@ -304,7 +304,7 @@ def main() -> int:
     missing = finding_asset_ids - imported_asset_ids
     synthesized_count = 0
     if missing:
-        from importers.commandsentry_assets import ORG_BY_FQDN_SUFFIX, ORG_BY_IP_PREFIX
+        from cs_importers.commandsentry_assets import ORG_BY_FQDN_SUFFIX, ORG_BY_IP_PREFIX
         stubs: list[dict] = []
         for aid in sorted(missing):
             # Infer org from the FQDN/IP shape
