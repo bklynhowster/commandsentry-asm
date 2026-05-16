@@ -26,6 +26,10 @@
     "owner":               { "type": "string", "description": "Who is responsible for fixing it (SCI dev team, Howie/FortiGate, Pressable, etc.)." },
     "deadline":            { "type": ["string", "null"], "format": "date" },
     "source":              { "type": "string", "enum": ["nuclei", "zap", "semgrep", "gitleaks", "trivy", "osv-scanner", "trufflehog", "testssl", "sslyze", "ffuf", "subzy", "dnstwist", "theharvester", "nmap", "nikto", "wpscan", "feroxbuster", "auth_bypass_probe", "manual_named", "sprocket_external", "wellgate_external", "commandsentry_asm", "other"] },
+    "subdomain":           { "type": ["string", "null"], "description": "FQDN where the finding was observed (e.g. www.commandcommcentral.com). Derived from matched_at URL when possible." },
+    "host_ip":             { "type": ["string", "null"], "description": "IP address where the finding was observed (e.g. 24.38.70.6). Derived from scan output when present." },
+    "port":                { "type": ["integer", "null"], "description": "TCP/UDP port (e.g. 443). Defaulted to 443/80 by protocol when not explicit." },
+    "protocol":            { "type": ["string", "null"], "enum": ["http", "https", "tcp", "udp", "ssl", "dns", "smtp", "imap", "pop3", "ftp", null] },
     "history":             { "type": "array", "items": { "$ref": "finding_history.schema.json" } },
     "evidence_ids":        { "type": "array", "items": { "type": "string" }, "description": "References to evidence_artifacts records." },
     "tags":                { "type": "array", "items": { "type": "string" } }

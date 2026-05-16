@@ -50,7 +50,7 @@ from pathlib import Path
 THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(THIS_DIR))
 
-from parsers import nuclei, nuclei_text  # noqa: E402
+from parsers import nuclei, nuclei_text, summary_md  # noqa: E402
 from parsers.common import FindingEvent, now_iso  # noqa: E402
 
 
@@ -58,6 +58,7 @@ from parsers.common import FindingEvent, now_iso  # noqa: E402
 PARSERS = {
     "nuclei": nuclei.parse,
     "nuclei_text": nuclei_text.parse,
+    "summary_md": summary_md.parse,
     # Future entries get registered here as parsers come online:
     # "zap":         zap.parse,
     # "semgrep":     semgrep.parse,
@@ -89,20 +90,22 @@ def rollup_findings(events: list[FindingEvent]) -> list[dict]:
         last = evs_sorted[-1]
 
         history = []
-        for ev in evs_sorted:
+        for i, ev in enumerate(evs_sorted):
+            # Prefer explicit status_hint from manual sources; else default to
+            # "detected" (first) / "confirmed" (later) heuristic.
+            if ev.status_hint:
+                status = ev.status_hint
+            else:
+                status = "detected" if i == 0 else "confirmed"
             history.append({
                 "scan_id":          ev.scan_id,
                 "observed_at":      ev.observed_at,
-                "status":           "detected",
+                "status":           status,
                 "severity_at_scan": ev.severity,
                 "matched_at":       ev.matched_at,
                 "raw_excerpt":      ev.raw_excerpt,
                 "notes":            None,
             })
-
-        # Mark all but first as "confirmed" (later parsers may overwrite based on verdicts)
-        for h in history[1:]:
-            h["status"] = "confirmed"
 
         # Pull merged CWE/CVE/refs across events (in case the same finding appears
         # in scans where different metadata was emitted)
@@ -121,6 +124,22 @@ def rollup_findings(events: list[FindingEvent]) -> list[dict]:
         current_severity = last.severity
         title = last.title or first.title
 
+        # current_status: latest event's status_hint wins; else count heuristic.
+        if last.status_hint:
+            current_status = last.status_hint
+        elif len(evs_sorted) == 1:
+            current_status = "detected"
+        else:
+            current_status = "confirmed"
+
+        # remediated_at: scan time of the most recent remediated/validated event
+        remediated_at = None
+        for h in reversed(history):
+            if h["status"] in ("remediated", "validated_remediated"):
+                remediated_at = h["observed_at"]
+                break
+
+        # New schema fields — use latest observation's values for current state
         finding = {
             "finding_id":            fid,
             "asset_id":              first.asset_id,
@@ -131,14 +150,18 @@ def rollup_findings(events: list[FindingEvent]) -> list[dict]:
             "cwe":                   all_cwe,
             "cve":                   all_cve,
             "references":            all_refs,
-            "current_status":        "detected" if len(evs_sorted) == 1 else "confirmed",
+            "current_status":        current_status,
             "first_detected_at":     first.observed_at,
             "first_detected_scan":   first.scan_id,
             "last_observed_at":      last.observed_at,
-            "remediated_at":         None,
+            "remediated_at":         remediated_at,
             "owner":                 None,
             "deadline":              None,
             "source":                first.source,
+            "subdomain":             last.subdomain or first.subdomain,
+            "host_ip":               last.host_ip or first.host_ip,
+            "port":                  last.port or first.port,
+            "protocol":              last.protocol or first.protocol,
             "history":               history,
             "evidence_ids":          [],   # populated by evidence-artifact parser
             "tags":                  [],

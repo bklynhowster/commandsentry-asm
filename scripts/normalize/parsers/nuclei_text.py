@@ -34,8 +34,11 @@ from .common import (
     infer_asset_id,
     infer_category_from_tags,
     map_severity_nuclei,
+    port_from_url,
+    protocol_from_url,
     relative_to_scan_root,
     stable_finding_id,
+    subdomain_from_url,
     to_utc_iso,
 )
 
@@ -148,6 +151,16 @@ def parse_text_file(
                 desc_parts.append(f"{k}={v}")
         description = "; ".join(desc_parts) if desc_parts else None
 
+        sub = subdomain_from_url(url)
+        proto = protocol_from_url(url)
+        prt = port_from_url(url)
+        if prt is None and proto == "https": prt = 443
+        elif prt is None and proto == "http": prt = 80
+        elif proto == "ssl" or "tls" in full_tpl.lower():
+            # tls-version reports as ssl://host:443 sometimes; default 443
+            proto = "ssl"
+            prt = prt or 443
+
         ev = FindingEvent(
             finding_id=stable_finding_id(asset_id, "nuclei", full_tpl, url),
             asset_id=asset_id,
@@ -164,6 +177,9 @@ def parse_text_file(
             references=[],
             raw_excerpt=line[:1500],
             evidence_paths=[rel_evidence],
+            subdomain=sub,
+            port=prt,
+            protocol=proto,
         )
         events.append(ev)
 

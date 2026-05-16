@@ -51,8 +51,11 @@ from .common import (
     infer_asset_id,
     infer_category_from_tags,
     map_severity_nuclei,
+    port_from_url,
+    protocol_from_url,
     relative_to_scan_root,
     stable_finding_id,
+    subdomain_from_url,
     to_utc_iso,
 )
 
@@ -149,6 +152,12 @@ def parse_jsonl_file(
 
         category = infer_category_from_tags(tags, template_id)
 
+        sub = subdomain_from_url(matched_at) or subdomain_from_url(host) or None
+        proto = protocol_from_url(matched_at)
+        prt = port_from_url(matched_at)
+        if prt is None and proto == "https": prt = 443
+        elif prt is None and proto == "http": prt = 80
+
         ev = FindingEvent(
             finding_id=stable_finding_id(asset_id, "nuclei", template_id, matched_at),
             asset_id=asset_id,
@@ -165,6 +174,10 @@ def parse_jsonl_file(
             references=list(refs) if isinstance(refs, list) else [],
             raw_excerpt=_truncate(json.dumps(rec, separators=(",", ":")), 2000),
             evidence_paths=[relative_to_scan_root(jsonl_path, scan_root)],
+            subdomain=sub,
+            host_ip=None,    # nuclei doesn't reliably provide resolved IP
+            port=prt,
+            protocol=proto,
         )
         events.append(ev)
 

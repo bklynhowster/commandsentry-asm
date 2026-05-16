@@ -172,7 +172,7 @@ class FindingEvent:
     finding_id: str
     asset_id: str
     scan_id: str
-    source: str                         # "nuclei", "zap", "semgrep", etc.
+    source: str                         # "nuclei", "zap", "semgrep", "manual_named", etc.
     title: str
     severity: str                       # canonical
     category: str
@@ -185,9 +185,91 @@ class FindingEvent:
     raw_excerpt: Optional[str] = None
     evidence_paths: list[str] = field(default_factory=list)  # relative to scan_root
 
+    # Merger-prep fields (extended schema 2026-05-16). Optional, populated when
+    # the parser can derive them. Enables service-centric and subdomain-centric
+    # SPA views without needing a separate services table for Phase 1.
+    subdomain: Optional[str] = None     # FQDN where finding observed
+    host_ip: Optional[str] = None       # IP address
+    port: Optional[int] = None
+    protocol: Optional[str] = None      # http/https/tcp/udp/ssl/dns/smtp/imap/pop3
+
+    # Status hint from manually-authored sources (SUMMARY.md, VERDICT.md).
+    # Drives the rollup to set current_status correctly across scans.
+    # None when the parser has no explicit status signal — rollup falls back
+    # to count-based heuristic.
+    status_hint: Optional[str] = None   # "open", "remediated", "regressed", "validated_remediated"
+
 
 def event_to_dict(ev: FindingEvent) -> dict:
     return asdict(ev)
+
+
+# ─── status hint mapping (SUMMARY.md author's intent → canonical status) ────
+STATUS_HINT_MAP = {
+    "UNPATCHED":                 "open",
+    "UNCHANGED":                 "open",
+    "STILL OPEN":                "open",
+    "STILL-OPEN":                "open",
+    "OPEN":                      "open",
+    "CONFIRMED":                 "confirmed",
+    "NEW":                       "detected",
+    "REMEDIATED":                "remediated",
+    "RESOLVED":                  "remediated",
+    "FIXED":                     "remediated",
+    "VALIDATED_REMEDIATED":      "validated_remediated",
+    "VALIDATED REMEDIATED":      "validated_remediated",
+    "REGRESSED":                 "regressed",
+    "FALSE_POSITIVE":            "false_positive",
+    "FALSE POSITIVE":            "false_positive",
+}
+
+
+def normalize_status_hint(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    return STATUS_HINT_MAP.get(raw.strip().upper())
+
+
+# ─── subdomain inference from URL ─────────────────────────────────────────────
+def subdomain_from_url(url: Optional[str]) -> Optional[str]:
+    """Pull the FQDN from a URL. Returns None if can't determine."""
+    if not url:
+        return None
+    import re
+    m = re.match(r"^(?:https?|ssl|ftp|smtp)://([^/:?#]+)", url, re.IGNORECASE)
+    if m:
+        return m.group(1).lower()
+    # Sometimes nuclei records bare host:port
+    m = re.match(r"^([a-z0-9.-]+)(?::\d+)?$", url, re.IGNORECASE)
+    if m:
+        return m.group(1).lower()
+    return None
+
+
+def port_from_url(url: Optional[str]) -> Optional[int]:
+    """Extract port from URL. None if not explicit (callers can default by protocol)."""
+    if not url:
+        return None
+    import re
+    m = re.match(r"^[a-z]+://[^/:]+:(\d+)", url, re.IGNORECASE)
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def protocol_from_url(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    url = url.lower()
+    if url.startswith("https://"): return "https"
+    if url.startswith("http://"):  return "http"
+    if url.startswith("ssl://"):   return "ssl"
+    if url.startswith("ftp://"):   return "ftp"
+    if url.startswith("smtp://"):  return "smtp"
+    return None
 
 
 # ─── category inference ───────────────────────────────────────────────────────
