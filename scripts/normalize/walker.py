@@ -53,6 +53,8 @@ SCAN_RUN_PATTERNS = [
     # Comprehensive scans: comprehensive-scan-YYYYMMDD-HHMM
     re.compile(r"^comprehensive-scan-\d{8}-\d{4}$"),
     re.compile(r"^comprehensive-scan-prod-\d{8}-\d{4}$"),
+    # Intensive scans (commandmarketinginnovations etc.)
+    re.compile(r"^intensive-scan-\d{4}-\d{2}-\d{2}$"),
     # Authenticated: auth-scan-YYYY-MM-DD or auth-scan-YYYYMMDD-HHMM
     re.compile(r"^auth-scan-\d{4}-\d{2}-\d{2}$"),
     re.compile(r"^auth-scan-\d{8}-\d{4}$"),
@@ -72,13 +74,23 @@ SCAN_RUN_PATTERNS = [
     re.compile(r"^api-hardcore-scan-v2-run-\d{14}$"),
     re.compile(r"^api-probes-only-run-\d{14}$"),
     re.compile(r"^api-dotnet-probe-run-\d{14}$"),
+    re.compile(r"^dotnet-probe-\d{8}-\d{6}$"),
     # SQLi-specific probes
     re.compile(r"^sqli-probe-\d{8}-\d{4}$"),
+    # ASM-related (cross-site)
+    re.compile(r"^asm-discovery-\d{8}-\d{4}$"),
+    re.compile(r"^asm-phase2-results$"),
+    # DAST per-target
+    re.compile(r"^dast-[a-z0-9._-]+-\d{8}-\d{4}$"),
     # Generic security-scan- format
     re.compile(r"^security-scan-[^/]+-\d{8}-\d{4}$"),
-    # WP-specific
+    # WP-specific / target-rooted older convention
     re.compile(r"^www$"),                        # commanddigital/www/ — older convention, single canonical scan dir
     re.compile(r"^www-deep$"),                   # unimacgraphics, etc.
+    re.compile(r"^www-deep-v3$"),                # commandmarketinginnovations
+    # Test subdomain variants
+    re.compile(r"^test3$"),                      # cablenet-test3-testapi/test3
+    re.compile(r"^testapi$"),
 ]
 
 
@@ -249,25 +261,86 @@ def walk_targets(scan_root: Path) -> list[TargetInventory]:
                 inv.scan_runs.append(sr)
             elif sub.is_file():
                 inv.loose_artifacts.append(sub.name)
-        # Also detect tools at the target-level (old convention — commanddigital/, etc.)
-        # If the target dir itself has tool outputs but no scan-run subdirs, treat the
-        # target dir as one synthetic scan-run.
-        if not inv.scan_runs:
-            tools = detect_tools_in_scan_run(entry)
-            if tools:
-                inv.scan_runs.append(ScanRun(
-                    target=entry.name,
-                    scan_run_dir="(target-root, no scan-run subdir)",
-                    absolute_path=str(entry),
-                    inferred_started_at=None,
-                    tools_detected=tools,
-                    artifact_count=count_artifacts(entry),
-                    has_summary_md=(entry / "SUMMARY.md").exists(),
-                    has_html_report=any(entry.glob("*.html")),
-                    notes=["synthetic scan-run, no dated subdir found"],
-                ))
+        # ALWAYS check the target dir itself for tool outputs at root level.
+        # Many old scans (commanddigital, commandmarketinginnovations, etc.) dump
+        # nuclei_results.txt etc. directly under the target dir without a dated
+        # scan-run subdir. We emit a synthetic `_target_root` scan-run alongside
+        # any dated subdirs — this catches target-root tools whether or not
+        # other scan-runs exist underneath.
+        #
+        # Important: detect_tools_in_scan_run uses rglob, so it would also re-find
+        # files inside scan-run subdirs and double-count. We need to restrict
+        # target-root detection to NON-RECURSIVE matching here.
+        root_tools = detect_tools_at_target_root(entry, exclude_dirs=set(sub.scan_run_dir for sub in inv.scan_runs))
+        if root_tools:
+            inv.scan_runs.append(ScanRun(
+                target=entry.name,
+                scan_run_dir="_target_root",
+                absolute_path=str(entry),
+                inferred_started_at=None,
+                tools_detected=root_tools,
+                artifact_count=sum(1 for p in entry.iterdir() if p.is_file()),
+                has_summary_md=(entry / "SUMMARY.md").exists(),
+                has_html_report=any(entry.glob("*.html")),
+                notes=["target-root scan output (no dated scan-run wrapper)"],
+            ))
         inventories.append(inv)
     return inventories
+
+
+def detect_tools_at_target_root(target_path: Path, exclude_dirs: set[str]) -> list[ToolDetection]:
+    """
+    Like detect_tools_in_scan_run but only looks at files directly in target_path
+    and inside child dirs that aren't already classified as scan-runs.
+
+    Avoids double-counting tools that live in dated scan-run subdirs.
+    """
+    detections: list[ToolDetection] = []
+    # Build a set of candidate file paths: target-root files + files inside
+    # non-scan-run subdirs (like commanddigital/www/, commandcompanies/www-deep/).
+    candidates: list[Path] = []
+    for p in target_path.iterdir():
+        if p.is_file():
+            candidates.append(p)
+        elif p.is_dir() and p.name in exclude_dirs:
+            # Already counted as scan-run; skip
+            continue
+        elif p.is_dir() and not p.name.startswith("_") and not p.name.startswith("."):
+            # Non-scan-run subdir — include its files for old-convention scans
+            for sub in p.rglob("*"):
+                if sub.is_file():
+                    candidates.append(sub)
+
+    candidate_names = {c.name: c for c in candidates}
+    # Track which candidate paths matched, with the relative path back to target_path
+    for fp in TOOL_FINGERPRINTS:
+        found = []
+        for fname in fp["files"]:
+            # Plain filename
+            if "/" not in fname:
+                for c in candidates:
+                    if c.name == fname:
+                        try:
+                            found.append(str(c.relative_to(target_path)))
+                        except ValueError:
+                            found.append(str(c))
+            else:
+                # Path-with-slash fingerprint (rare; matches like "session_tests/login_summary.json")
+                for c in candidates:
+                    try:
+                        rel = str(c.relative_to(target_path))
+                    except ValueError:
+                        continue
+                    if rel.endswith(fname):
+                        found.append(rel)
+        if found:
+            detections.append(ToolDetection(
+                tool=fp["tool"],
+                files=found,
+                output_format=fp["output_format"],
+                parser=fp["parser"],
+            ))
+    return detections
 
 
 def walk_commandsentry_assets(cs_data_dir: Path) -> list[CSAssetEntry]:
