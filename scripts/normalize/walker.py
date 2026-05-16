@@ -122,7 +122,7 @@ TOOL_FINGERPRINTS = [
     # Text-output tools
     {"tool": "nmap",           "files": ["nmap_full.txt", "nmap_quick.txt", "nmap.txt"],                 "output_format": "text",  "parser": "nmap"},
     {"tool": "nmap_xml",       "files": ["nmap.xml", "nmap_full.xml"],                                   "output_format": "xml",   "parser": "nmap_xml"},
-    {"tool": "nikto",          "files": ["nikto_results.txt", "nikto.txt"],                              "output_format": "text",  "parser": "nikto"},
+    {"tool": "nikto",          "files": ["nikto_results.txt", "nikto.txt", "nikto.txt.txt", "nikto_results.txt.txt", "nikto-unauth.txt", "nikto-unauth.txt.txt", "nikto_auth.txt", "nikto_auth.txt.txt"], "output_format": "text", "parser": "nikto"},
     {"tool": "wpscan",         "files": ["wpscan.txt", "wpscan_v2.txt"],                                 "output_format": "text",  "parser": "wpscan"},
     {"tool": "feroxbuster",    "files": ["feroxbuster.txt", "feroxbuster-unauth.txt"],                   "output_format": "text",  "parser": "feroxbuster"},
     {"tool": "whatweb",        "files": ["whatweb.txt"],                                                 "output_format": "text",  "parser": "whatweb"},

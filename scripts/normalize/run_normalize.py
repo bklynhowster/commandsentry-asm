@@ -50,7 +50,7 @@ from pathlib import Path
 THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(THIS_DIR))
 
-from parsers import nuclei, nuclei_text, summary_md, testssl, sslyze  # noqa: E402
+from parsers import nuclei, nuclei_text, summary_md, testssl, sslyze, nikto, wpscan  # noqa: E402
 from parsers.common import FindingEvent, now_iso  # noqa: E402
 
 
@@ -61,6 +61,8 @@ PARSERS = {
     "summary_md":  summary_md.parse,
     "testssl":     testssl.parse,
     "sslyze":      sslyze.parse,
+    "nikto":       nikto.parse,
+    "wpscan":      wpscan.parse,
     # Future entries get registered here as parsers come online:
     # "zap":         zap.parse,
     # "semgrep":     semgrep.parse,
