@@ -135,7 +135,8 @@ TOOL_FINGERPRINTS = [
     {"tool": "wp_probes",      "files": ["wp_probes.txt"],                                               "output_format": "text",  "parser": "wp_probes"},
     {"tool": "katana_urls",    "files": ["katana_urls.txt"],                                             "output_format": "text",  "parser": "katana"},
     # Markdown summaries — manual finding source
-    {"tool": "summary_md",     "files": ["SUMMARY.md", "VERDICT.md"],                                    "output_format": "markdown","parser": "summary_md"},
+    {"tool": "summary_md",     "files": ["SUMMARY.md"],                                                 "output_format": "markdown","parser": "summary_md"},
+    {"tool": "verdict_md",     "files": ["VERDICT.md"],                                                 "output_format": "markdown","parser": "verdict_md"},
 ]
 
 

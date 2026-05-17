@@ -50,7 +50,7 @@ from pathlib import Path
 THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(THIS_DIR))
 
-from cs_parsers import nuclei, nuclei_text, summary_md, testssl, sslyze, nikto, wpscan  # noqa: E402
+from cs_parsers import nuclei, nuclei_text, summary_md, verdict_md, testssl, sslyze, nikto, wpscan  # noqa: E402
 from cs_parsers.common import FindingEvent, now_iso  # noqa: E402
 from cs_importers import commandsentry_assets, posture_rollup  # noqa: E402
 
@@ -60,6 +60,7 @@ PARSERS = {
     "nuclei":      nuclei.parse,
     "nuclei_text": nuclei_text.parse,
     "summary_md":  summary_md.parse,
+    "verdict_md":  verdict_md.parse,
     "testssl":     testssl.parse,
     "sslyze":      sslyze.parse,
     "nikto":       nikto.parse,
@@ -124,10 +125,16 @@ def rollup_findings(events: list[FindingEvent]) -> list[dict]:
                     seen_refs.add(r)
                     all_refs.append(r)
 
-        # Current severity = latest scan's severity. Title prefers the most
-        # recent observation in case names shifted.
-        current_severity = last.severity
-        title = last.title or first.title
+        # Current severity = MAX severity across all events. Using the
+        # latest event's severity alone would let placeholder events
+        # (e.g. verdict_md emitting severity=INFO when it just updates status)
+        # incorrectly downgrade a finding. Title comes from the same event
+        # whose severity we picked, falling back if it's empty.
+        _SEV_ORDER = ["CRITICAL", "HIGH", "MODERATE-HIGH", "MODERATE", "LOW", "INFO"]
+        _SEV_IDX = {s: i for i, s in enumerate(_SEV_ORDER)}
+        sev_winner = min(evs_sorted, key=lambda e: _SEV_IDX.get(e.severity, 99))
+        current_severity = sev_winner.severity
+        title = sev_winner.title or last.title or first.title
 
         # current_status: latest event's status_hint wins; else count heuristic.
         if last.status_hint:
