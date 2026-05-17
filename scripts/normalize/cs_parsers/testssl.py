@@ -215,13 +215,22 @@ def parse_testssl_file(
         grouped_id, is_cipher = _normalize_id(raw_id)
 
         # Skip pure meta/scorecard IDs only (overall_grade, service, etc.).
-        # Everything else keeps testssl's reported severity — no auto-downgrade.
         if grouped_id in SCORECARD_IDS:
             continue
 
         # Collapse synonym IDs into their canonical ID so duplicate reporting
         # of the same underlying issue counts as one finding, not several.
         grouped_id = DEDUPE_MAP.get(grouped_id, grouped_id)
+
+        # Severity calibration to match Command's curated-report standard.
+        # Verified via cross-check against the 5/13-5/14 HTML reports:
+        # those reports put testssl MEDIUM-tier findings (FS, HSTS_time,
+        # TLS_misses_extension_23, cipherlist_*, security_headers) at LOW.
+        # MODERATE is reserved for named application findings (M-01..M-04).
+        # Rule: testssl MEDIUM with no CWE → LOW. With CWE (real named
+        # attacks: LUCKY13, ROBOT, FREAK, etc.) → keep MEDIUM.
+        if canonical_sev == "MODERATE" and not rec.get("cwe"):
+            canonical_sev = "LOW"
 
         ip_field = rec.get("ip") or ""
         port = rec.get("port") or ""
