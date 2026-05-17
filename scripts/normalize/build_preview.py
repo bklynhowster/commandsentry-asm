@@ -413,7 +413,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   // ─── state ───────────────────────────────────────────────────────────────
   let currentView = 'assets';
   let currentAsset = null;
-  let findingsFilter = { q: '', severity: '', source: '', status: '' };
+  let findingsFilter = { q: '', severity: '', source: '', status: '', showResolved: false };
 
   // ─── helpers ─────────────────────────────────────────────────────────────
   function el(tag, attrs, children) {
@@ -712,41 +712,74 @@ HTML_TEMPLATE = r"""<!doctype html>
       app.appendChild(tbl);
     }
 
-    // Findings panel — open findings first by severity, then resolved at the bottom
+    // Findings panel — OPEN findings shown by default; resolved/historical
+    // findings hidden under an expandable section. Howie's design principle:
+    // the dashboard should surface what needs attention, not enumerate history.
     if (f.length) {
-      app.appendChild(el('h2', null, [`Findings (${f.length})`]));
       const sevOrder = ['CRITICAL','HIGH','MODERATE-HIGH','MODERATE','LOW','INFO'];
       const RESOLVED = new Set(['remediated','validated_remediated','false_positive','wont_fix','accepted_risk']);
-      const sortedF = [...f].sort((x, y) => {
-        // Resolved → always last
-        const xRes = RESOLVED.has(x.current_status) ? 1 : 0;
-        const yRes = RESOLVED.has(y.current_status) ? 1 : 0;
-        if (xRes !== yRes) return xRes - yRes;
-        // Within each group, by severity descending
-        return sevOrder.indexOf(x.severity) - sevOrder.indexOf(y.severity);
-      });
-      const tbl = el('table');
-      tbl.appendChild(el('thead', null, [el('tr', null, [
-        el('th', null, ['Sev']),
-        el('th', null, ['Title']),
-        el('th', null, ['Source']),
-        el('th', null, ['Status']),
-        el('th', null, ['Subdomain']),
-      ])]));
-      const tb = el('tbody');
-      for (const x of sortedF.slice(0, 500)) {
-        const isResolved = RESOLVED.has(x.current_status);
-        tb.appendChild(el('tr', {class: isResolved ? 'row-resolved' : ''}, [
-          el('td', null, [sevBadge(x.severity)]),
-          el('td', null, [x.title.slice(0, 120)]),
-          el('td', {class: 'mono'}, [x.source]),
-          el('td', null, [statusBadge(x.current_status)]),
-          el('td', {class: 'mono'}, [x.subdomain || '']),
-        ]));
+      const open_findings = f.filter(x => !RESOLVED.has(x.current_status));
+      const resolved_findings = f.filter(x => RESOLVED.has(x.current_status));
+
+      open_findings.sort((a, b) => sevOrder.indexOf(a.severity) - sevOrder.indexOf(b.severity));
+      resolved_findings.sort((a, b) => sevOrder.indexOf(a.severity) - sevOrder.indexOf(b.severity));
+
+      app.appendChild(el('h2', null, [`Open findings (${open_findings.length})`]));
+      if (open_findings.length === 0) {
+        app.appendChild(el('div', {class: 'empty'}, ['No open findings on this asset. ✓']));
+      } else {
+        const tbl = el('table');
+        tbl.appendChild(el('thead', null, [el('tr', null, [
+          el('th', null, ['Sev']),
+          el('th', null, ['Title']),
+          el('th', null, ['Source']),
+          el('th', null, ['Status']),
+          el('th', null, ['Subdomain']),
+        ])]));
+        const tb = el('tbody');
+        for (const x of open_findings.slice(0, 500)) {
+          tb.appendChild(el('tr', null, [
+            el('td', null, [sevBadge(x.severity)]),
+            el('td', null, [x.title.slice(0, 120)]),
+            el('td', {class: 'mono'}, [x.source]),
+            el('td', null, [statusBadge(x.current_status)]),
+            el('td', {class: 'mono'}, [x.subdomain || '']),
+          ]));
+        }
+        tbl.appendChild(tb);
+        app.appendChild(tbl);
+        if (open_findings.length > 500) app.appendChild(el('div', {class: 'subtitle'}, [`(showing first 500 of ${open_findings.length})`]));
       }
-      tbl.appendChild(tb);
-      app.appendChild(tbl);
-      if (f.length > 500) app.appendChild(el('div', {class: 'subtitle'}, [`(showing first 500 of ${f.length})`]));
+
+      // Resolved history — collapsed by default, expand on click
+      if (resolved_findings.length > 0) {
+        const details = el('details', {style: 'margin-top: 20px;'});
+        const summary = el('summary', {style: 'cursor: pointer; font-family: var(--font-display); font-weight: 600; font-size: 14px; color: var(--ink-60); padding: 8px 0;'}, [
+          `Remediation history (${resolved_findings.length} resolved finding${resolved_findings.length !== 1 ? 's' : ''}) — click to expand`
+        ]);
+        details.appendChild(summary);
+        const tbl = el('table', {style: 'margin-top: 8px;'});
+        tbl.appendChild(el('thead', null, [el('tr', null, [
+          el('th', null, ['Sev (then)']),
+          el('th', null, ['Title']),
+          el('th', null, ['Source']),
+          el('th', null, ['Status']),
+          el('th', null, ['Resolved']),
+        ])]));
+        const tb = el('tbody');
+        for (const x of resolved_findings) {
+          tb.appendChild(el('tr', {class: 'row-resolved'}, [
+            el('td', null, [sevBadge(x.severity)]),
+            el('td', null, [x.title.slice(0, 120)]),
+            el('td', {class: 'mono'}, [x.source]),
+            el('td', null, [statusBadge(x.current_status)]),
+            el('td', {class: 'mono'}, [(x.remediated_at || x.last_observed_at || '').slice(0, 10)]),
+          ]));
+        }
+        tbl.appendChild(tb);
+        details.appendChild(tbl);
+        app.appendChild(details);
+      }
     }
   }
 
@@ -782,12 +815,21 @@ HTML_TEMPLATE = r"""<!doctype html>
 
     const statSel = el('select');
     statSel.appendChild(el('option', {value: ''}, ['all statuses']));
-    for (const s of ['detected','confirmed','open','regressed','remediated','validated_remediated','false_positive']) {
+    for (const s of ['open','regressed','remediated','validated_remediated','false_positive']) {
       statSel.appendChild(el('option', {value: s}, [s]));
     }
     statSel.value = findingsFilter.status;
     statSel.onchange = e => { findingsFilter.status = e.target.value; refresh(); };
     filters.appendChild(statSel);
+
+    // "Show resolved" toggle — hidden by default
+    const resLabel = el('label', {style: 'display:flex; align-items:center; gap:6px; font-size:13px; color: var(--ink-60); padding: 0 6px;'});
+    const resCb = el('input', {type: 'checkbox'});
+    if (findingsFilter.showResolved) resCb.setAttribute('checked', 'checked');
+    resCb.onchange = e => { findingsFilter.showResolved = e.target.checked; refresh(); };
+    resLabel.appendChild(resCb);
+    resLabel.appendChild(el('span', null, ['Show resolved']));
+    filters.appendChild(resLabel);
 
     app.appendChild(filters);
 
@@ -797,7 +839,10 @@ HTML_TEMPLATE = r"""<!doctype html>
 
     function refresh() {
       tblWrap.innerHTML = '';
+      const RESOLVED = new Set(['remediated','validated_remediated','false_positive','wont_fix','accepted_risk']);
       const filtered = DATA.findings.filter(f => {
+        // Hide resolved by default unless toggle is on OR user explicitly filtered to a resolved status
+        if (!findingsFilter.showResolved && !findingsFilter.status && RESOLVED.has(f.current_status)) return false;
         if (findingsFilter.severity && f.severity !== findingsFilter.severity) return false;
         if (findingsFilter.source   && f.source   !== findingsFilter.source) return false;
         if (findingsFilter.status   && f.current_status !== findingsFilter.status) return false;

@@ -136,13 +136,29 @@ def rollup_findings(events: list[FindingEvent]) -> list[dict]:
         current_severity = sev_winner.severity
         title = sev_winner.title or last.title or first.title
 
-        # current_status: latest event's status_hint wins; else count heuristic.
+        # current_status: SIMPLIFIED for UI consumption. The history array still
+        # carries granular per-event states (detected / confirmed / etc.) for
+        # forensic drill-in and the 2-scan-confirmation alerter. But the
+        # surface-level status badge users see only needs to answer "does this
+        # need attention?". Map:
+        #   detected, confirmed, open  → "open"
+        #   regressed                  → "regressed"  (special: was fixed, came back)
+        #   remediated, validated_remediated, false_positive, wont_fix, accepted_risk
+        #                              → kept as-is (specific resolved states)
+        _RESOLVED = {"remediated", "validated_remediated", "false_positive", "wont_fix", "accepted_risk"}
         if last.status_hint:
-            current_status = last.status_hint
+            raw_status = last.status_hint
         elif len(evs_sorted) == 1:
-            current_status = "detected"
+            raw_status = "detected"
         else:
-            current_status = "confirmed"
+            raw_status = "confirmed"
+
+        if raw_status in _RESOLVED:
+            current_status = raw_status
+        elif raw_status == "regressed":
+            current_status = "regressed"
+        else:
+            current_status = "open"
 
         # remediated_at: scan time of the most recent remediated/validated event
         remediated_at = None
