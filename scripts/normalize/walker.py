@@ -254,11 +254,13 @@ def walk_targets(scan_root: Path) -> list[TargetInventory]:
         inv = TargetInventory(target=entry.name, absolute_path=str(entry))
         for sub in sorted(entry.iterdir()):
             if sub.is_dir() and matches_scan_run_pattern(sub.name):
+                # Try dirname-encoded date first; fall back to oldest file mtime.
+                ts = parse_scan_run_timestamp(sub.name) or oldest_mtime_in_dir(sub)
                 sr = ScanRun(
                     target=entry.name,
                     scan_run_dir=sub.name,
                     absolute_path=str(sub),
-                    inferred_started_at=parse_scan_run_timestamp(sub.name),
+                    inferred_started_at=ts,
                     tools_detected=detect_tools_in_scan_run(sub),
                     artifact_count=count_artifacts(sub),
                     has_summary_md=(sub / "SUMMARY.md").exists(),
@@ -277,21 +279,88 @@ def walk_targets(scan_root: Path) -> list[TargetInventory]:
         # Important: detect_tools_in_scan_run uses rglob, so it would also re-find
         # files inside scan-run subdirs and double-count. We need to restrict
         # target-root detection to NON-RECURSIVE matching here.
-        root_tools = detect_tools_at_target_root(entry, exclude_dirs=set(sub.scan_run_dir for sub in inv.scan_runs))
+        exclude_dirs = set(sub.scan_run_dir for sub in inv.scan_runs)
+        root_tools = detect_tools_at_target_root(entry, exclude_dirs=exclude_dirs)
         if root_tools:
+            inferred = oldest_mtime_at_target_root(entry, exclude_dirs=exclude_dirs)
             inv.scan_runs.append(ScanRun(
                 target=entry.name,
                 scan_run_dir="_target_root",
                 absolute_path=str(entry),
-                inferred_started_at=None,
+                inferred_started_at=inferred,
                 tools_detected=root_tools,
                 artifact_count=sum(1 for p in entry.iterdir() if p.is_file()),
                 has_summary_md=(entry / "SUMMARY.md").exists(),
                 has_html_report=any(entry.glob("*.html")),
-                notes=["target-root scan output (no dated scan-run wrapper)"],
+                notes=["target-root scan output (no dated scan-run wrapper)"]
+                      + ([] if inferred else ["no datable artifacts to infer started_at"]),
             ))
         inventories.append(inv)
     return inventories
+
+
+def oldest_mtime_in_dir(scan_run_path: Path) -> Optional[str]:
+    """
+    Oldest mtime among files anywhere under scan_run_path, as ISO UTC string.
+    Fallback for scan-runs whose dirname doesn't encode a date (www, www-deep,
+    test3, etc.). Returns None if no files exist or the dir can't be read.
+    """
+    from datetime import datetime, timezone
+
+    oldest_ts: Optional[float] = None
+    try:
+        for p in scan_run_path.rglob("*"):
+            if p.is_file():
+                try:
+                    ts = p.stat().st_mtime
+                    if oldest_ts is None or ts < oldest_ts:
+                        oldest_ts = ts
+                except OSError:
+                    continue
+    except OSError:
+        return None
+    if oldest_ts is None:
+        return None
+    return datetime.fromtimestamp(oldest_ts, tz=timezone.utc).isoformat()
+
+
+def oldest_mtime_at_target_root(target_path: Path, exclude_dirs: set[str]) -> Optional[str]:
+    """
+    Return the oldest mtime ISO timestamp among files at target_path + inside
+    non-scan-run child dirs. Used as a fallback for synthetic target-root scans
+    whose scan_run_dir doesn't encode a date.
+
+    Mirrors the candidate-gathering logic of detect_tools_at_target_root so the
+    timestamp matches the scope of tools that get attributed to this scan.
+
+    Returns None if no datable files exist (empty target dirs, etc.).
+    """
+    from datetime import datetime, timezone
+
+    oldest_ts: Optional[float] = None
+    try:
+        for p in target_path.iterdir():
+            if p.is_file():
+                ts = p.stat().st_mtime
+                if oldest_ts is None or ts < oldest_ts:
+                    oldest_ts = ts
+            elif p.is_dir() and p.name in exclude_dirs:
+                continue
+            elif p.is_dir() and not p.name.startswith("_") and not p.name.startswith("."):
+                for sub in p.rglob("*"):
+                    if sub.is_file():
+                        try:
+                            ts = sub.stat().st_mtime
+                            if oldest_ts is None or ts < oldest_ts:
+                                oldest_ts = ts
+                        except OSError:
+                            continue
+    except OSError:
+        return None
+
+    if oldest_ts is None:
+        return None
+    return datetime.fromtimestamp(oldest_ts, tz=timezone.utc).isoformat()
 
 
 def detect_tools_at_target_root(target_path: Path, exclude_dirs: set[str]) -> list[ToolDetection]:

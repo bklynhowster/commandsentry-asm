@@ -135,12 +135,13 @@ def infer_asset_id(target_dirname: str) -> str:
       commandcompanies            → commandcompanies.com
       commandmarketinginnovations → commandmarketinginnovations.com
 
-    Hostname-style names with dots are taken as-is. Otherwise we apply known
-    transforms. Unknown names fall back to `target:<dirname>` so we don't
-    fabricate an asset identity we can't justify.
+    Hostname-style names with dots are taken as-is, then run through
+    canonical_asset_id() so www.X folds into X per design principle #5.
+    Unknown names fall back to `target:<dirname>` so we don't fabricate an
+    asset identity we can't justify.
     """
     if "." in target_dirname:
-        return target_dirname
+        return canonical_asset_id(target_dirname) or target_dirname
     mapping = {
         "commandcommcentral":            "commandcommcentral.com",
         "commanddigital":                "commanddigital.com",

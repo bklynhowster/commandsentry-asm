@@ -263,19 +263,21 @@ FROM findings
 WHERE current_status IN ('detected', 'confirmed', 'open', 'regressed');
 
 -- Per-asset open severity rollup — the numbers shown on each posture card.
+-- Note: COUNT(f.finding_id) instead of COUNT(*) so assets with no findings
+-- show total_open=0 rather than 1 from the LEFT JOIN NULL row.
 CREATE OR REPLACE VIEW v_asset_posture_counts AS
 SELECT
   a.asset_id,
   a.name,
   a.organization,
   a.current_risk,
-  COUNT(*) FILTER (WHERE f.severity = 'CRITICAL')      AS critical_open,
-  COUNT(*) FILTER (WHERE f.severity = 'HIGH')          AS high_open,
-  COUNT(*) FILTER (WHERE f.severity = 'MODERATE-HIGH') AS mod_high_open,
-  COUNT(*) FILTER (WHERE f.severity = 'MODERATE')      AS moderate_open,
-  COUNT(*) FILTER (WHERE f.severity = 'LOW')           AS low_open,
-  COUNT(*) FILTER (WHERE f.severity = 'INFO')          AS info_open,
-  COUNT(*)                                              AS total_open
+  COUNT(f.finding_id) FILTER (WHERE f.severity = 'CRITICAL')      AS critical_open,
+  COUNT(f.finding_id) FILTER (WHERE f.severity = 'HIGH')          AS high_open,
+  COUNT(f.finding_id) FILTER (WHERE f.severity = 'MODERATE-HIGH') AS mod_high_open,
+  COUNT(f.finding_id) FILTER (WHERE f.severity = 'MODERATE')      AS moderate_open,
+  COUNT(f.finding_id) FILTER (WHERE f.severity = 'LOW')           AS low_open,
+  COUNT(f.finding_id) FILTER (WHERE f.severity = 'INFO')          AS info_open,
+  COUNT(f.finding_id)                                              AS total_open
 FROM assets a
 LEFT JOIN v_open_findings f ON f.asset_id = a.asset_id
 GROUP BY a.asset_id, a.name, a.organization, a.current_risk;

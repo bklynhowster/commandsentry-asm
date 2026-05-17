@@ -209,7 +209,10 @@ def extract_scans(manifest: dict) -> list[dict]:
         target = tgt["target"]
         for sr in tgt.get("scan_runs", []):
             scan_run_dir = sr["scan_run_dir"]
-            if scan_run_dir.startswith("(target-root"):
+            # Canonical naming: walker emits _target_root, older manifests may
+            # have used (target-root...). Both collapse to the same synthetic
+            # scan_id so FKs from findings line up.
+            if scan_run_dir.startswith("(target-root") or scan_run_dir == "_target_root":
                 scan_id = f"{target}__synthetic_root"
             else:
                 scan_id = f"{target}__{scan_run_dir}"
@@ -250,6 +253,7 @@ def classify_scan_type(scan_run_dir: str, tools_run: list[str]) -> str:
     if d.startswith("security-scan-"):     return "vuln_full_assessment"
     if d in ("www", "www-deep"):           return "vuln_full_assessment"
     if d.startswith("(target-root"):       return "vuln_full_assessment"
+    if d == "_target_root":                return "vuln_full_assessment"
     return "vuln_quick_recon"
 
 
