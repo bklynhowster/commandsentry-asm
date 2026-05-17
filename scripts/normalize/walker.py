@@ -137,6 +137,11 @@ TOOL_FINGERPRINTS = [
     # Markdown summaries — manual finding source
     {"tool": "summary_md",     "files": ["SUMMARY.md"],                                                 "output_format": "markdown","parser": "summary_md"},
     {"tool": "verdict_md",     "files": ["VERDICT.md"],                                                 "output_format": "markdown","parser": "verdict_md"},
+    # Curated assessment HTML reports — Howie's branded final reports with
+    # human-judged findings (often the ONLY place findings like W-02 or A-03
+    # exist, since they're added during scan curation, not from raw tool output).
+    # Walker detects by glob pattern handled in detect_tools_in_scan_run.
+    {"tool": "curated_html",   "files": ["CommandDigital_*_Assessment_*.html", "CommandDigital_*_Consolidated_*.html"], "output_format": "html", "parser": "curated_html"},
 ]
 
 
@@ -312,15 +317,16 @@ def detect_tools_at_target_root(target_path: Path, exclude_dirs: set[str]) -> li
                 if sub.is_file():
                     candidates.append(sub)
 
-    candidate_names = {c.name: c for c in candidates}
+    import fnmatch
     # Track which candidate paths matched, with the relative path back to target_path
     for fp in TOOL_FINGERPRINTS:
         found = []
         for fname in fp["files"]:
-            # Plain filename
+            # Plain filename — exact match OR glob (e.g. CommandDigital_*_Assessment_*.html)
             if "/" not in fname:
+                has_glob = any(ch in fname for ch in "*?[")
                 for c in candidates:
-                    if c.name == fname:
+                    if (has_glob and fnmatch.fnmatch(c.name, fname)) or (not has_glob and c.name == fname):
                         try:
                             found.append(str(c.relative_to(target_path)))
                         except ValueError:

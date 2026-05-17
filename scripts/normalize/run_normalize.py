@@ -50,21 +50,22 @@ from pathlib import Path
 THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(THIS_DIR))
 
-from cs_parsers import nuclei, nuclei_text, summary_md, verdict_md, testssl, sslyze, nikto, wpscan  # noqa: E402
+from cs_parsers import nuclei, nuclei_text, summary_md, verdict_md, testssl, sslyze, nikto, wpscan, curated_html  # noqa: E402
 from cs_parsers.common import FindingEvent, now_iso  # noqa: E402
 from cs_importers import commandsentry_assets, posture_rollup  # noqa: E402
 
 
 # ─── parser registry ──────────────────────────────────────────────────────────
 PARSERS = {
-    "nuclei":      nuclei.parse,
-    "nuclei_text": nuclei_text.parse,
-    "summary_md":  summary_md.parse,
-    "verdict_md":  verdict_md.parse,
-    "testssl":     testssl.parse,
-    "sslyze":      sslyze.parse,
-    "nikto":       nikto.parse,
-    "wpscan":      wpscan.parse,
+    "nuclei":       nuclei.parse,
+    "nuclei_text":  nuclei_text.parse,
+    "summary_md":   summary_md.parse,
+    "verdict_md":   verdict_md.parse,
+    "testssl":      testssl.parse,
+    "sslyze":       sslyze.parse,
+    "nikto":        nikto.parse,
+    "wpscan":       wpscan.parse,
+    "curated_html": curated_html.parse,
     # Future entries get registered here as parsers come online:
     # "zap":         zap.parse,
     # "semgrep":     semgrep.parse,
