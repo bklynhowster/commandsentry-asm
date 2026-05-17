@@ -52,7 +52,7 @@ sys.path.insert(0, str(THIS_DIR))
 
 from cs_parsers import nuclei, nuclei_text, summary_md, testssl, sslyze, nikto, wpscan  # noqa: E402
 from cs_parsers.common import FindingEvent, now_iso  # noqa: E402
-from cs_importers import commandsentry_assets  # noqa: E402
+from cs_importers import commandsentry_assets, posture_rollup  # noqa: E402
 
 
 # ─── parser registry ──────────────────────────────────────────────────────────
@@ -348,6 +348,11 @@ def main() -> int:
                 f.write(json.dumps(stub, separators=(",", ":")) + "\n")
     cs_stats["synthesized_stubs"] = synthesized_count
 
+    # Posture rollup — calculate current_risk + reason per asset.
+    # MUST run last (after assets.jsonl is complete with stubs).
+    posture_stats = posture_rollup.run_rollup(output_dir)
+    cs_stats["posture_verdicts"] = posture_stats.get("verdicts", {})
+
     # Summary
     lines = []
     lines.append("=" * 72)
@@ -372,6 +377,13 @@ def main() -> int:
     lines.append(f"  services:          {cs_stats['services']:>6}")
     lines.append(f"  asm_scans:         {cs_stats['asm_scans']:>6}")
     lines.append(f"  synthesized stubs: {cs_stats.get('synthesized_stubs', 0):>6}  (asset_ids referenced by findings but not in ASM)")
+    lines.append("")
+    lines.append("Posture verdicts (per-asset rollup):")
+    verdicts = cs_stats.get("posture_verdicts", {})
+    for v in ("CRITICAL", "HIGH", "MODERATE-HIGH", "MODERATE", "LOW", "INFO", "UNKNOWN"):
+        c = verdicts.get(v, 0)
+        if c:
+            lines.append(f"  {v:14s}  {c:>3}")
     lines.append("")
 
     # Severity rollup

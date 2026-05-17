@@ -278,6 +278,108 @@ HTML_TEMPLATE = r"""<!doctype html>
     cursor: pointer;
   }
   .back-link:hover { text-decoration: underline; }
+
+  /* Posture cards — the primary CISO-tier view */
+  .posture-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+    gap: 12px;
+  }
+  .posture-card {
+    background: var(--paper);
+    border: 1px solid var(--paper-rule);
+    border-left: 4px solid var(--ink-30);
+    padding: 16px 18px;
+    border-radius: 2px;
+    cursor: pointer;
+    transition: transform 0.05s, box-shadow 0.05s;
+  }
+  .posture-card:hover { transform: translateY(-1px); box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
+  .posture-card.verdict-CRITICAL      { border-left-color: var(--danger); }
+  .posture-card.verdict-HIGH          { border-left-color: #d96344; }
+  .posture-card.verdict-MODERATE-HIGH { border-left-color: #d18840; }
+  .posture-card.verdict-MODERATE      { border-left-color: var(--warn); }
+  .posture-card.verdict-LOW           { border-left-color: var(--ok); }
+  .posture-card.verdict-INFO          { border-left-color: var(--ink-30); }
+  .posture-card.verdict-UNKNOWN       { border-left-color: var(--ink-10); }
+
+  .posture-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-bottom: 4px;
+  }
+  .posture-name {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .posture-reason {
+    font-size: 13px;
+    color: var(--ink-80);
+    line-height: 1.45;
+    margin: 6px 0;
+  }
+  .posture-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    font-size: 11px;
+    color: var(--ink-60);
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--ink-10);
+  }
+  .posture-meta .meta-item { display: flex; gap: 4px; align-items: center; }
+  .posture-meta .meta-item .lbl { text-transform: uppercase; letter-spacing: 0.5px; }
+  .posture-meta .meta-item .num { font-family: var(--font-mono); font-weight: 600; color: var(--ink); }
+  .verdict-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 3px 8px;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .verdict-CRITICAL .verdict-badge      { background: var(--danger);     color: white; }
+  .verdict-HIGH .verdict-badge          { background: #d96344;           color: white; }
+  .verdict-MODERATE-HIGH .verdict-badge { background: #d18840;           color: white; }
+  .verdict-MODERATE .verdict-badge      { background: var(--warn);       color: white; }
+  .verdict-LOW .verdict-badge           { background: var(--ok);         color: white; }
+  .verdict-INFO .verdict-badge          { background: var(--ink-30);     color: var(--ink); }
+  .verdict-UNKNOWN .verdict-badge       { background: var(--ink-10);     color: var(--ink-60); }
+
+  .posture-section-header {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--ink-60);
+    margin: 20px 0 8px 0;
+  }
+  .view-toggle {
+    display: inline-flex;
+    gap: 1px;
+    background: var(--paper-rule);
+    border-radius: 2px;
+    padding: 1px;
+    margin-bottom: 16px;
+  }
+  .view-toggle button {
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 5px 12px;
+    border: 0;
+    background: var(--paper);
+    cursor: pointer;
+    border-radius: 2px;
+  }
+  .view-toggle button.active { background: var(--ink); color: var(--paper); }
 </style>
 </head>
 <body>
@@ -341,79 +443,177 @@ HTML_TEMPLATE = r"""<!doctype html>
     return counts;
   }
 
-  // ─── view: ASSETS ────────────────────────────────────────────────────────
+  // ─── view: ASSETS (posture-card primary view) ────────────────────────────
+  let assetsLayout = 'cards';  // 'cards' or 'table'
+
+  const VERDICT_ORDER = ['CRITICAL','HIGH','MODERATE-HIGH','MODERATE','LOW','INFO','UNKNOWN'];
+  const VERDICT_INDEX = Object.fromEntries(VERDICT_ORDER.map((v,i) => [v, i]));
+
   function renderAssets() {
     const app = document.getElementById('app');
     app.innerHTML = '';
 
-    app.appendChild(el('h1', null, ['Assets']));
+    app.appendChild(el('h1', null, ['Posture']));
     app.appendChild(el('div', {class: 'subtitle'}, [
-      `${DATA.assets.length} assets · ${DATA.findings.length} findings · ${DATA.services.length} services`
+      'Per-asset risk verdicts. Click any card for details.'
     ]));
 
-    // Stat cards — fleet rollup
-    const sevTotal = severityCounts(DATA.findings);
+    // Fleet posture summary — counts of assets at each verdict tier
+    const verdictCounts = {CRITICAL:0, HIGH:0, 'MODERATE-HIGH':0, MODERATE:0, LOW:0, INFO:0, UNKNOWN:0};
+    for (const a of DATA.assets) {
+      const v = a.current_risk || 'UNKNOWN';
+      if (verdictCounts.hasOwnProperty(v)) verdictCounts[v]++;
+    }
     const grid = el('div', {class: 'stat-grid'});
-    grid.appendChild(stat('CRITICAL', sevTotal.CRITICAL, 'open findings'));
-    grid.appendChild(stat('HIGH', sevTotal.HIGH, 'open findings'));
-    grid.appendChild(stat('MODERATE', sevTotal.MODERATE + sevTotal['MODERATE-HIGH'], 'open findings'));
-    grid.appendChild(stat('LOW', sevTotal.LOW, 'open findings'));
-    grid.appendChild(stat('Assets', DATA.assets.length, `${DATA.assets.filter(a => a.source === 'synthesized_from_findings').length} synthesized stubs`));
-    grid.appendChild(stat('Services exposed', DATA.services.length, 'across all assets'));
+    if (verdictCounts.CRITICAL)      grid.appendChild(stat('CRITICAL',      verdictCounts.CRITICAL,      'assets'));
+    if (verdictCounts.HIGH)          grid.appendChild(stat('HIGH',          verdictCounts.HIGH,          'assets'));
+    if (verdictCounts['MODERATE-HIGH']) grid.appendChild(stat('MODERATE-HIGH', verdictCounts['MODERATE-HIGH'], 'assets'));
+    if (verdictCounts.MODERATE)      grid.appendChild(stat('MODERATE',      verdictCounts.MODERATE,      'assets'));
+    if (verdictCounts.LOW)           grid.appendChild(stat('LOW',           verdictCounts.LOW,           'assets'));
+    if (verdictCounts.INFO)          grid.appendChild(stat('INFO',          verdictCounts.INFO,          'assets'));
+    if (verdictCounts.UNKNOWN)       grid.appendChild(stat('UNKNOWN',       verdictCounts.UNKNOWN,       'never vuln-scanned'));
     app.appendChild(grid);
 
-    // Asset table
+    // View toggle
+    const toggle = el('div', {class: 'view-toggle'});
+    const btnCards = el('button', {class: assetsLayout === 'cards' ? 'active' : '', onclick: () => { assetsLayout = 'cards'; renderAssets(); }}, ['Posture cards']);
+    const btnTable = el('button', {class: assetsLayout === 'table' ? 'active' : '', onclick: () => { assetsLayout = 'table'; renderAssets(); }}, ['Detail table']);
+    toggle.appendChild(btnCards);
+    toggle.appendChild(btnTable);
+    app.appendChild(toggle);
+
+    // Sort assets by verdict severity, then by total open findings descending
+    const sortedAssets = [...DATA.assets].sort((a, b) => {
+      const va = VERDICT_INDEX[a.current_risk || 'UNKNOWN'] ?? 99;
+      const vb = VERDICT_INDEX[b.current_risk || 'UNKNOWN'] ?? 99;
+      if (va !== vb) return va - vb;
+      return (b.open_findings_total || 0) - (a.open_findings_total || 0);
+    });
+
+    if (assetsLayout === 'cards') {
+      renderPostureCards(app, sortedAssets);
+    } else {
+      renderAssetTable(app, sortedAssets);
+    }
+  }
+
+  function renderPostureCards(app, assets) {
+    // Group cards by verdict tier with section headers
+    let currentVerdict = null;
+    let currentGrid = null;
+    for (const a of assets) {
+      const v = a.current_risk || 'UNKNOWN';
+      if (v !== currentVerdict) {
+        currentVerdict = v;
+        const sevDescriptor = {
+          'CRITICAL': 'Critical — immediate attention',
+          'HIGH': 'High — fix this week',
+          'MODERATE-HIGH': 'Moderate-High — schedule remediation',
+          'MODERATE': 'Moderate — track and plan',
+          'LOW': 'Low — baseline hardening',
+          'INFO': 'Informational only',
+          'UNKNOWN': 'Not vulnerability-scanned yet',
+        }[v] || v;
+        app.appendChild(el('div', {class: 'posture-section-header'}, [sevDescriptor]));
+        currentGrid = el('div', {class: 'posture-grid'});
+        app.appendChild(currentGrid);
+      }
+      currentGrid.appendChild(makePostureCard(a));
+    }
+  }
+
+  function makePostureCard(a) {
+    const v = a.current_risk || 'UNKNOWN';
+    const stub = a.source === 'synthesized_from_findings';
+    const card = el('div', {
+      class: `posture-card verdict-${v}`,
+      onclick: () => { currentAsset = a.asset_id; currentView = 'asset-detail'; render(); }
+    });
+
+    const head = el('div', {class: 'posture-head'});
+    const nameWrap = el('div', {class: 'posture-name'}, [a.asset_id]);
+    head.appendChild(nameWrap);
+    head.appendChild(el('span', {class: 'verdict-badge'}, [v]));
+    card.appendChild(head);
+
+    if (stub) {
+      card.appendChild(el('div', {style: 'font-size:10px; font-family: var(--font-mono); color: var(--copper-ink); margin-top:-2px;'}, ['Not yet in COMMANDsentry ASM tracking']));
+    }
+
+    card.appendChild(el('div', {class: 'posture-reason'}, [a.current_risk_reason || 'No reason recorded.']));
+
+    // Bottom meta row: open counts by severity + last observed
+    const meta = el('div', {class: 'posture-meta'});
+    const open = a.open_findings_by_severity || {};
+    const openTotal = a.open_findings_total || 0;
+    meta.appendChild(metaItem('Open', String(openTotal)));
+    for (const sev of ['CRITICAL','HIGH','MODERATE-HIGH','MODERATE','LOW']) {
+      if (open[sev]) meta.appendChild(metaItem(sev[0], String(open[sev])));  // single-letter shorthand
+    }
+    if (a.organization && a.organization !== 'unknown') {
+      meta.appendChild(metaItem('Org', a.organization.replace(/_/g, ' ')));
+    }
+    if (a.last_observed) {
+      meta.appendChild(metaItem('Last scan', (a.last_observed || '').slice(0, 10)));
+    }
+    card.appendChild(meta);
+
+    return card;
+  }
+
+  function metaItem(label, value) {
+    return el('div', {class: 'meta-item'}, [
+      el('span', {class: 'lbl'}, [label]),
+      el('span', {class: 'num'}, [value]),
+    ]);
+  }
+
+  function renderAssetTable(app, assets) {
     const tbl = el('table');
     const thead = el('thead');
     thead.appendChild(el('tr', null, [
+      el('th', null, ['Verdict']),
       el('th', null, ['Asset']),
+      el('th', null, ['Reason']),
       el('th', null, ['Org']),
-      el('th', null, ['Type']),
+      el('th', {class: 'num'}, ['Open']),
       el('th', {class: 'num'}, ['Subs']),
-      el('th', {class: 'num'}, ['Services']),
-      el('th', {class: 'num'}, ['C']),
-      el('th', {class: 'num'}, ['H']),
-      el('th', {class: 'num'}, ['M']),
-      el('th', {class: 'num'}, ['L']),
-      el('th', {class: 'num'}, ['I']),
+      el('th', {class: 'num'}, ['Svcs']),
     ]));
     tbl.appendChild(thead);
-
     const tbody = el('tbody');
-    // Sort: most severe first
-    const sortedAssets = [...DATA.assets].sort((a, b) => {
-      const af = findingsByAsset(a.asset_id);
-      const bf = findingsByAsset(b.asset_id);
-      const ac = severityCounts(af);
-      const bc = severityCounts(bf);
-      const score = c => c.CRITICAL*1e6 + c.HIGH*1e4 + (c.MODERATE+c['MODERATE-HIGH'])*100 + c.LOW;
-      return score(bc) - score(ac);
-    });
-
-    for (const a of sortedAssets) {
-      const f = findingsByAsset(a.asset_id);
-      const c = severityCounts(f);
+    for (const a of assets) {
+      const v = a.current_risk || 'UNKNOWN';
       const subs = subdomainsByAsset(a.asset_id);
       const svcs = servicesByAsset(a.asset_id);
-      const stub = a.source === 'synthesized_from_findings';
       const nameCell = el('td', {class: 'mono'}, [a.asset_id]);
-      if (stub) nameCell.appendChild(el('span', {class: 'stub-tag'}, ['not in ASM']));
+      if (a.source === 'synthesized_from_findings') nameCell.appendChild(el('span', {class: 'stub-tag'}, ['not in ASM']));
       const row = el('tr', {class: 'row-clickable', onclick: () => { currentAsset = a.asset_id; currentView = 'asset-detail'; render(); }}, [
+        el('td', null, [el('span', {class: 'verdict-badge', style: getVerdictBadgeStyle(v)}, [v])]),
         nameCell,
+        el('td', null, [a.current_risk_reason || '']),
         el('td', null, [el('span', {class: 'org-tag'}, [a.organization || 'unknown'])]),
-        el('td', {class: 'mono'}, [a.type || '']),
+        el('td', {class: 'num'}, [String(a.open_findings_total || 0)]),
         el('td', {class: 'num'}, [String(subs.length)]),
         el('td', {class: 'num'}, [String(svcs.length)]),
-        el('td', {class: 'num'}, [c.CRITICAL ? String(c.CRITICAL) : '–']),
-        el('td', {class: 'num'}, [c.HIGH ? String(c.HIGH) : '–']),
-        el('td', {class: 'num'}, [String(c.MODERATE + c['MODERATE-HIGH']) === '0' ? '–' : String(c.MODERATE + c['MODERATE-HIGH'])]),
-        el('td', {class: 'num'}, [c.LOW ? String(c.LOW) : '–']),
-        el('td', {class: 'num'}, [c.INFO ? String(c.INFO) : '–']),
       ]);
       tbody.appendChild(row);
     }
     tbl.appendChild(tbody);
     app.appendChild(tbl);
+  }
+
+  function getVerdictBadgeStyle(v) {
+    const colors = {
+      'CRITICAL': 'background:#B02A2A;color:white',
+      'HIGH': 'background:#d96344;color:white',
+      'MODERATE-HIGH': 'background:#d18840;color:white',
+      'MODERATE': 'background:#B4751E;color:white',
+      'LOW': 'background:#2F6B4F;color:white',
+      'INFO': 'background:rgba(11,27,43,0.30);color:#0B1B2B',
+      'UNKNOWN': 'background:rgba(11,27,43,0.10);color:rgba(11,27,43,0.60)',
+    };
+    return colors[v] || '';
   }
 
   function stat(label, value, sub) {
