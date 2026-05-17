@@ -1,0 +1,52 @@
+name: Daily posture digest
+
+# Runs once a day at 12:00 UTC = 07:00 ET (08:00 ET during EDT).
+# Adjust the cron line if you want a different time. Cron uses UTC.
+#
+# Also runnable manually from the Actions tab via workflow_dispatch.
+
+on:
+  schedule:
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Render but don't send / write"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'psycopg[binary]==3.3.4'
+
+      - name: Run alerter
+        env:
+          SUPABASE_DSN:        ${{ secrets.SUPABASE_DSN }}
+          RESEND_API_KEY:      ${{ secrets.RESEND_API_KEY }}
+          ALERTER_FROM:        ${{ vars.ALERTER_FROM       || 'commandsentry@goldenlaneinc.com' }}
+          ALERTER_TO:          ${{ vars.ALERTER_TO         || 'hschneider@commandcompanies.com,howiehow@mac.com' }}
+          ALERTER_DASHBOARD_URL: ${{ vars.ALERTER_DASHBOARD_URL || 'https://supabase.com/dashboard/project/hdygktppfvuspnumpfuq' }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python scripts/alerter/run_alerter.py --dry-run
+          else
+            python scripts/alerter/run_alerter.py
+          fi
