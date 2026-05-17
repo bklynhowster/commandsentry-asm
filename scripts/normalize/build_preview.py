@@ -225,6 +225,15 @@ HTML_TEMPLATE = r"""<!doctype html>
   .status-remediated           { background: var(--ok); color: white; }
   .status-validated_remediated { background: var(--ok); color: white; }
 
+  /* Resolved findings get visually de-emphasized — the severity badge
+     should not compete with open findings for attention. The data stays
+     visible (engineer needs to see "was fixed on X date") but the row
+     stops yelling. Phase 3 SPA principle: a remediated HIGH is not a HIGH
+     for posture purposes; treat it visually accordingly. */
+  tr.row-resolved { opacity: 0.5; }
+  tr.row-resolved .sev { opacity: 0.6; }
+  tr.row-resolved td { color: var(--ink-60); }
+
   .empty {
     padding: 32px;
     text-align: center;
@@ -703,11 +712,19 @@ HTML_TEMPLATE = r"""<!doctype html>
       app.appendChild(tbl);
     }
 
-    // Findings panel — sorted by severity
+    // Findings panel — open findings first by severity, then resolved at the bottom
     if (f.length) {
       app.appendChild(el('h2', null, [`Findings (${f.length})`]));
       const sevOrder = ['CRITICAL','HIGH','MODERATE-HIGH','MODERATE','LOW','INFO'];
-      const sortedF = [...f].sort((x, y) => sevOrder.indexOf(x.severity) - sevOrder.indexOf(y.severity));
+      const RESOLVED = new Set(['remediated','validated_remediated','false_positive','wont_fix','accepted_risk']);
+      const sortedF = [...f].sort((x, y) => {
+        // Resolved → always last
+        const xRes = RESOLVED.has(x.current_status) ? 1 : 0;
+        const yRes = RESOLVED.has(y.current_status) ? 1 : 0;
+        if (xRes !== yRes) return xRes - yRes;
+        // Within each group, by severity descending
+        return sevOrder.indexOf(x.severity) - sevOrder.indexOf(y.severity);
+      });
       const tbl = el('table');
       tbl.appendChild(el('thead', null, [el('tr', null, [
         el('th', null, ['Sev']),
@@ -718,7 +735,8 @@ HTML_TEMPLATE = r"""<!doctype html>
       ])]));
       const tb = el('tbody');
       for (const x of sortedF.slice(0, 500)) {
-        tb.appendChild(el('tr', null, [
+        const isResolved = RESOLVED.has(x.current_status);
+        tb.appendChild(el('tr', {class: isResolved ? 'row-resolved' : ''}, [
           el('td', null, [sevBadge(x.severity)]),
           el('td', null, [x.title.slice(0, 120)]),
           el('td', {class: 'mono'}, [x.source]),
@@ -803,9 +821,16 @@ HTML_TEMPLATE = r"""<!doctype html>
       ])]));
       const tb = el('tbody');
       const sevOrder = ['CRITICAL','HIGH','MODERATE-HIGH','MODERATE','LOW','INFO'];
-      const sorted = [...filtered].sort((a, b) => sevOrder.indexOf(a.severity) - sevOrder.indexOf(b.severity));
+      const RESOLVED = new Set(['remediated','validated_remediated','false_positive','wont_fix','accepted_risk']);
+      const sorted = [...filtered].sort((a, b) => {
+        const aRes = RESOLVED.has(a.current_status) ? 1 : 0;
+        const bRes = RESOLVED.has(b.current_status) ? 1 : 0;
+        if (aRes !== bRes) return aRes - bRes;
+        return sevOrder.indexOf(a.severity) - sevOrder.indexOf(b.severity);
+      });
       for (const f of sorted.slice(0, 1000)) {
-        const row = el('tr', {class: 'row-clickable', onclick: () => { currentAsset = f.asset_id; currentView = 'asset-detail'; render(); }}, [
+        const isResolved = RESOLVED.has(f.current_status);
+        const row = el('tr', {class: 'row-clickable' + (isResolved ? ' row-resolved' : ''), onclick: () => { currentAsset = f.asset_id; currentView = 'asset-detail'; render(); }}, [
           el('td', null, [sevBadge(f.severity)]),
           el('td', {class: 'mono'}, [f.asset_id]),
           el('td', null, [f.title.slice(0, 100)]),
@@ -913,8 +938,16 @@ HTML_TEMPLATE = r"""<!doctype html>
         el('th', null, ['Status']),
       ])]));
       const tb = el('tbody');
-      for (const f of matches.slice(0, 200)) {
-        tb.appendChild(el('tr', {class: 'row-clickable', onclick: () => { currentAsset = f.asset_id; currentView = 'asset-detail'; render(); }}, [
+      const RESOLVED = new Set(['remediated','validated_remediated','false_positive','wont_fix','accepted_risk']);
+      // Sort open first, resolved last
+      const sortedMatches = [...matches].sort((a, b) => {
+        const aRes = RESOLVED.has(a.current_status) ? 1 : 0;
+        const bRes = RESOLVED.has(b.current_status) ? 1 : 0;
+        return aRes - bRes;
+      });
+      for (const f of sortedMatches.slice(0, 200)) {
+        const isResolved = RESOLVED.has(f.current_status);
+        tb.appendChild(el('tr', {class: 'row-clickable' + (isResolved ? ' row-resolved' : ''), onclick: () => { currentAsset = f.asset_id; currentView = 'asset-detail'; render(); }}, [
           el('td', {class: 'mono'}, [f.asset_id]),
           el('td', null, [f.title.slice(0, 100)]),
           el('td', {class: 'mono'}, [f.source]),
