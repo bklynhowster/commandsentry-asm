@@ -340,6 +340,23 @@ def main() -> int:
                 parser_stats[parser_name]["events"] += len(evs)
                 all_events.extend(evs)
 
+    # Cross-source dedup of named findings.
+    # When a named finding (M-01, H-01, L-02, etc.) is emitted by BOTH the
+    # summary_md parser (prefix `:manual:`) and the curated_html parser
+    # (prefix `:curated:`) on the same asset, they're the same underlying
+    # finding seen through two doc formats. Merge by rewriting curated
+    # finding_ids onto the corresponding manual_named identity.
+    #
+    # Both parsers use source="manual_named" — only the finding_id prefix
+    # differs. We canonicalize to `:manual:<short>` (SUMMARY.md is usually
+    # more detailed / authoritative; curated HTML is the polished output).
+    _NAMED_RE = _re.compile(r"^(.+?):(?:manual|curated):([A-Z]+-\d+)$")
+    for ev in all_events:
+        m = _NAMED_RE.match(ev.finding_id)
+        if m:
+            asset, short = m.group(1), m.group(2)
+            ev.finding_id = f"{asset}:manual:{short}"
+
     # Rollup
     findings = rollup_findings(all_events)
 
