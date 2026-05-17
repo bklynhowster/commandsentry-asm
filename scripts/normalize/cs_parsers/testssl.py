@@ -53,45 +53,22 @@ SEVERITY_MAP = {
 # Severities we drop entirely (not actionable findings):
 SKIP_SEVERITIES = {"WARN", "OK", "DEBUG"}
 
-# Scorecard / summary IDs — these are NOT findings. They're testssl meta-output
-# that summarizes other findings (e.g. overall_grade is the letter grade derived
-# from other tests). Filtering them out reduces noise without losing information
-# — the underlying real findings are still emitted by other tests.
+# Pure scorecard / meta IDs — these are NOT findings. They're testssl
+# tool-meta output (overall_grade is the letter grade DERIVED from other
+# tests; service is the protocol identification; engine_problem is a
+# tool diagnostic). Filtering them out is safe because the underlying
+# real findings are emitted by other tests.
+#
+# Be conservative: only filter things that are unambiguously meta. When
+# in doubt, keep the finding at testssl's assigned severity and let the
+# operator decide. Howie's principle: 'trust testssl's severity; only
+# remove what's truly meta-summary.'
 SCORECARD_IDS = {
-    "overall_grade",
+    "overall_grade",         # letter grade derived from other tests
     "overall_grade_warning",
-    "cipherlist_STRONG_FS",
-    "cipherlist_STRONG_NOFS",
-    "cipherlist_LIMITED",
-    "cipherlist_WEAK",
-    "cipherlist_INSECURE",
-    "cipher_order",
-    "cipher_order-tls1",
-    "cipher_order-tls1_1",
-    "cipher_order-tls1_2",
-    "cipher_order-tls1_3",
-    "cipher_order_TLSv1_2",
-    "cipher_order_TLSv1_3",
-    "service",
-    "FS",  # "Forward Secrecy supported" — summary; specific cipher findings cover detail
-    "TLS_extensions",
-    "engine_problem",
-    "scanProblem",
-}
-
-# Hardening-only findings — real but not vulnerabilities per se. Downgrade
-# testssl's MEDIUM → canonical LOW so they don't inflate the moderate count.
-# These are 'fix when convenient' items, not 'fix now' items.
-HARDENING_IDS = {
-    "TLS1_2",                       # 'TLS 1.2 not offered' — config note
-    "TLS1_3",
-    "HSTS_time",                    # HSTS max-age too short
-    "HSTS_multiple",                # multiple HSTS headers
-    "HSTS",                         # HSTS not enabled / misconfigured
-    "TLS_misses_extension_23",      # Missing extended-master-secret extension
-    "security_headers",             # Generic missing-security-headers summary
-    "BREACH",                       # Compression detection — real but rarely exploitable now
-    "RC4",                          # RC4 detection — likely already filtered by another test
+    "service",               # protocol identification, not a finding
+    "engine_problem",        # testssl tool diagnostic
+    "scanProblem",           # testssl tool diagnostic
 }
 
 
@@ -184,18 +161,10 @@ def parse_testssl_file(
         raw_id = rec.get("id") or ""
         grouped_id, is_cipher = _normalize_id(raw_id)
 
-        # Skip scorecard/summary IDs entirely — they're meta about other
-        # findings, not findings themselves. Filters out e.g. overall_grade
-        # ('C'), cipherlist_STRONG_FS ('not offered'), engine_problem.
+        # Skip pure meta/scorecard IDs only (overall_grade, service, etc.).
+        # Everything else keeps testssl's reported severity — no auto-downgrade.
         if grouped_id in SCORECARD_IDS:
             continue
-
-        # Downgrade hardening-only findings from MODERATE → LOW. These are real
-        # config notes (HSTS time too short, missing extended-master-secret,
-        # TLS 1.2 not offered) but they're not vulnerabilities worth flagging
-        # alongside actual exploitable issues.
-        if grouped_id in HARDENING_IDS and canonical_sev == "MODERATE":
-            canonical_sev = "LOW"
 
         ip_field = rec.get("ip") or ""
         port = rec.get("port") or ""
