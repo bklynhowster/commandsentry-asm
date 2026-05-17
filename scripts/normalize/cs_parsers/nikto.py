@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from .common import (
+    canonical_asset_id,
     is_fqdn_in_scope,
     FindingEvent,
     infer_asset_id,
@@ -145,7 +146,7 @@ def parse_nikto_file(
             except ValueError: pass
 
     # Asset = the FQDN scanned, not the target-dir apex
-    event_asset_id = target_host.lower() if (target_host and is_fqdn_in_scope(target_host.lower(), asset_id)) else asset_id
+    event_asset_id = canonical_asset_id(target_host.lower()) if (target_host and is_fqdn_in_scope(target_host.lower(), asset_id)) else canonical_asset_id(asset_id)
 
     events: list[FindingEvent] = []
     seen_finding_ids: set[str] = set()  # dedupe within the same scan file

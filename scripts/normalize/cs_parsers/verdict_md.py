@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Optional
 
 from .common import (
+    canonical_asset_id,
     is_fqdn_in_scope,
     FindingEvent,
     infer_asset_id,
@@ -137,7 +138,7 @@ def parse_verdict_md(
     tm = TARGET_LINE_RE.search(text)
     target_url = tm.group(1) if tm else None
     target_sub = subdomain_from_url(target_url) if target_url else None
-    event_asset_id = target_sub if is_fqdn_in_scope(target_sub, asset_id) else asset_id
+    event_asset_id = canonical_asset_id(target_sub) if is_fqdn_in_scope(target_sub, asset_id) else canonical_asset_id(asset_id)
 
     events: list[FindingEvent] = []
     for short in finding_shorts:

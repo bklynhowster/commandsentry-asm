@@ -272,6 +272,28 @@ def protocol_from_url(url: Optional[str]) -> Optional[str]:
     return None
 
 
+def canonical_asset_id(fqdn: Optional[str]) -> Optional[str]:
+    """
+    Collapse www.X and X to the same canonical asset_id.
+
+    The bare apex and the www subdomain are operationally the same web
+    property in 99% of cases — same server, same WordPress install, same
+    posture. Treating them as separate assets creates phantom 'two boxes'
+    in the dashboard when there's really one. Other subdomains
+    (test/api/admin/etc) are genuinely distinct and not collapsed.
+
+    The finding's `subdomain` field still records the actual hostname that
+    was scanned (www.X), so forensic drill-in shows the real URL. Only the
+    asset_id grouping changes.
+    """
+    if not fqdn:
+        return fqdn
+    fqdn = fqdn.lower()
+    if fqdn.startswith("www."):
+        return fqdn[4:]
+    return fqdn
+
+
 def is_fqdn_in_scope(fqdn: Optional[str], target_asset: str) -> bool:
     """
     Returns True if fqdn is the target_asset's registrable apex or a subdomain

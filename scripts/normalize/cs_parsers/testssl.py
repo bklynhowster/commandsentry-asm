@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 from .common import (
+    canonical_asset_id,
     is_fqdn_in_scope,
     FindingEvent,
     infer_asset_id,
@@ -203,7 +204,7 @@ def parse_testssl_file(
 
         # Asset = the FQDN tested (sub from testssl ip field), not the
         # target-dir apex. Test/api/etc findings → their own asset cards.
-        event_asset_id = sub if is_fqdn_in_scope(sub, asset_id) else asset_id
+        event_asset_id = canonical_asset_id(sub) if is_fqdn_in_scope(sub, asset_id) else canonical_asset_id(asset_id)
 
         ev = FindingEvent(
             finding_id=stable_finding_id(event_asset_id, "testssl", grouped_id, f"{host}:{port}"),

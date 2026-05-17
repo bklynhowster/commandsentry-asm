@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Optional
 
 from .common import (
+    canonical_asset_id,
     is_fqdn_in_scope,
     FindingEvent,
     infer_asset_id,
@@ -301,7 +302,7 @@ def parse_summary_md(
         # Asset = the actual scanned FQDN (Target URL or matched endpoint),
         # not the target dir's apex mapping. Keeps test/api/etc findings
         # under the correct asset card.
-        event_asset_id = sub if is_fqdn_in_scope(sub, asset_id) else asset_id
+        event_asset_id = canonical_asset_id(sub) if is_fqdn_in_scope(sub, asset_id) else canonical_asset_id(asset_id)
 
         ev = FindingEvent(
             finding_id=f"{event_asset_id}:manual:{short}",

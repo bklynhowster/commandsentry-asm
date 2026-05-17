@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 from .common import (
+    canonical_asset_id,
     is_fqdn_in_scope,
     FindingEvent,
     infer_asset_id,
@@ -165,7 +166,7 @@ def parse_text_file(
 
         # Prefer the URL-derived FQDN as asset_id so test/api/etc findings
         # don't bleed into the apex card.
-        event_asset_id = sub if is_fqdn_in_scope(sub, asset_id) else asset_id
+        event_asset_id = canonical_asset_id(sub) if is_fqdn_in_scope(sub, asset_id) else canonical_asset_id(asset_id)
 
         ev = FindingEvent(
             finding_id=stable_finding_id(event_asset_id, "nuclei", full_tpl, url),
