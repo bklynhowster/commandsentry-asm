@@ -10,9 +10,11 @@ COMMANDsentry data layer. Target: Supabase project `commandsentry`
 - `reset.sql` — destructive drop-all; use during early iteration only.
 - `import_jsonl.py` — one-shot `_normalized/*.jsonl` → Postgres importer.
   Idempotent (ON CONFLICT DO UPDATE) and supports `--truncate` for clean reloads.
-- `checks/` — verification SQL that reproduces the throwaway-dashboard
-  numbers from the DB. Compare against `run_normalize.py`'s console summary
-  and against the `preview-dashboard.html` posture cards.
+- `checks/` — verification SQL + a shell script that reproduces the
+  throwaway-dashboard numbers from the DB and proves RLS lockdown. Compare
+  against `run_normalize.py`'s console summary.
+- `rls.sql` — Row Level Security policies (Phase 3 Track 1). Apply once
+  before the SPA is built; idempotent on re-apply.
 
 ## Workflow
 
@@ -45,6 +47,22 @@ psql "$SUPABASE_DSN" -f scripts/db/checks/03_duplicate_finding_check.sql
 ```bash
 pip install --user 'psycopg[binary]'
 ```
+
+## Phase 3 Track 1 — RLS lockdown
+
+After loading data, apply RLS and verify the anon API key returns nothing:
+
+```bash
+psql "$SUPABASE_DSN" -f scripts/db/rls.sql
+
+export SUPABASE_URL='https://YOUR_PROJECT_REF.supabase.co'
+export SUPABASE_ANON_KEY='sb_publishable_...'
+./scripts/db/checks/04_rls_lockdown.sh
+```
+
+The lockdown check fails loudly if any table leaks data to the anon key.
+Also disable "Allow new users to sign up" in dashboard → Authentication
+→ Sign In / Providers to prevent self-registration.
 
 ## Phase 2 success criteria
 
