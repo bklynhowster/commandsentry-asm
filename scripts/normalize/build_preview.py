@@ -866,7 +866,6 @@ HTML_TEMPLATE = r"""<!doctype html>
       ])]));
       const tb = el('tbody');
       const sevOrder = ['CRITICAL','HIGH','MODERATE-HIGH','MODERATE','LOW','INFO'];
-      const RESOLVED = new Set(['remediated','validated_remediated','false_positive','wont_fix','accepted_risk']);
       const sorted = [...filtered].sort((a, b) => {
         const aRes = RESOLVED.has(a.current_status) ? 1 : 0;
         const bRes = RESOLVED.has(b.current_status) ? 1 : 0;
