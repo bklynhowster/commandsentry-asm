@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-17T08:30:16Z_c407aa5f",
-    "started_at": "2026-05-17T08:30:16Z",
-    "completed_at": "2026-05-17T08:32:12Z",
-    "duration_seconds": 116,
+    "id": "scan_2026-05-17T13:48:05Z_66285733",
+    "started_at": "2026-05-17T13:48:05Z",
+    "completed_at": "2026-05-17T13:49:25Z",
+    "duration_seconds": 80,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-17T08:32:12Z",
-      "last_seen": "2026-05-17T08:32:12Z",
+      "first_discovered": "2026-05-17T13:49:25Z",
+      "last_seen": "2026-05-17T13:49:25Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -107,9 +107,9 @@
         ],
         "txt": [
           "MS=ms93622757",
-          "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430"
+          "apple-domain-verification=cWkfjNKuM61a3EZ6"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -221,13 +221,13 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-17T08:32:12Z",
-      "last_seen": "2026-05-17T08:32:12Z",
+      "first_discovered": "2026-05-17T13:49:26Z",
+      "last_seen": "2026-05-17T13:49:26Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 200,
-        "title": "Welcome - Customized printing services in NY & NJ | Command Companies"
+        "http_status": 403,
+        "title": "Checking your browser..."
       },
       "hosts": [
         {
@@ -259,13 +259,13 @@
           "tls": true,
           "cert": {
             "subject": "CN=tls.automattic.com",
-            "issuer": "CN=E7, O=Let's Encrypt, C=US",
+            "issuer": "CN=E8, O=Let's Encrypt, C=US",
             "san": [
-              "commandcompanies.com",
-              "tls.automattic.com"
+              "tls.automattic.com",
+              "www.commandcompanies.com"
             ],
-            "not_before": "2026-03-21T02:43:26Z",
-            "not_after": "2026-06-19T02:43:25Z",
+            "not_before": "2026-03-21T02:43:46Z",
+            "not_after": "2026-06-19T02:43:45Z",
             "self_signed": false,
             "days_to_expiry": 32
           }
@@ -285,97 +285,17 @@
       },
       "fingerprint": {
         "server": "nginx",
-        "platform_label": "WordPress on wp.cloud (Pressable)",
+        "platform_label": null,
         "tech": [
-          {
-            "name": "Contact Form 7",
-            "version": "6.1.6",
-            "category": null
-          },
-          {
-            "name": "Google Analytics",
-            "version": null,
-            "category": null
-          },
-          {
-            "name": "Google Maps",
-            "version": null,
-            "category": null
-          },
           {
             "name": "HSTS",
             "version": null,
             "category": "security"
           },
           {
-            "name": "MySQL",
-            "version": null,
-            "category": "database"
-          },
-          {
             "name": "Nginx",
             "version": null,
             "category": "webserver"
-          },
-          {
-            "name": "PHP",
-            "version": null,
-            "category": "language"
-          },
-          {
-            "name": "Slider Revolution",
-            "version": "6.7.41",
-            "category": "wp-plugin"
-          },
-          {
-            "name": "WP Google Map Plugin",
-            "version": "4.9.4",
-            "category": null
-          },
-          {
-            "name": "WPMU DEV Smush",
-            "version": "4.0.3",
-            "category": "wp-plugin"
-          },
-          {
-            "name": "WordPress",
-            "version": null,
-            "category": "cms"
-          },
-          {
-            "name": "Yoast SEO",
-            "version": "27.6",
-            "category": "wp-plugin"
-          },
-          {
-            "name": "imagesLoaded",
-            "version": "5.0.0",
-            "category": null
-          },
-          {
-            "name": "jQuery",
-            "version": null,
-            "category": "frontend"
-          },
-          {
-            "name": "jQuery Migrate",
-            "version": "3.4.1",
-            "category": "frontend"
-          },
-          {
-            "name": "reCAPTCHA",
-            "version": null,
-            "category": null
-          },
-          {
-            "name": "wp.cloud",
-            "version": null,
-            "category": "hosting"
-          },
-          {
-            "name": "wpBakery",
-            "version": null,
-            "category": "wp-plugin"
           }
         ]
       },
@@ -387,7 +307,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-17T04:06:20Z_20a66b91",
+    "since_scan": "scan_2026-05-17T08:30:16Z_c407aa5f",
     "added": {
       "subdomains": [],
       "services": [],
@@ -1613,6 +1533,42 @@
       "scan_id": "scan_2026-05-17T08:30:16Z_c407aa5f",
       "started_at": "2026-05-17T08:30:16Z",
       "completed_at": "2026-05-17T08:32:12Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 1,
+      "service_count": 4,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Contact Form 7": "6.1.6",
+        "Slider Revolution": "6.7.41",
+        "WP Google Map Plugin": "4.9.4",
+        "WPMU DEV Smush": "4.0.3",
+        "Yoast SEO": "27.6",
+        "imagesLoaded": "5.0.0",
+        "jQuery Migrate": "3.4.1"
+      }
+    },
+    {
+      "scan_id": "scan_2026-05-17T13:48:05Z_66285733",
+      "started_at": "2026-05-17T13:48:05Z",
+      "completed_at": "2026-05-17T13:49:25Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 1,
