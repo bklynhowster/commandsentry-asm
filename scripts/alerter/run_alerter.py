@@ -44,7 +44,7 @@ import sys
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from html import escape
+from html import escape, unescape
 
 try:
     import psycopg
@@ -234,7 +234,7 @@ def render_html(
             f"<tr>"
             f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:12px;">{escape(r[0])}</td>'
             f'<td style="padding:6px 12px 6px 0;">{_sev_pill(r[3])}</td>'
-            f'<td style="padding:6px 0;font-size:13px;color:#555;">{escape(r[4] or "")}</td>'
+            f'<td style="padding:6px 0;font-size:13px;color:#555;">{escape(unescape(r[4] or ""))}</td>'
             f"</tr>"
             for r in rows
         )
@@ -340,7 +340,8 @@ def render_text(
     if high_risk:
         lines.append(f"ASSETS ELEVATED TO HIGH / CRITICAL ({len(high_risk)}):")
         for r in high_risk:
-            lines.append(f"  [{r[3]:<13}] {r[0]:<40}  {r[4] or ''}")
+            reason = unescape(r[4] or "")
+            lines.append(f"  [{r[3]:<13}] {r[0]:<40}  {reason}")
         lines.append("")
 
     return "\n".join(lines)
