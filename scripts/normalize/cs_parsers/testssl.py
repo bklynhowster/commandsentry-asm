@@ -72,6 +72,59 @@ SCORECARD_IDS = {
 }
 
 
+# Dedupe map: when multiple testssl IDs report what's clearly the SAME root
+# issue (just reported from different angles), collapse them into one. The
+# canonical ID is the one operators will recognize; the others are folded in.
+#
+# Example: 'FS' and 'cipherlist_STRONG_FS' both report 'server doesn't support
+# Forward Secrecy'. They're not two findings; they're one finding observed two
+# ways. Treating them as separate inflates the MODERATE count without adding
+# information.
+DEDUPE_MAP = {
+    "cipherlist_STRONG_FS": "FS",         # collapse into "FS" (forward secrecy)
+    "cipherlist_STRONG_NOFS": "FS",
+}
+
+
+# Human-readable title prefix per testssl ID. testssl test IDs are cryptic
+# ('TLS_misses_extension_23' — what is that?). This map gives each one a
+# plain-English label. When a record is shown, we combine: '<label> — <testssl finding text>'.
+# IDs not in this map fall back to "TLS · <id>: <finding>".
+TITLE_LABELS = {
+    "FS":                          "TLS forward secrecy not supported",
+    "HSTS":                        "HSTS not enabled",
+    "HSTS_time":                   "HSTS max-age too short",
+    "HSTS_multiple":               "Multiple HSTS headers",
+    "HSTS_subdomains":             "HSTS includeSubDomains not set",
+    "HSTS_preload":                "HSTS preload not set",
+    "TLS1_2":                      "TLS 1.2 not offered",
+    "TLS1_3":                      "TLS 1.3 not offered",
+    "TLS1_0":                      "TLS 1.0 offered (deprecated)",
+    "TLS1_1":                      "TLS 1.1 offered (deprecated)",
+    "TLS_misses_extension_23":     "Extended Master Secret extension missing (RFC 7627 violation)",
+    "security_headers":            "Security headers missing or weak",
+    "BREACH":                      "BREACH attack vulnerability check",
+    "RC4":                         "RC4 cipher offered (deprecated)",
+    "LUCKY13":                     "LUCKY13 timing attack possible",
+    "POODLE":                      "POODLE attack possible",
+    "heartbleed":                  "Heartbleed (CVE-2014-0160)",
+    "ROBOT":                       "ROBOT attack vulnerability",
+    "CCS":                         "OpenSSL CCS injection (CVE-2014-0224)",
+    "BEAST":                       "BEAST attack vulnerability",
+    "FREAK":                       "FREAK attack — export-grade RSA",
+    "LOGJAM":                      "LOGJAM attack — weak DH params",
+    "DROWN":                       "DROWN attack — SSLv2 enabled",
+    "SWEET32":                     "SWEET32 — 64-bit block cipher",
+    "compression":                 "TLS compression enabled (CRIME)",
+    "cipher_order":                "Server does not enforce cipher order",
+    "DNS_CAArecord":               "No CAA DNS record (cert issuance unrestricted)",
+    "OCSP_stapling":               "OCSP stapling not enabled",
+    "cert_chain_of_trust":         "Certificate chain of trust issue",
+    "cert_trust_wildcard":         "Wildcard certificate in use",
+    "certs_list_ordering_problem": "Certificate list ordering issue",
+}
+
+
 # Cipher records have IDs like "cipher-tls1_2_xc028" or "cipher_x6b" — group
 # them by stripping the trailing _xNNNN hex token.
 CIPHER_ID_RE = re.compile(r"^(cipher[-_][a-z0-9_]+?)(?:_x[0-9a-fA-F]+)$")
@@ -166,6 +219,10 @@ def parse_testssl_file(
         if grouped_id in SCORECARD_IDS:
             continue
 
+        # Collapse synonym IDs into their canonical ID so duplicate reporting
+        # of the same underlying issue counts as one finding, not several.
+        grouped_id = DEDUPE_MAP.get(grouped_id, grouped_id)
+
         ip_field = rec.get("ip") or ""
         port = rec.get("port") or ""
         key = (grouped_id, canonical_sev, ip_field, str(port))
@@ -181,15 +238,28 @@ def parse_testssl_file(
 
         # Build title + description
         first = records[0]
+        # "Vague" finding texts that don't add information beyond what the
+        # label already conveys. Don't append these to the title.
+        VAGUE = {"", "--", "ok", "offered", "not offered"}
+        finding_text = (first.get("finding") or "").strip()
+        label = TITLE_LABELS.get(grouped_id)
+
         if len(records) == 1:
-            title = f"testssl: {grouped_id}"
-            description = first.get("finding") or ""
+            if label:
+                title = (f"{label} — {finding_text[:100]}"
+                         if finding_text and finding_text.lower() not in VAGUE
+                         else label)
+            else:
+                title = (f"TLS · {grouped_id}: {finding_text[:120]}"
+                         if finding_text else f"TLS · {grouped_id}")
+            description = finding_text
             if first.get("cwe"):
                 description = f"{description}  ({first['cwe']})" if description else first["cwe"]
         else:
-            # Grouped (cipher list)
+            # Grouped (cipher list OR dedupe-merged synonym findings)
             n = len(records)
-            title = f"testssl: {grouped_id}  ({n} entries)"
+            base = label or f"testssl: {grouped_id}"
+            title = f"{base}  ({n} reports)"
             # Pull just the cipher mnemonic from each "TLSv1.2  xc028  ECDHE-RSA-..." line
             cipher_strs: list[str] = []
             for r in records[:20]:  # cap to avoid huge descriptions
