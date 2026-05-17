@@ -657,59 +657,29 @@ HTML_TEMPLATE = r"""<!doctype html>
     grid.appendChild(stat('INFO', c.INFO, ''));
     app.appendChild(grid);
 
-    // Subdomains panel
-    const subs = subdomainsByAsset(a.asset_id);
-    if (subs.length) {
-      app.appendChild(el('h2', null, ['Subdomains']));
-      const tbl = el('table');
-      tbl.appendChild(el('thead', null, [el('tr', null, [
-        el('th', null, ['Name']),
-        el('th', null, ['Alive']),
-        el('th', null, ['Platform']),
-        el('th', null, ['WAF']),
-        el('th', null, ['Server']),
-      ])]));
-      const tb = el('tbody');
-      for (const s of subs) {
-        const waf = s.waf && s.waf.detected ? `${s.waf.vendor||'detected'}` : '–';
-        tb.appendChild(el('tr', null, [
-          el('td', {class: 'mono'}, [s.name]),
-          el('td', null, [s.alive ? '✓' : '–']),
-          el('td', null, [s.platform_label || '']),
-          el('td', null, [waf]),
-          el('td', {class: 'mono'}, [s.server || '']),
-        ]));
-      }
-      tbl.appendChild(tb);
-      app.appendChild(tbl);
-    }
+    // Related assets — sibling cards sharing the registrable apex.
+    // Provides quick navigation without mixing siblings' findings into THIS page.
+    // (Subdomains and Services tables removed — they were ASM-tier surface
+    // inventory that confused users when their findings didn't appear in the
+    // findings list below. ASM data belongs on a separate Surface view.)
+    const myParts = a.asset_id.split('.');
+    const myApex = myParts.length >= 2 ? myParts.slice(-2).join('.') : a.asset_id;
+    const siblings = DATA.assets.filter(x =>
+      x.asset_id !== a.asset_id &&
+      !x.asset_id.startsWith('ip:') &&
+      (x.asset_id === myApex || x.asset_id.endsWith('.' + myApex))
+    ).sort((x, y) => x.asset_id.localeCompare(y.asset_id));
 
-    // Services panel
-    const svcs = servicesByAsset(a.asset_id);
-    if (svcs.length) {
-      app.appendChild(el('h2', null, [`Services (${svcs.length})`]));
-      const tbl = el('table');
-      tbl.appendChild(el('thead', null, [el('tr', null, [
-        el('th', null, ['Subdomain']),
-        el('th', null, ['IP']),
-        el('th', {class: 'num'}, ['Port']),
-        el('th', null, ['Proto']),
-        el('th', null, ['Service']),
-        el('th', null, ['TLS']),
-      ])]));
-      const tb = el('tbody');
-      for (const s of svcs) {
-        tb.appendChild(el('tr', null, [
-          el('td', {class: 'mono'}, [s.subdomain]),
-          el('td', {class: 'mono'}, [s.host_ip]),
-          el('td', {class: 'num'}, [String(s.port)]),
-          el('td', {class: 'mono'}, [s.protocol || '']),
-          el('td', null, [s.service || '']),
-          el('td', null, [s.tls ? '✓' : '–']),
-        ]));
+    if (siblings.length > 0) {
+      app.appendChild(el('h2', null, ['Related assets']));
+      app.appendChild(el('div', {class: 'subtitle'}, [
+        `Other assets sharing the ${myApex} apex. Click to view their findings independently.`
+      ]));
+      const relGrid = el('div', {class: 'posture-grid'});
+      for (const s of siblings) {
+        relGrid.appendChild(makePostureCard(s));
       }
-      tbl.appendChild(tb);
-      app.appendChild(tbl);
+      app.appendChild(relGrid);
     }
 
     // Findings panel — OPEN findings shown by default; resolved/historical
