@@ -72,6 +72,22 @@ SCORECARD_IDS = {
 }
 
 
+# testssl IDs that should KEEP their MODERATE severity even without CWE.
+# Most testssl MEDIUM-no-CWE entries are hardening items that Command's
+# curated reports demote to LOW (HSTS_time, TLS1_2, FS, TLS_misses_extension_23,
+# etc.). But some have direct exploit consequences and stay MEDIUM:
+#
+# - security_headers: missing CSP / X-Frame-Options means clickjacking,
+#   XSS injection, MIME-sniffing all become possible. CVSS 5.3 per
+#   Command's 5/14 curated report (A-01).
+#
+# Verified against api.commandcommcentral.com 5/14 report; expand list when
+# we cross-correlate more reports.
+KEEP_MEDIUM_IDS = {
+    "security_headers",
+}
+
+
 # Dedupe map: when multiple testssl IDs report what's clearly the SAME root
 # issue (just reported from different angles), collapse them into one. The
 # canonical ID is the one operators will recognize; the others are folded in.
@@ -223,13 +239,13 @@ def parse_testssl_file(
         grouped_id = DEDUPE_MAP.get(grouped_id, grouped_id)
 
         # Severity calibration to match Command's curated-report standard.
-        # Verified via cross-check against the 5/13-5/14 HTML reports:
-        # those reports put testssl MEDIUM-tier findings (FS, HSTS_time,
-        # TLS_misses_extension_23, cipherlist_*, security_headers) at LOW.
-        # MODERATE is reserved for named application findings (M-01..M-04).
-        # Rule: testssl MEDIUM with no CWE → LOW. With CWE (real named
-        # attacks: LUCKY13, ROBOT, FREAK, etc.) → keep MEDIUM.
-        if canonical_sev == "MODERATE" and not rec.get("cwe"):
+        # Cross-checked against the 5/13-5/14 HTML reports:
+        # - Most testssl MEDIUMs (HSTS_time, TLS1_2, FS, TLS_misses_*) are
+        #   hardening items demoted to LOW in the curated reports.
+        # - security_headers stays MEDIUM (direct exploit consequences:
+        #   missing CSP/X-Frame → clickjacking, XSS, MIME-sniffing).
+        # - CWE-tagged findings (real named attacks) keep MEDIUM/HIGH.
+        if canonical_sev == "MODERATE" and not rec.get("cwe") and grouped_id not in KEEP_MEDIUM_IDS:
             canonical_sev = "LOW"
 
         ip_field = rec.get("ip") or ""
