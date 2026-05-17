@@ -81,6 +81,23 @@ def coerce_int(v: Any) -> int | None:
 # Per-table importers
 # ---------------------------------------------------------------------------
 
+def _asset_row(asset_id: str, name: str | None = None, org: str = "unknown",
+               asset_type: str = "single_host", stub: bool = False) -> tuple:
+    """Build a parameter tuple matching the assets INSERT column order."""
+    return (
+        asset_id,
+        name or asset_id,
+        asset_type,
+        org,
+        ["stub"] if stub else [],
+        None,           # first_observed
+        None,           # last_observed
+        "UNKNOWN",      # current_risk
+        "stub asset auto-created during import for FK integrity" if stub else None,
+        Json({}),
+    )
+
+
 def load_assets(cur, path: Path) -> int:
     rows = []
     for rec in read_jsonl(path):
@@ -180,17 +197,17 @@ def load_findings(cur, path: Path) -> tuple[int, int]:
             rec.get("cve") or [],
             rec.get("references") or [],
             rec.get("current_status") or "detected",
-            rec["first_detected_at"],
-            rec.get("first_detected_scan"),
+            get(rec, "first_detected_at"),
+            rec.get("first_detected_scan") or None,
             get(rec, "last_observed_at"),
             get(rec, "remediated_at"),
-            rec.get("owner"),
+            rec.get("owner") or None,
             get(rec, "deadline"),
             rec.get("source") or "other",
-            rec.get("subdomain"),
-            rec.get("host_ip"),
+            rec.get("subdomain") or None,
+            rec.get("host_ip") or None,
             coerce_int(rec.get("port")),
-            rec.get("protocol"),
+            rec.get("protocol") or None,
             rec.get("tags") or [],
         ))
 
@@ -198,12 +215,12 @@ def load_findings(cur, path: Path) -> tuple[int, int]:
             hist_rows.append((
                 rec["finding_id"],
                 h["scan_id"],
-                h["observed_at"],
+                get(h, "observed_at"),
                 h.get("status") or "detected",
-                h.get("severity_at_scan"),
-                h.get("matched_at"),
-                h.get("raw_excerpt"),
-                h.get("notes"),
+                h.get("severity_at_scan") or None,
+                h.get("matched_at") or None,
+                h.get("raw_excerpt") or None,
+                h.get("notes") or None,
             ))
 
     if find_rows:
@@ -297,7 +314,82 @@ def main() -> None:
                 cur.execute("TRUNCATE finding_history, evidence_artifacts, findings, scans, assets RESTART IDENTITY CASCADE")
 
             n_assets   = load_assets(cur, assets_p)
+
+            # Auto-stub any orphan asset_ids referenced by scans/findings
+            # but missing from assets.jsonl (e.g. mail subdomains, parser
+            # bugs leaking www. variants). Preserves FK integrity without
+            # discarding data; stubs are tagged for later cleanup.
+            referenced: set[str] = set()
+            for rec in read_jsonl(scans_p):
+                referenced.add(rec["asset_id"])
+            for rec in read_jsonl(findings_p):
+                referenced.add(rec["asset_id"])
+
+            cur.execute("SELECT asset_id FROM assets")
+            existing = {r[0] for r in cur.fetchall()}
+            orphans = sorted(referenced - existing)
+            if orphans:
+                print(f">> Auto-stubbing {len(orphans)} orphan asset(s): {orphans}")
+                stub_rows = [_asset_row(o, stub=True) for o in orphans]
+                cur.executemany(
+                    """
+                    INSERT INTO assets (
+                        asset_id, name, type, organization, tags,
+                        first_observed, last_observed, current_risk, current_risk_reason, metadata
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (asset_id) DO NOTHING
+                    """,
+                    stub_rows,
+                )
+                n_assets += len(orphans)
+
             n_scans    = load_scans(cur, scans_p)
+
+            # Auto-stub any scan_ids referenced by findings/history but
+            # missing from scans.jsonl (parser naming inconsistency:
+            # curated_html emits __synthetic_root, walker emits ___target_root).
+            # Build a map from synthetic scan_id -> asset_id by reading findings.
+            scan_to_asset: dict[str, str] = {}
+            for rec in read_jsonl(findings_p):
+                fid_scan = rec.get("first_detected_scan")
+                if fid_scan:
+                    scan_to_asset.setdefault(fid_scan, rec["asset_id"])
+                for h in rec.get("history", []) or []:
+                    sid = h.get("scan_id")
+                    if sid:
+                        scan_to_asset.setdefault(sid, rec["asset_id"])
+
+            cur.execute("SELECT scan_id FROM scans")
+            existing_scans = {r[0] for r in cur.fetchall()}
+            orphan_scans = sorted(set(scan_to_asset.keys()) - existing_scans)
+            if orphan_scans:
+                print(f">> Auto-stubbing {len(orphan_scans)} orphan scan(s): {orphan_scans}")
+                stub_scan_rows = [
+                    (
+                        sid,
+                        scan_to_asset[sid],
+                        "vuln_full_assessment",
+                        None, None, None, None, None,
+                        "mac_local_scan",
+                        "stub scan auto-created during import (parser naming inconsistency)",
+                        Json([]),
+                    )
+                    for sid in orphan_scans
+                ]
+                cur.executemany(
+                    """
+                    INSERT INTO scans (
+                        scan_id, asset_id, scan_type, started_at, completed_at,
+                        command_line, exit_code, output_dir, source, notes, tools_run
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (scan_id) DO NOTHING
+                    """,
+                    stub_scan_rows,
+                )
+                n_scans += len(orphan_scans)
+
             n_findings, n_hist = load_findings(cur, findings_p)
         conn.commit()
 

@@ -44,9 +44,13 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN
   CREATE TYPE organization_t AS ENUM (
     'command_companies', 'command_digital', 'command_financial',
-    'command_missouri', 'command_marketing', 'unimat', 'sci'
+    'command_missouri', 'command_marketing', 'unimat', 'sci', 'unknown'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Idempotent backfill for organization_t (ALTER TYPE ADD VALUE can't live
+-- inside a DO/transaction block, so it must be a top-level statement).
+ALTER TYPE organization_t ADD VALUE IF NOT EXISTS 'unknown';
 
 DO $$ BEGIN
   CREATE TYPE finding_status_t AS ENUM (
@@ -58,10 +62,14 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
   CREATE TYPE history_status_t AS ENUM (
-    'detected', 'confirmed', 'remediated', 'validated_remediated',
+    'detected', 'confirmed', 'open', 'remediated', 'validated_remediated',
     'regressed', 'false_positive', 'absent'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- 'open' added to match Phase 3 simplified status taxonomy (Principle #4):
+-- rollup collapses detected/confirmed into 'open' for UI consumption.
+ALTER TYPE history_status_t ADD VALUE IF NOT EXISTS 'open';
 
 DO $$ BEGIN
   CREATE TYPE finding_category_t AS ENUM (
@@ -147,7 +155,9 @@ CREATE TABLE IF NOT EXISTS scans (
   scan_id         text          PRIMARY KEY,
   asset_id        text          NOT NULL REFERENCES assets(asset_id) ON DELETE CASCADE,
   scan_type       scan_type_t   NOT NULL,
-  started_at      timestamptz   NOT NULL,
+  -- started_at may be NULL for target-root synthetic scans (no dated wrapper dir).
+  -- Phase 3 walker will backfill from file mtimes.
+  started_at      timestamptz,
   completed_at    timestamptz,
   command_line    text,
   exit_code       integer,
@@ -174,7 +184,8 @@ CREATE TABLE IF NOT EXISTS findings (
   cve                   text[]           NOT NULL DEFAULT '{}',
   "references"          text[]           NOT NULL DEFAULT '{}',
   current_status        finding_status_t NOT NULL DEFAULT 'detected',
-  first_detected_at     timestamptz      NOT NULL,
+  -- first_detected_at may be NULL for findings inherited from undated scans.
+  first_detected_at     timestamptz,
   first_detected_scan   text             REFERENCES scans(scan_id) ON DELETE SET NULL,
   last_observed_at      timestamptz,
   remediated_at         timestamptz,
@@ -205,7 +216,8 @@ CREATE TABLE IF NOT EXISTS finding_history (
   id                bigserial          PRIMARY KEY,
   finding_id        text               NOT NULL REFERENCES findings(finding_id) ON DELETE CASCADE,
   scan_id           text               NOT NULL REFERENCES scans(scan_id) ON DELETE CASCADE,
-  observed_at       timestamptz        NOT NULL,
+  -- observed_at may be NULL when inherited from an undated scan.
+  observed_at       timestamptz,
   status            history_status_t   NOT NULL,
   severity_at_scan  severity_t,
   matched_at        text,
