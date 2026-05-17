@@ -10,9 +10,9 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-16T22:27:29Z_ce064606",
-    "started_at": "2026-05-16T22:27:29Z",
-    "completed_at": "2026-05-16T22:31:11Z",
+    "id": "scan_2026-05-17T04:11:29Z_62b7b7f5",
+    "started_at": "2026-05-17T04:11:29Z",
+    "completed_at": "2026-05-17T04:15:11Z",
     "duration_seconds": 222,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-16T22:31:11Z",
-      "last_seen": "2026-05-16T22:31:11Z",
+      "first_discovered": "2026-05-17T04:15:11Z",
+      "last_seen": "2026-05-17T04:15:11Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -155,8 +155,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-16T22:31:11Z",
-      "last_seen": "2026-05-16T22:31:11Z",
+      "first_discovered": "2026-05-17T04:15:11Z",
+      "last_seen": "2026-05-17T04:15:11Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -254,8 +254,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-16T22:31:11Z",
-      "last_seen": "2026-05-16T22:31:11Z",
+      "first_discovered": "2026-05-17T04:15:11Z",
+      "last_seen": "2026-05-17T04:15:11Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -312,8 +312,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-16T22:31:11Z",
-      "last_seen": "2026-05-16T22:31:11Z",
+      "first_discovered": "2026-05-17T04:15:11Z",
+      "last_seen": "2026-05-17T04:15:11Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -348,8 +348,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-16T22:31:11Z",
-      "last_seen": "2026-05-16T22:31:11Z",
+      "first_discovered": "2026-05-17T04:15:11Z",
+      "last_seen": "2026-05-17T04:15:11Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -457,8 +457,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-16T22:31:11Z",
-      "last_seen": "2026-05-16T22:31:11Z",
+      "first_discovered": "2026-05-17T04:15:11Z",
+      "last_seen": "2026-05-17T04:15:11Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -563,7 +563,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-16T20:02:22Z_b76e36be",
+    "since_scan": "scan_2026-05-16T22:27:29Z_ce064606",
     "added": {
       "subdomains": [],
       "services": [],
@@ -2341,6 +2341,58 @@
       "scan_id": "scan_2026-05-16T22:27:29Z_ce064606",
       "started_at": "2026-05-16T22:27:29Z",
       "completed_at": "2026-05-16T22:31:11Z",
+      "subdomain_count": 6,
+      "live_subdomain_count": 6,
+      "host_count": 4,
+      "service_count": 9,
+      "subdomain_names": [
+        "api.commandcommcentral.com",
+        "commandcommcentral.com",
+        "ns01.commandcommcentral.com",
+        "ns02.commandcommcentral.com",
+        "test.commandcommcentral.com",
+        "www.commandcommcentral.com"
+      ],
+      "ports_by_sub": {
+        "commandcommcentral.com": {
+          "24.38.70.5": [
+            80,
+            443
+          ]
+        },
+        "api.commandcommcentral.com": {
+          "24.157.51.85": [
+            80,
+            443
+          ]
+        },
+        "ns01.commandcommcentral.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.commandcommcentral.com": {},
+        "test.commandcommcentral.com": {
+          "24.38.70.8": [
+            80,
+            443
+          ]
+        },
+        "www.commandcommcentral.com": {
+          "24.38.70.5": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "IIS": "10.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-05-17T04:11:29Z_62b7b7f5",
+      "started_at": "2026-05-17T04:11:29Z",
+      "completed_at": "2026-05-17T04:15:11Z",
       "subdomain_count": 6,
       "live_subdomain_count": 6,
       "host_count": 4,
