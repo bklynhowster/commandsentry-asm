@@ -15,7 +15,7 @@ To get cross-scan trend dashboards, regression alerting, and one CISO-facing vie
 
 | Entity | Source | Purpose |
 |---|---|---|
-| `organizations` | Manually maintained | Command Companies, Command Digital, Command Financial, Command Missouri, Command Marketing, Unimat, SCI |
+| `organizations` | Manually maintained | Command Companies, Command Digital, Command Financial, Command Missouri, Command Marketing, Unimac, SCI |
 | `assets` | COMMANDsentry + vuln scan targets | One row per assessed target (apex domain, IP, mail server, etc.) |
 | `subdomains` | COMMANDsentry asset JSON | Nested under assets |
 | `hosts` | COMMANDsentry asset JSON | IPs observed for an asset/subdomain |

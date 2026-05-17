@@ -9,7 +9,7 @@
     "asset_id":     { "type": "string", "description": "Stable identifier. For domains: the apex (commandcommcentral.com). For IP-only targets: ip:<address>. For single hosts: the FQDN." },
     "name":         { "type": "string", "description": "Human-readable name shown in dashboards." },
     "type":         { "type": "string", "enum": ["apex_domain", "single_host", "ip", "ip_range", "mail_server", "vpn_endpoint", "api_host"] },
-    "organization": { "type": "string", "enum": ["command_companies", "command_digital", "command_financial", "command_missouri", "command_marketing", "unimat", "sci"] },
+    "organization": { "type": "string", "enum": ["command_companies", "command_digital", "command_financial", "command_missouri", "command_marketing", "unimac", "sci"] },
     "tags":         { "type": "array", "items": { "type": "string" } },
     "first_observed":  { "type": "string", "format": "date-time", "description": "Earliest scan date that observed this asset." },
     "last_observed":   { "type": "string", "format": "date-time", "description": "Most recent scan date that observed this asset." },

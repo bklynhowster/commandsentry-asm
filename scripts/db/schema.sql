@@ -44,7 +44,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN
   CREATE TYPE organization_t AS ENUM (
     'command_companies', 'command_digital', 'command_financial',
-    'command_missouri', 'command_marketing', 'unimat', 'sci', 'unknown'
+    'command_missouri', 'command_marketing', 'unimac', 'sci', 'unknown'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 

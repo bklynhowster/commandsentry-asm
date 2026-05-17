@@ -43,7 +43,7 @@ ORG_BY_FQDN_SUFFIX = {
     "commandmarketing.com":               "command_marketing",
     "commandfinancial.com":               "command_financial",
     "commandmissouri.com":                "command_missouri",
-    "unimacgraphics.com":                 "unimat",
+    "unimacgraphics.com":                 "unimac",
     "sciimage.com":                       "sci",
     "commandweb.com":                     "unknown",  # ownership uncertain per recon notes
 }
