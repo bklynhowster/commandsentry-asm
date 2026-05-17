@@ -272,6 +272,65 @@ def protocol_from_url(url: Optional[str]) -> Optional[str]:
     return None
 
 
+def is_fqdn_in_scope(fqdn: Optional[str], target_asset: str) -> bool:
+    """
+    Returns True if fqdn is the target_asset's registrable apex or a subdomain
+    of it. Used to restrict per-event asset_id overrides to in-scope FQDNs —
+    keeps scan-output references to external URLs (login.microsoftonline.com,
+    rdap.verisign.com, CDN endpoints) from becoming spurious assets.
+
+    For IP-based targets, returns False (no FQDN override applies).
+    """
+    if not fqdn or not target_asset:
+        return False
+    if target_asset.startswith("ip:") or target_asset.startswith("ip-range:") or target_asset.startswith("target:"):
+        return False
+    fqdn = fqdn.lower()
+    parts = target_asset.split(".")
+    apex = ".".join(parts[-2:]) if len(parts) >= 2 else target_asset
+    return fqdn == apex or fqdn.endswith("." + apex)
+
+
+def resolve_finding_asset_id(target_dirname: str, *url_candidates: Optional[str]) -> str:
+    """
+    Decide the asset_id for a finding. Prefers the most specific FQDN we can
+    derive from URL candidates (matched_at, target URL, host string), but ONLY
+    if that FQDN is under the same registrable apex as the target dir's
+    canonical asset.
+
+    Why the apex restriction: scan outputs frequently reference external
+    URLs (login.microsoftonline.com, rdap.verisign.com, CDN endpoints, etc.).
+    Without filtering, those become spurious 'assets' in the dashboard.
+    By restricting to in-scope FQDNs, we keep test/www/api etc as their own
+    assets while keeping external references attributed to the target apex.
+
+    For IP-based targets, no URL-derived override is applied — IPs stay as IPs.
+
+    URL candidates tried in order; first valid FQDN-under-apex match wins.
+    """
+    target_asset = infer_asset_id(target_dirname)
+
+    # IP-based targets: don't try to URL-derive
+    if target_asset.startswith("ip:") or target_asset.startswith("ip-range:") or target_asset.startswith("target:"):
+        return target_asset
+
+    # FQDN-based target — compute the registrable-domain apex (last 2 labels
+    # for .com/.net/.org-style TLDs; this is naive but works for the
+    # Command-family domains and most others we encounter).
+    target_parts = target_asset.split(".")
+    target_apex = ".".join(target_parts[-2:]) if len(target_parts) >= 2 else target_asset
+
+    for url in url_candidates:
+        fqdn = subdomain_from_url(url) if url else None
+        if not fqdn:
+            continue
+        fqdn = fqdn.lower()
+        # Only accept if under the same registrable apex
+        if fqdn == target_apex or fqdn.endswith("." + target_apex):
+            return fqdn
+    return target_asset
+
+
 # ─── category inference ───────────────────────────────────────────────────────
 def infer_category_from_tags(tags: list[str], template_id: str = "") -> str:
     """

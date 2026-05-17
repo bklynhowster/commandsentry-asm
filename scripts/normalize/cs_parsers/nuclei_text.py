@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 from .common import (
+    is_fqdn_in_scope,
     FindingEvent,
     infer_asset_id,
     infer_category_from_tags,
@@ -37,6 +38,7 @@ from .common import (
     port_from_url,
     protocol_from_url,
     relative_to_scan_root,
+    resolve_finding_asset_id,
     stable_finding_id,
     subdomain_from_url,
     to_utc_iso,
@@ -161,9 +163,13 @@ def parse_text_file(
             proto = "ssl"
             prt = prt or 443
 
+        # Prefer the URL-derived FQDN as asset_id so test/api/etc findings
+        # don't bleed into the apex card.
+        event_asset_id = sub if is_fqdn_in_scope(sub, asset_id) else asset_id
+
         ev = FindingEvent(
-            finding_id=stable_finding_id(asset_id, "nuclei", full_tpl, url),
-            asset_id=asset_id,
+            finding_id=stable_finding_id(event_asset_id, "nuclei", full_tpl, url),
+            asset_id=event_asset_id,
             scan_id=scan_id,
             source="nuclei",
             title=title,

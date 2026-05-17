@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Optional
 
 from .common import (
+    is_fqdn_in_scope,
     FindingEvent,
     infer_asset_id,
     relative_to_scan_root,
@@ -76,9 +77,11 @@ def _emit(asset_id, scan_id, observed_at, evidence_path, hostname, ip, port,
           test_id, title, severity, category, description, cwe_list, cve_list) -> FindingEvent:
     host = hostname or ip or asset_id
     matched_at = f"https://{host}:{port}" if port else f"https://{host}"
+    # Asset = the FQDN tested, not the target-dir apex
+    event_asset_id = hostname if is_fqdn_in_scope(hostname, asset_id) else asset_id
     return FindingEvent(
-        finding_id=stable_finding_id(asset_id, "sslyze", test_id, f"{host}:{port}"),
-        asset_id=asset_id,
+        finding_id=stable_finding_id(event_asset_id, "sslyze", test_id, f"{host}:{port}"),
+        asset_id=event_asset_id,
         scan_id=scan_id,
         source="sslyze",
         title=title,

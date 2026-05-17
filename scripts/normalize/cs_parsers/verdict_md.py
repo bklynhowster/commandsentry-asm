@@ -37,13 +37,19 @@ from pathlib import Path
 from typing import Optional
 
 from .common import (
+    is_fqdn_in_scope,
     FindingEvent,
     infer_asset_id,
     normalize_status_hint,
     relative_to_scan_root,
     stable_finding_id,
+    subdomain_from_url,
     to_utc_iso,
 )
+
+
+# Target URL line in VERDICT.md — e.g. "Target: https://www.commandcommcentral.com (24.38.70.5)"
+TARGET_LINE_RE = re.compile(r"^\s*Target:\s*(https?://\S+)", re.IGNORECASE | re.MULTILINE)
 
 
 # Sprocket external finding ID → internal short ID mapping.
@@ -125,9 +131,17 @@ def parse_verdict_md(
     rel_evidence = relative_to_scan_root(md_path, scan_root)
     observed_at = to_utc_iso(fallback_observed_at) or fallback_observed_at or ""
 
+    # Pull the Target URL — verdict applies to whatever FQDN was tested.
+    # Use that as asset_id so the verdict lands on the SAME asset that the
+    # original SUMMARY.md finding landed on (both use FQDN-as-asset_id).
+    tm = TARGET_LINE_RE.search(text)
+    target_url = tm.group(1) if tm else None
+    target_sub = subdomain_from_url(target_url) if target_url else None
+    event_asset_id = target_sub if is_fqdn_in_scope(target_sub, asset_id) else asset_id
+
     events: list[FindingEvent] = []
     for short in finding_shorts:
-        finding_id = f"{asset_id}:manual:{short}"
+        finding_id = f"{event_asset_id}:manual:{short}"
 
         # We don't know the original title/severity from VERDICT.md alone —
         # those came from the original SUMMARY.md. Use placeholder values;
@@ -138,7 +152,7 @@ def parse_verdict_md(
         # record (the verdict event's severity isn't displayed alone).
         events.append(FindingEvent(
             finding_id=finding_id,
-            asset_id=asset_id,
+            asset_id=event_asset_id,
             scan_id=scan_id,
             source="manual_named",
             title=f"{short}: verdict from remediation verification",

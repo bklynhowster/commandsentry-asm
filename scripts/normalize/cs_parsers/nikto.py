@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from .common import (
+    is_fqdn_in_scope,
     FindingEvent,
     infer_asset_id,
     relative_to_scan_root,
@@ -143,6 +144,9 @@ def parse_nikto_file(
             try: target_port = int(m.group(1))
             except ValueError: pass
 
+    # Asset = the FQDN scanned, not the target-dir apex
+    event_asset_id = target_host.lower() if (target_host and is_fqdn_in_scope(target_host.lower(), asset_id)) else asset_id
+
     events: list[FindingEvent] = []
     seen_finding_ids: set[str] = set()  # dedupe within the same scan file
 
@@ -175,13 +179,13 @@ def parse_nikto_file(
             )
             severity = _severity_for_text(desc)
             category = _category_for_text(desc)
-            fid = stable_finding_id(asset_id, "nikto", f"id-{test_id}", matched_at)
+            fid = stable_finding_id(event_asset_id, "nikto", f"id-{test_id}", matched_at)
             if fid in seen_finding_ids:
                 continue
             seen_finding_ids.add(fid)
             events.append(FindingEvent(
                 finding_id=fid,
-                asset_id=asset_id,
+                asset_id=event_asset_id,
                 scan_id=scan_id,
                 source="nikto",
                 title=f"nikto[{test_id}]: {desc[:120]}",
@@ -205,13 +209,13 @@ def parse_nikto_file(
         if m:
             header_name = m.group(1).strip().lower()
             matched_at = f"https://{target_host}" if target_host else (f"https://{target_ip}" if target_ip else "")
-            fid = stable_finding_id(asset_id, "nikto", f"missing-header:{header_name}", matched_at)
+            fid = stable_finding_id(event_asset_id, "nikto", f"missing-header:{header_name}", matched_at)
             if fid in seen_finding_ids:
                 continue
             seen_finding_ids.add(fid)
             events.append(FindingEvent(
                 finding_id=fid,
-                asset_id=asset_id,
+                asset_id=event_asset_id,
                 scan_id=scan_id,
                 source="nikto",
                 title=f"Missing security header: {header_name}",
@@ -233,13 +237,13 @@ def parse_nikto_file(
         # Banner changed (info)
         if BANNER_RE.match(content):
             matched_at = f"https://{target_host}" if target_host else ""
-            fid = stable_finding_id(asset_id, "nikto", "server-banner-changed", matched_at)
+            fid = stable_finding_id(event_asset_id, "nikto", "server-banner-changed", matched_at)
             if fid in seen_finding_ids:
                 continue
             seen_finding_ids.add(fid)
             events.append(FindingEvent(
                 finding_id=fid,
-                asset_id=asset_id,
+                asset_id=event_asset_id,
                 scan_id=scan_id,
                 source="nikto",
                 title="Server banner changed (server-side hiding)",
@@ -264,14 +268,14 @@ def parse_nikto_file(
                 matched_at = f"https://{target_host}" if target_host else ""
                 # Use the first keyword as the test_id seed
                 test_id = kw_re.pattern.replace("\\b", "").replace("\\s+", "_")[:40]
-                fid = stable_finding_id(asset_id, "nikto", f"kw:{test_id}", matched_at)
+                fid = stable_finding_id(event_asset_id, "nikto", f"kw:{test_id}", matched_at)
                 if fid in seen_finding_ids:
                     break
                 seen_finding_ids.add(fid)
                 desc = _strip_url_suffix(content)
                 events.append(FindingEvent(
                     finding_id=fid,
-                    asset_id=asset_id,
+                    asset_id=event_asset_id,
                     scan_id=scan_id,
                     source="nikto",
                     title=f"nikto: {desc[:120]}",

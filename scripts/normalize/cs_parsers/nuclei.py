@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Optional
 
 from .common import (
+    is_fqdn_in_scope,
     FindingEvent,
     infer_asset_id,
     infer_category_from_tags,
@@ -158,9 +159,11 @@ def parse_jsonl_file(
         if prt is None and proto == "https": prt = 443
         elif prt is None and proto == "http": prt = 80
 
+        event_asset_id = sub if is_fqdn_in_scope(sub, asset_id) else asset_id
+
         ev = FindingEvent(
-            finding_id=stable_finding_id(asset_id, "nuclei", template_id, matched_at),
-            asset_id=asset_id,
+            finding_id=stable_finding_id(event_asset_id, "nuclei", template_id, matched_at),
+            asset_id=event_asset_id,
             scan_id=scan_id,
             source="nuclei",
             title=name,

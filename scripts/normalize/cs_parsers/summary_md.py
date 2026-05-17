@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Optional
 
 from .common import (
+    is_fqdn_in_scope,
     FindingEvent,
     infer_asset_id,
     normalize_status_hint,
@@ -297,9 +298,14 @@ def parse_summary_md(
         if prt is None and proto == "https": prt = 443
         elif prt is None and proto == "http": prt = 80
 
+        # Asset = the actual scanned FQDN (Target URL or matched endpoint),
+        # not the target dir's apex mapping. Keeps test/api/etc findings
+        # under the correct asset card.
+        event_asset_id = sub if is_fqdn_in_scope(sub, asset_id) else asset_id
+
         ev = FindingEvent(
-            finding_id=f"{asset_id}:manual:{short}",
-            asset_id=asset_id,
+            finding_id=f"{event_asset_id}:manual:{short}",
+            asset_id=event_asset_id,
             scan_id=scan_id,
             source="manual_named",
             title=f"{short}: {title}",

@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Optional
 
 from .common import (
+    is_fqdn_in_scope,
     FindingEvent,
     infer_asset_id,
     relative_to_scan_root,
@@ -134,6 +135,9 @@ def parse_wpscan_file(
         sm = re.match(r"^https?://([^/:\s]+)", target_url)
         if sm: target_sub = sm.group(1).lower()
 
+    # Asset = the FQDN scanned (from URL line), not the target-dir apex
+    event_asset_id = target_sub if is_fqdn_in_scope(target_sub, asset_id) else asset_id
+
     events: list[FindingEvent] = []
     seen_finding_ids: set[str] = set()
 
@@ -179,14 +183,14 @@ def parse_wpscan_file(
                 if url_in_body:
                     matched_at = url_in_body.group(0)
 
-                fid = stable_finding_id(asset_id, "wpscan", cve_id, matched_at)
+                fid = stable_finding_id(event_asset_id, "wpscan", cve_id, matched_at)
                 if fid in seen_finding_ids:
                     continue
                 seen_finding_ids.add(fid)
                 severity = _severity_for_cve_block(section_title + " " + body)
                 events.append(FindingEvent(
                     finding_id=fid,
-                    asset_id=asset_id,
+                    asset_id=event_asset_id,
                     scan_id=scan_id,
                     source="wpscan",
                     title=f"{cve_id}: {section_title[:120]}",
@@ -225,12 +229,12 @@ def parse_wpscan_file(
                 # Outdated
                 slug = section_title.lower().split()[0]
                 matched_at = location_match or target_url or ""
-                fid = stable_finding_id(asset_id, "wpscan", f"outdated:{slug}", matched_at)
+                fid = stable_finding_id(event_asset_id, "wpscan", f"outdated:{slug}", matched_at)
                 if fid not in seen_finding_ids:
                     seen_finding_ids.add(fid)
                     events.append(FindingEvent(
                         finding_id=fid,
-                        asset_id=asset_id,
+                        asset_id=event_asset_id,
                         scan_id=scan_id,
                         source="wpscan",
                         title=f"Outdated WordPress component: {section_title} ({version_match} → {latest_ver})",
@@ -269,13 +273,13 @@ def parse_wpscan_file(
         for (_, short, sev, desc) in exposure_specs:
             url_in_title = URL_RE.search(section_title)
             matched_at = (url_in_title.group(0) if url_in_title else (target_url or ""))
-            fid = stable_finding_id(asset_id, "wpscan", short, matched_at)
+            fid = stable_finding_id(event_asset_id, "wpscan", short, matched_at)
             if fid in seen_finding_ids:
                 continue
             seen_finding_ids.add(fid)
             events.append(FindingEvent(
                 finding_id=fid,
-                asset_id=asset_id,
+                asset_id=event_asset_id,
                 scan_id=scan_id,
                 source="wpscan",
                 title=f"WordPress: {short.replace('-', ' ')}",
