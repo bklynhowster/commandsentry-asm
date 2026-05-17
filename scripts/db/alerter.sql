@@ -28,8 +28,17 @@ CREATE TABLE IF NOT EXISTS meta_alerter_runs (
   email_sent      boolean      NOT NULL DEFAULT false,
   status          text         NOT NULL DEFAULT 'started',  -- started|success|error
   error_message   text,
-  notes           text
+  notes           text,
+  -- Snapshot of every asset_id currently in high-risk posture at end of this
+  -- run. Next run diffs the live set against this snapshot to only fire on
+  -- newly-elevated assets, even if the underlying assets.updated_at trigger
+  -- bumps every row on every import.
+  reported_high_risk_assets text[] NOT NULL DEFAULT '{}'
 );
+
+-- Idempotent backfill for existing deployments
+ALTER TABLE meta_alerter_runs
+  ADD COLUMN IF NOT EXISTS reported_high_risk_assets text[] NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS idx_alerter_runs_name_started
   ON meta_alerter_runs(alerter_name, started_at DESC);
@@ -87,10 +96,12 @@ JOIN findings f ON f.finding_id = fh.finding_id
 WHERE fh.status IN ('confirmed', 'open', 'regressed');
 
 -- ---------------------------------------------------------------------------
--- 4. View — assets whose current_risk became CRITICAL or HIGH
+-- 4. View — assets currently in high-risk posture
 --
--- Hard to get "transition" without snapshotting; instead we surface the
--- current state and let the alerter dedupe against its own state.
+-- Returns the full live set of CRITICAL / HIGH / MODERATE-HIGH assets.
+-- Dedup against the previous run's reported_high_risk_assets snapshot
+-- happens in the Python alerter, not here — that lets the snapshot survive
+-- the assets.updated_at trigger bumping every row on every import.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW v_alerter_high_risk_assets AS
 SELECT
@@ -103,3 +114,21 @@ SELECT
   updated_at
 FROM assets
 WHERE current_risk IN ('CRITICAL', 'HIGH', 'MODERATE-HIGH');
+
+-- ---------------------------------------------------------------------------
+-- 5. Helper: prior reported high-risk asset set
+-- Returns the latest successful run's snapshot, or empty array if no
+-- prior success exists yet.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION alerter_prior_high_risk_set(p_name text DEFAULT 'daily_digest')
+RETURNS text[]
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT COALESCE(reported_high_risk_assets, '{}'::text[])
+  FROM meta_alerter_runs
+  WHERE alerter_name = p_name
+    AND status = 'success'
+  ORDER BY started_at DESC
+  LIMIT 1;
+$$;

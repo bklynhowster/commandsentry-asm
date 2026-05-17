@@ -106,15 +106,12 @@ WHERE event_at > %s
 ORDER BY asset_id, finding_id;
 """
 
-SQL_HIGH_RISK_ASSETS_NEW = """
--- Assets currently CRITICAL/HIGH/MODERATE-HIGH whose updated_at falls
--- in the window. updated_at gets bumped when the posture rollup writes,
--- so this surfaces newly-elevated assets without snapshotting.
+SQL_HIGH_RISK_ASSETS_NOW = """
+-- Full live set of high-risk assets. The Python alerter diffs this against
+-- the previous run's snapshot to surface only newly-elevated ones.
 SELECT asset_id, name, organization, current_risk, current_risk_reason,
        updated_at
 FROM v_alerter_high_risk_assets
-WHERE updated_at > %s
-  AND updated_at <= %s
 ORDER BY
   CASE current_risk
     WHEN 'CRITICAL'      THEN 1
@@ -122,6 +119,10 @@ ORDER BY
     WHEN 'MODERATE-HIGH' THEN 3
   END,
   asset_id;
+"""
+
+SQL_PRIOR_HIGH_RISK_SET = """
+SELECT alerter_prior_high_risk_set(%s)
 """
 
 SQL_OPEN_BASELINE = """
@@ -151,7 +152,8 @@ UPDATE meta_alerter_runs
        new_high_risk = %s,
        email_sent    = %s,
        status        = %s,
-       error_message = %s
+       error_message = %s,
+       reported_high_risk_assets = %s
  WHERE id = %s
 """
 
@@ -426,8 +428,18 @@ def main() -> int:
             confirmed = cur.fetchall()
             cur.execute(SQL_REGRESSED, (window_start, window_end))
             regressed = cur.fetchall()
-            cur.execute(SQL_HIGH_RISK_ASSETS_NEW, (window_start, window_end))
-            high_risk = cur.fetchall()
+
+            # Live high-risk asset set + prior reported set for dedup
+            cur.execute(SQL_HIGH_RISK_ASSETS_NOW)
+            live_high_risk = cur.fetchall()
+            cur.execute(SQL_PRIOR_HIGH_RISK_SET, (name,))
+            prior_row = cur.fetchone()
+            prior_set: set[str] = set(prior_row[0]) if prior_row and prior_row[0] else set()
+
+            # Surface only newly-elevated assets in the digest
+            high_risk = [r for r in live_high_risk if r[0] not in prior_set]
+            # The snapshot we persist for next run's dedup = full current set
+            current_high_risk_ids = sorted({r[0] for r in live_high_risk})
 
             cur.execute(SQL_OPEN_BASELINE)
             b = cur.fetchone()
@@ -486,7 +498,7 @@ def main() -> int:
         with conn.cursor() as cur:
             cur.execute(SQL_FINALIZE_RUN, (
                 len(confirmed), len(regressed), len(high_risk),
-                sent, status, err, run_id,
+                sent, status, err, current_high_risk_ids, run_id,
             ))
         conn.commit()
 
