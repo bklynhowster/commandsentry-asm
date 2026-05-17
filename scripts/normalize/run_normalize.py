@@ -274,6 +274,46 @@ def main() -> int:
 
     manifest = json.loads(manifest_path.read_text())
 
+    # ─── Curated HTML pre-filter ───────────────────────────────────────────
+    # Old curated HTML reports reused finding IDs (H-01 in March meant SSL
+    # cert issues; H-01 in May means ASP.NET auth bypass). Treating each
+    # report as describing current state produces phantom findings from
+    # superseded historical reports.
+    #
+    # Fix: per asset, keep only the LATEST CommandDigital_*_Assessment_*.html.
+    # Older reports are evidence files (still on disk, in evidence_paths)
+    # but not finding sources.
+    import re as _re
+    CURATED_HTML_RE = _re.compile(r"CommandDigital_(.+?)_(?:Assessment|Consolidated|VulnAssessment)_(\d{4}-\d{2}-\d{2})", _re.IGNORECASE)
+
+    # Map (asset_id_from_filename) -> (latest_date, scan_run_entry, file_relpath)
+    latest_per_asset: dict[str, tuple[str, dict, str]] = {}
+    for tgt_entry in manifest.get("targets", []):
+        for sr_entry in tgt_entry.get("scan_runs", []):
+            for tool in sr_entry.get("tools_detected", []):
+                if tool.get("parser") != "curated_html":
+                    continue
+                for fname in tool.get("files", []):
+                    base = Path(fname).name
+                    m = CURATED_HTML_RE.search(base)
+                    if not m:
+                        continue
+                    file_asset = m.group(1).lower()
+                    # Canonicalize: www.X → X
+                    if file_asset.startswith("www."):
+                        file_asset = file_asset[4:]
+                    file_date = m.group(2)
+                    cur = latest_per_asset.get(file_asset)
+                    if cur is None or file_date > cur[0]:
+                        latest_per_asset[file_asset] = (file_date, sr_entry, fname)
+
+    # Build a set of (scan_run_abs, file_relpath) tuples that are the LATEST
+    # per asset. Used to filter the curated_html parser invocations below.
+    curated_html_keep: set[tuple[str, str]] = set()
+    for asset, (date, sr_entry, fname) in latest_per_asset.items():
+        curated_html_keep.add((sr_entry["absolute_path"], fname))
+    print(f"[curated_html] Filtering to latest report per asset: keeping {len(curated_html_keep)} files (of all detected).", file=sys.stderr)
+
     # Collect events across every scan-run
     all_events: list[FindingEvent] = []
     parser_stats: dict[str, dict[str, int]] = defaultdict(lambda: {"runs": 0, "events": 0})
@@ -282,6 +322,16 @@ def main() -> int:
         for sr_entry in tgt_entry.get("scan_runs", []):
             for tool in sr_entry.get("tools_detected", []):
                 parser_name = tool.get("parser")
+
+                # For curated_html, narrow the file list to only the
+                # latest-per-asset files. This mutates the tool dict in-place
+                # (acceptable — manifest is loaded fresh each run).
+                if parser_name == "curated_html":
+                    filtered = [f for f in tool.get("files", [])
+                                if (sr_entry["absolute_path"], f) in curated_html_keep]
+                    if not filtered:
+                        continue
+                    tool["files"] = filtered
                 if parser_name not in PARSERS:
                     continue
                 parser_fn = PARSERS[parser_name]
