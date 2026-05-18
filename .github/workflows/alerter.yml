@@ -44,7 +44,7 @@ jobs:
         env:
           SUPABASE_DSN:        ${{ secrets.SUPABASE_DSN }}
           RESEND_API_KEY:      ${{ secrets.RESEND_API_KEY }}
-          ALERTER_FROM:        ${{ vars.ALERTER_FROM       || 'commandsentry@goldenlaneinc.com' }}
+          ALERTER_FROM:        ${{ vars.ALERTER_FROM       || 'commandsentry@alerts.goldenlaneinc.com' }}
           ALERTER_TO:          ${{ vars.ALERTER_TO         || 'hschneider@commandcompanies.com,howiehow@mac.com' }}
           ALERTER_DASHBOARD_URL: ${{ vars.ALERTER_DASHBOARD_URL || 'https://supabase.com/dashboard/project/hdygktppfvuspnumpfuq' }}
         run: |
