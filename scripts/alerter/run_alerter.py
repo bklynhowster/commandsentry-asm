@@ -376,6 +376,10 @@ def send_via_resend(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type":  "application/json",
+            # Cloudflare (which fronts Resend's API) blocks the default
+            # Python-urllib/* User-Agent with HTTP 403 / error 1010. Use a
+            # named UA so we're not flagged as an anonymous bot.
+            "User-Agent":    "COMMANDsentry-alerter/1.0 (+https://github.com/bklynhowster/commandsentry-asm)",
         },
     )
     try:
