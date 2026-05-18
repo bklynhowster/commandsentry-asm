@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-18T04:19:16Z_0860fc2b",
-    "started_at": "2026-05-18T04:19:16Z",
-    "completed_at": "2026-05-18T04:21:14Z",
-    "duration_seconds": 118,
+    "id": "scan_2026-05-18T10:20:04Z_89bd3e76",
+    "started_at": "2026-05-18T10:20:04Z",
+    "completed_at": "2026-05-18T10:21:42Z",
+    "duration_seconds": 98,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-18T04:21:14Z",
-      "last_seen": "2026-05-18T04:21:14Z",
+      "first_discovered": "2026-05-18T10:21:42Z",
+      "last_seen": "2026-05-18T10:21:42Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -106,10 +106,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
+          "MS=ms93622757",
           "apple-domain-verification=cWkfjNKuM61a3EZ6",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
           "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
-          "MS=ms93622757"
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -221,8 +221,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-18T04:21:14Z",
-      "last_seen": "2026-05-18T04:21:14Z",
+      "first_discovered": "2026-05-18T10:21:42Z",
+      "last_seen": "2026-05-18T10:21:42Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -387,7 +387,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-17T19:19:49Z_3d6ad023",
+    "since_scan": "scan_2026-05-18T04:19:16Z_0860fc2b",
     "added": {
       "subdomains": [],
       "services": [],
@@ -1721,6 +1721,42 @@
       "scan_id": "scan_2026-05-18T04:19:16Z_0860fc2b",
       "started_at": "2026-05-18T04:19:16Z",
       "completed_at": "2026-05-18T04:21:14Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 1,
+      "service_count": 4,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Contact Form 7": "6.1.6",
+        "Slider Revolution": "6.7.41",
+        "WP Google Map Plugin": "4.9.4",
+        "WPMU DEV Smush": "4.0.3",
+        "Yoast SEO": "27.6",
+        "imagesLoaded": "5.0.0",
+        "jQuery Migrate": "3.4.1"
+      }
+    },
+    {
+      "scan_id": "scan_2026-05-18T10:20:04Z_89bd3e76",
+      "started_at": "2026-05-18T10:20:04Z",
+      "completed_at": "2026-05-18T10:21:42Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 1,
