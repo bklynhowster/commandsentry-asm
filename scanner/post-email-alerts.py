@@ -46,6 +46,66 @@ SCAN_WINDOW_HR = int(os.environ.get("ALERT_SCAN_WINDOW", "12"))
 
 REPO_ROOT  = Path(__file__).resolve().parent.parent
 ASSETS_DIR = REPO_ROOT / "data" / "assets"
+STATE_DIR  = REPO_ROOT / "data" / "state"
+CERT_STATE_FILE = STATE_DIR / "cert_alert_tiers.json"
+
+# IP prefixes for managed-hosting providers that auto-renew certs. Cert
+# expiry alerts for these are suppressed at NOTICE tier (only fire WATCH
+# under 7 days, in case the provider's auto-renewal genuinely fails).
+PRESSABLE_IP_PREFIXES = ("199.16.172.", "199.16.173.")
+WPENGINE_IP_PREFIXES  = ("141.193.213.", "141.193.32.", "141.193.221.")  # Flywheel/WPE; partial
+CLOUDFLARE_IP_PREFIXES = (
+    "104.16.",  "104.17.",  "104.18.",  "104.19.",  "104.20.",  "104.21.",
+    "104.22.",  "104.23.",  "104.24.",  "104.25.",  "104.26.",  "104.27.",
+    "104.28.",  "104.29.",  "104.30.",  "104.31.",
+    "172.64.",  "172.65.",  "172.66.",  "172.67.",  "172.68.",  "172.69.",
+    "172.70.",  "172.71.",
+)
+AUTORENEW_IP_PREFIXES = PRESSABLE_IP_PREFIXES + WPENGINE_IP_PREFIXES + CLOUDFLARE_IP_PREFIXES
+
+
+# ---------------------------------------------------------------------------
+# Cert-expiry tier-cross helpers
+#
+# Old behavior was THRESHOLD-based: any cert with days_to_expiry < 30 fired a
+# NOTICE on every scan → 23 daily emails per cert as it counted down.
+#
+# New behavior is TIER-CROSS-based: tiers at 30 / 14 / 7 / 3 / 1 days. Fire
+# only when a cert crosses into a more-urgent tier. State persists between
+# scans in data/state/cert_alert_tiers.json (committed by the asm-discover
+# workflow alongside data/assets/).
+#
+# First-run behavior: if no state file exists, record current tiers WITHOUT
+# firing alerts. Avoids dumping a flood of "currently in tier X" notices on
+# the day the new logic deploys. Renewals (cert moves back to a safer tier)
+# are silent — state updates so the next downward cross re-fires correctly.
+# ---------------------------------------------------------------------------
+
+def cert_tier(days: int) -> int:
+    """Lower number = safer. 0 means no alert at all."""
+    if days < 1:    return 5
+    if days < 3:    return 4
+    if days < 7:    return 3
+    if days < 14:   return 2
+    if days < 30:   return 1
+    return 0
+
+def is_autorenew_ip(ip: str) -> bool:
+    if not ip:
+        return False
+    return any(ip.startswith(p) for p in AUTORENEW_IP_PREFIXES)
+
+def load_cert_state() -> dict:
+    if not CERT_STATE_FILE.exists():
+        return {}
+    try:
+        return json.loads(CERT_STATE_FILE.read_text())
+    except Exception:
+        return {}
+
+def save_cert_state(state: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    CERT_STATE_FILE.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
 
 class Alert:
     __slots__ = ("severity", "asset", "kind", "title", "detail")
@@ -57,6 +117,11 @@ def collect_alerts() -> list[Alert]:
     if not ASSETS_DIR.exists():
         return out
     cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=SCAN_WINDOW_HR)
+
+    # Cert tier-cross state. Empty dict on first run → seed-without-firing.
+    cert_state          = load_cert_state()
+    cert_state_dirty    = False
+    cert_state_seeding  = (len(cert_state) == 0 and not CERT_STATE_FILE.exists())
 
     for path in sorted(ASSETS_DIR.glob("*.json")):
         if path.name.endswith(".example.json"):
@@ -289,7 +354,14 @@ def collect_alerts() -> list[Alert]:
                 f"Issuer set: {(c.get('from') or [])} → {(c.get('to') or [])}"
             ))
 
-        # WATCH/notice: cert expiry windows (across all subs' services)
+        # Cert expiry — TIER-CROSS-based, not threshold. Tiers at
+        # 30 / 14 / 7 / 3 / 1 days; alert fires only when a cert crosses
+        # into a more-urgent tier. Auto-renew managed-hosting IPs
+        # (Pressable, WP Engine, Cloudflare) suppress NOTICE-tier alerts
+        # since they auto-rotate; only fire WATCH (<7d) for those, in case
+        # the provider's renewal genuinely fails.
+        #
+        # See cert_tier(), is_autorenew_ip(), load_cert_state() above.
         for sub in (asset.get("subdomains") or []):
             sub_name = sub.get("name", "?")
             for svc in (sub.get("services") or []):
@@ -297,14 +369,42 @@ def collect_alerts() -> list[Alert]:
                 days = cert.get("days_to_expiry")
                 if not isinstance(days, (int, float)):
                     continue
-                label = f"{sub_name} ({svc.get('ip')}:{svc.get('port')})"
-                if days < 7:
-                    out.append(Alert("watch", aname, "cert_expiring",
-                                     f"Cert on {label} expires in {int(days)} day(s)",
-                                     f"Issuer: {cert.get('issuer') or '?'}"))
-                elif days < 30:
-                    out.append(Alert("notice", aname, "cert_expiring_soon",
-                                     f"Cert on {label} expires in {int(days)} day(s)", ""))
+                ip   = svc.get("ip") or ""
+                port = svc.get("port") or ""
+                label = f"{sub_name} ({ip}:{port})"
+                key   = f"{aname}::{sub_name}::{ip}::{port}"
+
+                current = cert_tier(int(days))
+                previous = cert_state.get(key, 0)
+
+                # No-op tiers
+                if current == previous:
+                    continue
+                # Renewal — cert moved BACK to a safer tier. Silent; state
+                # resets so next downward cross re-fires correctly.
+                if current < previous:
+                    cert_state[key]  = current
+                    cert_state_dirty = True
+                    continue
+                # First-run seeding: record tiers but don't fire anything.
+                if cert_state_seeding:
+                    cert_state[key]  = current
+                    cert_state_dirty = True
+                    continue
+                # Auto-renew host: suppress NOTICE tiers (1, 2). Update state
+                # so we still escalate properly when it drops to WATCH (3+).
+                if is_autorenew_ip(ip) and current < 3:
+                    cert_state[key]  = current
+                    cert_state_dirty = True
+                    continue
+
+                # Real alert.
+                severity = "watch" if current >= 3 else "notice"
+                out.append(Alert(severity, aname, "cert_expiring",
+                                 f"Cert on {label} expires in {int(days)} day(s)",
+                                 f"Issuer: {cert.get('issuer') or '?'}"))
+                cert_state[key]  = current
+                cert_state_dirty = True
 
         # WATCH/notice: root liveness TRANSITIONS — only for domain-type assets
         # where HTTP liveness is a meaningful signal. Two important fixes vs
@@ -327,6 +427,10 @@ def collect_alerts() -> list[Alert]:
                     out.append(Alert("notice", aname, "asset_back_online",
                                      f"Domain {aname} root came back online",
                                      "Root was not responding to HTTP in the previous scan, now it is."))
+
+    # Persist cert-tier state for next run.
+    if cert_state_dirty or cert_state_seeding:
+        save_cert_state(cert_state)
 
     return out
 

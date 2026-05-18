@@ -226,7 +226,7 @@ jobs:
         run: |
           set -uo pipefail
 
-          git add data/assets/ web/data/ || true
+          git add data/assets/ data/state/ web/data/ || true
           git reset HEAD -- 'data/raw/**' 2>/dev/null || true
 
           if git diff --staged --quiet; then
@@ -263,7 +263,7 @@ jobs:
             # 2026-05-16 after scripts/normalize/run_normalize.py disappeared
             # from a runner commit.
             git reset --mixed origin/main
-            git add data/assets/ web/data/
+            git add data/assets/ data/state/ web/data/
 
             if git diff --staged --quiet; then
               echo "No changes left to commit after reset (concurrent scan covered it)."
