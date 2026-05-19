@@ -247,17 +247,71 @@ def load_findings(cur, path: Path) -> tuple[int, int]:
             ON CONFLICT (finding_id) DO UPDATE SET
                 asset_id            = EXCLUDED.asset_id,
                 title               = EXCLUDED.title,
-                severity            = EXCLUDED.severity,
                 category            = EXCLUDED.category,
                 description         = EXCLUDED.description,
                 cwe                 = EXCLUDED.cwe,
                 cve                 = EXCLUDED.cve,
                 "references"        = EXCLUDED."references",
-                current_status      = EXCLUDED.current_status,
+
+                -- STATUS-DOWNGRADE GUARD (added 2026-05-19 after second
+                -- re-open incident): once a finding is closed, the JSONL
+                -- importer is NOT allowed to reopen it. JSONL only knows
+                -- what scanners detect — it doesn't carry the human
+                -- decision that closed the finding. Manual closures and
+                -- verdict_md scans set the closed state; an ordinary
+                -- re-scan that re-observes the underlying condition must
+                -- not invalidate that decision. Exception: an explicit
+                -- 'regressed' status from the JSONL is allowed through —
+                -- that's the "was fixed, came back" signal.
+                current_status = CASE
+                  WHEN findings.current_status IN (
+                         'remediated','validated_remediated',
+                         'false_positive','wont_fix','accepted_risk'
+                       )
+                       AND EXCLUDED.current_status NOT IN (
+                         'remediated','validated_remediated',
+                         'false_positive','wont_fix','accepted_risk',
+                         'regressed'
+                       )
+                    THEN findings.current_status
+                  ELSE EXCLUDED.current_status
+                END,
+                remediated_at = CASE
+                  WHEN findings.current_status IN (
+                         'remediated','validated_remediated',
+                         'false_positive','wont_fix','accepted_risk'
+                       )
+                       AND EXCLUDED.current_status NOT IN (
+                         'remediated','validated_remediated',
+                         'false_positive','wont_fix','accepted_risk',
+                         'regressed'
+                       )
+                    THEN findings.remediated_at
+                  ELSE EXCLUDED.remediated_at
+                END,
+
+                -- SEVERITY-DOWNGRADE PROTECTION: if the operator (via
+                -- backfill SQL) classified a finding as LESS severe than
+                -- the JSONL is now asserting, keep the lower DB value.
+                -- This is the equivalent of the status guard above, for
+                -- the severity field. A re-scan can lower severity but
+                -- can't blindly raise it back above the manual override.
+                severity = CASE
+                  WHEN (CASE findings.severity
+                         WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
+                         WHEN 'MODERATE-HIGH' THEN 3 WHEN 'MODERATE' THEN 4
+                         WHEN 'LOW' THEN 5 WHEN 'INFO' THEN 6 ELSE 9 END)
+                     > (CASE EXCLUDED.severity
+                         WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
+                         WHEN 'MODERATE-HIGH' THEN 3 WHEN 'MODERATE' THEN 4
+                         WHEN 'LOW' THEN 5 WHEN 'INFO' THEN 6 ELSE 9 END)
+                    THEN findings.severity
+                  ELSE EXCLUDED.severity
+                END,
+
                 first_detected_at   = LEAST(findings.first_detected_at, EXCLUDED.first_detected_at),
                 first_detected_scan = COALESCE(findings.first_detected_scan, EXCLUDED.first_detected_scan),
                 last_observed_at    = EXCLUDED.last_observed_at,
-                remediated_at       = EXCLUDED.remediated_at,
                 owner               = EXCLUDED.owner,
                 deadline            = EXCLUDED.deadline,
                 source              = EXCLUDED.source,

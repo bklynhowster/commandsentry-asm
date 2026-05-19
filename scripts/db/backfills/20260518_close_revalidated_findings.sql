@@ -50,14 +50,22 @@ SELECT close_findings_by_id(
 -- A-01 (Missing Security Headers) on api.ccc — overview says headers are
 -- still missing but this is now a defense-in-depth gap, not a direct exploit.
 -- Downgrade MODERATE -> LOW rather than closing.
+--
+-- Two finding_ids cover this in practice: the manual A-01 (stable id) and
+-- the testssl security_headers row (whose hash format changed when the
+-- 2026-05-19 testssl parser fix migrated finding_ids). Target by title +
+-- (asset, source) instead of literal finding_id so this backfill keeps
+-- working after future hash-format migrations.
 UPDATE findings
    SET severity = 'LOW'
- WHERE finding_id IN (
-   'api.commandcommcentral.com:manual:A-01',
-   'api.commandcommcentral.com:testssl:security_headers:c6f480b'
- )
- AND current_status IN ('detected','confirmed','open','regressed')
- AND severity = 'MODERATE';
+ WHERE current_status IN ('detected','confirmed','open','regressed')
+   AND severity = 'MODERATE'
+   AND (
+     finding_id = 'api.commandcommcentral.com:manual:A-01'
+     OR (asset_id = 'api.commandcommcentral.com'
+         AND source = 'testssl'
+         AND title ILIKE '%security headers missing%')
+   );
 
 
 -- ---------------------------------------------------------------------------
