@@ -15,20 +15,25 @@
 
 -- ---------------------------------------------------------------------------
 -- refresh_asset_last_observed(asset_id)
---   Set assets.last_observed = max(scans.completed_at) for that asset.
---   No-op if the asset has no scans.
+--   Set assets.last_observed = max(COALESCE(completed_at, started_at)) for
+--   that asset. Falls back to started_at because the current normalizer
+--   doesn't always set completed_at (all 60 scans in initial backfill
+--   have NULL completed_at as of 2026-05-19). No-op if the asset has no
+--   scans at all.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION refresh_asset_last_observed(p_asset_id text)
 RETURNS void
 LANGUAGE sql AS $$
   UPDATE assets a
      SET last_observed = COALESCE(
-           (SELECT MAX(s.completed_at) FROM scans s WHERE s.asset_id = a.asset_id),
+           (SELECT MAX(COALESCE(s.completed_at, s.started_at))
+              FROM scans s WHERE s.asset_id = a.asset_id),
            a.last_observed
          ),
          first_observed = COALESCE(
            a.first_observed,
-           (SELECT MIN(s.started_at) FROM scans s WHERE s.asset_id = a.asset_id)
+           (SELECT MIN(COALESCE(s.started_at, s.completed_at))
+              FROM scans s WHERE s.asset_id = a.asset_id)
          )
    WHERE a.asset_id = p_asset_id;
 $$;
@@ -37,6 +42,8 @@ $$;
 -- ---------------------------------------------------------------------------
 -- refresh_all_asset_last_observed()
 --   Bulk version. Walks the assets table and recomputes from scans.
+--   Uses COALESCE(completed_at, started_at) for the same reason as
+--   refresh_asset_last_observed.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION refresh_all_asset_last_observed()
 RETURNS integer
@@ -46,14 +53,14 @@ DECLARE
 BEGIN
   WITH s AS (
     SELECT asset_id,
-           MIN(started_at)   AS first_started,
-           MAX(completed_at) AS last_completed
+           MIN(COALESCE(started_at, completed_at)) AS first_seen,
+           MAX(COALESCE(completed_at, started_at)) AS last_seen
       FROM scans
      GROUP BY asset_id
   )
   UPDATE assets a
-     SET last_observed  = COALESCE(s.last_completed, a.last_observed),
-         first_observed = COALESCE(a.first_observed, s.first_started)
+     SET last_observed  = COALESCE(s.last_seen, a.last_observed),
+         first_observed = COALESCE(a.first_observed, s.first_seen)
     FROM s
    WHERE a.asset_id = s.asset_id;
   GET DIAGNOSTICS v_n = ROW_COUNT;
