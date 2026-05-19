@@ -56,6 +56,16 @@ if [[ -z "${SUPABASE_DSN:-}" ]]; then
   exit 2
 fi
 
+# Sanity check the DSN — catches the classic "exported '...' literally"
+# foot-gun (and any other obviously malformed string).
+if [[ "$SUPABASE_DSN" != postgresql://* && "$SUPABASE_DSN" != postgres://* ]]; then
+  echo "error: SUPABASE_DSN does not look like a valid Postgres URL." >&2
+  echo "       Got: $SUPABASE_DSN" >&2
+  echo "       Expected: postgresql://USER:PASS@HOST:PORT/postgres" >&2
+  echo "       Copy the real DSN from Obsidian: '21 - Supabase Project Credentials.md'" >&2
+  exit 2
+fi
+
 cd "$REPO_ROOT"
 
 echo "============================================================"
