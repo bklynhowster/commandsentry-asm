@@ -21,6 +21,16 @@ Usage:
         --dsn "$SUPABASE_DSN"
 
 Add --truncate to wipe the loadable tables first (during early iteration).
+
+Add --delta-close to mark any previously-open findings for the (asset, source)
+combos in this import as `remediated` if they weren't re-observed in any of
+the incoming scans. Use this when ingesting an incremental re-scan; do NOT
+use with --truncate (pointless — the tables were just emptied).
+
+The importer ALWAYS calls refresh_all_asset_last_observed() and
+refresh_all_asset_posture() at the end so assets.last_observed and
+assets.current_risk reflect reality. Apply scripts/db/maintenance.sql at
+least once before running this script.
 """
 
 from __future__ import annotations
@@ -291,6 +301,13 @@ def main() -> None:
     ap.add_argument("--normalized", required=True, help="Directory with assets.jsonl / scans.jsonl / findings.jsonl")
     ap.add_argument("--dsn", default=os.environ.get("SUPABASE_DSN"), help="Postgres DSN (or set SUPABASE_DSN)")
     ap.add_argument("--truncate", action="store_true", help="TRUNCATE loadable tables before insert (destructive)")
+    ap.add_argument("--delta-close", action="store_true",
+                    help="Mark prior open findings on this scan's (asset, source) "
+                         "as remediated if they weren't re-observed in the incoming "
+                         "scans. Use for incremental re-scans, not full backfills.")
+    ap.add_argument("--no-refresh", action="store_true",
+                    help="Skip the post-import refresh of last_observed and "
+                         "current_risk. Default behavior is to always refresh.")
     args = ap.parse_args()
 
     if not args.dsn:
@@ -391,6 +408,43 @@ def main() -> None:
                 n_scans += len(orphan_scans)
 
             n_findings, n_hist = load_findings(cur, findings_p)
+
+            # ---------------------------------------------------------
+            # Post-import maintenance
+            # ---------------------------------------------------------
+            n_closed = 0
+            if args.delta_close and not args.truncate:
+                # Collect the scan_ids that came in with this import
+                scan_ids_in_batch: list[str] = []
+                for rec in read_jsonl(scans_p):
+                    scan_ids_in_batch.append(rec["scan_id"])
+                # Synthetic scan_ids referenced by findings but not in scans.jsonl
+                # (e.g. ___synthetic_root) — include them too. They were stubbed
+                # in earlier.
+                for rec in read_jsonl(findings_p):
+                    sid = rec.get("first_detected_scan")
+                    if sid and sid not in scan_ids_in_batch:
+                        scan_ids_in_batch.append(sid)
+                    for h in rec.get("history", []) or []:
+                        sid = h.get("scan_id")
+                        if sid and sid not in scan_ids_in_batch:
+                            scan_ids_in_batch.append(sid)
+
+                for sid in scan_ids_in_batch:
+                    cur.execute("SELECT delta_close_for_scan(%s)", (sid,))
+                    n_closed += (cur.fetchone()[0] or 0)
+                if n_closed:
+                    print(f">> Delta-close: marked {n_closed} stale finding(s) "
+                          f"as remediated across {len(scan_ids_in_batch)} scan(s)")
+
+            if not args.no_refresh:
+                cur.execute("SELECT refresh_all_asset_last_observed()")
+                n_obs = cur.fetchone()[0] or 0
+                cur.execute("SELECT refresh_all_asset_posture()")
+                n_pos = cur.fetchone()[0] or 0
+                print(f">> Refresh: last_observed on {n_obs} asset(s), "
+                      f"posture recomputed for {n_pos} asset(s)")
+
         conn.commit()
 
     print(">> Import complete:")
@@ -398,6 +452,8 @@ def main() -> None:
     print(f"   scans:            {n_scans}")
     print(f"   findings:         {n_findings}")
     print(f"   finding_history:  {n_hist}")
+    if args.delta_close and not args.truncate:
+        print(f"   delta-closed:     {n_closed}")
 
 
 if __name__ == "__main__":
