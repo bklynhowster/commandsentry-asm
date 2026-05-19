@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-19T15:41:14Z_a58b40cd",
-    "started_at": "2026-05-19T15:41:14Z",
-    "completed_at": "2026-05-19T15:42:35Z",
-    "duration_seconds": 81,
+    "id": "scan_2026-05-19T20:00:34Z_99fd1660",
+    "started_at": "2026-05-19T20:00:34Z",
+    "completed_at": "2026-05-19T20:02:39Z",
+    "duration_seconds": 125,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -28,8 +28,8 @@
   },
   "registration": {},
   "summary": {
-    "subdomain_count": 2,
-    "live_subdomain_count": 2,
+    "subdomain_count": 4,
+    "live_subdomain_count": 4,
     "host_count": 1,
     "service_count": 4,
     "newest_cert_expiry_days": 30,
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-19T15:42:35Z",
-      "last_seen": "2026-05-19T15:42:35Z",
+      "first_discovered": "2026-05-19T20:02:39Z",
+      "last_seen": "2026-05-19T20:02:39Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -217,12 +217,84 @@
       }
     },
     {
+      "name": "rest.commandcompanies.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-05-19T20:02:39Z",
+      "last_seen": "2026-05-19T20:02:39Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "hosts": [],
+      "services": [],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
+      "name": "v2.commandcompanies.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-05-19T20:02:39Z",
+      "last_seen": "2026-05-19T20:02:39Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "hosts": [],
+      "services": [],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
       "name": "www.commandcompanies.com",
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-19T15:42:35Z",
-      "last_seen": "2026-05-19T15:42:35Z",
+      "first_discovered": "2026-05-19T20:02:39Z",
+      "last_seen": "2026-05-19T20:02:39Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -387,9 +459,12 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-19T09:59:45Z_1b74e26c",
+    "since_scan": "scan_2026-05-19T15:41:14Z_a58b40cd",
     "added": {
-      "subdomains": [],
+      "subdomains": [
+        "rest.commandcompanies.com",
+        "v2.commandcompanies.com"
+      ],
       "services": [],
       "hosts": []
     },
@@ -1988,6 +2063,46 @@
             443
           ]
         },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Contact Form 7": "6.1.6",
+        "Slider Revolution": "6.7.55",
+        "WP Google Map Plugin": "4.9.4",
+        "WPMU DEV Smush": "4.0.3",
+        "Yoast SEO": "27.6",
+        "imagesLoaded": "5.0.0",
+        "jQuery Migrate": "3.4.1"
+      }
+    },
+    {
+      "scan_id": "scan_2026-05-19T20:00:34Z_99fd1660",
+      "started_at": "2026-05-19T20:00:34Z",
+      "completed_at": "2026-05-19T20:02:39Z",
+      "subdomain_count": 4,
+      "live_subdomain_count": 4,
+      "host_count": 1,
+      "service_count": 4,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "rest.commandcompanies.com",
+        "v2.commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "rest.commandcompanies.com": {},
+        "v2.commandcompanies.com": {},
         "www.commandcompanies.com": {
           "199.16.172.54": [
             80,
