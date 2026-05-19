@@ -277,3 +277,64 @@ BEGIN
   GET DIAGNOSTICS v_n = ROW_COUNT;
   RETURN v_n;
 END $$;
+
+
+-- ---------------------------------------------------------------------------
+-- v_dashboard_30d_metrics
+--   Period summary for the dashboard header — counts of findings newly
+--   detected and findings closed in the last 30 days, bucketed by severity.
+--
+--   "opened" = first_detected_at within the window (the finding identity
+--              had never been seen before that date)
+--   "closed" = remediated_at within the window AND current_status is one
+--              of the closed states (remediated / validated_remediated /
+--              false_positive / wont_fix / accepted_risk)
+--
+--   Note: a single finding can show up in BOTH columns if it was first
+--   detected AND closed within the window. That's accurate behavior — the
+--   meeting story is "we caught it and shipped a fix in the same period."
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_dashboard_30d_metrics AS
+WITH cutoff AS (SELECT now() - interval '30 days' AS d)
+SELECT
+  30::int AS period_days,
+
+  -- Opened: first_detected_at within the period
+  (SELECT COUNT(*) FROM findings, cutoff
+    WHERE severity = 'CRITICAL' AND first_detected_at >= cutoff.d)  AS opened_critical,
+  (SELECT COUNT(*) FROM findings, cutoff
+    WHERE severity = 'HIGH' AND first_detected_at >= cutoff.d)      AS opened_high,
+  (SELECT COUNT(*) FROM findings, cutoff
+    WHERE severity = 'MODERATE-HIGH' AND first_detected_at >= cutoff.d) AS opened_mod_high,
+  (SELECT COUNT(*) FROM findings, cutoff
+    WHERE severity = 'MODERATE' AND first_detected_at >= cutoff.d)  AS opened_moderate,
+  (SELECT COUNT(*) FROM findings, cutoff
+    WHERE severity = 'LOW' AND first_detected_at >= cutoff.d)       AS opened_low,
+  (SELECT COUNT(*) FROM findings, cutoff
+    WHERE severity = 'INFO' AND first_detected_at >= cutoff.d)      AS opened_info,
+
+  -- Closed: remediated_at within the period AND in a closed state
+  (SELECT COUNT(*) FROM findings, cutoff
+    WHERE severity = 'CRITICAL' AND remediated_at >= cutoff.d
+      AND current_status IN ('remediated','validated_remediated','false_positive','wont_fix','accepted_risk'))  AS closed_critical,
+  (SELECT COUNT(*) FROM findings, cutoff
+    WHERE severity = 'HIGH' AND remediated_at >= cutoff.d
+      AND current_status IN ('remediated','validated_remediated','false_positive','wont_fix','accepted_risk'))  AS closed_high,
+  (SELECT COUNT(*) FROM findings, cutoff
+    WHERE severity = 'MODERATE-HIGH' AND remediated_at >= cutoff.d
+      AND current_status IN ('remediated','validated_remediated','false_positive','wont_fix','accepted_risk'))  AS closed_mod_high,
+  (SELECT COUNT(*) FROM findings, cutoff
+    WHERE severity = 'MODERATE' AND remediated_at >= cutoff.d
+      AND current_status IN ('remediated','validated_remediated','false_positive','wont_fix','accepted_risk'))  AS closed_moderate,
+  (SELECT COUNT(*) FROM findings, cutoff
+    WHERE severity = 'LOW' AND remediated_at >= cutoff.d
+      AND current_status IN ('remediated','validated_remediated','false_positive','wont_fix','accepted_risk'))  AS closed_low,
+  (SELECT COUNT(*) FROM findings, cutoff
+    WHERE severity = 'INFO' AND remediated_at >= cutoff.d
+      AND current_status IN ('remediated','validated_remediated','false_positive','wont_fix','accepted_risk'))  AS closed_info
+;
+
+-- Grant access so the SPA (authenticated role) can read it via PostgREST.
+-- Anon role gets nothing — RLS already gates everything but views need
+-- explicit grant for select.
+GRANT SELECT ON v_dashboard_30d_metrics TO authenticated;
