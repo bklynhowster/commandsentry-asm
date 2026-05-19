@@ -302,9 +302,11 @@ def main() -> None:
     ap.add_argument("--dsn", default=os.environ.get("SUPABASE_DSN"), help="Postgres DSN (or set SUPABASE_DSN)")
     ap.add_argument("--truncate", action="store_true", help="TRUNCATE loadable tables before insert (destructive)")
     ap.add_argument("--delta-close", action="store_true",
-                    help="Mark prior open findings on this scan's (asset, source) "
-                         "as remediated if they weren't re-observed in the incoming "
-                         "scans. Use for incremental re-scans, not full backfills.")
+                    help="!! BROKEN as of 2026-05-19 — do NOT use. Closes findings "
+                         "against every historical scan and wrongly closes manual_named "
+                         "+ curated_html + summary_md + verdict_md findings. Will be "
+                         "re-enabled once latest-scan-only logic ships. Use "
+                         "scripts/db/maintenance.sql close_findings_by_id() instead.")
     ap.add_argument("--no-refresh", action="store_true",
                     help="Skip the post-import refresh of last_observed and "
                          "current_risk. Default behavior is to always refresh.")
@@ -414,6 +416,12 @@ def main() -> None:
             # ---------------------------------------------------------
             n_closed = 0
             if args.delta_close and not args.truncate:
+                print("error: --delta-close is currently disabled because the "
+                      "close logic has known bugs (see --help). Refusing to run. "
+                      "Use scripts/db/maintenance.sql close_findings_by_id() or "
+                      "a one-off backfill SQL instead.", file=sys.stderr)
+                sys.exit(3)
+            if False:  # ----- DISABLED BLOCK BELOW -----
                 # Collect the scan_ids that came in with this import
                 scan_ids_in_batch: list[str] = []
                 for rec in read_jsonl(scans_p):

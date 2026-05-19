@@ -133,17 +133,23 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Import with --delta-close
+# 3. Import (delta-close intentionally DISABLED — see note below)
 # ---------------------------------------------------------------------------
+# NOTE: --delta-close was disabled 2026-05-19 after first end-to-end test
+# revealed two bugs in the close logic:
+#   1. It treated human-curated sources (manual_named, summary_md,
+#      verdict_md, curated_html) the same as auto-scanner sources, wrongly
+#      closing confirmed-open manual findings.
+#   2. It iterates EVERY historical scan, allowing old scans to close
+#      findings that newer scans actually re-detected.
+# Until both are fixed, the wrapper does plain import + posture refresh.
+# To close findings, use scripts/db/maintenance.sql functions
+# (close_findings_by_id) or a one-off backfill SQL.
 IMPORT_ARGS=(--normalized "$NORMALIZED_DIR" --dsn "$SUPABASE_DSN")
 if [[ $DRY_RUN -eq 1 ]]; then
-  echo ">> [3/3] import — DRY RUN (would call: --delta-close)"
-  # We don't have a true dry-run on the importer; the best we can do is
-  # skip step 3 entirely. Diff at the end will then show no change.
-  echo "  (skipping actual import — re-run without --dry-run to apply)"
+  echo ">> [3/3] import — DRY RUN (skipping actual import)"
 else
-  echo ">> [3/3] import_jsonl.py --delta-close"
-  IMPORT_ARGS+=(--delta-close)
+  echo ">> [3/3] import_jsonl.py  (delta-close disabled — see header)"
   python3 scripts/db/import_jsonl.py "${IMPORT_ARGS[@]}" \
     || { echo "import failed" >&2; exit 1; }
 fi

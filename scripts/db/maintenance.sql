@@ -183,8 +183,16 @@ END $$;
 --   finding_history row for this scan_id, and mark them remediated with
 --   remediated_at = scan.completed_at.
 --
---   Only sources that actually ran in this scan are touched — won't close
---   testssl findings when only nuclei ran.
+--   SAFETY RULE — HUMAN-CURATED SOURCES ARE BLACKLISTED.
+--   Delta-close only applies to scanner-driven sources (testssl, nuclei,
+--   wpscan, nikto, etc.) where every scan re-tests the full surface, so
+--   "absent from this scan" reliably means "the condition is gone."
+--
+--   Human-curated sources (manual_named, summary_md, verdict_md,
+--   curated_html) are EXCLUDED. Those findings are authored once and don't
+--   re-attach to later scans — delta-closing them would silently mark
+--   confirmed-open findings as remediated. Use close_findings_by_id() or
+--   a verdict_md re-validation scan to close those.
 --
 --   Returns the number of findings closed.
 -- ---------------------------------------------------------------------------
@@ -192,9 +200,13 @@ CREATE OR REPLACE FUNCTION delta_close_for_scan(p_scan_id text)
 RETURNS integer
 LANGUAGE plpgsql AS $$
 DECLARE
-  v_asset    text;
-  v_completed timestamptz;
-  v_n integer;
+  v_asset      text;
+  v_completed  timestamptz;
+  v_n          integer;
+  -- Sources that delta-close is NOT allowed to touch. These represent
+  -- human-curated channels (manual writeups, SUMMARY.md verdicts, curated
+  -- HTML reports). Their findings persist across scans intentionally.
+  v_blacklist  text[] := ARRAY['manual_named','summary_md','verdict_md','curated_html'];
 BEGIN
   SELECT asset_id, COALESCE(completed_at, started_at, now())
     INTO v_asset, v_completed
@@ -206,17 +218,19 @@ BEGIN
   END IF;
 
   WITH sources_in_scan AS (
-    SELECT DISTINCT f.source
+    SELECT DISTINCT f.source::text AS source
       FROM finding_history fh
       JOIN findings f ON f.finding_id = fh.finding_id
      WHERE fh.scan_id = p_scan_id
+       AND f.source::text <> ALL(v_blacklist)
   ),
   candidates AS (
     SELECT f.finding_id
       FROM findings f
      WHERE f.asset_id = v_asset
        AND f.current_status IN ('detected','confirmed','open','regressed')
-       AND f.source IN (SELECT source FROM sources_in_scan)
+       AND f.source::text IN (SELECT source FROM sources_in_scan)
+       AND f.source::text <> ALL(v_blacklist)
        AND NOT EXISTS (
              SELECT 1 FROM finding_history fh
               WHERE fh.finding_id = f.finding_id
