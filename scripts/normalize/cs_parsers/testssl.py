@@ -325,8 +325,16 @@ def parse_testssl_file(
         # target-dir apex. Test/api/etc findings → their own asset cards.
         event_asset_id = canonical_asset_id(sub) if is_fqdn_in_scope(sub, asset_id) else canonical_asset_id(asset_id)
 
+        # finding_id MUST use canonical inputs only. Two scans of the same
+        # condition on the same canonical asset must produce the same hash,
+        # so history merges instead of creating dupes. The raw `host` from
+        # testssl's JSON varies between scans (sometimes "www.x.com",
+        # sometimes just the IP, sometimes the apex) — don't put it in the
+        # hash input. event_asset_id is already the canonical form, and
+        # port distinguishes legitimately-different services on the same
+        # asset (e.g., 443 vs 8443).
         ev = FindingEvent(
-            finding_id=stable_finding_id(event_asset_id, "testssl", grouped_id, f"{host}:{port}"),
+            finding_id=stable_finding_id(event_asset_id, "testssl", grouped_id, f"port-{port}"),
             asset_id=event_asset_id,
             scan_id=scan_id,
             source="testssl",

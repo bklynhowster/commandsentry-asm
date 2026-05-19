@@ -81,7 +81,10 @@ def _emit(asset_id, scan_id, observed_at, evidence_path, hostname, ip, port,
     # Asset = the FQDN tested, not the target-dir apex
     event_asset_id = canonical_asset_id(hostname) if is_fqdn_in_scope(hostname, asset_id) else canonical_asset_id(asset_id)
     return FindingEvent(
-        finding_id=stable_finding_id(event_asset_id, "sslyze", test_id, f"{host}:{port}"),
+        # Same canonical-input rule as testssl.py — see that file's comment
+        # block. Raw host varies between scans; event_asset_id + port is
+        # the stable identity.
+        finding_id=stable_finding_id(event_asset_id, "sslyze", test_id, f"port-{port}"),
         asset_id=event_asset_id,
         scan_id=scan_id,
         source="sslyze",
