@@ -91,6 +91,10 @@ SCAN_RUN_PATTERNS = [
     re.compile(r"^api-hardcore-scan-v2-run-\d{14}$"),
     re.compile(r"^api-probes-only-run-\d{14}$"),
     re.compile(r"^api-dotnet-probe-run-\d{14}$"),
+    re.compile(r"^api-probes-only-\d{8}-\d{6}$"),
+    re.compile(r"^api-probes-only-\d{8}-\d{4}$"),
+    re.compile(r"^api-deep-\d{8}-\d{6}$"),
+    re.compile(r"^api-deep-\d{8}-\d{4}$"),
     re.compile(r"^dotnet-probe-\d{8}-\d{6}$"),
     # SQLi-specific probes
     re.compile(r"^sqli-probe-\d{8}-\d{4}$"),
