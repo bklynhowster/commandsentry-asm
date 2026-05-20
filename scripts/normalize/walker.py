@@ -63,9 +63,26 @@ SCAN_RUN_PATTERNS = [
     # Auth bypass / surgical
     re.compile(r"^auth-bypass-\d{8}-\d{4}$"),
     re.compile(r"^remediation-verify-\d{4}-\d{2}-\d{2}$"),
+    # Deep-validate family (4-digit and 6-digit time suffixes, plus -lite variant)
     re.compile(r"^deep-validate-\d{8}-\d{4}$"),
-    # Stringent / probes
+    re.compile(r"^deep-validate-\d{8}-\d{6}$"),
+    re.compile(r"^deep-validate-lite-\d{8}-\d{4}$"),
+    re.compile(r"^deep-validate-lite-\d{8}-\d{6}$"),
+    # Stringent family — prod-stringent + variants, both time formats
     re.compile(r"^stringent-\d{8}-\d{4}$"),
+    re.compile(r"^stringent-\d{8}-\d{6}$"),
+    re.compile(r"^prod-stringent-\d{8}-\d{4}$"),
+    re.compile(r"^prod-stringent-\d{8}-\d{6}$"),
+    re.compile(r"^prod-stringent-auth-\d{8}-\d{4}$"),
+    re.compile(r"^prod-stringent-auth-\d{8}-\d{6}$"),
+    re.compile(r"^test-stringent-\d{8}-\d{4}$"),
+    re.compile(r"^test-stringent-\d{8}-\d{6}$"),
+    # Surgical verification scripts (2026-05-20 verification pattern)
+    re.compile(r"^verify-mediums-\d{8}-\d{4}$"),
+    re.compile(r"^verify-mediums-\d{8}-\d{6}$"),
+    re.compile(r"^m02-m03-verify-\d{8}-\d{4}$"),
+    re.compile(r"^m02-m03-verify-\d{8}-\d{6}$"),
+    # Probes
     re.compile(r"^probes-only-\d{8}-\d{6}$"),
     re.compile(r"^probes-only-\d{8}-\d{4}$"),
     # API-focused
