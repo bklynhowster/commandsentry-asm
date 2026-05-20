@@ -63,6 +63,11 @@ SCAN_RUN_PATTERNS = [
     # Auth bypass / surgical
     re.compile(r"^auth-bypass-\d{8}-\d{4}$"),
     re.compile(r"^remediation-verify-\d{4}-\d{2}-\d{2}$"),
+    # Test-environment unauth scan (2026-04-29 convention)
+    re.compile(r"^test-unauth-scan-\d{4}-\d{2}-\d{2}$"),
+    # Full comprehensive scans (5/12 TEST convention)
+    re.compile(r"^full-scan-\d{8}-\d{6}$"),
+    re.compile(r"^full-scan-\d{8}-\d{4}$"),
     # Deep-validate family (4-digit and 6-digit time suffixes, plus -lite variant)
     re.compile(r"^deep-validate-\d{8}-\d{4}$"),
     re.compile(r"^deep-validate-\d{8}-\d{6}$"),
@@ -77,6 +82,10 @@ SCAN_RUN_PATTERNS = [
     re.compile(r"^prod-stringent-auth-\d{8}-\d{6}$"),
     re.compile(r"^test-stringent-\d{8}-\d{4}$"),
     re.compile(r"^test-stringent-\d{8}-\d{6}$"),
+    re.compile(r"^test-stringent-auth-\d{8}-\d{4}$"),
+    re.compile(r"^test-stringent-auth-\d{8}-\d{6}$"),
+    re.compile(r"^stringent-auth-\d{8}-\d{4}$"),
+    re.compile(r"^stringent-auth-\d{8}-\d{6}$"),
     # Surgical verification scripts (2026-05-20 verification pattern)
     re.compile(r"^verify-mediums-\d{8}-\d{4}$"),
     re.compile(r"^verify-mediums-\d{8}-\d{6}$"),
