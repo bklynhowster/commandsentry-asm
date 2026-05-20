@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-19T20:00:34Z_99fd1660",
-    "started_at": "2026-05-19T20:00:34Z",
-    "completed_at": "2026-05-19T20:02:39Z",
-    "duration_seconds": 125,
+    "id": "scan_2026-05-20T04:15:10Z_a7153dda",
+    "started_at": "2026-05-20T04:15:10Z",
+    "completed_at": "2026-05-20T04:17:06Z",
+    "duration_seconds": 116,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -28,11 +28,11 @@
   },
   "registration": {},
   "summary": {
-    "subdomain_count": 4,
-    "live_subdomain_count": 4,
+    "subdomain_count": 2,
+    "live_subdomain_count": 2,
     "host_count": 1,
     "service_count": 4,
-    "newest_cert_expiry_days": 30,
+    "newest_cert_expiry_days": 29,
     "top_hosting_org": "Automattic, Inc",
     "platforms": [
       "WordPress on wp.cloud (Pressable)"
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-19T20:02:39Z",
-      "last_seen": "2026-05-19T20:02:39Z",
+      "first_discovered": "2026-05-20T04:17:06Z",
+      "last_seen": "2026-05-20T04:17:06Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -81,16 +81,8 @@
           "banner": null,
           "tls": true,
           "cert": {
-            "subject": "CN=tls.automattic.com",
-            "issuer": "CN=E7, O=Let's Encrypt, C=US",
-            "san": [
-              "commandcompanies.com",
-              "tls.automattic.com"
-            ],
-            "not_before": "2026-03-21T02:43:26Z",
-            "not_after": "2026-06-19T02:43:25Z",
-            "self_signed": false,
-            "days_to_expiry": 30
+            "not_after": "2026-06-19 02:43",
+            "self_signed": false
           }
         }
       ],
@@ -106,10 +98,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
-          "MS=ms93622757",
-          "apple-domain-verification=cWkfjNKuM61a3EZ6",
           "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+          "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "MS=ms93622757"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -217,84 +209,12 @@
       }
     },
     {
-      "name": "rest.commandcompanies.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-05-19T20:02:39Z",
-      "last_seen": "2026-05-19T20:02:39Z",
-      "tags": [],
-      "reachability": {
-        "live": false,
-        "http_status": null,
-        "title": null
-      },
-      "hosts": [],
-      "services": [],
-      "dns": {
-        "a": [],
-        "aaaa": [],
-        "cname": null,
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": null,
-        "platform_label": null,
-        "tech": []
-      },
-      "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
-      }
-    },
-    {
-      "name": "v2.commandcompanies.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-05-19T20:02:39Z",
-      "last_seen": "2026-05-19T20:02:39Z",
-      "tags": [],
-      "reachability": {
-        "live": false,
-        "http_status": null,
-        "title": null
-      },
-      "hosts": [],
-      "services": [],
-      "dns": {
-        "a": [],
-        "aaaa": [],
-        "cname": null,
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": null,
-        "platform_label": null,
-        "tech": []
-      },
-      "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
-      }
-    },
-    {
       "name": "www.commandcompanies.com",
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-19T20:02:39Z",
-      "last_seen": "2026-05-19T20:02:39Z",
+      "first_discovered": "2026-05-20T04:17:06Z",
+      "last_seen": "2026-05-20T04:17:06Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -339,7 +259,7 @@
             "not_before": "2026-03-21T02:43:26Z",
             "not_after": "2026-06-19T02:43:25Z",
             "self_signed": false,
-            "days_to_expiry": 30
+            "days_to_expiry": 29
           }
         }
       ],
@@ -459,17 +379,17 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-19T15:41:14Z_a58b40cd",
+    "since_scan": "scan_2026-05-19T20:00:34Z_99fd1660",
     "added": {
-      "subdomains": [
-        "rest.commandcompanies.com",
-        "v2.commandcompanies.com"
-      ],
+      "subdomains": [],
       "services": [],
       "hosts": []
     },
     "removed": {
-      "subdomains": [],
+      "subdomains": [
+        "rest.commandcompanies.com",
+        "v2.commandcompanies.com"
+      ],
       "services": [],
       "hosts": []
     },
@@ -2103,6 +2023,42 @@
         },
         "rest.commandcompanies.com": {},
         "v2.commandcompanies.com": {},
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Contact Form 7": "6.1.6",
+        "Slider Revolution": "6.7.55",
+        "WP Google Map Plugin": "4.9.4",
+        "WPMU DEV Smush": "4.0.3",
+        "Yoast SEO": "27.6",
+        "imagesLoaded": "5.0.0",
+        "jQuery Migrate": "3.4.1"
+      }
+    },
+    {
+      "scan_id": "scan_2026-05-20T04:15:10Z_a7153dda",
+      "started_at": "2026-05-20T04:15:10Z",
+      "completed_at": "2026-05-20T04:17:06Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 1,
+      "service_count": 4,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
         "www.commandcompanies.com": {
           "199.16.172.54": [
             80,
