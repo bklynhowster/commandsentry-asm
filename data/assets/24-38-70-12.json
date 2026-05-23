@@ -10,9 +10,9 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-22T20:09:34Z_fce78492",
-    "started_at": "2026-05-22T20:09:34Z",
-    "completed_at": "2026-05-22T20:09:40Z",
+    "id": "scan_2026-05-23T04:08:44Z_c4ae9344",
+    "started_at": "2026-05-23T04:08:44Z",
+    "completed_at": "2026-05-23T04:08:50Z",
     "duration_seconds": 6,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
@@ -27,7 +27,7 @@
     "host_count": 1,
     "service_count": 0,
     "newest_cert_expiry_days": null,
-    "top_hosting_org": null,
+    "top_hosting_org": "Cablevision Systems Corp.",
     "platforms": []
   },
   "subdomains": [
@@ -36,8 +36,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-05-22T20:09:40Z",
-      "last_seen": "2026-05-22T20:09:40Z",
+      "first_discovered": "2026-05-23T04:08:50Z",
+      "last_seen": "2026-05-23T04:08:50Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -47,6 +47,12 @@
       "hosts": [
         {
           "ip": "24.38.70.12",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
+          "country": "US",
+          "region": "New York",
+          "city": "New York City",
+          "reverse_dns": "1826460c.cst.lightpath.net",
           "is_private": false
         }
       ],
@@ -74,7 +80,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-22T15:05:42Z_3cae10f5",
+    "since_scan": "scan_2026-05-22T20:09:34Z_fce78492",
     "added": {
       "subdomains": [],
       "services": [],
@@ -906,6 +912,22 @@
       "scan_id": "scan_2026-05-22T20:09:34Z_fce78492",
       "started_at": "2026-05-22T20:09:34Z",
       "completed_at": "2026-05-22T20:09:40Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 0,
+      "subdomain_names": [
+        "24.38.70.12"
+      ],
+      "ports_by_sub": {
+        "24.38.70.12": {}
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-05-23T04:08:44Z_c4ae9344",
+      "started_at": "2026-05-23T04:08:44Z",
+      "completed_at": "2026-05-23T04:08:50Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 1,
