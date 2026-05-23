@@ -251,7 +251,7 @@ def main():
             sb.table("assets")
             .select("asset_id, tech_profile, tech_profile_sources")
             .eq("asset_id", asset_id)
-            .maybeSingle()
+            .maybe_single()
             .execute()
             .data
         )
