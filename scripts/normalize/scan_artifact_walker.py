@@ -421,6 +421,43 @@ def extract_keywords_from_title(title: str) -> list[str]:
     return out
 
 
+def parse_nuclei_oneliner(raw: str) -> dict:
+    """
+    Parse the short text-format nuclei output we see in many raw_excerpt
+    fields:
+
+      [CVE-2024-2473] [http] [medium] https://host/path
+      [tech-detect:nginx] [http] [info] https://host
+
+    The most useful field here is the URL — when it's a CVE-tagged template,
+    that URL is the actual matched-at endpoint where the scanner triggered
+    the finding (e.g. /wp-admin/?action=postpass for the WPS Hide Login bug).
+    Far more useful than the generic '/wp-content/plugins/.../' fallback.
+
+    Returns dict with:
+      matched_url:  str   — captured URL
+      cve:          list  — when the [template-id] is CVE-shaped
+    """
+    raw = (raw or "").strip()
+    if not raw.startswith("["):
+        return {}
+    # Pattern: [template-id] [type] [severity] URL [...extra...]
+    m = re.match(
+        r"\[([^\]]+)\]\s+\[(\w+)\]\s+\[(\w+)\]\s+(https?://\S+)",
+        raw,
+    )
+    if not m:
+        return {}
+    template_id = m.group(1)
+    url = m.group(4)
+    out: dict = {"matched_url": url}
+    # If the template ID is CVE-shaped, expose it
+    cve_match = re.match(r"^(CVE-\d{4}-\d+)$", template_id, re.I)
+    if cve_match:
+        out["cve"] = [cve_match.group(1).upper()]
+    return out
+
+
 def parse_testssl_json_excerpt(raw: str) -> dict:
     """
     Parse a testssl.sh JSON record. Shape:
@@ -587,6 +624,17 @@ def enrichment_for_finding(finding: dict, idx: ArtifactIndex) -> dict:
     # ──────────────────────────────────────────────────────────────────────
     excerpt = (finding.get("_latest_excerpt") or "").strip()
     if excerpt:
+        # ── nuclei one-liner: extract matched URL + CVE from text format
+        # like "[CVE-2024-2473] [http] [medium] https://host/path"
+        ol = parse_nuclei_oneliner(excerpt)
+        if ol.get("matched_url") and not finding.get("matched_url"):
+            out["matched_url"] = ol["matched_url"]
+        if ol.get("cve"):
+            prior_cve = finding.get("cve") or []
+            merged = sorted({*prior_cve, *ol["cve"]})
+            if merged != prior_cve:
+                out["cve"] = merged
+
         # ── testssl.sh shape: lightweight CVE + CWE + port extraction
         # This is the dominant JSON shape on TLS-heavy findings.
         ts = parse_testssl_json_excerpt(excerpt)
