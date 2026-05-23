@@ -246,15 +246,17 @@ def main():
         idx = walker.build_index(folder, asset_id)
         new_profile = build_tech_profile(idx, walker)
 
-        # Fetch current profile for diff
-        row = (
+        # Fetch current profile for diff. maybe_single() in supabase-py can
+        # return None (not a response with .data=None) when no row matches,
+        # so guard the chain rather than assume .data is always reachable.
+        resp = (
             sb.table("assets")
             .select("asset_id, tech_profile, tech_profile_sources")
             .eq("asset_id", asset_id)
             .maybe_single()
             .execute()
-            .data
         )
+        row = getattr(resp, "data", None) if resp is not None else None
         if not row:
             print(f"  ! asset_id not found in DB: {asset_id}")
             continue
