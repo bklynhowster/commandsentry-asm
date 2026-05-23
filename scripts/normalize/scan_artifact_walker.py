@@ -538,10 +538,43 @@ def parse_nuclei_json_excerpt(raw: str) -> dict:
     raw = (raw or "").strip()
     if not raw or not raw.startswith("{"):
         return {}
+    # Try strict parse first
+    obj = None
     try:
         obj = _json.loads(raw)
     except (_json.JSONDecodeError, ValueError):
-        return {}
+        # Truncated JSON — the original ingest cut off raw_excerpt mid-string.
+        # Fall back to regex extraction of just the high-value nested fields.
+        # This is targeted at the nuclei shape — we know exactly what keys to
+        # look for.
+        info_match = re.search(r'"info"\s*:\s*\{(.*?)\}\s*,\s*"', raw, re.DOTALL)
+        cls_match = re.search(
+            r'"classification"\s*:\s*\{([^}]*)\}', raw, re.DOTALL,
+        )
+        if not cls_match and not info_match:
+            return {}
+        # Reconstruct a partial dict that the rest of this function can read
+        obj = {"info": {"classification": {}}}
+        if cls_match:
+            cls_text = "{" + cls_match.group(1) + "}"
+            try:
+                obj["info"]["classification"] = _json.loads(cls_text)
+            except _json.JSONDecodeError:
+                pass
+        # Also extract top-level "matched-at" since it lives outside info
+        ma = re.search(r'"matched-at"\s*:\s*"([^"]+)"', raw)
+        if ma:
+            obj["matched-at"] = ma.group(1)
+        # Try to extract info.name from anywhere
+        nm = re.search(r'"name"\s*:\s*"([^"]+)"', raw)
+        if nm:
+            obj["info"]["name"] = nm.group(1)
+        # info.tags
+        tg = re.search(r'"tags"\s*:\s*\[([^\]]+)\]', raw)
+        if tg:
+            tags = re.findall(r'"([^"]+)"', tg.group(1))
+            if tags:
+                obj["info"]["tags"] = tags
     if not isinstance(obj, dict):
         return {}
     info = obj.get("info") or {}
