@@ -159,9 +159,13 @@ CREATE INDEX IF NOT EXISTS idx_email_messages_from_domain
   ON email_messages(from_domain);
 CREATE INDEX IF NOT EXISTS idx_email_messages_thread_id
   ON email_messages(thread_id);
-CREATE INDEX IF NOT EXISTS idx_email_messages_subject_trgm
-  ON email_messages USING gin(subject gin_trgm_ops);
--- pg_trgm extension is already enabled in Supabase by default
+-- (Trigram index on subject was here originally for inbox search; removed
+--  because pg_trgm isn't enabled on this Supabase project by default. If
+--  inbox search becomes painful with the plain b-tree, run:
+--    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+--    CREATE INDEX idx_email_messages_subject_trgm
+--      ON email_messages USING gin(subject gin_trgm_ops);
+-- )
 
 COMMENT ON TABLE email_messages IS
   'Incoming emails ingested via inbound webhook, manual upload, or backfill. Audit-grade: full raw .eml preserved in Supabase Storage at raw_message_storage_url.';
