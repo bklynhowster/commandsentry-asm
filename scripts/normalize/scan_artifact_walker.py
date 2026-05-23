@@ -421,11 +421,156 @@ def extract_keywords_from_title(title: str) -> list[str]:
     return out
 
 
+def parse_nuclei_json_excerpt(raw: str) -> dict:
+    """
+    Some findings have their full nuclei JSON record stored in
+    finding_history.raw_excerpt. Parse it and return a dict of
+    structured fields the walker can use. Returns {} if not parseable
+    nuclei JSON.
+
+    Returns keys (only the ones present in the input):
+      cvss_score:    float — info.classification.cvss-score
+      cvss_vector:   str   — info.classification.cvss-metrics
+      cwe:           list[int] — info.classification.cwe-id (e.g. "cwe-200" → 200)
+      cve:           list[str] — info.classification.cve-id (uppercase)
+      matched_url:   str   — top-level "matched-at" field
+      tags:          list[str] — info.tags
+      severity:      str   — info.severity (lower-case)
+      affected_component:         str — info.name parsed (e.g. "WPS Hide Login" from "WPS Hide Login <= 1.9.15.2 - ...")
+      affected_component_version: str — version from info.name if present after "<= "
+    """
+    import json as _json
+    raw = (raw or "").strip()
+    if not raw or not raw.startswith("{"):
+        return {}
+    try:
+        obj = _json.loads(raw)
+    except (_json.JSONDecodeError, ValueError):
+        return {}
+    if not isinstance(obj, dict):
+        return {}
+    info = obj.get("info") or {}
+    cls = info.get("classification") or {}
+    out: dict = {}
+
+    # CVSS metrics
+    if cls.get("cvss-metrics"):
+        out["cvss_vector"] = str(cls["cvss-metrics"]).strip()
+    if cls.get("cvss-score") is not None:
+        try:
+            out["cvss_score"] = float(cls["cvss-score"])
+        except (TypeError, ValueError):
+            pass
+
+    # CWEs — "cwe-200" or ["cwe-200","cwe-79"]
+    cwe_field = cls.get("cwe-id") or []
+    if isinstance(cwe_field, str):
+        cwe_field = [cwe_field]
+    cwes: list[int] = []
+    for c in cwe_field:
+        m = re.search(r"cwe-?(\d+)", str(c), re.I)
+        if m:
+            cwes.append(int(m.group(1)))
+    if cwes:
+        out["cwe"] = sorted(set(cwes))
+
+    # CVEs — "cve-2024-2473" or list
+    cve_field = cls.get("cve-id") or []
+    if isinstance(cve_field, str):
+        cve_field = [cve_field]
+    cves: list[str] = []
+    for c in cve_field:
+        s = str(c).strip().upper()
+        if re.match(r"CVE-\d{4}-\d+", s):
+            cves.append(s)
+    if cves:
+        out["cve"] = sorted(set(cves))
+
+    # Matched URL — the actual exploit endpoint
+    if obj.get("matched-at"):
+        out["matched_url"] = str(obj["matched-at"]).strip()
+
+    # Tags
+    info_tags = info.get("tags") or []
+    if isinstance(info_tags, list) and info_tags:
+        out["tags"] = [str(t).strip() for t in info_tags if str(t).strip()]
+
+    # Component name + version from info.name like "WPS Hide Login <= 1.9.15.2 - Login Page Disclosure"
+    if info.get("name"):
+        name = str(info["name"]).strip()
+        # Try to split out version with patterns:
+        #   "Component <= X.Y.Z - Description"
+        #   "Component < X.Y.Z - Description"
+        #   "Component X.Y.Z - Description"
+        m = re.match(r"^([A-Za-z0-9 _\-]+?)\s*(?:<=?\s*|=\s*)?(\d+(?:\.\d+)+)\s*[-–—]", name)
+        if m:
+            out["affected_component"] = m.group(1).strip()
+            out["affected_component_version"] = m.group(2).strip()
+        else:
+            # Fallback — take the part before the first " - "
+            head = name.split(" - ", 1)[0].strip()
+            if head and not re.search(r"\d", head):
+                out["affected_component"] = head
+
+    return out
+
+
 def enrichment_for_finding(finding: dict, idx: ArtifactIndex) -> dict:
     """Given a finding row + the artifact index for its asset, return a dict
     of fields to merge into the row (only non-empty values)."""
     out: dict = {}
 
+    # ──────────────────────────────────────────────────────────────────────
+    # PRIORITY 1: nuclei JSON excerpt in the DB (richest source).
+    # When the original ingest stored a full nuclei JSON in
+    # finding_history.raw_excerpt, that JSON has every structured field
+    # we want — CVSS metrics, EPSS, CWE, CVE, matched-at, info tags. No
+    # title-matching needed; the JSON tells us exactly what was found.
+    # ──────────────────────────────────────────────────────────────────────
+    excerpt = (finding.get("_latest_excerpt") or "").strip()
+    if excerpt:
+        nuc = parse_nuclei_json_excerpt(excerpt)
+        if nuc.get("cvss_score") is not None and finding.get("cvss_score") is None:
+            out["cvss_score"] = nuc["cvss_score"]
+        if nuc.get("cvss_vector") and not finding.get("cvss_vector"):
+            out["cvss_vector"] = nuc["cvss_vector"]
+        if nuc.get("affected_component") and not finding.get("affected_component"):
+            out["affected_component"] = nuc["affected_component"]
+        if nuc.get("affected_component_version") and not finding.get("affected_component_version"):
+            out["affected_component_version"] = nuc["affected_component_version"]
+        if nuc.get("matched_url") and not finding.get("matched_url"):
+            out["matched_url"] = nuc["matched_url"]
+        # Arrays — union with existing
+        if nuc.get("cwe"):
+            prior_cwe = finding.get("cwe") or []
+            merged = sorted({*prior_cwe, *nuc["cwe"]})
+            if merged != prior_cwe:
+                out["cwe"] = merged
+        if nuc.get("cve"):
+            prior_cve = finding.get("cve") or []
+            merged = sorted({*prior_cve, *nuc["cve"]})
+            if merged != prior_cve:
+                out["cve"] = merged
+        if nuc.get("tags"):
+            prior_tags = finding.get("tags") or []
+            seen = {t.lower() for t in prior_tags}
+            new_tags = list(prior_tags)
+            for t in nuc["tags"]:
+                if t.lower() not in seen and len(t) > 1:
+                    new_tags.append(t)
+                    seen.add(t.lower())
+            if new_tags != prior_tags:
+                out["tags"] = new_tags
+        # If we got high-confidence component data from the JSON, we're
+        # done — title-based matching can only confirm, not improve.
+        if out.get("affected_component"):
+            return out
+
+    # ──────────────────────────────────────────────────────────────────────
+    # PRIORITY 2: title-keyword match against the artifact-index plugins.
+    # Used when there's no nuclei JSON excerpt, or the JSON didn't include
+    # an info.name we could parse.
+    # ──────────────────────────────────────────────────────────────────────
     keywords = extract_keywords_from_title(finding.get("title", ""))
     if not keywords:
         return out
@@ -548,7 +693,8 @@ def main():
         rows = (
             sb.table("findings")
             .select(
-                "finding_id, title, tags, affected_component, affected_component_version, matched_url"
+                "finding_id, title, tags, cve, cwe, cvss_score, cvss_vector, "
+                "affected_component, affected_component_version, matched_url"
             )
             .eq("asset_id", asset_id)
             .limit(args.limit)
@@ -558,8 +704,35 @@ def main():
         )
         print(f"  Findings on this asset: {len(rows)}")
 
+        # Pull the most-recent raw_excerpt for each finding in one batched
+        # query so we don't fire 500 individual selects against the DB. This
+        # is what unlocks parsing the nuclei JSON dumps that some findings
+        # carry but the on-disk artifact files don't.
+        finding_ids = [r["finding_id"] for r in rows]
+        excerpts_by_id: dict[str, str] = {}
+        if finding_ids:
+            CHUNK = 100  # Supabase .in_ has a query-string-length limit
+            for i in range(0, len(finding_ids), CHUNK):
+                batch = finding_ids[i : i + CHUNK]
+                hist = (
+                    sb.table("finding_history")
+                    .select("finding_id, raw_excerpt, observed_at")
+                    .in_("finding_id", batch)
+                    .order("observed_at", desc=True, nullsfirst=False)
+                    .execute()
+                    .data
+                    or []
+                )
+                for h in hist:
+                    fid = h["finding_id"]
+                    ex = (h.get("raw_excerpt") or "").strip()
+                    # Only keep the first (= most recent due to ORDER BY) record per finding
+                    if fid not in excerpts_by_id and ex:
+                        excerpts_by_id[fid] = ex
+
         for r in rows:
             total_findings += 1
+            r["_latest_excerpt"] = excerpts_by_id.get(r["finding_id"], "")
             updates = enrichment_for_finding(r, idx)
             if not updates:
                 continue
