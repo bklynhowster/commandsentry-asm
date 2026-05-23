@@ -65,8 +65,8 @@ DEFAULT_SCAN_ROOT = Path.home() / "Downloads" / "ISMS Procedures" / "Vulnerabili
 FOLDER_TO_ASSET: dict[str, str] = {
     # filesystem folder name           → DB asset_id
     "unimacgraphics":                    "unimacgraphics.com",
-    "commanddigital":                    "www.commanddigital.com",
-    "commandcompanies":                  "www.commandcompanies.com",
+    "commanddigital":                    "commanddigital.com",
+    "commandcompanies":                  "commandcompanies.com",
     "commandcommcentral":                "commandcommcentral.com",
     "commandmarketinginnovations":       "commandmarketinginnovations.com",
     # Aliases — some folders contain a "www" or "www-deep" subdir; the
