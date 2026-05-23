@@ -104,12 +104,14 @@ CRITICAL — do NOT fabricate stack specifics:
 
 EXTRACTION RULES (for the structured fields):
 - "extracted_cves": every CVE-YYYY-NNNN that appears anywhere in title, description, references, or scan excerpt. Uppercase normalized. Empty array if none.
-- "extracted_cwes": every CWE integer that appears anywhere. Just the numbers (e.g. [79, 89]). Empty array if none.
+- "extracted_cwes": every CWE integer mentioned in source data AS WELL AS any CWE you can defensibly infer from the finding's nature. For example: a "password max length" finding maps to CWE-521 (Weak Password Requirements) even if the source data doesn't say so. Auth bypass → CWE-287. Hardcoded credentials → CWE-798. SQL injection → CWE-89. Common inferences are EXPECTED — config findings that have no CVE still have a CWE. Empty array only if you genuinely cannot map this finding to any CWE. Just the integers (e.g. [79, 521]).
 - "extracted_tags": short keyword tags (lowercase, hyphenated) describing the finding. Pick 2–6 from this vocabulary or coin similar ones: wordpress, plugin, theme, outdated, vulnerable-component, cve-listed, tls, ssl, cipher, header, csp, hsts, cors, cookie, missing-header, xss, sqli, ssrf, idor, rce, lfi, redirect, auth, mfa, session, csrf, info-disclosure, banner, version-disclosure, directory-listing, debug, dns, dmarc, spf, dkim, takeover, typosquat, sast, sca, secret, deprecation. If the asset is hosted on a known platform (wp-engine, pressable, fortinet, iis, nginx, apache, dotnet, php) include that as a tag too.
 - "cvss_score": numeric, 0.0–10.0, ONLY if a CVSS score appears in the input (e.g. "CVSS 6.1"). Null otherwise. Do NOT estimate from the severity bucket.
 - "affected_component": the name of the vulnerable software/plugin/library/service (e.g. "Email Encoder Bundle", "Elementor", "nginx", "OpenSSL"). Null if the input doesn't name one.
 - "affected_component_version": detected version string (e.g. "2.8.3", "1.24.0"). Null if not in input.
 - "suggested_category": ONE of the valid enum values — sast, dast, sca, secret, recon, tls, headers, dns, email, auth, session, csrf, ssrf, xxe, xss, sqli, idor, rce, lfi, redirect, info_disclosure, takeover, typosquat, config, deprecation, supply_chain, other. Pick the BEST fit. An outdated WordPress plugin with known CVEs is "sca". A TLS cipher issue is "tls". A missing security header is "headers". An XSS finding is "xss". When unsure, "other".
+- "matched_url": the specific URL / endpoint where the scanner reported this finding (e.g. "/wp-admin/admin-ajax.php", "/account/changepassword", "https://www.example.com/login"). If the source data names a URL, copy it. If it doesn't but the finding clearly targets a known endpoint per the description (e.g. "password change form" → "/account/changepassword"), infer it. Null only if there's no defensible URL.
+- "frameworks": compliance framework references that this finding maps to. PULL FROM source data when mentioned (e.g. "NIST 800-63B's 64-char minimum" in the scan notes → ["NIST 800-63B"]). ALSO add reasonable inferences from the well-known mappings: password requirements → "NIST 800-63B"; access control → "NIST CSF PR.AC", "ISO 27001 A.9", "SOC 2 CC6.1"; encryption-in-transit → "NIST CSF PR.DS-2", "PCI DSS 4.1"; logging → "NIST CSF DE.AE", "ISO 27001 A.12.4"; vulnerability mgmt → "NIST CSF DE.CM-8", "PCI DSS 11.3.1". Output the framework identifier in the form Command actually uses (e.g. "NIST 800-63B", "NIST CSF PR.AC-1", "ISO 27001 A.9.4.3", "SOC 2 CC6.1", "HIPAA §164.308(a)(5)(ii)(D)", "PCI DSS 8.3.6"). Empty array if you can't map.
 - "extraction_confidence": "high" if title+description+scan_excerpt all align and the CVE/version/component are explicit. "medium" if you had to infer one field from another. "low" if you guessed.
 
 OUTPUT FORMAT: a single JSON object, no surrounding prose, no markdown fences:
@@ -119,12 +121,14 @@ OUTPUT FORMAT: a single JSON object, no surrounding prose, no markdown fences:
   "what_could_it_do": "Concrete impact and business consequence. 2-4 sentences. Specific to this stack, this asset, this finding.",
   "how_do_i_fix_it": "Numbered remediation steps as a single string with embedded newlines (1. ...\\n2. ...\\n3. ...). End with 'Estimated remediation time: X-Y hours' and, for HIGH/CRITICAL severities, 'Priority: P0/P1/etc.'",
   "extracted_cves": ["CVE-2020-13126", "CVE-2021-XXXXX"],
-  "extracted_cwes": [79, 89],
+  "extracted_cwes": [79, 89, 521],
   "extracted_tags": ["wordpress", "plugin", "outdated", "vulnerable-component"],
   "cvss_score": 6.1,
   "affected_component": "Email Encoder Bundle",
   "affected_component_version": null,
   "suggested_category": "sca",
+  "matched_url": "/wp-admin/admin-ajax.php",
+  "frameworks": ["NIST 800-63B", "ISO 27001 A.9.4.3"],
   "extraction_confidence": "medium"
 }
 
@@ -235,6 +239,7 @@ def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, for
         .select(
             "finding_id, title, severity, asset_id, description, cve, cwe, category, source, "
             "tags, cvss_score, affected_component, affected_component_version, "
+            "matched_url, frameworks, "
             'description_synth, description_source, description_synth_input_hash, "references"'
         )
     )
@@ -421,6 +426,25 @@ def write_synthesis(sb, finding_id: str, result: dict, input_hash: str, existing
     if sc and sc in VALID_CATEGORIES:
         payload["suggested_category"] = sc
 
+    # ── matched_url — only fill if empty (preserve scanner-extracted URLs)
+    if result.get("matched_url") and not existing.get("matched_url"):
+        url = str(result["matched_url"]).strip()
+        if url:
+            payload["matched_url"] = url
+
+    # ── Frameworks — union with existing array
+    new_fw = [f.strip() for f in (result.get("frameworks") or []) if f and str(f).strip()]
+    if new_fw:
+        prior = existing.get("frameworks") or []
+        seen = {f.lower() for f in prior}
+        merged = list(prior)
+        for f in new_fw:
+            if f.lower() not in seen:
+                merged.append(f)
+                seen.add(f.lower())
+        if merged != prior:
+            payload["frameworks"] = merged
+
     # ── Extraction confidence — always write
     ec = result.get("extraction_confidence")
     if ec in {"high", "medium", "low"}:
@@ -438,6 +462,125 @@ VALID_CATEGORIES = {
 
 
 # ─── Claude call ────────────────────────────────────────────────────────────
+def _parse_json_lenient(raw: str) -> dict:
+    """
+    Parse a JSON object string that may have model-induced damage.
+
+    Failure modes we've observed in production:
+      1. Literal newlines inside string values (Claude pastes code blocks
+         directly into a "how_do_i_fix_it" string without escaping). Standard
+         json.loads chokes with "Expecting ',' delimiter".
+      2. Unescaped double-quotes inside string values (less common — model
+         emits a code excerpt with " not \\").
+      3. Trailing commas before } (rare with low temp but happens).
+
+    Strategy:
+      - Try strict json.loads first (fast path, no-cost).
+      - If that fails, try a "literal newline → \\n" repair pass.
+      - If THAT fails, fall back to a per-key regex extractor that captures
+        each known top-level key's value as best it can. We may lose strict
+        type fidelity (e.g. arrays end up as parsed JSON or fall back to
+        empty) but we never lose the whole finding.
+
+    Returns a dict with whichever keys we could recover. Validation of
+    required keys still happens in the caller.
+    """
+    import re as _re
+
+    # Fast path
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Repair pass 1 — escape literal newlines/CRs inside string values.
+    # We walk the string, tracking whether we're inside a "...". When inside
+    # a string, raw \n or \r becomes \\n / \\r so json.loads accepts it.
+    repaired_chars: list[str] = []
+    in_string = False
+    escape_next = False
+    for ch in raw:
+        if escape_next:
+            repaired_chars.append(ch)
+            escape_next = False
+            continue
+        if ch == "\\":
+            repaired_chars.append(ch)
+            escape_next = True
+            continue
+        if ch == '"':
+            repaired_chars.append(ch)
+            in_string = not in_string
+            continue
+        if in_string and ch == "\n":
+            repaired_chars.append("\\n")
+            continue
+        if in_string and ch == "\r":
+            repaired_chars.append("\\r")
+            continue
+        if in_string and ch == "\t":
+            repaired_chars.append("\\t")
+            continue
+        repaired_chars.append(ch)
+    repaired = "".join(repaired_chars)
+
+    try:
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        pass
+
+    # Repair pass 2 — strip trailing commas before } or ]
+    no_trailing = _re.sub(r",(\s*[}\]])", r"\1", repaired)
+    try:
+        return json.loads(no_trailing)
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback — per-key regex extractor. We can't recover everything, but
+    # we can usually salvage the three prose strings + the structured fields.
+    out: dict = {}
+    # String values: "key": "value" where value may span multiple "lines"
+    # (because newlines inside string values were repaired above).
+    str_keys = [
+        "what_is_this", "what_could_it_do", "how_do_i_fix_it",
+        "affected_component", "affected_component_version",
+        "suggested_category", "extraction_confidence",
+    ]
+    for key in str_keys:
+        m = _re.search(
+            rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"',
+            no_trailing, _re.DOTALL,
+        )
+        if m:
+            # Unescape the captured string the way json.loads would
+            try:
+                out[key] = json.loads(f'"{m.group(1)}"')
+            except json.JSONDecodeError:
+                out[key] = m.group(1)
+
+    # Array values
+    arr_keys = ["extracted_cves", "extracted_cwes", "extracted_tags"]
+    for key in arr_keys:
+        m = _re.search(rf'"{key}"\s*:\s*(\[[^\]]*\])', no_trailing, _re.DOTALL)
+        if m:
+            try:
+                out[key] = json.loads(m.group(1))
+            except json.JSONDecodeError:
+                pass
+
+    # Numeric value (cvss_score)
+    m = _re.search(r'"cvss_score"\s*:\s*(null|[\d.]+)', no_trailing)
+    if m:
+        v = m.group(1)
+        out["cvss_score"] = None if v == "null" else float(v)
+
+    if not out:
+        # Truly unparseable — give up and propagate the original error so
+        # the caller logs the finding as a failure.
+        raise json.JSONDecodeError("Unable to parse JSON after all repair attempts", raw, 0)
+    return out
+
+
 def synthesize_one(client, finding: FindingInput) -> dict:
     resp = client.messages.create(
         model=MODEL_ID,
@@ -452,7 +595,8 @@ def synthesize_one(client, finding: FindingInput) -> dict:
     end = txt.rfind("}")
     if start < 0 or end < 0:
         raise ValueError(f"No JSON object in response: {txt[:500]}")
-    payload = json.loads(txt[start : end + 1])
+    raw = txt[start : end + 1]
+    payload = _parse_json_lenient(raw)
 
     # The model occasionally typos JSON keys (observed: "how_do_fix_it"
     # instead of "how_do_i_fix_it"). Normalize known variants before
@@ -468,6 +612,8 @@ def synthesize_one(client, finding: FindingInput) -> dict:
         "affected_component": ["component", "affected_software", "vulnerable_component"],
         "affected_component_version": ["component_version", "affected_version", "version"],
         "suggested_category": ["category_suggestion", "category"],
+        "matched_url": ["matched_at", "url", "endpoint", "matchedUrl"],
+        "frameworks": ["framework_mappings", "compliance_frameworks", "framework_list"],
         "extraction_confidence": ["confidence", "confidence_level"],
     }
     for canonical, aliases in key_aliases.items():
@@ -553,6 +699,8 @@ def main():
                 print(f"    Component:            {result.get('affected_component') or '—'}")
                 print(f"    Version:              {result.get('affected_component_version') or '—'}")
                 print(f"    Suggested category:   {result.get('suggested_category') or '—'}")
+                print(f"    Matched URL:          {result.get('matched_url') or '—'}")
+                print(f"    Frameworks:           {result.get('frameworks') or '—'}")
                 print(f"    Extraction confidence: {result.get('extraction_confidence') or '—'}")
                 print()
             else:
