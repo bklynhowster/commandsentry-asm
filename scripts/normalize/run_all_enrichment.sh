@@ -68,14 +68,14 @@ cd "$REPO_ROOT"
 # Timestamp helper so log lines line up across long runs.
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
-# Track results so we can print a summary at the end.
-declare -A STATUS
-STATUS[synth]="-"
-STATUS[walker]="-"
-STATUS[populator]="-"
-STATUS[cve]="-"
-
-declare -i overall=0
+# Track results so we can print a summary at the end. Plain variables
+# rather than associative array — macOS ships bash 3.2 which lacks
+# 'declare -A', and we want to work without a Homebrew bash dependency.
+STATUS_SYNTH="-"
+STATUS_WALKER="-"
+STATUS_POPULATOR="-"
+STATUS_CVE="-"
+overall=0
 
 echo "============================================================"
 echo "  COMMANDsentry — Post-ingest enrichment chain"
@@ -93,16 +93,16 @@ if [[ $SKIP_SYNTH -eq 0 ]]; then
     SYNTH_ARGS+=(--severity $SEVERITY_FILTER)
   fi
   if "$VENV_PYTHON" scripts/backfill/synthesize_finding_descriptions.py "${SYNTH_ARGS[@]}"; then
-    STATUS[synth]="ok"
+    STATUS_SYNTH="ok"
   else
-    STATUS[synth]="FAILED"
+    STATUS_SYNTH="FAILED"
     overall=1
     echo "  ! synth failed — continuing with remaining steps"
   fi
   echo
 else
   echo ">> [1/4] synth — SKIPPED"; echo
-  STATUS[synth]="skipped"
+  STATUS_SYNTH="skipped"
 fi
 
 # ---------------------------------------------------------------------------
@@ -111,16 +111,16 @@ fi
 if [[ $SKIP_WALKER -eq 0 ]]; then
   echo ">> [2/4] $(ts)  scan_artifact_walker.py"
   if "$VENV_PYTHON" scripts/normalize/scan_artifact_walker.py; then
-    STATUS[walker]="ok"
+    STATUS_WALKER="ok"
   else
-    STATUS[walker]="FAILED"
+    STATUS_WALKER="FAILED"
     overall=1
     echo "  ! walker failed — continuing with remaining steps"
   fi
   echo
 else
   echo ">> [2/4] walker — SKIPPED"; echo
-  STATUS[walker]="skipped"
+  STATUS_WALKER="skipped"
 fi
 
 # ---------------------------------------------------------------------------
@@ -129,16 +129,16 @@ fi
 if [[ $SKIP_POPULATOR -eq 0 ]]; then
   echo ">> [3/4] $(ts)  asset_tech_profile_populator.py"
   if "$VENV_PYTHON" scripts/normalize/asset_tech_profile_populator.py; then
-    STATUS[populator]="ok"
+    STATUS_POPULATOR="ok"
   else
-    STATUS[populator]="FAILED"
+    STATUS_POPULATOR="FAILED"
     overall=1
     echo "  ! populator failed — continuing with remaining steps"
   fi
   echo
 else
   echo ">> [3/4] populator — SKIPPED"; echo
-  STATUS[populator]="skipped"
+  STATUS_POPULATOR="skipped"
 fi
 
 # ---------------------------------------------------------------------------
@@ -147,16 +147,16 @@ fi
 if [[ $SKIP_CVE -eq 0 ]]; then
   echo ">> [4/4] $(ts)  cve_enricher.py"
   if "$VENV_PYTHON" scripts/normalize/cve_enricher.py; then
-    STATUS[cve]="ok"
+    STATUS_CVE="ok"
   else
-    STATUS[cve]="FAILED"
+    STATUS_CVE="FAILED"
     overall=1
     echo "  ! cve_enricher failed — continuing"
   fi
   echo
 else
   echo ">> [4/4] cve_enricher — SKIPPED"; echo
-  STATUS[cve]="skipped"
+  STATUS_CVE="skipped"
 fi
 
 # ---------------------------------------------------------------------------
@@ -165,17 +165,18 @@ fi
 echo "============================================================"
 echo "  Summary  ($(ts))"
 echo "============================================================"
-printf "  synth:     %s\n" "${STATUS[synth]}"
-printf "  walker:    %s\n" "${STATUS[walker]}"
-printf "  populator: %s\n" "${STATUS[populator]}"
-printf "  cve:       %s\n" "${STATUS[cve]}"
+printf "  synth:     %s\n" "$STATUS_SYNTH"
+printf "  walker:    %s\n" "$STATUS_WALKER"
+printf "  populator: %s\n" "$STATUS_POPULATOR"
+printf "  cve:       %s\n" "$STATUS_CVE"
 echo
 
 if [[ -n "$LOG_FILE" ]]; then
   mkdir -p "$(dirname "$LOG_FILE")"
+  if [[ $overall -eq 0 ]]; then OVERALL_TXT="ok"; else OVERALL_TXT="FAILED"; fi
   printf "%s  synth=%s  walker=%s  populator=%s  cve=%s  overall=%s\n" \
-    "$(ts)" "${STATUS[synth]}" "${STATUS[walker]}" "${STATUS[populator]}" "${STATUS[cve]}" \
-    "$([[ $overall -eq 0 ]] && echo ok || echo FAILED)" \
+    "$(ts)" "$STATUS_SYNTH" "$STATUS_WALKER" "$STATUS_POPULATOR" "$STATUS_CVE" \
+    "$OVERALL_TXT" \
     >> "$LOG_FILE"
 fi
 
