@@ -111,7 +111,18 @@ EXTRACTION RULES (for the structured fields):
 - "affected_component_version": detected version string (e.g. "2.8.3", "1.24.0"). Null if not in input.
 - "suggested_category": ONE of the valid enum values — sast, dast, sca, secret, recon, tls, headers, dns, email, auth, session, csrf, ssrf, xxe, xss, sqli, idor, rce, lfi, redirect, info_disclosure, takeover, typosquat, config, deprecation, supply_chain, other. Pick the BEST fit. An outdated WordPress plugin with known CVEs is "sca". A TLS cipher issue is "tls". A missing security header is "headers". An XSS finding is "xss". When unsure, "other".
 - "matched_url": the specific URL / endpoint where the scanner reported this finding (e.g. "/wp-admin/admin-ajax.php", "/account/changepassword", "https://www.example.com/login"). If the source data names a URL, copy it. If it doesn't but the finding clearly targets a known endpoint per the description (e.g. "password change form" → "/account/changepassword"), infer it. Null only if there's no defensible URL.
-- "frameworks": compliance framework references that this finding maps to. PULL FROM source data when mentioned (e.g. "NIST 800-63B's 64-char minimum" in the scan notes → ["NIST 800-63B"]). ALSO add reasonable inferences from the well-known mappings: password requirements → "NIST 800-63B"; access control → "NIST CSF PR.AC", "ISO 27001 A.9", "SOC 2 CC6.1"; encryption-in-transit → "NIST CSF PR.DS-2", "PCI DSS 4.1"; logging → "NIST CSF DE.AE", "ISO 27001 A.12.4"; vulnerability mgmt → "NIST CSF DE.CM-8", "PCI DSS 11.3.1". Output the framework identifier in the form Command actually uses (e.g. "NIST 800-63B", "NIST CSF PR.AC-1", "ISO 27001 A.9.4.3", "SOC 2 CC6.1", "HIPAA §164.308(a)(5)(ii)(D)", "PCI DSS 8.3.6"). Empty array if you can't map.
+- "frameworks": compliance framework references that this finding maps to. **YOU MUST emit BOTH explicit source-data mentions AND inferred mappings — not just one.** For Command Companies, the frameworks that always need consideration are: NIST 800-63B (auth/passwords), NIST CSF (any control), ISO 27001 (any control), SOC 2 (any control). HIPAA and PCI DSS only when health data or payment data is involved. **Default expectation: 2–4 framework chips per finding.** Output the framework identifier in the form Command actually uses, with the specific clause/control reference when applicable (e.g. "NIST 800-63B" not just "NIST"; "ISO 27001 A.9.4.3" not "ISO 27001"; "SOC 2 CC6.1" not "SOC 2"; "NIST CSF PR.AC-1" not "NIST CSF"; "HIPAA §164.308(a)(5)(ii)(D)" not "HIPAA"; "PCI DSS 8.3.6" not "PCI DSS"). Reference table for common inferences:
+    · Password/credential requirements → ALWAYS: NIST 800-63B, NIST CSF PR.AC-1, ISO 27001 A.9.4.3, SOC 2 CC6.1
+    · Access control/auth bypass → NIST CSF PR.AC, ISO 27001 A.9.1, SOC 2 CC6.1, NIST 800-53 AC-2
+    · Encryption in transit (TLS) → NIST CSF PR.DS-2, ISO 27001 A.10.1, SOC 2 CC6.7, PCI DSS 4.1
+    · Encryption at rest → NIST CSF PR.DS-1, ISO 27001 A.10.1, SOC 2 CC6.1
+    · Logging/audit → NIST CSF DE.AE, ISO 27001 A.12.4, SOC 2 CC7.2
+    · Vulnerability mgmt / patching → NIST CSF DE.CM-8, ISO 27001 A.12.6.1, SOC 2 CC7.1, PCI DSS 11.3.1
+    · Security headers (CSP/HSTS) → NIST CSF PR.PT-3, ISO 27001 A.14.1, SOC 2 CC6.6
+    · Input validation (XSS/SQLi/SSRF) → NIST CSF PR.IP-12, ISO 27001 A.14.2.5, OWASP ASVS V5
+    · Information disclosure → NIST CSF PR.DS, ISO 27001 A.13.2, SOC 2 CC6.7
+    · Insecure deserialization / RCE → NIST CSF PR.IP-12, ISO 27001 A.14.2.5, OWASP ASVS V5
+  Empty array ONLY when the finding truly doesn't map to any framework (extremely rare for any real finding).
 - "extraction_confidence": "high" if title+description+scan_excerpt all align and the CVE/version/component are explicit. "medium" if you had to infer one field from another. "low" if you guessed.
 
 OUTPUT FORMAT: a single JSON object, no surrounding prose, no markdown fences:
