@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  com.commandsentry.enrichment.plist — launchd template
+
+  Runs run_all_enrichment.sh nightly at 03:30 local time as a belt-and-
+  suspenders backstop in case ingest-rescan.sh wasn't called (manual finding
+  inserts, direct DB edits, sysadmin-on-vacation scenarios, etc.).
+
+  Install:
+    1. Copy this file to ~/Library/LaunchAgents/com.commandsentry.enrichment.plist
+    2. Edit ProgramArguments to use absolute paths (this template uses {{HOME}})
+    3. launchctl load ~/Library/LaunchAgents/com.commandsentry.enrichment.plist
+    4. launchctl start com.commandsentry.enrichment   # test it runs
+
+  Tail the log:
+    tail -f ~/Downloads/ISMS\ Procedures/COMMANDsentry/logs/enrichment-cron.log
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.commandsentry.enrichment.plist
+    rm ~/Library/LaunchAgents/com.commandsentry.enrichment.plist
+
+  Why 03:30: avoids NVD daytime traffic + leaves results visible by morning.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.commandsentry.enrichment</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>{{HOME}}/Downloads/ISMS Procedures/COMMANDsentry/scripts/normalize/run_all_enrichment.sh</string>
+        <string>--log-file</string>
+        <string>{{HOME}}/Downloads/ISMS Procedures/COMMANDsentry/logs/enrichment-cron.log</string>
+    </array>
+
+    <!-- 03:30 local time daily -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <!-- Capture stdout/stderr so we can debug if it ever silently fails -->
+    <key>StandardOutPath</key>
+    <string>{{HOME}}/Downloads/ISMS Procedures/COMMANDsentry/logs/enrichment-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{HOME}}/Downloads/ISMS Procedures/COMMANDsentry/logs/enrichment-stderr.log</string>
+
+    <!-- launchd should NOT keep the job alive if it exits — we want it to
+         run once on schedule, not loop forever. -->
+    <key>KeepAlive</key>
+    <false/>
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Working directory matters because run_all_enrichment.sh resolves
+         REPO_ROOT relative to itself, but the venv path resolution is
+         cleaner if cwd is the repo root. -->
+    <key>WorkingDirectory</key>
+    <string>{{HOME}}/Downloads/ISMS Procedures/COMMANDsentry</string>
+
+    <!-- The .env loader in each Python script reads from the repo root.
+         We don't need to pass anything through EnvironmentVariables. -->
+</dict>
+</plist>

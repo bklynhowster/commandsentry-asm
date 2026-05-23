@@ -36,12 +36,14 @@ WEB_DATA="${WEB_DATA:-$REPO_ROOT/web/data}"
 DRY_RUN=0
 SKIP_WALKER=0
 SKIP_NORMALIZE=0
+SKIP_ENRICHMENT=0
 
 for arg in "$@"; do
   case "$arg" in
-    --dry-run)      DRY_RUN=1 ;;
-    --no-walker)    SKIP_WALKER=1 ;;
-    --no-normalize) SKIP_NORMALIZE=1 ;;
+    --dry-run)        DRY_RUN=1 ;;
+    --no-walker)      SKIP_WALKER=1 ;;
+    --no-normalize)   SKIP_NORMALIZE=1 ;;
+    --no-enrichment)  SKIP_ENRICHMENT=1 ;;
     -h|--help)
       sed -n '2,/^set -uo/p' "$0" | sed -n '/^#/p' | sed 's/^# \{0,1\}//'
       exit 0
@@ -194,6 +196,35 @@ with psycopg.connect(os.environ["SUPABASE_DSN"], autocommit=True) as conn:
         else:
             print("\n  No findings touched. (Either nothing changed, or --dry-run was used.)")
 PY
+
+# ---------------------------------------------------------------------------
+# Post-ingest enrichment — runs synth + walker + populator + cve_enricher
+# automatically so the portal stays current without manual cron-running.
+# Idempotent: every script is a no-op on unchanged data.
+# Skip with --no-enrichment if you're iterating fast and don't want to
+# wait for NVD's rate-limited per-CVE lookups.
+# ---------------------------------------------------------------------------
+if [[ $SKIP_ENRICHMENT -eq 0 && $DRY_RUN -eq 0 ]]; then
+  echo
+  echo ">> [enrichment] running synth + walker + populator + cve_enricher..."
+  ENRICH_SCRIPT="$REPO_ROOT/scripts/normalize/run_all_enrichment.sh"
+  if [[ -x "$ENRICH_SCRIPT" ]]; then
+    "$ENRICH_SCRIPT" --log-file "$REPO_ROOT/logs/enrichment.log" || {
+      echo "  ! enrichment chain reported failure — see output above" >&2
+      # Don't bail the overall ingest — the findings are already written.
+      # Enrichment can be re-run any time.
+    }
+  else
+    echo "  ! enrichment script not found or not executable: $ENRICH_SCRIPT" >&2
+    echo "    chmod +x and re-run, or pass --no-enrichment to skip" >&2
+  fi
+elif [[ $DRY_RUN -eq 1 ]]; then
+  echo
+  echo ">> [enrichment] SKIPPED (--dry-run)"
+elif [[ $SKIP_ENRICHMENT -eq 1 ]]; then
+  echo
+  echo ">> [enrichment] SKIPPED (--no-enrichment)"
+fi
 
 echo
 echo "============================================================"
