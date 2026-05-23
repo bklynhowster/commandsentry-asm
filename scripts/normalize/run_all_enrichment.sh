@@ -36,7 +36,12 @@ SKIP_SYNTH=0
 SKIP_WALKER=0
 SKIP_POPULATOR=0
 SKIP_CVE=0
-SEVERITY_FILTER=""
+# Default severity filter — only synthesize the meaningful-severity findings.
+# Most thin findings in the DB are testssl INFO/LOW entries that don't need
+# AI synth at all. Override with --severity-only or pass --severity-only ""
+# (literal empty) to run on every severity.
+SEVERITY_FILTER="CRITICAL HIGH MODERATE-HIGH MODERATE"
+SYNTH_LIMIT=100
 LOG_FILE=""
 
 while [[ $# -gt 0 ]]; do
@@ -88,9 +93,13 @@ echo
 # ---------------------------------------------------------------------------
 if [[ $SKIP_SYNTH -eq 0 ]]; then
   echo ">> [1/4] $(ts)  synthesize_finding_descriptions.py"
-  SYNTH_ARGS=(--limit 200)
+  SYNTH_ARGS=(--limit "$SYNTH_LIMIT")
   if [[ -n "$SEVERITY_FILTER" ]]; then
+    # shellcheck disable=SC2086
     SYNTH_ARGS+=(--severity $SEVERITY_FILTER)
+    echo "    (severity filter: $SEVERITY_FILTER · limit: $SYNTH_LIMIT)"
+  else
+    echo "    (no severity filter · limit: $SYNTH_LIMIT)"
   fi
   if "$VENV_PYTHON" scripts/backfill/synthesize_finding_descriptions.py "${SYNTH_ARGS[@]}"; then
     STATUS_SYNTH="ok"
