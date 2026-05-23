@@ -421,6 +421,64 @@ def extract_keywords_from_title(title: str) -> list[str]:
     return out
 
 
+def parse_testssl_json_excerpt(raw: str) -> dict:
+    """
+    Parse a testssl.sh JSON record. Shape:
+
+      {"id": "DROWN_hint", "ip": "host/1.2.3.4", "port": "443",
+       "severity": "INFO", "cve": "CVE-2016-0800 CVE-2016-0703",
+       "cwe": "CWE-310", "finding": "..."}
+
+    `cve` is a SPACE-SEPARATED string, not an array. `cwe` is a single string
+    in "CWE-N" form. Both fields are optional.
+
+    Returns dict of fields to merge (cve list, cwe list, port int) — only
+    the ones that were present and non-empty.
+    """
+    import json as _json
+    raw = (raw or "").strip()
+    if not raw or not raw.startswith("{"):
+        return {}
+    try:
+        obj = _json.loads(raw)
+    except (_json.JSONDecodeError, ValueError):
+        return {}
+    if not isinstance(obj, dict):
+        return {}
+    # Shape check — testssl records always have these
+    if not ({"id", "severity", "finding"} <= set(obj.keys())):
+        return {}
+
+    out: dict = {}
+
+    # CVE — split space-separated string, normalize
+    if obj.get("cve"):
+        cves: list[str] = []
+        for c in str(obj["cve"]).split():
+            s = c.strip().upper()
+            if re.match(r"CVE-\d{4}-\d+", s):
+                cves.append(s)
+        if cves:
+            out["cve"] = sorted(set(cves))
+
+    # CWE — single "CWE-NNN" or sometimes "CWE-NNN CWE-MMM"
+    if obj.get("cwe"):
+        cwes: list[int] = []
+        for m in re.finditer(r"CWE-?(\d+)", str(obj["cwe"]), re.I):
+            cwes.append(int(m.group(1)))
+        if cwes:
+            out["cwe"] = sorted(set(cwes))
+
+    # Port — populate if numeric
+    if obj.get("port"):
+        try:
+            out["port"] = int(obj["port"])
+        except (TypeError, ValueError):
+            pass
+
+    return out
+
+
 def parse_nuclei_json_excerpt(raw: str) -> dict:
     """
     Some findings have their full nuclei JSON record stored in
@@ -529,6 +587,21 @@ def enrichment_for_finding(finding: dict, idx: ArtifactIndex) -> dict:
     # ──────────────────────────────────────────────────────────────────────
     excerpt = (finding.get("_latest_excerpt") or "").strip()
     if excerpt:
+        # ── testssl.sh shape: lightweight CVE + CWE + port extraction
+        # This is the dominant JSON shape on TLS-heavy findings.
+        ts = parse_testssl_json_excerpt(excerpt)
+        if ts.get("cve"):
+            prior_cve = finding.get("cve") or []
+            merged = sorted({*prior_cve, *ts["cve"]})
+            if merged != prior_cve:
+                out["cve"] = merged
+        if ts.get("cwe"):
+            prior_cwe = finding.get("cwe") or []
+            merged = sorted({*prior_cwe, *ts["cwe"]})
+            if merged != prior_cwe:
+                out["cwe"] = merged
+
+        # ── nuclei shape: rich extraction (CVSS vector, EPSS, matched URL, etc.)
         nuc = parse_nuclei_json_excerpt(excerpt)
         if nuc.get("cvss_score") is not None and finding.get("cvss_score") is None:
             out["cvss_score"] = nuc["cvss_score"]
