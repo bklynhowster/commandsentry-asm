@@ -153,7 +153,18 @@ TOOL_FINGERPRINTS = [
     {"tool": "nmap",           "files": ["nmap_full.txt", "nmap_quick.txt", "nmap.txt"],                 "output_format": "text",  "parser": "nmap"},
     {"tool": "nmap_xml",       "files": ["nmap.xml", "nmap_full.xml"],                                   "output_format": "xml",   "parser": "nmap_xml"},
     {"tool": "nikto",          "files": ["nikto_results.txt", "nikto.txt", "nikto.txt.txt", "nikto_results.txt.txt", "nikto-unauth.txt", "nikto-unauth.txt.txt", "nikto_auth.txt", "nikto_auth.txt.txt"], "output_format": "text", "parser": "nikto"},
-    {"tool": "wpscan",         "files": ["wpscan.txt", "wpscan_v2.txt"],                                 "output_format": "text",  "parser": "wpscan"},
+    # wpscan-with-cves.txt is the API-token-enriched variant. List it FIRST so
+    # it's the preferred match when both files exist (intensive-scan emits both,
+    # but the bare wpscan.txt has 0 CVEs).
+    {"tool": "wpscan",         "files": ["wpscan-with-cves.txt", "wpscan_with_cves.txt", "wpscan.txt", "wpscan_v2.txt"], "output_format": "text",  "parser": "wpscan"},
+    # wpvulnerability.net per-plugin status JSONs (phase02 of intensive scans).
+    # One file per plugin; carries already-cross-referenced VULNERABLE/PATCHED
+    # status against the installed version. Highest-value parser for
+    # intensive scans.
+    {"tool": "wpvuln",         "files": ["wpvuln-*.json"],                                               "output_format": "json",  "parser": "wpvuln_json"},
+    # Backup/config-file sweep table (phase04 of intensive scans). Emits an
+    # info-disclosure finding for any 2xx response on a sensitive path.
+    {"tool": "probe_results",  "files": ["probe-results.txt"],                                           "output_format": "text",  "parser": "probe_results"},
     {"tool": "feroxbuster",    "files": ["feroxbuster.txt", "feroxbuster-unauth.txt"],                   "output_format": "text",  "parser": "feroxbuster"},
     {"tool": "whatweb",        "files": ["whatweb.txt"],                                                 "output_format": "text",  "parser": "whatweb"},
     {"tool": "headers",        "files": ["headers.txt"],                                                 "output_format": "text",  "parser": "headers"},
