@@ -244,14 +244,28 @@ class FindingInput:
 
 # ─── DB access ──────────────────────────────────────────────────────────────
 def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, force: bool):
-    """Return list of FindingInput. Filters thin-description findings unless --force."""
+    """Return list of FindingInput.
+
+    Picks findings that need synth work. A finding qualifies if ANY of:
+      - description is thin/citation-only (the original criterion)
+      - impact column is NULL (Phase F's "WHAT COULD IT DO?" missing)
+      - remediation column is NULL (Phase F's "HOW DO I FIX IT?" missing)
+
+    The impact/remediation case was added 2026-05-24 after the new
+    wpvuln_json and probe_results parsers shipped — those write a full
+    description directly at parse time, which made the old is_thin filter
+    skip them entirely, leaving §2/§3 blank on the portal indefinitely
+    unless an operator ran --force manually. The expanded filter lets the
+    auto-enrichment chain catch these gaps without intervention.
+    """
     q = (
         sb.table("findings")
         .select(
             "finding_id, title, severity, asset_id, description, cve, cwe, category, source, "
             "tags, cvss_score, affected_component, affected_component_version, "
             "matched_url, frameworks, "
-            'description_synth, description_source, description_synth_input_hash, "references"'
+            'description_synth, description_source, description_synth_input_hash, '
+            'impact, remediation, "references"'
         )
     )
     if finding_id:
@@ -277,11 +291,22 @@ def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, for
 
     out: list[FindingInput] = []
     for r in rows:
-        # Skip if already synthesized unless --force
-        if not force and r.get("description_synth") and r.get("description_source") in {
-            "ai_synthesized", "ai_synthesized_reviewed", "manual"
-        }:
-            continue
+        # Skip only if FULLY synthesized — all three Phase F sections present
+        # AND description_source attests to that provenance. Previously this
+        # skipped on description_synth alone, which made findings with a
+        # parser-written description (wpvuln_json, probe_results) get skipped
+        # even though their impact/remediation were still NULL.
+        if not force:
+            fully_synthesized = (
+                r.get("description_synth")
+                and r.get("impact")
+                and r.get("remediation")
+                and r.get("description_source") in {
+                    "ai_synthesized", "ai_synthesized_reviewed", "manual"
+                }
+            )
+            if fully_synthesized:
+                continue
 
         # Best history excerpt — pick by score (section markers + length)
         hist = (
@@ -317,7 +342,13 @@ def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, for
             cvss=cvss,
             existing_row=r,
         )
-        if force or finding.is_thin:
+        # Include if forcing, thin description, OR any Phase F section missing.
+        # The impact/remediation check is the key 2026-05-24 addition: it lets
+        # findings authored by parsers (wpvuln_json, probe_results) that ship
+        # with a complete description but no impact/remediation get picked up
+        # by the auto-enrichment chain instead of requiring --force.
+        missing_impact_or_remediation = not r.get("impact") or not r.get("remediation")
+        if force or finding.is_thin or missing_impact_or_remediation:
             out.append(finding)
 
     return out
