@@ -165,10 +165,17 @@ def parse_wpvuln_file(
                 finding_id=stable_finding_id(asset_id, "wpvulnerability", template_id, matched_at),
                 asset_id=asset_id,
                 scan_id=scan_id,
-                source="wpvulnerability.net",
+                # source/category must match the DB enums (finding_source_t /
+                # finding_category_t). wpvulnerability.net is functionally
+                # equivalent to a WPScan+API-token run (both cross-reference
+                # plugin versions against a CVE DB) — using `wpscan` keeps
+                # provenance honest within the current enum vocabulary.
+                # `sca` (Software Composition Analysis) is the correct
+                # category — that's exactly what this is.
+                source="wpscan",
                 title=title,
                 severity=severity,
-                category="wordpress_plugin_vulnerability",
+                category="sca",
                 observed_at=observed_at,
                 matched_at=matched_at,
                 description=description,

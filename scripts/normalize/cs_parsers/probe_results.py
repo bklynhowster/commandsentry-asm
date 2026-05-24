@@ -73,52 +73,59 @@ def _classify(path: str, size_bytes: int) -> tuple[str, str, str]:
     """
     Return (severity, category, reason) for a 2xx-returning path.
     `reason` becomes the human-readable finding title segment.
+
+    NOTE: `category` MUST be one of the values in the DB's
+    `finding_category_t` enum (sast/dast/sca/secret/recon/tls/headers/dns/
+    email/auth/session/csrf/ssrf/xxe/xss/sqli/idor/rce/lfi/redirect/
+    info_disclosure/takeover/typosquat/config/deprecation/supply_chain/
+    other). We map our detailed semantic categories onto this vocabulary;
+    the human-readable `reason` carries the specifics into the title.
     """
     p = path.lower()
 
     # Disaster tier — sensitive files NEVER want to be reachable
     if any(p.startswith(x) for x in ("/.git/", "/.svn/", "/.hg/")):
-        return ("CRITICAL", "source_control_exposure", "VCS metadata exposed")
+        return ("CRITICAL", "secret", "VCS metadata exposed")
     if p in ("/.env", "/.env.bak", "/.env.local", "/.env.production"):
-        return ("CRITICAL", "credentials_exposure", ".env file exposed")
+        return ("CRITICAL", "secret", ".env file exposed")
     if p.startswith("/wp-config.php") and size_bytes > 100:
-        return ("CRITICAL", "credentials_exposure", "wp-config.php content exposed")
+        return ("CRITICAL", "secret", "wp-config.php content exposed")
     if p in ("/db.sql", "/database.sql", "/backup.sql"):
-        return ("CRITICAL", "database_dump_exposed", "Database dump exposed")
+        return ("CRITICAL", "secret", "Database dump exposed")
 
     # PHP info / test endpoints
     if p in ("/phpinfo.php", "/info.php", "/test.php") and size_bytes > 500:
-        return ("HIGH", "php_info_exposure", "PHP info page exposed")
+        return ("HIGH", "info_disclosure", "PHP info page exposed")
 
     # WP admin endpoints — exposed but not necessarily exploitable
     if p == "/wp-admin/install.php":
-        return ("MODERATE", "wp_install_exposed", "WordPress install page exposed")
+        return ("MODERATE", "config", "WordPress install page exposed")
     if p == "/wp-admin/upgrade.php":
-        return ("MODERATE", "wp_upgrade_exposed", "WordPress upgrade page exposed")
+        return ("MODERATE", "config", "WordPress upgrade page exposed")
 
     # Backup files actually returning content
     if any(p.endswith(x) for x in (".zip", ".tar", ".tar.gz", ".sql.gz")) and size_bytes > 1024:
-        return ("HIGH", "backup_file_exposed", "Backup archive accessible")
+        return ("HIGH", "secret", "Backup archive accessible")
     if p == "/wp-content/debug.log" and size_bytes > 100:
-        return ("HIGH", "debug_log_exposed", "WordPress debug log exposed")
+        return ("HIGH", "info_disclosure", "WordPress debug log exposed")
 
     # Fingerprint / info disclosure
     if p == "/readme.html":
-        return ("INFO", "version_disclosure", "WordPress readme.html exposed")
+        return ("INFO", "info_disclosure", "WordPress readme.html exposed")
     if p == "/license.txt":
-        return ("INFO", "version_disclosure", "WordPress license.txt exposed")
+        return ("INFO", "info_disclosure", "WordPress license.txt exposed")
     if p == "/wp-config-sample.php":
-        return ("LOW", "config_sample_exposed", "wp-config-sample.php exposed")
+        return ("LOW", "config", "wp-config-sample.php exposed")
     if "/.ds_store" in p:
-        return ("LOW", "metadata_exposure", ".DS_Store exposed")
+        return ("LOW", "info_disclosure", ".DS_Store exposed")
 
     # Plugin/theme directory listings — Apache "Index of" pages
     if p.startswith("/wp-content/plugins/") or p.startswith("/wp-content/themes/"):
-        return ("LOW", "directory_listing", "Plugin/theme directory listing")
+        return ("LOW", "info_disclosure", "Plugin/theme directory listing")
     if p.startswith("/wp-content/mu-plugins/"):
-        return ("LOW", "directory_listing", "MU-plugins directory listing")
+        return ("LOW", "info_disclosure", "MU-plugins directory listing")
 
-    return ("LOW", "information_disclosure", f"Sensitive path returned 2xx: {path}")
+    return ("LOW", "info_disclosure", f"Sensitive path returned 2xx: {path}")
 
 
 def parse_probe_results_file(
@@ -177,7 +184,10 @@ def parse_probe_results_file(
                 finding_id=stable_finding_id(asset_id, "probe_results", template_id, matched_at),
                 asset_id=asset_id,
                 scan_id=scan_id,
-                source="probe_results",
+                # source must match finding_source_t enum. `other` is the
+                # honest fit for a curl-based path probe sweep — it's not
+                # produced by any of the named tools in the enum.
+                source="other",
                 title=title,
                 severity=severity,
                 category=category,
