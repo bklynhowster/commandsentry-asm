@@ -174,41 +174,21 @@ def parse_wpscan_file(
         body = "\n".join(body_lines)
 
         # ─── CVE-style finding ─────────────────────────────────────────
+        # DISABLED 2026-05-24. WPScan lists every CVE the plugin has EVER had,
+        # including ones the installed version has already patched. Emitting
+        # those creates noise findings that never close (e.g. wp-smushit 4.0.3
+        # was flagged with CVE-2023-3352 even though that's fixed in 3.16.5).
+        #
+        # The wpvuln_json parser is now the single source of truth for plugin
+        # CVE findings — it cross-references against installed_version via
+        # wpvulnerability.net's `status: VULNERABLE | PATCHED` field, so only
+        # currently-applicable CVEs are emitted.
+        #
+        # WPScan still emits non-CVE findings below (XML-RPC, readme exposure,
+        # directory listings, user enumeration, outdated-version warnings).
         cve_inline = CVE_INLINE_RE.findall(section_title + " " + body)
         if cve_inline:
-            for year, num in cve_inline:
-                cve_id = f"CVE-{year}-{num}"
-                matched_at = target_url or ""
-                # Try to find a URL in the body for matched_at
-                url_in_body = URL_RE.search(body)
-                if url_in_body:
-                    matched_at = url_in_body.group(0)
-
-                fid = stable_finding_id(event_asset_id, "wpscan", cve_id, matched_at)
-                if fid in seen_finding_ids:
-                    continue
-                seen_finding_ids.add(fid)
-                severity = _severity_for_cve_block(section_title + " " + body)
-                events.append(FindingEvent(
-                    finding_id=fid,
-                    asset_id=event_asset_id,
-                    scan_id=scan_id,
-                    source="wpscan",
-                    title=f"{cve_id}: {section_title[:120]}",
-                    severity=severity,
-                    category="supply_chain",
-                    observed_at=observed_at,
-                    matched_at=matched_at,
-                    description=(section_title + "\n" + body)[:1500],
-                    cve=[cve_id],
-                    cwe=[],
-                    references=URL_RE.findall(body)[:5],
-                    raw_excerpt=(line + "\n" + body)[:2000],
-                    evidence_paths=[rel_evidence],
-                    subdomain=target_sub,
-                    port=443,
-                    protocol="https",
-                ))
+            # Skip — wpvuln_json owns this now.
             i = j
             continue
 

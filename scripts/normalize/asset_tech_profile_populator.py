@@ -275,7 +275,14 @@ def main():
             print(f"  (dry-run — not writing)")
             continue
 
-        sources = sorted({"nuclei", "plugin_versions"})
+        # Surface wpvuln in the sources list when wpvulnerability.net data
+        # contributed an installed_version for at least one plugin. That
+        # signal is what feeds the asset preview's Stack tile "Sources"
+        # line ("nuclei, plugin_versions, wpvuln").
+        source_set = {"nuclei", "plugin_versions"}
+        if any(p.source == "wpvulnerability.net" for p in idx.plugins):
+            source_set.add("wpvuln")
+        sources = sorted(source_set)
         sb.table("assets").update({
             "tech_profile": new_profile,
             "tech_profile_updated_at": datetime.now(timezone.utc).isoformat(),

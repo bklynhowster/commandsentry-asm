@@ -44,6 +44,7 @@ Environment:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -323,10 +324,85 @@ def parse_nuclei(path: Path) -> tuple[list[PluginRecord], Optional[str], Optiona
     return list(plugins.values()), wp_version, waf, tags
 
 
+def parse_wpvuln_jsons(target_folder: Path) -> list[PluginRecord]:
+    """Parse all wpvuln-<slug>.json files found anywhere under the target.
+
+    These files are produced by intensive-scan-*.sh at
+    `phase02-versions/wpvuln-<slug>.json` and contain the
+    wpvulnerability.net response for that plugin including
+    `installed_version`. That's the most-authoritative version source
+    we have — it's what the scanner actually detected on disk at the
+    plugin's readme/changelog endpoint, not a cachebuster `?ver=` query
+    string.
+
+    Search strategy: `target_folder` is usually a specific scan-run dir
+    (e.g. commandmarketinginnovations/www-deep). Intensive-scan wpvuln
+    files live in a SIBLING dir under the same target parent (e.g.
+    commandmarketinginnovations/intensive-scan-2026-05-23/phase02-versions/).
+    We rglob from the target_folder first; if nothing found, walk up one
+    level to the target parent and rglob across all sibling scan-runs.
+
+    If multiple intensive scans exist under the same target, the most
+    recent file (by mtime) wins per plugin slug.
+    """
+    by_slug: dict[str, tuple[float, PluginRecord]] = {}
+
+    # Search under the passed folder first; if nothing turns up, expand to
+    # the target parent so we pick up sibling intensive-scan-* dirs.
+    search_roots = [target_folder]
+    parent = target_folder.parent
+    if parent != target_folder and parent.exists():
+        search_roots.append(parent)
+
+    for root in search_roots:
+        for fp in root.rglob("wpvuln-*.json"):
+            if not fp.is_file():
+                continue
+            try:
+                data = json.loads(fp.read_text(encoding="utf-8", errors="replace"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            if data.get("type") != "plugin":
+                continue
+            slug = data.get("slug")
+            if not slug:
+                continue
+            installed = data.get("installed_version")
+            if not installed:
+                continue
+            mtime = fp.stat().st_mtime
+            slug_key = normalize_slug(slug)
+            cur = by_slug.get(slug_key)
+            if cur is None or mtime > cur[0]:
+                by_slug[slug_key] = (
+                    mtime,
+                    PluginRecord(
+                        slug=slug,
+                        version=str(installed),
+                        matched_url=None,
+                        source="wpvulnerability.net",
+                    ),
+                )
+        # If we found wpvuln files at this level, don't bother with the
+        # broader parent search — first hit wins.
+        if by_slug:
+            break
+    return [rec for _, rec in by_slug.values()]
+
+
 def merge_plugins(*lists: list[PluginRecord]) -> list[PluginRecord]:
-    """Merge plugin records from multiple sources. plugin_versions.txt (most
-    authoritative for version) wins on version conflicts; nuclei wins on
-    matched_url."""
+    """Merge plugin records from multiple sources.
+
+    Version-authoritativeness ordering (highest first):
+      1. wpvulnerability.net (`installed_version` from the API response —
+         scanner actually fetched the plugin file and matched the hash)
+      2. plugin_versions.txt (homepage-fallback explicit pinning)
+      3. nuclei / homepage cachebuster `?ver=` (least reliable)
+
+    nuclei still wins on matched_url since wpvuln doesn't carry URLs.
+    """
     by_slug: dict[str, PluginRecord] = {}
     for lst in lists:
         for p in lst:
@@ -337,9 +413,16 @@ def merge_plugins(*lists: list[PluginRecord]) -> list[PluginRecord]:
                 )
                 continue
             cur = by_slug[slug_key]
-            # plugin_versions.txt is the authoritative version source
-            if p.version and p.source == "plugin_versions.txt":
+            # wpvulnerability.net is the MOST authoritative version source.
+            # It overrides anything previously set.
+            if p.version and p.source == "wpvulnerability.net":
                 cur.version = p.version
+                cur.source = p.source
+            # plugin_versions.txt is next — only overrides if current source
+            # isn't already wpvulnerability.net.
+            elif p.version and p.source == "plugin_versions.txt" and cur.source != "wpvulnerability.net":
+                cur.version = p.version
+                cur.source = p.source
             elif p.version and not cur.version:
                 cur.version = p.version
             if p.matched_url and not cur.matched_url:
@@ -351,16 +434,22 @@ def build_index(folder: Path, asset_id: str) -> ArtifactIndex:
     """Build a single target's artifact index from all parseable scan files."""
     idx = ArtifactIndex(target_folder=folder, asset_id=asset_id)
 
-    # plugin_versions.txt — best version source
+    # plugin_versions.txt — explicit pinning (legacy flat layout)
     pv_records = parse_plugin_versions(folder / "plugin_versions.txt")
 
     # nuclei_results.txt — plugin slugs, matched URLs, WP version, WAF, tech tags
     nuc_records, wp_version, waf, tags = parse_nuclei(folder / "nuclei_results.txt")
 
+    # wpvuln JSONs (phase02 of intensive scans) — authoritative installed_version
+    wpv_records = parse_wpvuln_jsons(folder)
+
     idx.wp_version = wp_version
     idx.waf = waf
     idx.extra_tags.update(tags)
-    idx.plugins = merge_plugins(pv_records, nuc_records)
+    # Merge order matters when both sources have versions; merge_plugins'
+    # priority logic uses the `source` field, so the list order here is
+    # informational only.
+    idx.plugins = merge_plugins(pv_records, nuc_records, wpv_records)
 
     return idx
 
