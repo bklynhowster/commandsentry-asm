@@ -19,8 +19,15 @@ Two grouping considerations:
 2. Severity mapping (testssl → canonical):
      CRITICAL → CRITICAL    HIGH    → HIGH
      MEDIUM   → MODERATE    LOW     → LOW
-     INFO     → INFO        WARN    → drop (scan-tool warnings, not findings)
+     WARN     → drop (scan-tool warnings, not findings)
      OK       → drop (positive results, not findings)
+     INFO     → drop (2026-05-24: 91% of testssl emissions are INFO and
+                they're 100% metadata noise — ALPN, banner_server, cert
+                fingerprints, browser-compat simulation lists, cipher
+                orderings, TLS extensions, etc. None are actionable.
+                The cipher_strength scorecard, certificate metadata,
+                and protocol-detail records carry zero security value
+                vs the LOW+ records that flag actual issues.)
 """
 
 from __future__ import annotations
@@ -50,8 +57,14 @@ SEVERITY_MAP = {
     "LOW":      "LOW",
     "INFO":     "INFO",
 }
-# Severities we drop entirely (not actionable findings):
-SKIP_SEVERITIES = {"WARN", "OK", "DEBUG"}
+# Severities we drop entirely (not actionable findings).
+# INFO was added 2026-05-24: testssl's INFO bucket is all metadata
+# (certificate fingerprints, ALPN, banner strings, browser-compat
+# simulation, cipher orderings, etc.) — 91% of testssl's emission
+# volume with zero security signal. The actual TLS findings worth
+# surfacing all come in at LOW or higher (TLS1.0/1.1 offered, weak
+# ciphers, missing HSTS, BREACH/LUCKY13, etc.).
+SKIP_SEVERITIES = {"WARN", "OK", "DEBUG", "INFO"}
 
 # Pure scorecard / meta IDs — these are NOT findings. They're testssl
 # tool-meta output (overall_grade is the letter grade DERIVED from other
