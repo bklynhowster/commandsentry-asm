@@ -820,9 +820,20 @@ def enrichment_for_finding(finding: dict, idx: ArtifactIndex) -> dict:
 
     plugin = idx.find_plugin(*keywords)
     if plugin:
-        if not finding.get("affected_component"):
+        # wpvulnerability.net is authoritative — overwrite stale values
+        # rather than the default "only fill if NULL" merge. Without this,
+        # affected_component_version gets frozen at the version observed
+        # when the finding was first created (e.g. revslider 6.7.41) and
+        # never updates when the plugin is upgraded (to 6.7.54), so the
+        # finding detail page renders three different versions for the
+        # same plugin. Caught by Howie 2026-05-24 on CVE-2026-6692.
+        wpvuln_authoritative = plugin.source == "wpvulnerability.net"
+
+        if wpvuln_authoritative or not finding.get("affected_component"):
             out["affected_component"] = display_name_for(plugin.slug)
-        if not finding.get("affected_component_version") and plugin.version:
+        if plugin.version and (
+            wpvuln_authoritative or not finding.get("affected_component_version")
+        ):
             out["affected_component_version"] = plugin.version
         if not finding.get("matched_url") and plugin.matched_url:
             out["matched_url"] = plugin.matched_url
