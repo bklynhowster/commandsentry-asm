@@ -65,6 +65,35 @@ from .common import (
 CWE_RE = re.compile(r"cwe-(\d+)", re.IGNORECASE)
 
 
+# Noise templates — see nuclei_text.NOISE_TEMPLATE_PATTERNS for the full
+# rationale. Same denylist applied here so the JSONL parser drops the same
+# tech-fingerprinting / bare-presence detections. Matching is against the
+# BASE template-id (text before the first colon), so both `tech-detect`
+# and `tech-detect:cloudflare` map to the same `tech-detect` entry.
+NOISE_TEMPLATE_PATTERNS: set[str] = {
+    # Tech fingerprinting
+    "tech-detect",
+    "wordpress-plugin-detect",
+    "wordpress-passive-detection",
+    "wordpress-theme-detect",
+    "wordpress-detect",
+    "waf-detect",
+    # Bare-presence detections
+    "wordpress-login",
+    "wp-license-file",
+    "wp-links-opml",
+    "form-detection",
+    "robots-txt",
+    "robots-txt-endpoint",
+    "old-copyright",
+    "ssl-issuer",
+    "ssl-dns-names",
+    "tls-version",
+    "google-floc-disabled",
+    "missing-sri",
+}
+
+
 def _parse_cwe_list(values) -> list[int]:
     if not values:
         return []
@@ -127,6 +156,13 @@ def parse_jsonl_file(
 
         template_id = rec.get("template-id") or rec.get("templateID") or ""
         if not template_id:
+            continue
+
+        # Skip noise templates before doing the rest of the parse work.
+        # Strip any sub-matcher (`tech-detect:cloudflare` → `tech-detect`)
+        # so the denylist hits both the bare and qualified forms.
+        base_template = template_id.split(":", 1)[0]
+        if base_template in NOISE_TEMPLATE_PATTERNS:
             continue
 
         info = rec.get("info") or {}

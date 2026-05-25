@@ -56,6 +56,49 @@ LINE_RE = re.compile(
     r"(?P<tail>.*)$"
 )
 
+# Noise templates — pure tech-fingerprinting / bare-presence detections that
+# nuclei emits at INFO severity with no CVE attached. They flood the asset
+# detail page with "Elementor is here, Cloudflare is here, FontAwesome is
+# here" rows that the Technology Profile card already covers.
+#
+# Investigation 2026-05-25 (Pattern 3 dedup query) — these accounted for
+# ~12 of the 17 duplicate findings on the fleet. Each was multiple INFO
+# rows for the same component, no security signal in any of them.
+#
+# Same fix shape as testssl.py's SKIP_SEVERITIES = {INFO} drop on 5/24.
+# This is more targeted: we keep nuclei INFO findings that ARE useful
+# (http-missing-security-headers:*, missing-cookie-samesite-strict, the
+# wordpress-*:outdated_version family that flags stale plugins, etc.)
+# and only drop the bare-presence templates that carry no signal.
+#
+# Matching: we check the BASE template-id (the part before `:`), so
+# `tech-detect:cloudflare` and `tech-detect:font-awesome` both get caught
+# by the single `tech-detect` entry.
+NOISE_TEMPLATE_PATTERNS: set[str] = {
+    # Tech fingerprinting — identifies what's running, no security signal
+    "tech-detect",
+    "wordpress-plugin-detect",
+    "wordpress-passive-detection",
+    "wordpress-theme-detect",
+    "wordpress-detect",
+    "waf-detect",
+    # Bare-presence detections — just say "this exists"
+    "wordpress-login",
+    "wp-license-file",
+    "wp-links-opml",
+    "form-detection",
+    "robots-txt",
+    "robots-txt-endpoint",
+    "old-copyright",
+    "ssl-issuer",
+    "ssl-dns-names",
+    "tls-version",
+    "google-floc-disabled",
+    # Subresource integrity — emits one row per third-party JS/CSS;
+    # floods the asset page with marginal-signal findings.
+    "missing-sri",
+}
+
 # Tail bracket parts like ["value1","value2"] or [key="value"]
 TAIL_BRACKET_RE = re.compile(r'\[([^\]]+)\]')
 
@@ -116,6 +159,13 @@ def parse_text_file(
 
         tpl = m.group("tpl").strip()
         sub = (m.group("sub") or "").strip()
+
+        # Skip pure tech-fingerprinting / bare-presence templates before
+        # doing any further parsing — saves time and stops these from ever
+        # becoming FindingEvents that the rollup has to manage.
+        if tpl in NOISE_TEMPLATE_PATTERNS:
+            continue
+
         sev_raw = m.group("sev").strip()
         url = m.group("url").strip()
         tail = m.group("tail") or ""
