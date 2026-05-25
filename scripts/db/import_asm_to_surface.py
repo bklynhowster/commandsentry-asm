@@ -80,29 +80,56 @@ def derive_portal_asset_id(asm_doc: dict) -> str | None:
 
 
 def derive_asset_type(asm_doc: dict) -> str:
-    """Legacy ASM types: ip / apex / fqdn / cidr / asn — same as portal."""
+    """Map legacy ASM type values to portal asset_type_t enum.
+
+    Legacy ASM uses:  ip | apex | fqdn | cidr | asn
+    Portal enum:      ip | apex_domain | single_host | ip_range | ...
+
+    Anything we don't recognize defaults to 'single_host' (the catch-all
+    for a named host that isn't an apex).
+    """
     asset = asm_doc.get("asset") or {}
-    return (asset.get("type") or "fqdn").lower()
+    raw = (asset.get("type") or "").strip().lower()
+    mapping = {
+        "ip":   "ip",
+        "apex": "apex_domain",
+        "fqdn": "single_host",
+        "cidr": "ip_range",
+        "asn":  "ip_range",
+    }
+    return mapping.get(raw, "single_host")
 
 
 def derive_organization(asm_doc: dict) -> str:
-    """Legacy ASM has free-form 'owner' (often 'unknown'). Map to portal org."""
+    """Map legacy ASM 'owner' (free-form) to portal organization_t enum.
+
+    Portal enum values are LOWERCASE:
+      command_companies | command_digital | command_financial |
+      command_missouri  | command_marketing | unimac | sci | unknown
+
+    Unknown/missing → 'unknown' (the enum's catch-all).
+    """
     asset = asm_doc.get("asset") or {}
     owner = (asset.get("owner") or "").strip().lower()
     if not owner or owner in ("unknown", ""):
-        return "UNKNOWN"
-    # Common mappings — extend as patterns emerge in the data.
+        return "unknown"
     mapping = {
-        "command digital": "COMMAND_DIGITAL",
-        "command_digital": "COMMAND_DIGITAL",
-        "command companies": "COMMAND_COMPANIES",
-        "command marketing": "COMMAND_MARKETING",
-        "command financial": "COMMAND_FINANCIAL",
-        "command missouri": "COMMAND_MISSOURI",
-        "unimac": "UNIMAC",
-        "sci": "SCI",
+        "command digital":   "command_digital",
+        "command_digital":   "command_digital",
+        "command companies": "command_companies",
+        "command_companies": "command_companies",
+        "command marketing": "command_marketing",
+        "command_marketing": "command_marketing",
+        "command financial": "command_financial",
+        "command_financial": "command_financial",
+        "command missouri":  "command_missouri",
+        "command_missouri":  "command_missouri",
+        "unimac":            "unimac",
+        "sci":               "sci",
     }
-    return mapping.get(owner, owner.upper().replace(" ", "_"))
+    # Default to 'unknown' if the owner string doesn't match a known org —
+    # safer than inventing a new enum value that would fail the insert.
+    return mapping.get(owner, "unknown")
 
 
 # ---------------------------------------------------------------------------
