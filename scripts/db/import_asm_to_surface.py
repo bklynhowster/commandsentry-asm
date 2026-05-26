@@ -355,6 +355,270 @@ INSERT INTO public.asset_surface_event (
 
 
 # ---------------------------------------------------------------------------
+# Notification fan-out — fire Resend emails to users subscribed to ASM
+# events at real_time cadence. Daily/weekly digests are out-of-scope here.
+# ---------------------------------------------------------------------------
+# Event-type → preference-key mapping. The portal's notification-prefs
+# vocabulary uses slightly different names than our event log:
+#   port_opened       → checks asm_prefs.new_port_opened
+#   port_closed       → checks asm_prefs.port_closed
+#   asset_first_seen  → checks asm_prefs.new_asset_discovered
+EVENT_TYPE_TO_PREF_KEY = {
+    "port_opened":      "new_port_opened",
+    "port_closed":      "port_closed",
+    "asset_first_seen": "new_asset_discovered",
+}
+
+RESEND_API_URL = "https://api.resend.com/emails"
+RESEND_FROM = "Command Companies — Information Security <commandsentry@alerts.goldenlaneinc.com>"
+
+FETCH_SUBSCRIBERS = """
+SELECT
+  p.user_id,
+  u.email,
+  p.asm_prefs
+FROM public.user_notification_prefs p
+JOIN auth.users u ON u.id = p.user_id
+WHERE
+  (p.asm_prefs -> 'new_port_opened'      ->> 'cadence' = 'real_time')
+  OR (p.asm_prefs -> 'port_closed'           ->> 'cadence' = 'real_time')
+  OR (p.asm_prefs -> 'new_asset_discovered'  ->> 'cadence' = 'real_time');
+"""
+
+
+def dispatch_event_notifications(
+    conn,
+    all_events: list[dict],
+    source_tag: str,
+) -> dict[str, int]:
+    """After all per-asset events have been inserted, fan out Resend emails.
+
+    Groups by (user_id, asset_id) so a single scan that flips many ports on
+    one host produces ONE summary email per subscriber, not N noisy ones.
+
+    Returns a small stats dict for the run summary line.
+    """
+    stats = {"subscribers": 0, "emails_sent": 0, "emails_failed": 0, "skipped_no_key": 0}
+
+    if not all_events:
+        return stats
+
+    api_key = os.environ.get("RESEND_API_KEY")
+    if not api_key:
+        # Not a failure — just nothing to send. Importer still committed
+        # the events to the table; the UI timeline will still render them.
+        # Email is a best-effort augmentation.
+        stats["skipped_no_key"] = 1
+        print("  ! RESEND_API_KEY not set — skipping notification fan-out", file=sys.stderr)
+        return stats
+
+    # Fetch subscribers once. Small table; cheap.
+    with conn.cursor() as cur:
+        cur.execute(FETCH_SUBSCRIBERS)
+        subscribers = cur.fetchall()
+
+    stats["subscribers"] = len(subscribers)
+    if not subscribers:
+        return stats
+
+    # Group events by asset_id for the per-(user, asset) email batching.
+    by_asset: dict[str, list[dict]] = {}
+    for ev in all_events:
+        by_asset.setdefault(ev["asset_id"], []).append(ev)
+
+    # For each subscriber, decide which events they care about.
+    import urllib.request
+    import urllib.error
+
+    for sub in subscribers:
+        user_id, email, asm_prefs = sub
+        if not email:
+            continue
+        if not isinstance(asm_prefs, dict):
+            asm_prefs = {}
+
+        # For each asset, filter to events the user is subscribed to at real_time
+        for asset_id, asset_events in by_asset.items():
+            matching = [
+                ev for ev in asset_events
+                if _user_wants_event(asm_prefs, ev["event_type"])
+            ]
+            if not matching:
+                continue
+
+            ok = _send_notification_email(
+                api_key=api_key,
+                to_email=email,
+                asset_id=asset_id,
+                events=matching,
+            )
+            if ok:
+                stats["emails_sent"] += 1
+            else:
+                stats["emails_failed"] += 1
+
+    return stats
+
+
+def _user_wants_event(asm_prefs: dict, event_type: str) -> bool:
+    key = EVENT_TYPE_TO_PREF_KEY.get(event_type)
+    if not key:
+        return False
+    entry = asm_prefs.get(key)
+    if not isinstance(entry, dict):
+        return False
+    return entry.get("cadence") == "real_time"
+
+
+def _send_notification_email(
+    api_key: str,
+    to_email: str,
+    asset_id: str,
+    events: list[dict],
+) -> bool:
+    """Send one branded Resend email summarizing all event matches for this
+    asset for this user. Returns True on Resend 200, False on any failure.
+    Failures print to stderr but never raise (notification is best-effort).
+    """
+    import urllib.request
+    import urllib.error
+
+    # Compose subject + body
+    n_open = sum(1 for e in events if e["event_type"] == "port_opened")
+    n_close = sum(1 for e in events if e["event_type"] == "port_closed")
+    n_first = sum(1 for e in events if e["event_type"] == "asset_first_seen")
+
+    bits: list[str] = []
+    if n_first:
+        bits.append("new asset")
+    if n_open:
+        bits.append(f"{n_open} port{'s' if n_open != 1 else ''} opened")
+    if n_close:
+        bits.append(f"{n_close} port{'s' if n_close != 1 else ''} closed")
+    summary = " · ".join(bits) if bits else "surface change"
+
+    subject = f"[COMMANDsentry] {asset_id}: {summary}"
+
+    rows_html = "\n".join(_event_to_html_row(ev) for ev in events)
+
+    portal_url = "https://commandsentry-portal.netlify.app"
+    asset_url = f"{portal_url}/assets/{asset_id}"
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background-color:#EAE7DF;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;color:#0B1B2B;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#EAE7DF;">
+    <tr><td align="center" style="padding:40px 16px;">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="background-color:#FBFAF6;border:1px solid #CAD0D8;max-width:600px;width:100%;">
+        <tr><td style="background-color:#C8632A;height:3px;line-height:3px;font-size:0;">&nbsp;</td></tr>
+        <tr><td align="center" style="padding:24px 32px 8px 32px;background-color:#FFFFFF;">
+          <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#4F5F70;font-weight:600;">Command Companies</div>
+          <div style="margin-top:8px;font-size:28px;font-weight:700;letter-spacing:-0.01em;line-height:1.1;">
+            <span style="color:#0B1B2B;">COMMAND</span><span style="color:#C8632A;">sentry</span>
+          </div>
+        </td></tr>
+        <tr><td style="padding:20px 32px 4px 32px;background-color:#FFFFFF;">
+          <h1 style="margin:0;font-size:18px;font-weight:700;line-height:1.3;color:#0B1B2B;">
+            Surface change on <span style="font-family:'SF Mono',Menlo,Consolas,monospace;">{_html_escape(asset_id)}</span>
+          </h1>
+          <p style="margin:8px 0 0 0;font-size:13px;color:#4F5F70;">{_html_escape(summary)}</p>
+        </td></tr>
+        <tr><td style="padding:16px 32px 8px 32px;background-color:#FFFFFF;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:14px;line-height:1.5;border-collapse:collapse;">
+            {rows_html}
+          </table>
+        </td></tr>
+        <tr><td align="center" style="padding:16px 32px 24px 32px;background-color:#FFFFFF;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+            <tr><td align="center" style="background-color:#C8632A;">
+              <a href="{asset_url}" target="_blank" style="display:inline-block;padding:12px 28px;font-size:14px;font-weight:600;color:#FFFFFF;text-decoration:none;letter-spacing:0.02em;">
+                View asset in COMMANDsentry &rarr;
+              </a>
+            </td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:16px 32px;background-color:#F4F2EE;border-top:1px solid #E4E8EE;font-size:11px;line-height:1.5;color:#4F5F70;text-align:center;">
+          <div><strong style="color:#0B1B2B;">Command Companies</strong> · Information Security &amp; Compliance</div>
+          <div style="margin-top:4px;">You are receiving this because you enabled real-time notifications for this event type. Change settings at <a href="{portal_url}/account/notifications" style="color:#4F5F70;text-decoration:underline;">commandsentry-portal/account/notifications</a>.</div>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+
+    body = json.dumps({
+        "from": RESEND_FROM,
+        "to": [to_email],
+        "subject": subject,
+        "html": html,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        RESEND_API_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return 200 <= resp.status < 300
+    except urllib.error.HTTPError as e:
+        err_body = ""
+        try:
+            err_body = e.read().decode("utf-8", "replace")
+        except Exception:
+            pass
+        print(
+            f"  ! Resend {e.code} for {to_email} ({asset_id}): {err_body[:200]}",
+            file=sys.stderr,
+        )
+        return False
+    except Exception as e:
+        print(f"  ! Notification send failed for {to_email} ({asset_id}): {e}", file=sys.stderr)
+        return False
+
+
+def _event_to_html_row(ev: dict) -> str:
+    et = ev["event_type"]
+    if et == "asset_first_seen":
+        return (
+            '<tr><td style="padding:6px 0;border-bottom:1px solid #F0EEE8;">'
+            '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#C8632A;margin-right:8px;vertical-align:middle;"></span>'
+            'Asset first observed in inventory</td></tr>'
+        )
+    verb = "opened" if et == "port_opened" else "closed"
+    color = "#16A34A" if et == "port_opened" else "#D97706"
+    port = ev.get("port") or "?"
+    proto = (ev.get("proto") or "tcp").upper()
+    svc = ev.get("service")
+    svc_str = f" ({_html_escape(svc)})" if svc else ""
+    host = ev.get("host")
+    host_str = f" on <span style=\"font-family:'SF Mono',Menlo,monospace;\">{_html_escape(host)}</span>" if host else ""
+    return (
+        f'<tr><td style="padding:6px 0;border-bottom:1px solid #F0EEE8;">'
+        f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{color};margin-right:8px;vertical-align:middle;"></span>'
+        f'Port <span style="font-family:\'SF Mono\',Menlo,monospace;">{port}/{proto}</span> {verb}{svc_str}{host_str}'
+        f'</td></tr>'
+    )
+
+
+def _html_escape(s: Any) -> str:
+    if s is None:
+        return ""
+    s = str(s)
+    return (
+        s.replace("&", "&amp;")
+         .replace("<", "&lt;")
+         .replace(">", "&gt;")
+         .replace('"', "&quot;")
+    )
+
+
+# ---------------------------------------------------------------------------
 # DB upserts
 # ---------------------------------------------------------------------------
 
@@ -497,6 +761,7 @@ def import_one(
         "asset_id": asset_id,
         "asset_inserted": asset_inserted,
         "events_emitted": len(events),
+        "events": events,
     }
 
 
@@ -543,6 +808,15 @@ def main() -> int:
             "rows for assets that have actually been around for ages."
         ),
     )
+    ap.add_argument(
+        "--skip-notifications",
+        action="store_true",
+        help=(
+            "Insert events to the DB but DON'T fan out Resend emails. Use "
+            "for testing the importer without spamming subscribers, or "
+            "during ops work where the event log should update silently."
+        ),
+    )
     args = ap.parse_args()
 
     if not args.dry_run and not args.dsn:
@@ -568,6 +842,7 @@ def main() -> int:
     new_assets = 0
     skipped = 0
     failed = 0
+    all_events: list[dict] = []
 
     conn = None
     if not args.dry_run:
@@ -607,9 +882,26 @@ def main() -> int:
                 okay += 1
                 if result.get("asset_inserted"):
                     new_assets += 1
+                # Collect this asset's events for end-of-run notification dispatch
+                all_events.extend(result.get("events") or [])
 
         if conn and not args.dry_run:
             conn.commit()
+
+            # Fan-out notifications AFTER the surface/event writes have
+            # committed. We never let a Resend hiccup roll back the
+            # surface inventory updates — current-state correctness wins
+            # over notification delivery.
+            if all_events and not args.skip_notifications and not args.skip_events:
+                ns = dispatch_event_notifications(conn, all_events, args.source_tag)
+                if ns["subscribers"]:
+                    print(
+                        f"notifications: {ns['emails_sent']} sent, "
+                        f"{ns['emails_failed']} failed, "
+                        f"{ns['subscribers']} subscriber(s) checked"
+                    )
+                elif ns["skipped_no_key"]:
+                    pass  # already printed warning
     finally:
         if conn:
             conn.close()

@@ -292,6 +292,10 @@ jobs:
         if: success() && steps.targets.outputs.mode != 'skipped'
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          # Optional: if set, the importer fans out Resend notification
+          # emails to users subscribed to ASM events at real_time cadence.
+          # Missing key = silent (events still written to DB, just no email).
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: |
           if [[ -z "${SUPABASE_DSN}" ]]; then
             echo "::warning::SUPABASE_DSN secret not set — skipping Surface upload."
