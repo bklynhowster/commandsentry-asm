@@ -629,6 +629,12 @@ def _send_notification_email(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            # Cloudflare WAF in front of api.resend.com returns 1010 on the
+            # default Python-urllib UA. Use a real-looking string. Resend
+            # itself doesn't care about the UA — this is purely to satisfy
+            # the front-edge bot check.
+            "User-Agent": "COMMANDsentry-importer/1.0 (+https://commandsentry-portal.netlify.app)",
+            "Accept": "application/json",
         },
     )
 
