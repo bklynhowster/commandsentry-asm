@@ -196,6 +196,165 @@ def derive_lifecycle(asm_doc: dict) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Event-diff helpers — produce asset_surface_event rows from old vs new blob.
+# ---------------------------------------------------------------------------
+# Service identity is the tuple (host, port, proto). Same triple in both
+# blobs = no event. Triple only in new = port_opened. Triple only in old =
+# port_closed. We keep extra detail (service, tls) on the event row but
+# don't use it for identity — banner-name / TLS-detection flips should
+# not look like a close-and-reopen.
+
+
+def flatten_services(blob: dict) -> dict[tuple[str, int, str], dict]:
+    """Walk surface_data.subdomains[].hosts[].services[] (or the legacy
+    surface_data.subdomains[].services[] shape) and return a map keyed by
+    (host, port, proto) → service detail dict.
+
+    Returns an empty dict for any unparseable blob — the importer never
+    fails an upsert because of event-diff problems.
+    """
+    out: dict[tuple[str, int, str], dict] = {}
+    if not isinstance(blob, dict):
+        return out
+    subs = blob.get("subdomains") or []
+    if not isinstance(subs, list):
+        return out
+
+    for sub in subs:
+        if not isinstance(sub, dict):
+            continue
+        sub_name = sub.get("name") or sub.get("subdomain")
+
+        # Two possible shapes — the ASM JSON has services attached either
+        # to each host or directly to the subdomain. Handle both.
+        host_entries = sub.get("hosts") or []
+        if host_entries:
+            for h in host_entries:
+                if not isinstance(h, dict):
+                    continue
+                host_addr = h.get("ip") or h.get("address") or sub_name or "?"
+                for svc in (h.get("services") or []):
+                    _record_service(out, host_addr, sub_name, svc)
+        else:
+            host_addr = sub_name or "?"
+            for svc in (sub.get("services") or []):
+                _record_service(out, host_addr, sub_name, svc)
+
+    return out
+
+
+def _record_service(
+    out: dict[tuple[str, int, str], dict],
+    host: str,
+    subdomain: str | None,
+    svc: dict,
+) -> None:
+    if not isinstance(svc, dict):
+        return
+    try:
+        port = int(svc.get("port"))
+    except (TypeError, ValueError):
+        return
+    proto = (svc.get("protocol") or svc.get("proto") or "tcp").lower()
+    key = (host, port, proto)
+    # First-wins: if a service appears twice across hosts for the same
+    # (host, port, proto), keep the first detail.
+    if key in out:
+        return
+    out[key] = {
+        "host": host,
+        "subdomain": subdomain,
+        "port": port,
+        "proto": proto,
+        "service": svc.get("service") or svc.get("name"),
+        "tls": bool(svc.get("tls")),
+    }
+
+
+def compute_events(
+    asset_id: str,
+    existing_blob: dict | None,
+    new_blob: dict,
+    source_tag: str,
+) -> list[dict]:
+    """Return a list of asset_surface_event row dicts (ready for executemany).
+
+    Rules:
+      - existing_blob is None (asset never seen) → one asset_first_seen row
+        and NOTHING ELSE (don't flood on new-asset discovery)
+      - both blobs present → port_opened for keys in new not in old,
+        port_closed for keys in old not in new
+    """
+    if existing_blob is None:
+        return [
+            {
+                "asset_id": asset_id,
+                "event_type": "asset_first_seen",
+                "host": None,
+                "port": None,
+                "proto": None,
+                "service": None,
+                "tls": None,
+                "prev_value": None,
+                "new_value": None,
+                "source_tag": source_tag,
+            }
+        ]
+
+    old_map = flatten_services(existing_blob)
+    new_map = flatten_services(new_blob)
+
+    events: list[dict] = []
+
+    for key in new_map.keys() - old_map.keys():
+        det = new_map[key]
+        events.append(
+            {
+                "asset_id": asset_id,
+                "event_type": "port_opened",
+                "host": det["host"],
+                "port": det["port"],
+                "proto": det["proto"],
+                "service": det.get("service"),
+                "tls": det.get("tls"),
+                "prev_value": None,
+                "new_value": Json(det),
+                "source_tag": source_tag,
+            }
+        )
+
+    for key in old_map.keys() - new_map.keys():
+        det = old_map[key]
+        events.append(
+            {
+                "asset_id": asset_id,
+                "event_type": "port_closed",
+                "host": det["host"],
+                "port": det["port"],
+                "proto": det["proto"],
+                "service": det.get("service"),
+                "tls": det.get("tls"),
+                "prev_value": Json(det),
+                "new_value": None,
+                "source_tag": source_tag,
+            }
+        )
+
+    return events
+
+
+INSERT_EVENT = """
+INSERT INTO public.asset_surface_event (
+  asset_id, event_type, host, port, proto, service, tls,
+  prev_value, new_value, source_tag
+) VALUES (
+  %(asset_id)s, %(event_type)s, %(host)s, %(port)s, %(proto)s, %(service)s, %(tls)s,
+  %(prev_value)s, %(new_value)s, %(source_tag)s
+);
+"""
+
+
+# ---------------------------------------------------------------------------
 # DB upserts
 # ---------------------------------------------------------------------------
 
@@ -245,8 +404,20 @@ ON CONFLICT (asset_id) DO UPDATE SET
 """
 
 
-def import_one(conn, asm_doc: dict, source_tag: str, dry_run: bool) -> dict[str, Any]:
-    """Push one asset JSON to the DB. Returns a small status dict."""
+def import_one(
+    conn,
+    asm_doc: dict,
+    source_tag: str,
+    dry_run: bool,
+    skip_events: bool = False,
+) -> dict[str, Any]:
+    """Push one asset JSON to the DB. Returns a small status dict.
+
+    With skip_events=False (default), diffs the incoming surface_data vs
+    the existing row and emits asset_surface_event rows for any deltas.
+    Pass skip_events=True for a silent backfill (e.g., re-running the
+    importer against unchanged data, or one-time historical loads).
+    """
     asset_id = derive_portal_asset_id(asm_doc)
     if not asset_id:
         return {"status": "skipped", "reason": "no asset.value"}
@@ -284,16 +455,48 @@ def import_one(conn, asm_doc: dict, source_tag: str, dry_run: bool) -> dict[str,
             "would_upsert_surface_keys": list(surface_row.keys()),
         }
 
+    events: list[dict] = []
     with conn.cursor() as cur:
+        # 1. Fetch existing surface_data BEFORE we overwrite it. If the
+        #    row doesn't exist yet, existing_blob stays None — we'll emit
+        #    a single asset_first_seen event instead of per-port events.
+        existing_blob: dict | None = None
+        if not skip_events:
+            cur.execute(
+                "SELECT surface_data FROM public.asset_surface WHERE asset_id = %s",
+                (asset_id,),
+            )
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                existing_blob = row[0]
+
+        # 2. Upsert asset + surface (overwrites surface_data).
         cur.execute(UPSERT_ASSET, asset_row)
-        row = cur.fetchone()
-        asset_inserted = row[1] if row else False
+        a_row = cur.fetchone()
+        asset_inserted = a_row[1] if a_row else False
         cur.execute(UPSERT_SURFACE, surface_row)
+
+        # 3. Compute + write events. Failures here MUST NOT roll back the
+        #    upsert — current-state correctness is more important than
+        #    perfect history. Catch and log instead.
+        if not skip_events:
+            try:
+                events = compute_events(asset_id, existing_blob, asm_doc, source_tag)
+                if events:
+                    cur.executemany(INSERT_EVENT, events)
+            except Exception as e:
+                # Print but don't re-raise. The transaction will still
+                # commit the surface row at the outer level.
+                print(
+                    f"  ! event-diff for {asset_id} failed (non-fatal): {e}",
+                    file=sys.stderr,
+                )
 
     return {
         "status": "ok",
         "asset_id": asset_id,
         "asset_inserted": asset_inserted,
+        "events_emitted": len(events),
     }
 
 
@@ -330,6 +533,15 @@ def main() -> int:
         type=int,
         default=0,
         help="Only process first N files (debug aid). 0 = all.",
+    )
+    ap.add_argument(
+        "--skip-events",
+        action="store_true",
+        help=(
+            "Suppress asset_surface_event writes. Use for silent backfills "
+            "where you don't want to flood the event log with asset_first_seen "
+            "rows for assets that have actually been around for ages."
+        ),
     )
     args = ap.parse_args()
 
@@ -371,7 +583,9 @@ def main() -> int:
                 continue
 
             try:
-                result = import_one(conn, doc, args.source_tag, args.dry_run)
+                result = import_one(
+                    conn, doc, args.source_tag, args.dry_run, args.skip_events
+                )
             except Exception as e:
                 print(f"  ! {path.name}: import error: {e}", file=sys.stderr)
                 if conn:
@@ -387,7 +601,9 @@ def main() -> int:
                 okay += 1
             else:
                 tag = "NEW" if result.get("asset_inserted") else "upd"
-                print(f"  ✓ {path.name}: {tag} {result['asset_id']}")
+                ev = result.get("events_emitted") or 0
+                ev_str = f" [+{ev} event{'s' if ev != 1 else ''}]" if ev else ""
+                print(f"  ✓ {path.name}: {tag} {result['asset_id']}{ev_str}")
                 okay += 1
                 if result.get("asset_inserted"):
                     new_assets += 1
