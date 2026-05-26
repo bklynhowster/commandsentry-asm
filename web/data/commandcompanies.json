@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-26T17:55:33Z_9789cdf8",
-    "started_at": "2026-05-26T17:55:33Z",
-    "completed_at": "2026-05-26T17:57:08Z",
-    "duration_seconds": 95,
+    "id": "scan_2026-05-26T20:22:23Z_d48d9f6c",
+    "started_at": "2026-05-26T20:22:23Z",
+    "completed_at": "2026-05-26T20:23:49Z",
+    "duration_seconds": 86,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-26T17:57:09Z",
-      "last_seen": "2026-05-26T17:57:09Z",
+      "first_discovered": "2026-05-26T20:23:49Z",
+      "last_seen": "2026-05-26T20:23:49Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -247,8 +247,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-26T17:57:09Z",
-      "last_seen": "2026-05-26T17:57:09Z",
+      "first_discovered": "2026-05-26T20:23:49Z",
+      "last_seen": "2026-05-26T20:23:49Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -439,7 +439,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-26T15:59:01Z_732e05ac",
+    "since_scan": "scan_2026-05-26T17:55:33Z_9789cdf8",
     "added": {
       "subdomains": [],
       "services": [],
@@ -3073,6 +3073,42 @@
       "scan_id": "scan_2026-05-26T17:55:33Z_9789cdf8",
       "started_at": "2026-05-26T17:55:33Z",
       "completed_at": "2026-05-26T17:57:08Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 1,
+      "service_count": 4,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Contact Form 7": "6.1.6",
+        "Slider Revolution": "6.7.55",
+        "WP Google Map Plugin": "4.9.4",
+        "WPMU DEV Smush": "4.0.3",
+        "Yoast SEO": "27.6",
+        "imagesLoaded": "5.0.0",
+        "jQuery Migrate": "3.4.1"
+      }
+    },
+    {
+      "scan_id": "scan_2026-05-26T20:22:23Z_d48d9f6c",
+      "started_at": "2026-05-26T20:22:23Z",
+      "completed_at": "2026-05-26T20:23:49Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 1,
