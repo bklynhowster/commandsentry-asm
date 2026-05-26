@@ -38,6 +38,17 @@ targets:
       - internal-app
     notes: .NET Core 8 + IIS, FortiGate WAF, hosted by SCI. Includes test subdomain.
     rate_limit: gentle
+  - id: commandmarketinginnovations
+    type: apex
+    value: commandmarketinginnovations.com
+    scope_verified: true
+    owner: command_marketing
+    tags:
+      - production
+      - subsidiary
+      - public-facing
+    notes: CMI — Command Marketing Innovations. Existed as an asset with findings since launch but ASM enumeration wasn't enabled until 2026-05-26.
+    rate_limit: gentle
   - id: sciimage
     type: apex
     value: sciimage.com
