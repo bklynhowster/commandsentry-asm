@@ -712,9 +712,168 @@ def _html_escape(s: Any) -> str:
 # DB upserts
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Per-subdomain routing — session 2 of asset decomposition (task #29).
+# ---------------------------------------------------------------------------
+# Each subdomain in the ASM JSON belongs to ONE asset in the portal. Most
+# are their own asset (kind=web/portal/mail/etc.). www.X is an alias of X.
+# The apex itself is its own asset. This routing decides which asset gets
+# which subdomain's surface data.
+
+import re as _re
+
+_STAGING_PAT = _re.compile(
+    r'(-test|-staging|-dev|-uat|-qa|test\.|staging\.|dev\.|uat\.|qa\.)',
+    _re.IGNORECASE,
+)
+_MAIL_PAT = _re.compile(
+    r'^(mail|smtp|imap|mx[0-9]*|pop3?|webmail|exchange)\.', _re.IGNORECASE
+)
+_API_PAT = _re.compile(r'^(api|rest|graphql)\.', _re.IGNORECASE)
+_FTP_PAT = _re.compile(r'^(ftp|sftp|ftps)[0-9]*\.', _re.IGNORECASE)
+_INFRA_PAT = _re.compile(
+    r'^(ns[0-9]+|dns[0-9]*|vpn[0-9]*|jump[0-9]*|bastion|hyperv|xen|admin|backup|vcenter|esxi)\.',
+    _re.IGNORECASE,
+)
+
+
+def classify_subdomain_kind(name: str) -> str:
+    """Return asset_kind_t value. Mirror of classify_kind in split_assets_by_system.py
+    — duplicated inline so the importer doesn't need the sibling script in the
+    GH Actions environment.
+    """
+    if _MAIL_PAT.search(name):
+        return "mail"
+    if _STAGING_PAT.search(name):
+        return "staging"
+    if _API_PAT.search(name):
+        return "api"
+    if _FTP_PAT.search(name):
+        return "ftp"
+    if _INFRA_PAT.search(name):
+        return "infra"
+    return "unknown"
+
+
+def lookup_existing_aliases(conn, apex_asset_id: str) -> list[str]:
+    """Read the apex asset's aliases[] column. Used so we can route the
+    apex's www variant (and any other aliases) into the apex bucket rather
+    than treating them as separate assets.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT aliases FROM public.assets WHERE asset_id = %s",
+            (apex_asset_id,),
+        )
+        row = cur.fetchone()
+        if row and row[0]:
+            return [a.lower() for a in row[0]]
+    return []
+
+
+def route_subdomains_to_assets(
+    asm_doc: dict, apex_asset_id: str, aliases: list[str]
+) -> dict[str, list[dict]]:
+    """Bucket the ASM JSON's subdomains[] by destination asset_id.
+
+    Returns a dict {asset_id: [subdomain_entry, ...]}. The apex's bucket
+    always exists, even if empty, so its asset_surface row gets refreshed
+    every cron tick.
+    """
+    buckets: dict[str, list[dict]] = {apex_asset_id: []}
+    subs = asm_doc.get("subdomains") or []
+    apex_lower = apex_asset_id.lower()
+    alias_set = set(aliases)
+
+    for sub in subs:
+        if not isinstance(sub, dict):
+            continue
+        name = (sub.get("name") or sub.get("subdomain") or "").lower().strip()
+        if not name:
+            continue
+
+        # Apex itself or any alias → apex bucket
+        if name == apex_lower or name in alias_set:
+            buckets[apex_asset_id].append(sub)
+            continue
+
+        # Everything else gets its own bucket. Auto-creates a new asset
+        # row downstream if one doesn't already exist.
+        buckets.setdefault(name, []).append(sub)
+
+    return buckets
+
+
+def build_sliced_doc(orig_doc: dict, sub_list: list[dict]) -> dict:
+    """Create a per-asset copy of the ASM JSON containing only the given
+    subdomain entries. The summary is recomputed for that subset so the
+    convenience columns (service_count, etc.) reflect just this asset.
+
+    Preserves top-level keys (asset, scan, registration, history) so
+    derive_lifecycle, derive_convenience etc. continue to work unchanged.
+    """
+    sliced = dict(orig_doc)
+    sliced["subdomains"] = sub_list
+
+    # Recompute the summary block for this slice
+    summary = dict(orig_doc.get("summary") or {})
+    summary["subdomain_count"] = len(sub_list)
+    summary["live_subdomain_count"] = sum(
+        1 for s in sub_list
+        if isinstance(s, dict) and (s.get("reachability") or {}).get("live")
+    )
+    summary["host_count"] = len({
+        h.get("ip")
+        for s in sub_list if isinstance(s, dict)
+        for h in (s.get("hosts") or []) if isinstance(h, dict) and h.get("ip")
+    })
+    # Count services from BOTH nesting shapes — subdomain.services[] (the
+    # actual ASM JSON layout) AND hosts[].services[] (legacy/alt). Some
+    # asset blobs use one, some the other; this counts whichever's present.
+    def _count_svcs(sub: dict) -> int:
+        n = len(sub.get("services") or [])
+        for h in (sub.get("hosts") or []):
+            if isinstance(h, dict):
+                n += len(h.get("services") or [])
+        return n
+    summary["service_count"] = sum(
+        _count_svcs(s) for s in sub_list if isinstance(s, dict)
+    )
+    # Top hosting org for the slice — first non-null asn_org we find
+    top_org = None
+    for s in sub_list:
+        if not isinstance(s, dict):
+            continue
+        for h in (s.get("hosts") or []):
+            if isinstance(h, dict) and h.get("asn_org"):
+                top_org = h["asn_org"]
+                break
+        if top_org:
+            break
+    if top_org:
+        summary["top_hosting_org"] = top_org
+    sliced["summary"] = summary
+    return sliced
+
+
 UPSERT_ASSET = """
 INSERT INTO public.assets (asset_id, name, type, organization, first_observed, last_observed)
 VALUES (%(asset_id)s, %(name)s, %(type)s, %(organization)s, %(first_observed)s, %(last_observed)s)
+ON CONFLICT (asset_id) DO UPDATE SET
+  last_observed = GREATEST(public.assets.last_observed, EXCLUDED.last_observed)
+RETURNING asset_id, (xmax = 0) AS inserted;
+"""
+
+# Auto-create row for a newly-discovered subdomain. Sets kind + apex_domain
+# so the new asset appears properly in the dashboard from the moment it's
+# discovered. ON CONFLICT updates last_observed only — preserves any kind
+# the admin has manually flipped.
+UPSERT_NEW_SUBDOMAIN_ASSET = """
+INSERT INTO public.assets
+  (asset_id, name, type, organization, kind, apex_domain, first_observed, last_observed)
+VALUES
+  (%(asset_id)s, %(asset_id)s, 'single_host', %(organization)s,
+   %(kind)s, %(apex_domain)s, %(first_observed)s, %(last_observed)s)
 ON CONFLICT (asset_id) DO UPDATE SET
   last_observed = GREATEST(public.assets.last_observed, EXCLUDED.last_observed)
 RETURNING asset_id, (xmax = 0) AS inserted;
@@ -765,93 +924,129 @@ def import_one(
     dry_run: bool,
     skip_events: bool = False,
 ) -> dict[str, Any]:
-    """Push one asset JSON to the DB. Returns a small status dict.
+    """Push one asset JSON to the DB, routing subdomains to per-system
+    asset rows (asset decomposition session 2, task #29 follow-up).
 
-    With skip_events=False (default), diffs the incoming surface_data vs
-    the existing row and emits asset_surface_event rows for any deltas.
-    Pass skip_events=True for a silent backfill (e.g., re-running the
-    importer against unchanged data, or one-time historical loads).
+    For each subdomain in the JSON, decide which asset_id it belongs to:
+      - subdomain name == apex OR in apex.aliases → goes to apex bucket
+      - otherwise → goes to its own bucket (auto-creates the asset row
+        with classify_subdomain_kind for kind)
+
+    For each bucket, write a per-asset asset_surface row containing ONLY
+    that bucket's subdomains. The apex's surface row no longer carries
+    the whole apex blob — it carries only the apex + its aliases. New
+    sibling assets (portal.*, myorders.*, mail.*, etc.) get their own
+    surface data populated.
+
+    Returns a status dict aggregating across all buckets processed.
     """
-    asset_id = derive_portal_asset_id(asm_doc)
-    if not asset_id:
+    apex_asset_id = derive_portal_asset_id(asm_doc)
+    if not apex_asset_id:
         return {"status": "skipped", "reason": "no asset.value"}
 
     asset_type = derive_asset_type(asm_doc)
     organization = derive_organization(asm_doc)
-    lifecycle = derive_lifecycle(asm_doc)
-    convenience = derive_convenience(asm_doc)
 
-    asset_row = {
-        "asset_id": asset_id,
-        "name": asset_id,
-        "type": asset_type,
-        "organization": organization,
-        "first_observed": lifecycle["first_discovered"],
-        "last_observed": lifecycle["last_seen"],
-    }
+    # Discover aliases via the existing asset row (set by today's split).
+    # Empty list if the apex doesn't have an assets row yet — fine, just
+    # means www variants will also go into their own buckets and we'll
+    # backfill the aliases column on a later run.
+    aliases = lookup_existing_aliases(conn, apex_asset_id) if not dry_run else []
 
-    surface_row = {
-        "asset_id": asset_id,
-        "asset_type": asset_type,
-        **convenience,
-        "discovered_via": lifecycle["discovered_via"],
-        "first_discovered": lifecycle["first_discovered"],
-        "last_seen": lifecycle["last_seen"],
-        "surface_data": Json(asm_doc),
-        "updated_by": source_tag,
-    }
+    buckets = route_subdomains_to_assets(asm_doc, apex_asset_id, aliases)
 
     if dry_run:
         return {
             "status": "dry_run",
-            "asset_id": asset_id,
-            "would_upsert_asset": asset_row,
-            "would_upsert_surface_keys": list(surface_row.keys()),
+            "asset_id": apex_asset_id,
+            "buckets": {bid: len(subs) for bid, subs in buckets.items()},
         }
 
-    events: list[dict] = []
-    with conn.cursor() as cur:
-        # 1. Fetch existing surface_data BEFORE we overwrite it. If the
-        #    row doesn't exist yet, existing_blob stays None — we'll emit
-        #    a single asset_first_seen event instead of per-port events.
-        existing_blob: dict | None = None
-        if not skip_events:
-            cur.execute(
-                "SELECT surface_data FROM public.asset_surface WHERE asset_id = %s",
-                (asset_id,),
-            )
-            row = cur.fetchone()
-            if row and row[0] is not None:
-                existing_blob = row[0]
+    all_events: list[dict] = []
+    assets_inserted = 0
+    surfaces_written = 0
 
-        # 2. Upsert asset + surface (overwrites surface_data).
-        cur.execute(UPSERT_ASSET, asset_row)
-        a_row = cur.fetchone()
-        asset_inserted = a_row[1] if a_row else False
-        cur.execute(UPSERT_SURFACE, surface_row)
+    for bucket_id, sub_list in buckets.items():
+        is_apex = bucket_id == apex_asset_id
+        sliced = build_sliced_doc(asm_doc, sub_list)
+        bucket_convenience = derive_convenience(sliced)
+        bucket_lifecycle = derive_lifecycle(sliced)
 
-        # 3. Compute + write events. Failures here MUST NOT roll back the
-        #    upsert — current-state correctness is more important than
-        #    perfect history. Catch and log instead.
-        if not skip_events:
-            try:
-                events = compute_events(asset_id, existing_blob, asm_doc, source_tag)
-                if events:
-                    cur.executemany(INSERT_EVENT, events)
-            except Exception as e:
-                # Print but don't re-raise. The transaction will still
-                # commit the surface row at the outer level.
-                print(
-                    f"  ! event-diff for {asset_id} failed (non-fatal): {e}",
-                    file=sys.stderr,
+        with conn.cursor() as cur:
+            # 1. Fetch existing surface for event diff
+            existing_blob: dict | None = None
+            if not skip_events:
+                cur.execute(
+                    "SELECT surface_data FROM public.asset_surface WHERE asset_id = %s",
+                    (bucket_id,),
                 )
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                    existing_blob = row[0]
+
+            # 2. Upsert the asset row. The apex uses the standard
+            #    UPSERT_ASSET (preserves its existing kind/aliases).
+            #    Non-apex subdomains use UPSERT_NEW_SUBDOMAIN_ASSET which
+            #    auto-classifies kind on insert and sets apex_domain.
+            if is_apex:
+                cur.execute(UPSERT_ASSET, {
+                    "asset_id": bucket_id,
+                    "name": bucket_id,
+                    "type": asset_type,
+                    "organization": organization,
+                    "first_observed": bucket_lifecycle["first_discovered"],
+                    "last_observed": bucket_lifecycle["last_seen"],
+                })
+            else:
+                cur.execute(UPSERT_NEW_SUBDOMAIN_ASSET, {
+                    "asset_id": bucket_id,
+                    "organization": organization,
+                    "kind": classify_subdomain_kind(bucket_id),
+                    "apex_domain": apex_asset_id,
+                    "first_observed": bucket_lifecycle["first_discovered"],
+                    "last_observed": bucket_lifecycle["last_seen"],
+                })
+            a_row = cur.fetchone()
+            if a_row and a_row[1]:
+                assets_inserted += 1
+
+            # 3. Upsert the per-asset surface row
+            cur.execute(UPSERT_SURFACE, {
+                "asset_id": bucket_id,
+                "asset_type": asset_type if is_apex else "single_host",
+                **bucket_convenience,
+                "discovered_via": bucket_lifecycle["discovered_via"],
+                "first_discovered": bucket_lifecycle["first_discovered"],
+                "last_seen": bucket_lifecycle["last_seen"],
+                "surface_data": Json(sliced),
+                "updated_by": source_tag,
+            })
+            surfaces_written += 1
+
+            # 4. Per-bucket event diff
+            if not skip_events:
+                try:
+                    bucket_events = compute_events(
+                        bucket_id, existing_blob, sliced, source_tag,
+                    )
+                    if bucket_events:
+                        cur.executemany(INSERT_EVENT, bucket_events)
+                        all_events.extend(bucket_events)
+                except Exception as e:
+                    print(
+                        f"  ! event-diff for {bucket_id} failed (non-fatal): {e}",
+                        file=sys.stderr,
+                    )
 
     return {
         "status": "ok",
-        "asset_id": asset_id,
-        "asset_inserted": asset_inserted,
-        "events_emitted": len(events),
-        "events": events,
+        "asset_id": apex_asset_id,
+        "asset_inserted": assets_inserted > 0,
+        "buckets_processed": len(buckets),
+        "assets_inserted": assets_inserted,
+        "surfaces_written": surfaces_written,
+        "events": all_events,
+        "events_emitted": len(all_events),
     }
 
 
