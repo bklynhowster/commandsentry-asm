@@ -355,6 +355,71 @@ INSERT INTO public.asset_surface_event (
 
 
 # ---------------------------------------------------------------------------
+# Dark-asset detection — emit one asset_went_dark event per asset whose
+# last_seen has aged past the threshold, suppressed for SUPPRESS_DAYS after
+# the most recent dark event so we don't re-alert every cron tick.
+# ---------------------------------------------------------------------------
+# Threshold: 72h ≈ 12 cron ticks at 6h cadence. Long enough to weather a
+# normal Friday-night outage without a false alarm; short enough that a real
+# long-weekend dark asset gets noticed Monday morning.
+# Suppress window: 7d. If an asset stays dark for a month you get one email,
+# not 30. When it comes back and goes dark again later, that's a new event.
+DARK_THRESHOLD_HOURS = 72
+DARK_SUPPRESS_DAYS = 7
+
+FIND_DARK_ASSETS = """
+SELECT
+  s.asset_id,
+  s.last_seen,
+  s.primary_ptr,
+  s.top_hosting_org
+FROM public.asset_surface s
+WHERE s.last_seen IS NOT NULL
+  AND s.last_seen < (now() - (%s::int * interval '1 hour'))
+  AND NOT EXISTS (
+    SELECT 1 FROM public.asset_surface_event e
+    WHERE e.asset_id = s.asset_id
+      AND e.event_type = 'asset_went_dark'
+      AND e.observed_at > (now() - (%s::int * interval '1 day'))
+  );
+"""
+
+
+def detect_dark_assets(conn, source_tag: str) -> list[dict]:
+    """Find assets whose last_seen has crossed the dark threshold AND
+    don't already have a recent asset_went_dark alert. Returns one event
+    dict per dark asset, ready for INSERT.
+
+    Run AFTER the per-asset upserts complete so last_seen reflects the
+    current cron tick before we check freshness.
+    """
+    with conn.cursor() as cur:
+        cur.execute(FIND_DARK_ASSETS, (DARK_THRESHOLD_HOURS, DARK_SUPPRESS_DAYS))
+        rows = cur.fetchall()
+
+    return [
+        {
+            "asset_id": r[0],
+            "event_type": "asset_went_dark",
+            "host": None,
+            "port": None,
+            "proto": None,
+            "service": None,
+            "tls": None,
+            "prev_value": Json({
+                "last_seen": r[1].isoformat() if r[1] else None,
+                "primary_ptr": r[2],
+                "top_hosting_org": r[3],
+                "threshold_hours": DARK_THRESHOLD_HOURS,
+            }),
+            "new_value": None,
+            "source_tag": source_tag,
+        }
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Notification fan-out — fire Resend emails to users subscribed to ASM
 # events at real_time cadence. Daily/weekly digests are out-of-scope here.
 # ---------------------------------------------------------------------------
@@ -367,6 +432,7 @@ EVENT_TYPE_TO_PREF_KEY = {
     "port_opened":      "new_port_opened",
     "port_closed":      "port_closed",
     "asset_first_seen": "new_asset_discovered",
+    "asset_went_dark":  "asset_went_dark",
 }
 
 RESEND_API_URL = "https://api.resend.com/emails"
@@ -487,8 +553,11 @@ def _send_notification_email(
     n_open = sum(1 for e in events if e["event_type"] == "port_opened")
     n_close = sum(1 for e in events if e["event_type"] == "port_closed")
     n_first = sum(1 for e in events if e["event_type"] == "asset_first_seen")
+    n_dark = sum(1 for e in events if e["event_type"] == "asset_went_dark")
 
     bits: list[str] = []
+    if n_dark:
+        bits.append("WENT DARK")
     if n_first:
         bits.append("new asset")
     if n_open:
@@ -589,6 +658,21 @@ def _event_to_html_row(ev: dict) -> str:
             '<tr><td style="padding:6px 0;border-bottom:1px solid #F0EEE8;">'
             '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#C8632A;margin-right:8px;vertical-align:middle;"></span>'
             'Asset first observed in inventory</td></tr>'
+        )
+    if et == "asset_went_dark":
+        prev = ev.get("prev_value") or {}
+        # prev_value may be a Json wrapper if we're rendering events fresh
+        # from compute; unwrap to a plain dict for safe .get().
+        if hasattr(prev, "obj"):
+            prev = prev.obj
+        last_seen = prev.get("last_seen") if isinstance(prev, dict) else None
+        threshold = prev.get("threshold_hours") if isinstance(prev, dict) else DARK_THRESHOLD_HOURS
+        last_seen_str = f" (last successful response: {_html_escape(last_seen)})" if last_seen else ""
+        return (
+            f'<tr><td style="padding:6px 0;border-bottom:1px solid #F0EEE8;">'
+            f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#475569;margin-right:8px;vertical-align:middle;"></span>'
+            f'<strong>Asset went dark</strong> — no response for {threshold}+ hours{last_seen_str}'
+            f'</td></tr>'
         )
     verb = "opened" if et == "port_opened" else "closed"
     color = "#16A34A" if et == "port_opened" else "#D97706"
@@ -886,6 +970,27 @@ def main() -> int:
                 all_events.extend(result.get("events") or [])
 
         if conn and not args.dry_run:
+            # Dark-asset sweep BEFORE the first commit so the dark events
+            # land in the same transaction as the surface updates. Skipped
+            # under --skip-events because dark events ARE events. Failures
+            # here are non-fatal — current-state still commits.
+            if not args.skip_events:
+                try:
+                    dark_events = detect_dark_assets(conn, args.source_tag)
+                    if dark_events:
+                        with conn.cursor() as cur:
+                            cur.executemany(INSERT_EVENT, dark_events)
+                        all_events.extend(dark_events)
+                        print(
+                            f"dark-asset sweep: {len(dark_events)} asset(s) "
+                            f"crossed {DARK_THRESHOLD_HOURS}h threshold"
+                        )
+                except Exception as e:
+                    print(
+                        f"  ! dark-asset sweep failed (non-fatal): {e}",
+                        file=sys.stderr,
+                    )
+
             conn.commit()
 
             # Fan-out notifications AFTER the surface/event writes have
