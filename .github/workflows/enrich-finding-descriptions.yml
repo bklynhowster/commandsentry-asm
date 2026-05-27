@@ -92,7 +92,11 @@ jobs:
       - name: Run synthesis worker
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # SUPABASE_URL intentionally NOT set — the script's hardcoded
+          # default (DEFAULT_SUPABASE_URL = https://hdygktppfvuspnumpfuq.supabase.co)
+          # kicks in via os.environ.get(..., DEFAULT). Setting it here to an
+          # absent secret would evaluate to "" which the supabase client
+          # rejects with "supabase_url is required".
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
