@@ -550,23 +550,44 @@ def _send_notification_email(
     import urllib.error
 
     # Compose subject + body
+    # IRONPORT-AWARE PATTERN: Cisco IronPort quarantines emails with bracketed
+    # prefixes, IP-like strings in subject, and uppercase scare-words ("WENT
+    # DARK") as spam. We compose subjects in natural English with a single
+    # descriptive verb and the asset name in normal position. Daily digest
+    # uses this same shape and passes through M365/IronPort cleanly.
     n_open = sum(1 for e in events if e["event_type"] == "port_opened")
     n_close = sum(1 for e in events if e["event_type"] == "port_closed")
     n_first = sum(1 for e in events if e["event_type"] == "asset_first_seen")
     n_dark = sum(1 for e in events if e["event_type"] == "asset_went_dark")
 
+    # Pick the most operationally important event as the subject anchor.
+    # Priority: went dark > new asset > port changes.
+    if n_dark:
+        subject = f"COMMANDsentry alert: {asset_id} stopped responding"
+    elif n_first:
+        subject = f"COMMANDsentry: new asset discovered ({asset_id})"
+    elif n_open and not n_close:
+        word = "port" if n_open == 1 else "ports"
+        subject = f"COMMANDsentry: {n_open} new {word} on {asset_id}"
+    elif n_close and not n_open:
+        word = "port" if n_close == 1 else "ports"
+        subject = f"COMMANDsentry: {n_close} {word} no longer responding on {asset_id}"
+    else:
+        # Mixed opens and closes
+        subject = f"COMMANDsentry: surface change on {asset_id}"
+
+    # Internal-readable summary for the email body header (no spam triggers,
+    # but keeps the structured detail visible inline).
     bits: list[str] = []
     if n_dark:
-        bits.append("WENT DARK")
+        bits.append("asset stopped responding")
     if n_first:
-        bits.append("new asset")
+        bits.append("first observation")
     if n_open:
         bits.append(f"{n_open} port{'s' if n_open != 1 else ''} opened")
     if n_close:
         bits.append(f"{n_close} port{'s' if n_close != 1 else ''} closed")
-    summary = " · ".join(bits) if bits else "surface change"
-
-    subject = f"[COMMANDsentry] {asset_id}: {summary}"
+    summary = ", ".join(bits) if bits else "surface change"
 
     rows_html = "\n".join(_event_to_html_row(ev) for ev in events)
 
@@ -615,11 +636,21 @@ def _send_notification_email(
   </table>
 </body></html>"""
 
+    # List-Unsubscribe / Precedence headers identify this as legitimate
+    # opt-in transactional mail, reducing the spam-classifier suspicion.
+    # The unsubscribe URL points at the user's notification-prefs page so
+    # they can actually opt out (good citizenship + RFC 8058 compliance).
+    portal_url = "https://commandsentry-portal.netlify.app"
     body = json.dumps({
         "from": RESEND_FROM,
         "to": [to_email],
         "subject": subject,
         "html": html,
+        "headers": {
+            "List-Unsubscribe": f"<{portal_url}/account/notifications>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            "X-Entity-Ref-ID": f"commandsentry-{asset_id}",
+        },
     }).encode("utf-8")
 
     req = urllib.request.Request(
