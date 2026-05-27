@@ -679,7 +679,7 @@ def main():
     parser.add_argument("--severity", nargs="+", help="Severity filter (e.g. HIGH MODERATE-HIGH).")
     parser.add_argument("--dry-run", action="store_true", help="Print result, do not write to DB.")
     parser.add_argument("--force", action="store_true", help="Re-synthesize even if already done.")
-    parser.add_argument("--limit", type=int, default=100, help="Max findings to process this run.")
+    parser.add_argument("--limit", type=int, default=300, help="Max findings to process this run. Bumped 100→300 on 2026-05-27 so a single workflow_dispatch can drain the typical backlog (~300 thin findings) in one sitting; cron sweeps the tail.")
     args = parser.parse_args()
 
     _import_deps()
