@@ -73,7 +73,11 @@ jobs:
     # Skip the chained run if the upstream ASM Discover failed.
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 60 min — first-pass run on 2026-05-27 actually clocked in at 23m for
+    # 100 findings (avg ~14s/finding with Sonnet 4.6 outputting full prose
+    # + structured extractions). 60 min gives 2x headroom for slower API
+    # days and grows comfortably if --limit is raised later.
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
