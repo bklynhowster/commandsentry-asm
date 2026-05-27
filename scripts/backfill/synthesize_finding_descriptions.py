@@ -67,7 +67,7 @@ def _import_deps():
 
 
 # ─── Config ─────────────────────────────────────────────────────────────────
-MODEL_ID = "claude-sonnet-4-5"  # the production model
+MODEL_ID = "claude-sonnet-4-6"  # the production model (bumped 2026-05-27)
 MAX_TOKENS = 2048
 TEMPERATURE = 0.2  # low — we want consistent, factual output
 

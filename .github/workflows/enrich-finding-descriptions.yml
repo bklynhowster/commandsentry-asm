@@ -1,0 +1,121 @@
+name: Enrich finding descriptions
+
+# COMMANDsentry — auto-enrichment for finding §1 / §2 / §3 narrative.
+#
+# The portal's finding detail page renders three narrative slots:
+#   §1 What is this?            → findings.description_synth
+#   §2 What could it do?        → findings.impact
+#   §3 How do I get rid of it?  → findings.remediation
+#
+# Scanners (testssl, nuclei, nikto, wpscan, etc.) don't emit prose — they
+# emit machine output. This workflow runs the Phase F synthesis script
+# (scripts/backfill/synthesize_finding_descriptions.py) against every
+# finding whose §1/§2/§3 is still NULL, calling Claude Sonnet 4.6 to
+# produce the narrative + structured extractions (CVE/CWE/tags/CVSS/
+# affected component/framework mappings).
+#
+# Output is written with description_source = 'ai_synthesized' which the
+# portal renders immediately (auto-publish, per 2026-05-27 decision). The
+# /admin/finding-descriptions admin page lets Howie approve → flip to
+# 'ai_synthesized_reviewed' or reject → revert to scanner text.
+#
+# Triggers:
+#   - workflow_run completed for asm-discover (chained after every scan)
+#   - cron daily at 13:00 UTC (safety net — catches any drift)
+#   - workflow_dispatch (on-demand from the Actions UI)
+#
+# Cost expectation: Sonnet 4.6 at ~$3/MTok in, ~$15/MTok out. ~2k in +
+# ~1k out per finding ≈ $0.02/finding. A typical scan tick produces 0-30
+# new findings, so most runs are well under $1. First-pass backfill of
+# 200+ existing thin findings is ~$4-5 one-time.
+
+on:
+  # Chain after every ASM discover run, so new findings get §1/§2/§3
+  # populated within minutes of a scan completing.
+  workflow_run:
+    workflows: ["ASM Discover"]
+    types: [completed]
+
+  # Safety net cron — catches any findings the workflow_run path missed
+  # (e.g., findings inserted by manual SQL or by import_jsonl.py).
+  schedule:
+    - cron: '0 13 * * *'   # 13:00 UTC = 09:00 ET, well after the daily scan tick
+
+  # Manual trigger — useful for forcing a re-synthesis after a prompt change.
+  workflow_dispatch:
+    inputs:
+      severity:
+        description: 'Severity filter (space-separated, e.g. "HIGH MODERATE-HIGH"). Empty = all severities.'
+        required: false
+        default: ''
+        type: string
+      finding_id:
+        description: 'Single finding_id to (re)synthesize. Overrides severity.'
+        required: false
+        default: ''
+        type: string
+      force:
+        description: 'Re-synthesize even if fully populated already.'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+# Don't pile up overlapping enrichment runs.
+concurrency:
+  group: enrich-finding-descriptions
+  cancel-in-progress: false
+
+jobs:
+  enrich:
+    # Skip the chained run if the upstream ASM Discover failed.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install anthropic supabase python-dotenv
+
+      - name: Run synthesis worker
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+
+          # Build the arg list based on dispatch inputs (empty for scheduled /
+          # workflow_run paths — those scan everything thin).
+          ARGS=()
+          if [[ -n "${{ github.event.inputs.finding_id }}" ]]; then
+            ARGS+=(--finding-id "${{ github.event.inputs.finding_id }}")
+          elif [[ -n "${{ github.event.inputs.severity }}" ]]; then
+            # shellcheck disable=SC2206
+            SEV_ARR=( ${{ github.event.inputs.severity }} )
+            ARGS+=(--severity "${SEV_ARR[@]}")
+          fi
+          if [[ "${{ github.event.inputs.force }}" == "true" ]]; then
+            ARGS+=(--force)
+          fi
+
+          echo "Running with: ${ARGS[*]:-(no args — defaults: all thin findings)}"
+          python scripts/backfill/synthesize_finding_descriptions.py "${ARGS[@]}"
+
+      - name: Summarize
+        if: always()
+        run: |
+          echo "Synthesis job complete."
+          echo "Review pending entries at /admin/finding-descriptions in the portal."
