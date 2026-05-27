@@ -779,11 +779,19 @@ def route_subdomains_to_assets(
     Returns a dict {asset_id: [subdomain_entry, ...]}. The apex's bucket
     always exists, even if empty, so its asset_surface row gets refreshed
     every cron tick.
+
+    IMPLICIT www ALIAS: `www.<apex>` is ALWAYS treated as an alias of the
+    apex, even if it isn't in the apex's aliases[] column yet. This
+    catches the case where ASM first-scans a newly-added apex whose
+    aliases[] hasn't been populated. Without this, www.<apex> ends up as
+    its own asset row, which is never what we want.
     """
     buckets: dict[str, list[dict]] = {apex_asset_id: []}
     subs = asm_doc.get("subdomains") or []
     apex_lower = apex_asset_id.lower()
     alias_set = set(aliases)
+    # Hardcoded implicit alias — www.<apex>
+    implicit_www = f"www.{apex_lower}"
 
     for sub in subs:
         if not isinstance(sub, dict):
@@ -792,8 +800,8 @@ def route_subdomains_to_assets(
         if not name:
             continue
 
-        # Apex itself or any alias → apex bucket
-        if name == apex_lower or name in alias_set:
+        # Apex itself, any stored alias, OR the implicit www variant → apex bucket
+        if name == apex_lower or name in alias_set or name == implicit_www:
             buckets[apex_asset_id].append(sub)
             continue
 
@@ -802,6 +810,29 @@ def route_subdomains_to_assets(
         buckets.setdefault(name, []).append(sub)
 
     return buckets
+
+
+def ensure_www_alias_recorded(conn, apex_asset_id: str) -> None:
+    """If www.<apex> was discovered in this scan, make sure it's recorded
+    in the apex's aliases[] column so future runs are explicit, not
+    relying on the implicit www-alias rule.
+    """
+    www_name = f"www.{apex_asset_id.lower()}"
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE public.assets
+            SET aliases = (
+                SELECT array_agg(DISTINCT a) FROM (
+                    SELECT unnest(coalesce(aliases, '{}'::text[])) AS a
+                    UNION SELECT %s
+                ) t
+            )
+            WHERE asset_id = %s
+              AND NOT (aliases @> ARRAY[%s]::text[])
+            """,
+            (www_name, apex_asset_id, www_name),
+        )
 
 
 def build_sliced_doc(orig_doc: dict, sub_list: list[dict]) -> dict:
@@ -954,6 +985,25 @@ def import_one(
     aliases = lookup_existing_aliases(conn, apex_asset_id) if not dry_run else []
 
     buckets = route_subdomains_to_assets(asm_doc, apex_asset_id, aliases)
+
+    # If www.<apex> appeared in this scan and was routed via the implicit
+    # alias rule, persist that fact in the apex's aliases[] column so
+    # future scans don't depend on the runtime rule. Cheap upsert; no-op
+    # if it's already there.
+    if not dry_run:
+        apex_subs = buckets.get(apex_asset_id, [])
+        www_name = f"www.{apex_asset_id.lower()}"
+        if any(
+            (s.get("name") or "").lower() == www_name
+            for s in apex_subs if isinstance(s, dict)
+        ):
+            try:
+                ensure_www_alias_recorded(conn, apex_asset_id)
+            except Exception as e:
+                print(
+                    f"  ! ensure_www_alias_recorded for {apex_asset_id} failed (non-fatal): {e}",
+                    file=sys.stderr,
+                )
 
     if dry_run:
         return {
