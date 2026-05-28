@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-27T20:27:04Z_5c689ff8",
-    "started_at": "2026-05-27T20:27:04Z",
-    "completed_at": "2026-05-27T20:28:59Z",
-    "duration_seconds": 115,
+    "id": "scan_2026-05-28T04:17:30Z_a71d6fdd",
+    "started_at": "2026-05-28T04:17:30Z",
+    "completed_at": "2026-05-28T04:18:55Z",
+    "duration_seconds": 85,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -32,7 +32,7 @@
     "live_subdomain_count": 2,
     "host_count": 1,
     "service_count": 4,
-    "newest_cert_expiry_days": 84,
+    "newest_cert_expiry_days": 83,
     "top_hosting_org": "Automattic, Inc",
     "platforms": [
       "WordPress on wp.cloud (Pressable)"
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-27T20:28:59Z",
-      "last_seen": "2026-05-27T20:28:59Z",
+      "first_discovered": "2026-05-28T04:18:55Z",
+      "last_seen": "2026-05-28T04:18:55Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -116,7 +116,7 @@
             "not_before": "2026-05-22T01:44:05Z",
             "not_after": "2026-08-20T01:44:04Z",
             "self_signed": false,
-            "days_to_expiry": 84
+            "days_to_expiry": 83
           }
         }
       ],
@@ -132,10 +132,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
-          "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "MS=ms93622757",
           "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "MS=ms93622757"
+          "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -247,8 +247,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-27T20:28:59Z",
-      "last_seen": "2026-05-27T20:28:59Z",
+      "first_discovered": "2026-05-28T04:18:55Z",
+      "last_seen": "2026-05-28T04:18:55Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -319,7 +319,7 @@
             "not_before": "2026-05-22T01:44:05Z",
             "not_after": "2026-08-20T01:44:04Z",
             "self_signed": false,
-            "days_to_expiry": 84
+            "days_to_expiry": 83
           }
         }
       ],
@@ -439,7 +439,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-27T16:02:43Z_9c22348c",
+    "since_scan": "scan_2026-05-27T20:27:04Z_5c689ff8",
     "added": {
       "subdomains": [],
       "services": [],
@@ -3253,6 +3253,42 @@
       "scan_id": "scan_2026-05-27T20:27:04Z_5c689ff8",
       "started_at": "2026-05-27T20:27:04Z",
       "completed_at": "2026-05-27T20:28:59Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 1,
+      "service_count": 4,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Contact Form 7": "6.1.6",
+        "Slider Revolution": "6.7.55",
+        "WP Google Map Plugin": "4.9.5",
+        "WPMU DEV Smush": "4.0.3",
+        "Yoast SEO": "27.7",
+        "imagesLoaded": "5.0.0",
+        "jQuery Migrate": "3.4.1"
+      }
+    },
+    {
+      "scan_id": "scan_2026-05-28T04:17:30Z_a71d6fdd",
+      "started_at": "2026-05-28T04:17:30Z",
+      "completed_at": "2026-05-28T04:18:55Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 1,
