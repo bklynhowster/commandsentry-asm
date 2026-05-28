@@ -18,11 +18,15 @@ Even if nothing fires, the alerter sends a brief "all clear" so you know
 it's alive.
 
 Required env vars:
-  SUPABASE_DSN     postgres URL (use direct connection or session pooler)
-  RESEND_API_KEY   from https://resend.com/api-keys
-  ALERTER_FROM     verified sender, e.g. commandsentry@goldenlaneinc.com
-  ALERTER_TO       comma-separated recipient list, e.g.
-                     hschneider@commandcompanies.com,howiehow@mac.com
+  SUPABASE_DSN       postgres URL (use direct connection or session pooler)
+  SENDGRID_API_KEY   from Walter @ Command's SendGrid account
+                       (legacy RESEND_API_KEY still honored as fallback
+                       during the 2026-05-28 cutover transition)
+  ALERTER_FROM       verified Command sender; default
+                       CommandSentry@commandcompanies.com
+  ALERTER_FROM_NAME  display name; default "COMMANDsentry"
+  ALERTER_TO         comma-separated recipient list, e.g.
+                       hschneider@commandcompanies.com,howiehow@mac.com
 
 Optional env vars:
   ALERTER_NAME             default 'daily_digest' — keys the runs table
@@ -350,44 +354,61 @@ def render_text(
 
 
 # ---------------------------------------------------------------------------
-# Resend
+# SendGrid
 # ---------------------------------------------------------------------------
+#
+# MIGRATED 2026-05-28 from Resend (Decision D-031). See Obsidian
+# COMMANDsentry note 47 for the verification record + rationale. Same
+# shape as the prior Resend function so the call site needs minimal edits.
 
-def send_via_resend(
+def send_via_sendgrid(
     *,
     api_key: str,
     from_addr: str,
+    from_name: str,
     to_addrs: list[str],
     subject: str,
     html: str,
     text: str,
 ) -> dict:
+    """
+    POST to SendGrid v3 /mail/send. Returns a dict shaped to look like the
+    Resend response ({'id': ...}) so the call site doesn't have to special-
+    case providers. SendGrid puts the message ID in the X-Message-Id
+    response header rather than a JSON body; success is HTTP 202 Accepted
+    with an empty body.
+    """
     payload = {
-        "from": from_addr,
-        "to":   to_addrs,
+        "personalizations": [
+            {"to": [{"email": a} for a in to_addrs]},
+        ],
+        "from":    {"email": from_addr, "name": from_name},
         "subject": subject,
-        "html": html,
-        "text": text,
+        "content": [
+            # text/plain first so HTML clients pick the html alternative.
+            {"type": "text/plain", "value": text},
+            {"type": "text/html",  "value": html},
+        ],
     }
     req = urllib.request.Request(
-        url="https://api.resend.com/emails",
+        url="https://api.sendgrid.com/v3/mail/send",
         method="POST",
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type":  "application/json",
-            # Cloudflare (which fronts Resend's API) blocks the default
-            # Python-urllib/* User-Agent with HTTP 403 / error 1010. Use a
-            # named UA so we're not flagged as an anonymous bot.
             "User-Agent":    "COMMANDsentry-alerter/1.0 (+https://github.com/bklynhowster/commandsentry-asm)",
         },
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            # SendGrid returns 202 with empty body. Message ID is in
+            # the X-Message-Id header.
+            message_id = resp.headers.get("X-Message-Id") or ""
+            return {"id": message_id, "status_code": resp.status}
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Resend HTTP {e.code}: {body}") from None
+        raise RuntimeError(f"SendGrid HTTP {e.code}: {body[:500]}") from None
 
 
 # ---------------------------------------------------------------------------
@@ -401,8 +422,16 @@ def main() -> int:
     args = ap.parse_args()
 
     dsn          = _env("SUPABASE_DSN", required=True)
-    api_key      = _env("RESEND_API_KEY", required=not args.dry_run) or ""
-    from_addr    = _env("ALERTER_FROM", default="commandsentry@goldenlaneinc.com")
+    # Migrated 2026-05-28: RESEND_API_KEY → SENDGRID_API_KEY. Fall back to
+    # the legacy var name during the transition so an unset SENDGRID_API_KEY
+    # in CI doesn't break the digest before secrets are updated.
+    api_key      = (
+        _env("SENDGRID_API_KEY", required=False)
+        or _env("RESEND_API_KEY", required=not args.dry_run)
+        or ""
+    )
+    from_addr    = _env("ALERTER_FROM", default="CommandSentry@commandcompanies.com")
+    from_name    = _env("ALERTER_FROM_NAME", default="COMMANDsentry")
     to_raw       = _env("ALERTER_TO",
                         default="hschneider@commandcompanies.com,howiehow@mac.com")
     to_addrs     = [a.strip() for a in (to_raw or "").split(",") if a.strip()]
@@ -490,11 +519,15 @@ def main() -> int:
         err: str | None = None
         sent = False
         try:
-            resp = send_via_resend(
-                api_key=api_key, from_addr=from_addr, to_addrs=to_addrs,
+            resp = send_via_sendgrid(
+                api_key=api_key, from_addr=from_addr, from_name=from_name,
+                to_addrs=to_addrs,
                 subject=subject, html=html, text=text,
             )
-            sent = bool(resp.get("id"))
+            # SendGrid returns 202 with X-Message-Id header. Treat HTTP 202
+            # as the success signal — message-id can be empty in rare cases
+            # but the API accepted the request for delivery either way.
+            sent = resp.get("status_code") == 202 or bool(resp.get("id"))
         except Exception as e:
             status = "error"
             err = str(e)[:1900]
