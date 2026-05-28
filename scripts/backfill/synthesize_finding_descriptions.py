@@ -273,7 +273,16 @@ def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, for
     elif severities:
         q = q.in_("severity", severities)
 
-    rows = q.limit(500).execute().data or []
+    # 5000-row cap so the worker can SEE the full findings table when there
+    # are 1000+ findings. The 500 default in early development assumed a
+    # small dataset; in production with 1000+ findings the cap was silently
+    # excluding ~272 findings from row 501 onward — they'd never be
+    # processed by any run (bulk, cron, workflow_run) because the query
+    # never returned them. Spotted 2026-05-28 during the post-overnight
+    # audit (admin queue had 728 enriched out of 1000 total in DB).
+    # 5000 fits current dataset + 5x growth headroom; if we ever cross
+    # ~3000 findings, switch to proper pagination.
+    rows = q.limit(5000).execute().data or []
 
     # Pull asset + best history excerpt for each in batches
     asset_ids = list({r["asset_id"] for r in rows})
