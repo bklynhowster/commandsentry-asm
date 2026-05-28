@@ -1,0 +1,294 @@
+name: Scanner
+
+# COMMANDsentry — Phase 4a active scanning workflow.
+#
+# Pulls the oldest queued scan from public.scan_queue, dispatches it to the
+# tier-specific runner (run_light.py / run_medium.py / run_heavy.py), and
+# closes out the scan_run. One scan per invocation.
+#
+# Triggers:
+#   • Cron every 5 minutes — drains the queue continuously.
+#   • workflow_dispatch — optional asset_id + intensity inputs to queue a
+#     one-off scan from the GH Actions UI. Useful for testing + on-demand
+#     re-scans without going through the portal.
+#
+# Concurrency:
+#   • No restriction (NOT a single-group lock). The DB-level partial unique
+#     index `scan_queue_one_running_per_asset` already protects against the
+#     same asset being scanned concurrently. Allowing multiple workflow
+#     runs in parallel means a queue of 60 Light scans can drain across
+#     multiple runners in parallel instead of serializing through one.
+#
+# Asset auto-queueing:
+#   • New assets discovered by ASM Discover are NOT automatically queued
+#     here. The ASM importer is the right place to do that (separate
+#     commit, M5+). This workflow is purely the "scan executor" half.
+#
+# Spec: Obsidian / COMMANDsentry / 48 - Phase 4a Spec and Context Handoff.md
+
+on:
+  schedule:
+    # Every 5 minutes. Adjust later if queue depth is consistently zero
+    # (could go to every 15 min for cost reasons; or every minute for
+    # faster on-demand response, but at 5x the GH Actions minute cost).
+    - cron: '*/5 * * * *'
+
+  workflow_dispatch:
+    inputs:
+      asset_id:
+        description: 'Asset to scan ad-hoc (e.g., portal.unimacgraphics.com). Leave blank to only drain the queue.'
+        required: false
+        default: ''
+        type: string
+      intensity:
+        description: 'Tier for the ad-hoc scan. Ignored when asset_id is blank.'
+        required: false
+        default: 'light'
+        type: choice
+        options:
+          - light
+          - medium
+          - heavy
+      authenticated:
+        description: 'Run authenticated scan? Only valid for medium/heavy and requires asset_auth_config row.'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+# Per-invocation timeout sized for Heavy worst case + headroom. Light = ~5s,
+# Medium = ~15 min, Heavy = ~60-90 min, plus ~5 min for tool install/cache.
+# 120 min ceiling matches the enrich workflow.
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache Go binaries (httpx, etc.)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/bin
+            ~/.commandsentry
+          key: ${{ runner.os }}-scanner-tools-${{ hashFiles('scanner/install-tools.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-scanner-tools-
+            ${{ runner.os }}-asm-tools-
+
+      - name: Install scanner tool stack
+        run: |
+          chmod +x scanner/install-tools.sh
+          scanner/install-tools.sh --platform ubuntu
+
+      - name: Verify Light tier dependencies
+        run: |
+          # Light tier needs: python3, curl, dig (dnsutils), httpx (ProjectDiscovery)
+          for t in python3 curl dig httpx openssl; do
+            if ! command -v "$t" >/dev/null 2>&1; then
+              echo "::error::Required Light-tier tool not found: $t"
+              exit 1
+            fi
+          done
+          echo "Light tier tools present."
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'psycopg[binary]'
+
+      # ─── If workflow_dispatch with asset_id was supplied: queue it ──
+      - name: Queue ad-hoc scan from workflow_dispatch inputs
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.asset_id != '' }}
+        env:
+          PGCONNECT_TIMEOUT: 10
+          SUPABASE_DSN:      ${{ secrets.SUPABASE_DSN }}
+        run: |
+          ASSET_ID="${{ github.event.inputs.asset_id }}"
+          INTENSITY="${{ github.event.inputs.intensity }}"
+          AUTHENTICATED="${{ github.event.inputs.authenticated }}"
+
+          # Defensive shell-quote: psql -c with double-quoted SQL.
+          # Note: ASSET_ID gets interpolated via printf %q escape since
+          # it's user-supplied and might contain shell metachars.
+          ASSET_ID_QUOTED=$(printf '%q' "$ASSET_ID")
+
+          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
+            insert into public.scan_queue
+              (asset_id, intensity, authenticated, source, notes)
+            values
+              ('$ASSET_ID', '$INTENSITY', $AUTHENTICATED, 'workflow_dispatch',
+               'Ad-hoc fire via GH Actions UI (workflow_dispatch).');
+          "
+          echo "Queued $INTENSITY scan for $ASSET_ID (authenticated=$AUTHENTICATED)."
+
+      # ─── Atomically claim the next queued scan ─────────────────────
+      - name: Poll queue + claim next scan
+        id: poll
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          python scripts/scanner/poll_queue.py > /tmp/scan_descriptor.json
+          if [ -s /tmp/scan_descriptor.json ]; then
+            INTENSITY=$(python -c "import json; print(json.load(open('/tmp/scan_descriptor.json'))['intensity'])")
+            ASSET_ID=$(python -c "import json; print(json.load(open('/tmp/scan_descriptor.json'))['asset_id'])")
+            SCAN_RUN_ID=$(python -c "import json; print(json.load(open('/tmp/scan_descriptor.json'))['scan_run_id'])")
+            echo "intensity=$INTENSITY"     >> "$GITHUB_OUTPUT"
+            echo "asset_id=$ASSET_ID"       >> "$GITHUB_OUTPUT"
+            echo "scan_run_id=$SCAN_RUN_ID" >> "$GITHUB_OUTPUT"
+            echo "has_work=true"            >> "$GITHUB_OUTPUT"
+            echo "Claimed: $INTENSITY scan on $ASSET_ID (scan_run_id=$SCAN_RUN_ID)"
+          else
+            echo "has_work=false" >> "$GITHUB_OUTPUT"
+            echo "No queued scans to claim — nothing to do."
+          fi
+
+      # ─── Record the GH run_id on the scan_run for back-linking ─────
+      # Stamps the link between this workflow run and the scan_run so the
+      # portal can deep-link "view scanner logs" from the asset's history.
+      - name: Stamp github_run_id on scan_run
+        if: steps.poll.outputs.has_work == 'true'
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          GH_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SCAN_RUN_ID="${{ steps.poll.outputs.scan_run_id }}"
+          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
+            update public.scan_run
+               set github_run_id = '$GH_URL'
+             where scan_run_id   = '$SCAN_RUN_ID';
+          "
+
+      # ─── Dispatch to tier-specific runner ──────────────────────────
+      # Only Light tier is implemented as of M3. Medium/Heavy fail the
+      # claim cleanly with a "not yet implemented" error_message so
+      # operators see clearly why the scan failed instead of getting
+      # stuck-running rows.
+
+      - name: Run Light tier
+        if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'light' }}
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          python scripts/scanner/run_light.py /tmp/scan_descriptor.json
+
+      - name: Run Medium tier (NOT YET IMPLEMENTED — M6)
+        if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'medium' }}
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          SCAN_RUN_ID="${{ steps.poll.outputs.scan_run_id }}"
+          echo "::warning::Medium tier runner is not yet implemented (Phase 4a M6). Marking scan failed."
+          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
+            update public.scan_run
+               set status = 'failed',
+                   completed_at = now(),
+                   duration_seconds = extract(epoch from (now() - started_at))::int,
+                   error_message = 'Medium tier runner not yet implemented (Phase 4a M6)'
+             where scan_run_id = '$SCAN_RUN_ID';
+          "
+          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
+            update public.scan_queue
+               set status = 'failed',
+                   completed_at = now(),
+                   duration_seconds = extract(epoch from (now() - started_at))::int,
+                   error_message = 'Medium tier runner not yet implemented (Phase 4a M6)'
+             where scan_run_id = '$SCAN_RUN_ID';
+          "
+          exit 1  # mark the workflow step failed for visibility in Actions UI
+
+      - name: Run Heavy tier (NOT YET IMPLEMENTED — M9)
+        if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'heavy' }}
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          SCAN_RUN_ID="${{ steps.poll.outputs.scan_run_id }}"
+          echo "::warning::Heavy tier runner is not yet implemented (Phase 4a M9). Marking scan failed."
+          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
+            update public.scan_run
+               set status = 'failed',
+                   completed_at = now(),
+                   duration_seconds = extract(epoch from (now() - started_at))::int,
+                   error_message = 'Heavy tier runner not yet implemented (Phase 4a M9)'
+             where scan_run_id = '$SCAN_RUN_ID';
+          "
+          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
+            update public.scan_queue
+               set status = 'failed',
+                   completed_at = now(),
+                   duration_seconds = extract(epoch from (now() - started_at))::int,
+                   error_message = 'Heavy tier runner not yet implemented (Phase 4a M9)'
+             where scan_run_id = '$SCAN_RUN_ID';
+          "
+          exit 1
+
+      # ─── Cleanup any orphaned 'running' rows from this invocation ──
+      # If the runner died mid-step (OOM, GH Actions restart, etc.), the
+      # scan_queue + scan_run rows are stuck 'running' forever. This
+      # post-step ALWAYS runs (`if: always()`) and marks them failed.
+      # It's a per-invocation safety net; a separate cron should do
+      # global liveness sweeps for orphans older than 4 hours.
+      - name: Cleanup orphaned running rows from this scan_run
+        if: ${{ always() && steps.poll.outputs.has_work == 'true' }}
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          SCAN_RUN_ID="${{ steps.poll.outputs.scan_run_id }}"
+          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
+            update public.scan_run
+               set status = 'failed',
+                   completed_at = now(),
+                   duration_seconds = extract(epoch from (now() - started_at))::int,
+                   error_message   = coalesce(error_message,
+                                              'workflow ended without explicit close-out')
+             where scan_run_id = '$SCAN_RUN_ID'
+               and status      = 'running';
+          " || true
+
+          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
+            update public.scan_queue
+               set status = 'failed',
+                   completed_at = now(),
+                   duration_seconds = extract(epoch from (now() - started_at))::int,
+                   error_message   = coalesce(error_message,
+                                              'workflow ended without explicit close-out')
+             where scan_run_id = '$SCAN_RUN_ID'
+               and status      = 'running';
+          " || true
+
+      # ─── Summarize ─────────────────────────────────────────────────
+      - name: Summary
+        if: ${{ always() }}
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          if [ "${{ steps.poll.outputs.has_work }}" != "true" ]; then
+            echo "## :zzz: No queued scans this tick" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          SCAN_RUN_ID="${{ steps.poll.outputs.scan_run_id }}"
+          STATUS=$(psql "$SUPABASE_DSN" -t -A -c "
+            select status from public.scan_run where scan_run_id='$SCAN_RUN_ID';
+          " 2>/dev/null || echo "unknown")
+
+          {
+            echo "## Scanner run"
+            echo ""
+            echo "| Field         | Value |"
+            echo "|---------------|-------|"
+            echo "| Asset         | \`${{ steps.poll.outputs.asset_id }}\` |"
+            echo "| Intensity     | ${{ steps.poll.outputs.intensity }} |"
+            echo "| scan_run_id   | \`$SCAN_RUN_ID\` |"
+            echo "| Final status  | $STATUS |"
+          } >> "$GITHUB_STEP_SUMMARY"
