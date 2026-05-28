@@ -7,7 +7,13 @@ name: Scanner
 # closes out the scan_run. One scan per invocation.
 #
 # Triggers:
-#   • Cron every 5 minutes — drains the queue continuously.
+#   • Cron every 10 minutes at offset minutes (:07, :17, :27, :37, :47, :57)
+#     to dodge GitHub's high-load windows at hour boundaries.
+#   • workflow_run after ASM Discover succeeds — guaranteed 6-hour drain
+#     even if cron is being a jerk. GH Actions' scheduled cron is best-
+#     effort and known to flake on private repos with low activity, so
+#     this is the reliable backstop. (Behavior verified empirically on
+#     2026-05-28 — 5-min cron failed to fire for >70 min after deploy.)
 #   • workflow_dispatch — optional asset_id + intensity inputs to queue a
 #     one-off scan from the GH Actions UI. Useful for testing + on-demand
 #     re-scans without going through the portal.
@@ -28,10 +34,19 @@ name: Scanner
 
 on:
   schedule:
-    # Every 5 minutes. Adjust later if queue depth is consistently zero
-    # (could go to every 15 min for cost reasons; or every minute for
-    # faster on-demand response, but at 5x the GH Actions minute cost).
-    - cron: '*/5 * * * *'
+    # Every 10 min at offset minutes — avoids the :00 / :05 / :10 hour-
+    # boundary windows where GH Actions queues are heaviest and most
+    # likely to drop scheduled jobs. Per GH docs the 5-min minimum
+    # interval is also the most aggressively throttled.
+    - cron: '7-57/10 * * * *'
+
+  # Chain after every successful ASM Discover run — guarantees a queue
+  # drain pass at least every 6 hours (the ASM Discover cadence) even
+  # if our own scheduled cron flakes. ASM Discover has been running
+  # reliably for weeks so it's the trustworthy heartbeat.
+  workflow_run:
+    workflows: ["ASM Discover"]
+    types: [completed]
 
   workflow_dispatch:
     inputs:
@@ -63,6 +78,9 @@ permissions:
 # 120 min ceiling matches the enrich workflow.
 jobs:
   scan:
+    # Skip the chained run if upstream ASM Discover failed. Other triggers
+    # (cron, workflow_dispatch) always run.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
