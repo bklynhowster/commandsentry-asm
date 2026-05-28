@@ -130,7 +130,12 @@ class LightFinding:
     check_name:   str           # e.g., "missing-header-hsts"
     title:        str           # human-readable
     severity:     str           # CRITICAL / HIGH / MODERATE-HIGH / MODERATE / LOW / INFO
-    category:     str           # tls / headers / paths / dns / methods / csp / tech
+    # category MUST be a value in the finding_category_t enum. Valid values are:
+    #   sast, dast, sca, secret, recon, tls, headers, dns, email, auth, session,
+    #   csrf, ssrf, xxe, xss, sqli, idor, rce, lfi, redirect, info_disclosure,
+    #   takeover, typosquat, config, deprecation, supply_chain, other
+    # Light tier uses: tls, headers, dns, info_disclosure (for paths + tech), config (for methods)
+    category:     str
     description:  str           # 1-3 sentence scanner-side summary (enrichment expands this)
     tags:         list[str] = field(default_factory=list)
     cwe:          list[int] = field(default_factory=list)
@@ -220,7 +225,7 @@ def check_tls(ctx: ScanContext) -> None:
                 check_name="tls-cert-expired",
                 title=f"TLS certificate expired ({abs(days_remaining)} days ago)",
                 severity="HIGH",
-                category="tls",
+                category="tls",  # enum: tls
                 description=f"The TLS certificate served by {ctx.hostname} expired on "
                             f"{not_after_str}. Browsers and clients will refuse to "
                             f"connect or show warnings until a fresh certificate is issued.",
@@ -312,7 +317,7 @@ def check_common_paths(ctx: ScanContext) -> None:
                 check_name=f"exposed-path-{slug}",
                 title=f"Exposed path: {path} (HTTP {code})",
                 severity=severity,
-                category="paths",
+                category="info_disclosure",  # enum remap: 'paths' isn't a valid finding_category_t
                 description=f"The path {path} on {ctx.hostname} returned HTTP {code}. {why}.",
                 tags=["paths", "exposure"],
                 cwe=[538],
@@ -409,7 +414,7 @@ def check_httpx_tech(ctx: ScanContext) -> None:
             check_name="tech-disclosure",
             title=f"Detected technologies: {', '.join(tech[:5])}{'...' if len(tech) > 5 else ''}",
             severity="INFO",
-            category="tech",
+            category="info_disclosure",  # enum remap: 'tech' isn't a valid finding_category_t
             description=f"Active tech fingerprinting on {ctx.hostname} identified: "
                         f"{', '.join(tech)}. This is informational — useful for asset "
                         f"profiling and CVE matching, not a defect by itself.",
@@ -447,7 +452,7 @@ def check_methods(ctx: ScanContext) -> None:
                 check_name=f"method-{method.lower()}-enabled",
                 title=f"HTTP {method} method enabled",
                 severity=severity,
-                category="methods",
+                category="config",  # enum remap: 'methods' isn't a valid finding_category_t
                 description=f"The {method} HTTP method is enabled on {ctx.hostname} "
                             f"(advertised in the OPTIONS Allow header). {why}.",
                 tags=["methods", method.lower()],
@@ -494,7 +499,7 @@ def check_csp_nonce(ctx: ScanContext) -> None:
                 check_name="csp-static-nonce",
                 title="CSP script-src nonce is static across requests",
                 severity="MODERATE",
-                category="csp",
+                category="headers",  # enum remap: 'csp' isn't a valid finding_category_t (CSP IS a header)
                 description=f"Five consecutive requests to {ctx.hostname} returned "
                             f"identical CSP script-src nonces ('{list(unique)[0][:16]}...'). "
                             f"Static nonces defeat the purpose of nonce-based CSP — an "
@@ -560,7 +565,11 @@ VALUES (%(scan_run_id)s, %(tool_name)s, %(output_format)s, %(size_bytes)s, %(con
 """
 
 
-CLOSE_OUT_SQL = """
+# psycopg3 rejects multi-statement strings in execute() — split each pair
+# into individual single-statement queries. Caller runs both inside the open
+# transaction so the close-out remains atomic.
+
+CLOSE_SCAN_RUN_SQL = """
 UPDATE public.scan_run
 SET status            = 'complete',
     completed_at      = now(),
@@ -569,7 +578,9 @@ SET status            = 'complete',
     findings_added    = %(findings_added)s,
     findings_updated  = %(findings_updated)s
 WHERE scan_run_id     = %(scan_run_id)s;
+"""
 
+CLOSE_SCAN_QUEUE_SQL = """
 UPDATE public.scan_queue
 SET status            = 'complete',
     completed_at      = now(),
@@ -579,14 +590,16 @@ WHERE queue_id        = %(queue_id)s;
 """
 
 
-FAIL_SQL = """
+FAIL_SCAN_RUN_SQL = """
 UPDATE public.scan_run
 SET status           = 'failed',
     completed_at     = now(),
     duration_seconds = EXTRACT(EPOCH FROM (now() - started_at))::int,
     error_message    = %(error)s
 WHERE scan_run_id    = %(scan_run_id)s;
+"""
 
+FAIL_SCAN_QUEUE_SQL = """
 UPDATE public.scan_queue
 SET status           = 'failed',
     completed_at     = now(),
@@ -613,7 +626,9 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 "description": f.description,
                 "cwe":         f.cwe,
                 "references":  f.references,
-                "source":      "light_scan",
+                # 'commandsentry_light' added to finding_source_t in migration
+                # 20260528b_phase4a_source_enum_extension.sql
+                "source":      "commandsentry_light",
                 "tags":        f.tags,
             }
             cur.execute(UPSERT_FINDING_SQL, params)
@@ -641,23 +656,27 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
 
 def close_out(conn, ctx: ScanContext, inserted: int, updated: int) -> None:
     with conn.cursor() as cur:
-        cur.execute(CLOSE_OUT_SQL, {
+        params = {
             "tools_run":        ctx.tools_run,
             "findings_added":   inserted,
             "findings_updated": updated,
             "findings_count":   inserted + updated,
             "scan_run_id":      ctx.scan_run_id,
             "queue_id":         ctx.queue_id,
-        })
+        }
+        cur.execute(CLOSE_SCAN_RUN_SQL, params)
+        cur.execute(CLOSE_SCAN_QUEUE_SQL, params)
 
 
 def fail_out(conn, ctx: ScanContext, error: str) -> None:
     with conn.cursor() as cur:
-        cur.execute(FAIL_SQL, {
+        params = {
             "error":       error,
             "scan_run_id": ctx.scan_run_id,
             "queue_id":    ctx.queue_id,
-        })
+        }
+        cur.execute(FAIL_SCAN_RUN_SQL, params)
+        cur.execute(FAIL_SCAN_QUEUE_SQL, params)
 
 
 # ─── Main ───────────────────────────────────────────────────────────────
