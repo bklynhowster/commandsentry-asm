@@ -4,7 +4,12 @@ name: Daily posture digest
 # Adjust the cron line if you want a different time. Cron uses UTC.
 #
 # Also runnable manually from the Actions tab via workflow_dispatch.
-# dry_run=true is safe; it skips Resend + DB writes.
+# dry_run=true is safe; it skips email + DB writes.
+#
+# Email transport: SendGrid (D-031, 2026-05-28 cutover). The legacy
+# RESEND_API_KEY env var is still passed through for a transition
+# period so the alerter's `SENDGRID_API_KEY or RESEND_API_KEY` fallback
+# in run_alerter.py keeps working if SENDGRID_API_KEY isn't set.
 
 on:
   schedule:
@@ -41,8 +46,13 @@ jobs:
       - name: Run alerter
         env:
           SUPABASE_DSN:        ${{ secrets.SUPABASE_DSN }}
+          # D-031 (2026-05-28): primary SendGrid API key, with the legacy
+          # Resend key kept as fallback during the transition. The Python
+          # script prefers SENDGRID_API_KEY when set.
+          SENDGRID_API_KEY:    ${{ secrets.SENDGRID_API_KEY }}
           RESEND_API_KEY:      ${{ secrets.RESEND_API_KEY }}
-          ALERTER_FROM:        ${{ vars.ALERTER_FROM       || 'commandsentry@alerts.goldenlaneinc.com' }}
+          ALERTER_FROM:        ${{ vars.ALERTER_FROM       || 'CommandSentry@commandcompanies.com' }}
+          ALERTER_FROM_NAME:   ${{ vars.ALERTER_FROM_NAME  || 'COMMANDsentry' }}
           ALERTER_TO:          ${{ vars.ALERTER_TO         || 'hschneider@commandcompanies.com,howiehow@mac.com' }}
           ALERTER_DASHBOARD_URL: ${{ vars.ALERTER_DASHBOARD_URL || 'https://supabase.com/dashboard/project/hdygktppfvuspnumpfuq' }}
         run: |
