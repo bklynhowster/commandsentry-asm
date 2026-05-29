@@ -19,11 +19,16 @@
 #   EXPRESSVPN_ACTIVATION_CODE   — GH secret containing Howie's activation code
 #
 # Optional environment:
-#   VPN_REGION       — region name; default "USA - New York" (forensic-friendly)
-#   EXPRESSVPN_DEB_URL — direct URL to a downloadable .deb installer if
-#                        expressvpnctl isn't already present on the runner.
-#                        Hosting suggestions: private GH release asset,
-#                        S3 with pre-signed URL, etc.
+#   VPN_REGION         — region name; default "USA - New York" (forensic-friendly)
+#   EXPRESSVPN_INSTALLER_PATH — local path to a pre-downloaded ExpressVPN
+#                        installer. Supports both formats:
+#                          .run  — universal Linux installer (recommended)
+#                          .deb  — Debian/Ubuntu package
+#                        The workflow should download the asset from a
+#                        GH release via `gh release download` and set this
+#                        env var to the resulting path.
+#   EXPRESSVPN_DEB_URL — legacy: direct URL to a .deb installer. Kept for
+#                        backward compatibility; prefer EXPRESSVPN_INSTALLER_PATH.
 #
 # Outputs (written to $GITHUB_OUTPUT when running under GH Actions):
 #   vpn_region       — connected region (echoes back the input or default)
@@ -73,28 +78,59 @@ log "baseline runner IP (pre-VPN): ${BASELINE_IP:-<unknown>}"
 if ! command -v expressvpnctl &>/dev/null && ! command -v expressvpn &>/dev/null; then
   log "expressvpnctl not found on PATH — attempting install"
 
-  if [[ -n "${EXPRESSVPN_DEB_URL:-}" ]]; then
+  INSTALLER=""
+
+  # Preferred: EXPRESSVPN_INSTALLER_PATH set by the workflow (gh release
+  # download dropped the asset locally).
+  if [[ -n "${EXPRESSVPN_INSTALLER_PATH:-}" ]] && [[ -f "$EXPRESSVPN_INSTALLER_PATH" ]]; then
+    INSTALLER="$EXPRESSVPN_INSTALLER_PATH"
+    log "using pre-downloaded installer: $INSTALLER"
+
+  # Legacy: download from a URL (works for .deb hosted publicly or signed S3).
+  elif [[ -n "${EXPRESSVPN_DEB_URL:-}" ]]; then
     log "downloading installer from EXPRESSVPN_DEB_URL"
     if ! curl -fsSL "$EXPRESSVPN_DEB_URL" -o /tmp/expressvpn.deb; then
       err "failed to download installer from EXPRESSVPN_DEB_URL"
       exit 1
     fi
-    log "installing via dpkg"
-    if ! sudo dpkg -i /tmp/expressvpn.deb; then
-      # dpkg may fail due to missing deps — try to fix
-      sudo apt-get install -y -f -qq || true
-      if ! command -v expressvpnctl &>/dev/null && ! command -v expressvpn &>/dev/null; then
-        err "dpkg install failed even after apt-get -f"
-        exit 1
-      fi
-    fi
-    rm -f /tmp/expressvpn.deb
+    INSTALLER="/tmp/expressvpn.deb"
   else
-    err "expressvpnctl is not installed and EXPRESSVPN_DEB_URL is not set"
-    err "Either pre-install the CLI in a custom runner image, or set"
-    err "EXPRESSVPN_DEB_URL to a downloadable .deb installer."
+    err "expressvpnctl is not installed and no installer source provided."
+    err "Set EXPRESSVPN_INSTALLER_PATH to a local .run or .deb file,"
+    err "or EXPRESSVPN_DEB_URL to a downloadable URL."
     exit 1
   fi
+
+  # Install based on file extension.
+  case "$INSTALLER" in
+    *.run)
+      log "installing via universal .run installer"
+      chmod +x "$INSTALLER" || true
+      # MakeSelf-format .run installers from ExpressVPN extract themselves
+      # and run the embedded post-extract install. Standard pattern:
+      #   sudo sh installer.run
+      # Run via sudo because the package install hits /etc and /usr.
+      if ! sudo "$INSTALLER"; then
+        err ".run installer exited non-zero"
+        exit 1
+      fi
+      ;;
+    *.deb)
+      log "installing via dpkg"
+      if ! sudo dpkg -i "$INSTALLER"; then
+        # dpkg may fail due to missing deps — try to fix
+        sudo apt-get install -y -f -qq || true
+        if ! command -v expressvpnctl &>/dev/null && ! command -v expressvpn &>/dev/null; then
+          err "dpkg install failed even after apt-get -f"
+          exit 1
+        fi
+      fi
+      ;;
+    *)
+      err "unknown installer format: $INSTALLER (expected .run or .deb)"
+      exit 1
+      ;;
+  esac
 fi
 
 # Some installs expose the binary as `expressvpn`, newer as `expressvpnctl`.

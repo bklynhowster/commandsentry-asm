@@ -39,11 +39,33 @@ jobs:
           chmod +x scripts/scanner/vpn_bringup.sh
           chmod +x scripts/scanner/vpn_teardown.sh
 
+      # Download the ExpressVPN installer from the private GH release.
+      # gh CLI uses the workflow's GITHUB_TOKEN to authenticate against
+      # the repo, so no separate auth setup needed.
+      - name: Fetch ExpressVPN installer from vpn-tools release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/vpn-installer
+          # Pull every asset attached to the vpn-tools release. We expect
+          # exactly one (.run or .deb). Pattern is permissive so we don't
+          # break if Howie uploads with a slightly different filename.
+          gh release download vpn-tools \
+            --repo bklynhowster/commandsentry-asm \
+            --pattern 'expressvpn-*' \
+            --dir /tmp/vpn-installer
+          INSTALLER=$(ls /tmp/vpn-installer/expressvpn-* | head -1)
+          if [[ -z "$INSTALLER" ]]; then
+            echo "::error::No ExpressVPN installer asset found in vpn-tools release"
+            exit 1
+          fi
+          echo "Installer downloaded: $INSTALLER"
+          echo "EXPRESSVPN_INSTALLER_PATH=$INSTALLER" >> "$GITHUB_ENV"
+
       - name: Bring up VPN
         id: vpn
         env:
           EXPRESSVPN_ACTIVATION_CODE: ${{ secrets.EXPRESSVPN_ACTIVATION_CODE }}
-          EXPRESSVPN_DEB_URL:         ${{ secrets.EXPRESSVPN_DEB_URL }}
           VPN_REGION:                 ${{ github.event.inputs.region }}
         run: scripts/scanner/vpn_bringup.sh
 
