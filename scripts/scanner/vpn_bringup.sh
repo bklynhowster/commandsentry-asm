@@ -141,16 +141,45 @@ if ! command -v expressvpnctl &>/dev/null && ! command -v expressvpn &>/dev/null
 fi
 
 # Some installs expose the binary as `expressvpn`, newer as `expressvpnctl`.
-# Use whichever is present.
+# Use whichever is present. The .run installer may also drop the binary
+# in a non-standard location (e.g. /opt/expressvpn/) that isn't in the
+# default $PATH on the runner — check known install paths explicitly.
 CLI=""
-if command -v expressvpnctl &>/dev/null; then
-  CLI="expressvpnctl"
-elif command -v expressvpn &>/dev/null; then
-  CLI="expressvpn"
+for candidate in expressvpnctl expressvpn; do
+  if command -v "$candidate" &>/dev/null; then
+    CLI="$candidate"
+    break
+  fi
+done
+
+# Fallback: scan known install locations if not found via PATH.
+if [[ -z "$CLI" ]]; then
+  log "binary not on PATH — searching known install locations"
+  for path in \
+    /usr/bin/expressvpnctl \
+    /usr/local/bin/expressvpnctl \
+    /opt/expressvpn/bin/expressvpnctl \
+    /opt/expressvpn/expressvpnctl \
+    /usr/bin/expressvpn \
+    /usr/local/bin/expressvpn \
+    /opt/expressvpn/bin/expressvpn; do
+    if [[ -x "$path" ]]; then
+      CLI="$path"
+      log "found at: $path"
+      # Also extend PATH so subsequent calls work without absolute path.
+      export PATH="$(dirname "$path"):$PATH"
+      break
+    fi
+  done
 fi
 
 if [[ -z "$CLI" ]]; then
-  err "expressvpnctl install reported success but the binary is not on PATH"
+  err "ExpressVPN CLI not found after install"
+  err "PATH=$PATH"
+  err "Searching filesystem for anything 'expressvpn'-related:"
+  sudo find / -xdev -iname '*expressvpn*' 2>/dev/null | head -40 || true
+  err "dpkg packages matching expressvpn:"
+  dpkg -l 2>/dev/null | grep -i expressvpn || echo "  (none)"
   exit 1
 fi
 
