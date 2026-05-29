@@ -1,0 +1,188 @@
+name: VPN drill
+
+# Phase 4a M7 — VPN mastery drill. Manual-only. Exercises every meaningful
+# ExpressVPN operation in one run and captures timing + egress IP at each
+# step. Gives us actual data — not speculation — for designing mid-scan
+# rotation tomorrow.
+#
+# The drill in order:
+#   1. Bring up at primary region   → baseline egress IP, install/connect time
+#   2. Dump full region inventory  → know our actual options
+#   3. Status probe                  → what state info is readable mid-scan
+#   4. Rotate same-region            → does NY give us a new /24? cost?
+#   5. Rotate cross-region (Chicago) → ASN swap + cost
+#   6. Rotate cross-region (LA)      → second cross-region sample
+#   7. Round-trip latency check      → real outbound RTT through each exit
+#   8. Teardown                      → logout, slot cleanup
+#
+# Trigger: workflow_dispatch only — never schedule.
+#
+# Required secrets:
+#   EXPRESSVPN_ACTIVATION_CODE — same secret used by vpn-test.yml + scanner.yml
+
+on:
+  workflow_dispatch:
+    inputs:
+      primary_region:
+        description: 'Initial region to connect to'
+        required: false
+        default: 'USA - New York'
+        type: string
+      same_region_test:
+        description: 'Region for the same-region rotation test (should match primary)'
+        required: false
+        default: 'USA - New York'
+        type: string
+      second_region:
+        description: 'Region for the first cross-region rotation'
+        required: false
+        default: 'USA - Chicago'
+        type: string
+      third_region:
+        description: 'Region for the second cross-region rotation'
+        required: false
+        default: 'USA - Los Angeles'
+        type: string
+
+jobs:
+  drill:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Make VPN scripts executable
+        run: |
+          chmod +x scripts/scanner/vpn_bringup.sh
+          chmod +x scripts/scanner/vpn_teardown.sh
+          chmod +x scripts/scanner/vpn_rotate.sh
+
+      - name: Fetch ExpressVPN installer from vpn-tools release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/vpn-installer
+          gh release download vpn-tools \
+            --repo bklynhowster/commandsentry-asm \
+            --pattern 'expressvpn-*' \
+            --dir /tmp/vpn-installer
+          INSTALLER=$(ls /tmp/vpn-installer/expressvpn-* | head -1)
+          echo "EXPRESSVPN_INSTALLER_PATH=$INSTALLER" >> "$GITHUB_ENV"
+
+      # ─── Step 1: Initial bring-up ──────────────────────────────────
+      - name: 1. Bring up VPN at primary region
+        id: bringup
+        env:
+          EXPRESSVPN_ACTIVATION_CODE: ${{ secrets.EXPRESSVPN_ACTIVATION_CODE }}
+          VPN_REGION:                 ${{ github.event.inputs.primary_region }}
+        run: scripts/scanner/vpn_bringup.sh
+
+      # ─── Step 2: Region inventory ──────────────────────────────────
+      # Lock in the actual list of available regions so we stop guessing
+      # at names (some are "USA - New York", some are "USA - New Jersey
+      # - 1" with numeric suffixes, etc).
+      - name: 2. Dump full region inventory
+        run: |
+          echo "::group::All ExpressVPN regions"
+          expressvpnctl get regions 2>&1 || expressvpn get regions 2>&1 || \
+            echo "  (unable to enumerate regions)"
+          echo "::endgroup::"
+
+      # ─── Step 3: Status / state probe ──────────────────────────────
+      - name: 3. Dump VPN state info
+        run: |
+          CLI="expressvpnctl"
+          command -v expressvpnctl &>/dev/null || CLI="expressvpn"
+
+          echo "::group::status"
+          $CLI status 2>&1 || echo "  (status not available)"
+          echo "::endgroup::"
+
+          echo "::group::get smartlocation"
+          $CLI get smartlocation 2>&1 || echo "  (not available)"
+          echo "::endgroup::"
+
+          echo "::group::get protocol"
+          $CLI get protocol 2>&1 || echo "  (not available)"
+          echo "::endgroup::"
+
+      # ─── Step 4: Same-region rotation ──────────────────────────────
+      - name: 4. Same-region rotation (expect new /24 in same region)
+        id: same_region
+        env:
+          VPN_REGION: ${{ github.event.inputs.same_region_test }}
+        run: scripts/scanner/vpn_rotate.sh "$VPN_REGION"
+
+      - name: 4b. Verify same-region rotation egress
+        run: |
+          echo "Pre:  ${{ steps.same_region.outputs.pre_ip }}"
+          echo "Post: ${{ steps.same_region.outputs.post_ip }}"
+          echo "Cost: ${{ steps.same_region.outputs.rotation_cost_s }}s"
+          echo "::group::ifconfig.me/all.json after same-region rotation"
+          curl -sS --max-time 10 https://ifconfig.me/all.json || true
+          echo ""
+          echo "::endgroup::"
+
+      # ─── Step 5: First cross-region rotation ───────────────────────
+      - name: 5. Cross-region rotation → second region
+        id: second_region
+        env:
+          VPN_REGION: ${{ github.event.inputs.second_region }}
+        run: scripts/scanner/vpn_rotate.sh "$VPN_REGION"
+
+      - name: 5b. Verify cross-region rotation egress
+        run: |
+          echo "Pre:  ${{ steps.second_region.outputs.pre_ip }}"
+          echo "Post: ${{ steps.second_region.outputs.post_ip }}"
+          echo "Cost: ${{ steps.second_region.outputs.rotation_cost_s }}s"
+          echo "::group::ifconfig.me/all.json from second region"
+          curl -sS --max-time 10 https://ifconfig.me/all.json || true
+          echo ""
+          echo "::endgroup::"
+          echo "::group::Round-trip to commandsentry-portal.netlify.app"
+          curl -sS -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" \
+            --max-time 15 https://commandsentry-portal.netlify.app/ || true
+          echo "::endgroup::"
+
+      # ─── Step 6: Second cross-region rotation ──────────────────────
+      - name: 6. Cross-region rotation → third region
+        id: third_region
+        env:
+          VPN_REGION: ${{ github.event.inputs.third_region }}
+        run: scripts/scanner/vpn_rotate.sh "$VPN_REGION"
+
+      - name: 6b. Verify third region egress + latency
+        run: |
+          echo "Pre:  ${{ steps.third_region.outputs.pre_ip }}"
+          echo "Post: ${{ steps.third_region.outputs.post_ip }}"
+          echo "Cost: ${{ steps.third_region.outputs.rotation_cost_s }}s"
+          echo "::group::ifconfig.me/all.json from third region"
+          curl -sS --max-time 10 https://ifconfig.me/all.json || true
+          echo ""
+          echo "::endgroup::"
+          echo "::group::Round-trip to commandsentry-portal.netlify.app from $REGION"
+          curl -sS -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" \
+            --max-time 15 https://commandsentry-portal.netlify.app/ || true
+          echo "::endgroup::"
+
+      # ─── Step 7: Drill summary ─────────────────────────────────────
+      - name: 7. Drill summary
+        if: always()
+        run: |
+          {
+            echo "## VPN drill — summary"
+            echo ""
+            echo "| Step | Pre IP | Post IP | Cost |"
+            echo "|------|--------|---------|------|"
+            echo "| 1. Initial bringup (${{ github.event.inputs.primary_region }}) | (Azure runner) | ${{ steps.bringup.outputs.vpn_egress_ip }} | (~35s) |"
+            echo "| 4. Same-region (${{ github.event.inputs.same_region_test }}) | ${{ steps.same_region.outputs.pre_ip }} | ${{ steps.same_region.outputs.post_ip }} | ${{ steps.same_region.outputs.rotation_cost_s }}s |"
+            echo "| 5. Cross-region (${{ github.event.inputs.second_region }}) | ${{ steps.second_region.outputs.pre_ip }} | ${{ steps.second_region.outputs.post_ip }} | ${{ steps.second_region.outputs.rotation_cost_s }}s |"
+            echo "| 6. Cross-region (${{ github.event.inputs.third_region }}) | ${{ steps.third_region.outputs.pre_ip }} | ${{ steps.third_region.outputs.post_ip }} | ${{ steps.third_region.outputs.rotation_cost_s }}s |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ─── Step 8: Teardown ──────────────────────────────────────────
+      - name: 8. Tear down VPN
+        if: always()
+        run: scripts/scanner/vpn_teardown.sh
