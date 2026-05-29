@@ -219,7 +219,11 @@ rm -f "$ACTCODE_FILE"
 log "login OK"
 
 # ─── Step 4: Configure ───────────────────────────────────────────────
-# background enable: headless / no system tray
+# background enable: REQUIRED on headless. Per ExpressVPN's official CLI
+#   tutorial (verified 2026-05-29): "To use connection commands in the
+#   CLI, either the ExpressVPN GUI client must be running, OR background
+#   mode must be enabled." On a GH runner there's no GUI client, so
+#   without this every subsequent `connect` would silently fail.
 # networklock true: kill switch — fail closed if VPN drops mid-scan
 # protocol lightwayudp: ExpressVPN's modern UDP protocol, lower latency
 #                       and a less-fingerprintable handshake than OpenVPN
