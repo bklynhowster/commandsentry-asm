@@ -106,11 +106,16 @@ if ! command -v expressvpnctl &>/dev/null && ! command -v expressvpn &>/dev/null
     *.run)
       log "installing via universal .run installer"
       chmod +x "$INSTALLER" || true
-      # MakeSelf-format .run installers from ExpressVPN extract themselves
-      # and run the embedded post-extract install. Standard pattern:
-      #   sudo sh installer.run
-      # Run via sudo because the package install hits /etc and /usr.
-      if ! sudo "$INSTALLER"; then
+      # ExpressVPN's .run installer explicitly refuses being launched via
+      # sudo — it greps $SUDO_USER and bails with "Do not run this
+      # installer with sudo." The installer wants to see either a real
+      # root shell (uid 0, no SUDO_* env) or a non-root user. GH Actions
+      # runs as `runner` (regular user), so we need root for /usr writes,
+      # which forces us through sudo — but sudo by default leaves
+      # SUDO_USER / SUDO_UID / SUDO_GID set in the spawned shell. The
+      # workaround: spawn a bash via sudo, unset all the SUDO_* vars
+      # explicitly so the installer sees a clean root shell.
+      if ! sudo bash -c "unset SUDO_USER SUDO_UID SUDO_GID SUDO_COMMAND; '$INSTALLER'"; then
         err ".run installer exited non-zero"
         exit 1
       fi
