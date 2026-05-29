@@ -1,0 +1,73 @@
+name: VPN bring-up test
+
+# Phase 4a M7 foundation test. Manual-only — never schedule this. Lets us
+# verify the install + login + connect + verify + teardown sequence end-
+# to-end before wiring VPN egress into the actual scanner.yml Medium /
+# Heavy tier dispatch.
+#
+# Required secrets:
+#   EXPRESSVPN_ACTIVATION_CODE — Howie's activation code from his account portal
+#
+# Optional secrets:
+#   EXPRESSVPN_DEB_URL — direct URL to a .deb installer. Pre-stage via a
+#                        GH release asset (recommended), private S3, or
+#                        any HTTP-accessible URL. Required ONLY if the
+#                        runner image doesn't already have expressvpnctl.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'ExpressVPN region to connect to (must match `expressvpnctl get regions` output exactly)'
+        required: false
+        default: 'USA - New York'
+        type: string
+
+jobs:
+  test:
+    # ExpressVPN CLI requires Ubuntu 24.04+ per Howie's memory note 2026-05-16.
+    # ubuntu-latest currently points at 22.04 so we pin explicitly.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Make VPN scripts executable
+        run: |
+          chmod +x scripts/scanner/vpn_bringup.sh
+          chmod +x scripts/scanner/vpn_teardown.sh
+
+      - name: Bring up VPN
+        id: vpn
+        env:
+          EXPRESSVPN_ACTIVATION_CODE: ${{ secrets.EXPRESSVPN_ACTIVATION_CODE }}
+          EXPRESSVPN_DEB_URL:         ${{ secrets.EXPRESSVPN_DEB_URL }}
+          VPN_REGION:                 ${{ github.event.inputs.region }}
+        run: scripts/scanner/vpn_bringup.sh
+
+      - name: Echo what we saw
+        if: success()
+        run: |
+          echo "✅ VPN bring-up succeeded"
+          echo "  region:        ${{ steps.vpn.outputs.vpn_region }}"
+          echo "  baseline IP:   ${{ steps.vpn.outputs.vpn_baseline_ip }}"
+          echo "  egress IP:     ${{ steps.vpn.outputs.vpn_egress_ip }}"
+
+      - name: Make a real outbound request to verify egress is alive
+        if: success()
+        run: |
+          echo "--- Egress sanity (ifconfig.me/all.json):"
+          curl -sS --max-time 10 https://ifconfig.me/all.json || echo "(provider rate-limited)"
+          echo ""
+          echo "--- Egress IP reverse DNS:"
+          dig +short -x "${{ steps.vpn.outputs.vpn_egress_ip }}" || true
+          echo ""
+          echo "--- Round-trip to a real target (commandsentry-portal.netlify.app):"
+          curl -sS -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" --max-time 15 \
+            https://commandsentry-portal.netlify.app/ || true
+
+      - name: Tear down VPN
+        if: always()
+        run: scripts/scanner/vpn_teardown.sh

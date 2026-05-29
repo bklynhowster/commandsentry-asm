@@ -959,9 +959,11 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 "description": f.description,
                 "cwe":         f.cwe,
                 "references":  f.references,
-                # 'commandsentry_light' added to finding_source_t in migration
-                # 20260528b_phase4a_source_enum_extension.sql
-                "source":      "commandsentry_light",
+                # Source is derived from ctx.intensity so this same upsert
+                # path is reusable by run_medium.py / run_heavy.py without
+                # forking the function. All three values were added to
+                # finding_source_t in migration 20260528b.
+                "source":      f"commandsentry_{ctx.intensity}",
                 "tags":        f.tags,
             }
             cur.execute(UPSERT_FINDING_SQL, params)
