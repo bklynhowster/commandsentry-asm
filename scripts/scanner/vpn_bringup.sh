@@ -180,6 +180,17 @@ if [[ -z "$CLI" ]]; then
   sudo find / -xdev -iname '*expressvpn*' 2>/dev/null | head -40 || true
   err "dpkg packages matching expressvpn:"
   dpkg -l 2>/dev/null | grep -i expressvpn || echo "  (none)"
+  # Cat the installer's own log — it usually explains why it bailed.
+  # On the previous run we observed /tmp/expressvpn_install.log existed
+  # even though no binary was installed, suggesting the installer made
+  # an internal decision (likely "headless = skip everything").
+  if [[ -f /tmp/expressvpn_install.log ]]; then
+    err "=== /tmp/expressvpn_install.log (full contents) ==="
+    sudo cat /tmp/expressvpn_install.log 2>&1 || cat /tmp/expressvpn_install.log 2>&1 || true
+    err "=== end install log ==="
+  else
+    err "no /tmp/expressvpn_install.log to inspect"
+  fi
   exit 1
 fi
 
