@@ -112,15 +112,21 @@ if ! command -v expressvpnctl &>/dev/null && ! command -v expressvpn &>/dev/null
       # and unset all SUDO_* vars so the installer sees a clean root
       # shell.
       #
-      # NOTE: the .run installer exits non-zero on headless systems
-      # because the GUI client (separate from the CLI we actually want)
-      # fails to install when there's no $DISPLAY. The CLI itself does
-      # install successfully — the installer just propagates the GUI
-      # failure as the overall exit code. So we IGNORE the exit code
-      # and verify success by checking whether expressvpnctl or
-      # expressvpn ended up on PATH.
-      sudo bash -c "unset SUDO_USER SUDO_UID SUDO_GID SUDO_COMMAND; '$INSTALLER'" \
-        || log "installer exited non-zero (often expected on headless — GUI piece can't install without DISPLAY)"
+      # Run #5 (2026-05-29) confirmed the .run installer ALSO bails
+      # immediately on headless systems — its full install log was a
+      # single line "Started install process" before exiting with no
+      # binary written. The check is presumably "is $DISPLAY set". So
+      # we install xvfb and run the installer under xvfb-run, which
+      # provides a virtual X framebuffer that satisfies the check
+      # without requiring a real display.
+      log "installing xvfb to satisfy installer's GUI requirement"
+      sudo apt-get update -qq >/dev/null 2>&1 || true
+      sudo apt-get install -y -qq xvfb >/dev/null 2>&1 || \
+        err "xvfb install failed — installer may still fail headless check"
+
+      sudo bash -c "unset SUDO_USER SUDO_UID SUDO_GID SUDO_COMMAND; \
+        xvfb-run --auto-servernum --server-args='-screen 0 1024x768x24' '$INSTALLER'" \
+        || log "installer exited non-zero (will verify success via CLI-on-PATH check below)"
       ;;
     *.deb)
       log "installing via dpkg"
