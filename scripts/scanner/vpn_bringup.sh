@@ -108,17 +108,19 @@ if ! command -v expressvpnctl &>/dev/null && ! command -v expressvpn &>/dev/null
       chmod +x "$INSTALLER" || true
       # ExpressVPN's .run installer explicitly refuses being launched via
       # sudo — it greps $SUDO_USER and bails with "Do not run this
-      # installer with sudo." The installer wants to see either a real
-      # root shell (uid 0, no SUDO_* env) or a non-root user. GH Actions
-      # runs as `runner` (regular user), so we need root for /usr writes,
-      # which forces us through sudo — but sudo by default leaves
-      # SUDO_USER / SUDO_UID / SUDO_GID set in the spawned shell. The
-      # workaround: spawn a bash via sudo, unset all the SUDO_* vars
-      # explicitly so the installer sees a clean root shell.
-      if ! sudo bash -c "unset SUDO_USER SUDO_UID SUDO_GID SUDO_COMMAND; '$INSTALLER'"; then
-        err ".run installer exited non-zero"
-        exit 1
-      fi
+      # installer with sudo." Workaround: spawn a fresh bash via sudo
+      # and unset all SUDO_* vars so the installer sees a clean root
+      # shell.
+      #
+      # NOTE: the .run installer exits non-zero on headless systems
+      # because the GUI client (separate from the CLI we actually want)
+      # fails to install when there's no $DISPLAY. The CLI itself does
+      # install successfully — the installer just propagates the GUI
+      # failure as the overall exit code. So we IGNORE the exit code
+      # and verify success by checking whether expressvpnctl or
+      # expressvpn ended up on PATH.
+      sudo bash -c "unset SUDO_USER SUDO_UID SUDO_GID SUDO_COMMAND; '$INSTALLER'" \
+        || log "installer exited non-zero (often expected on headless — GUI piece can't install without DISPLAY)"
       ;;
     *.deb)
       log "installing via dpkg"
