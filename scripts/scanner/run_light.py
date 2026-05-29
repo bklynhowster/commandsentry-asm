@@ -155,6 +155,12 @@ class ScanContext:
     tools_run:     list[str] = field(default_factory=list)
     artifacts:     list[tuple[str, str, str]] = field(default_factory=list)
     # artifacts: list of (tool_name, output_format, content_string)
+    # M3 revision (2026-05-29): port_scan() populates open_ports before
+    # service-specific checks dispatch. asset_kind comes from the
+    # descriptor when present so we can short-circuit "no need to scan
+    # HTTPS on a pure mail relay" decisions.
+    open_ports:    set[int] = field(default_factory=set)
+    asset_kind:    str | None = None
 
 
 # ─── Subprocess helper ──────────────────────────────────────────────────
@@ -512,6 +518,333 @@ def check_csp_nonce(ctx: ScanContext) -> None:
             ))
 
 
+# ─── Port scan + per-service checks (M3 revision, 2026-05-29) ──────────
+#
+# The original Light tier was HTTPS-only — useless for SSH/SMTP/FTP/mail-
+# relay assets (Howie's design call 2026-05-28 night). M3 revision:
+#   1. port_scan() does naabu top-100 to discover what's actually open
+#   2. HTTPS suite stays unchanged but only fires when port 443 is open
+#      (or as a fallback when port scan returns nothing — covers
+#      firewalled environments where naabu can't reach)
+#   3. New per-service checks fire when their respective ports are open:
+#        check_ssh    on 22, 2222
+#        check_smtp   on 25, 465, 587, 2525
+#        check_ftp    on 21
+#   4. asset_kind from the descriptor can force checks even when the
+#      port wasn't seen — e.g. "mail-relay" kind always runs SMTP
+#      probing on 25/587 regardless of scan result.
+# ────────────────────────────────────────────────────────────────────────
+
+# Port-to-service mappings. Conservative: only ports we have actual
+# check implementations for. Other interesting ports (RDP 3389, MySQL
+# 3306, etc.) get a generic "exposed service" INFO finding later.
+SSH_PORTS  = {22, 2222}
+SMTP_PORTS = {25, 465, 587, 2525}
+FTP_PORTS  = {21}
+
+
+def port_scan(ctx: ScanContext) -> set[int]:
+    """
+    naabu top-100 TCP port scan against the asset's hostname. Returns
+    the set of open ports. Empty set on failure (network errors, naabu
+    missing, etc.) — callers should treat empty as "we don't know" and
+    fall back to HTTPS-only behavior.
+    """
+    ctx.tools_run.append("naabu")
+    rc, stdout, stderr = run_cmd(
+        ["naabu",
+         "-host", ctx.hostname,
+         "-top-ports", "100",
+         "-silent",
+         "-timeout", "5000",
+         "-retries", "1"],
+        timeout=180,
+    )
+    if rc != 0:
+        log(f"naabu rc={rc}: {stderr[:200]}")
+        # Capture the failure as an artifact so we have evidence why
+        # service-specific checks didn't fire.
+        ctx.artifacts.append((
+            "naabu",
+            "text",
+            f"naabu exited {rc}\n\nstderr:\n{stderr[:2000]}",
+        ))
+        return set()
+
+    open_ports: set[int] = set()
+    for line in stdout.splitlines():
+        line = line.strip()
+        if ":" in line:
+            try:
+                port = int(line.rsplit(":", 1)[1])
+                open_ports.add(port)
+            except ValueError:
+                continue
+
+    log(f"naabu open ports: {sorted(open_ports)}")
+    ctx.artifacts.append((
+        "naabu",
+        "text",
+        f"hostname: {ctx.hostname}\nopen ports: {sorted(open_ports)}\n\n"
+        f"raw stdout:\n{stdout[:2000]}",
+    ))
+    return open_ports
+
+
+def check_ssh(ctx: ScanContext, port: int) -> None:
+    """
+    SSH service detection + protocol-version check. Banner format is
+    "SSH-2.0-OpenSSH_X.Y" — parse the OpenSSH version and flag old
+    builds known to be missing security patches.
+    """
+    ctx.tools_run.append(f"ssh-banner:{port}")
+
+    import socket
+    try:
+        sock = socket.create_connection((ctx.hostname, port), timeout=5)
+        sock.settimeout(5)
+        banner = sock.recv(1024).decode("utf-8", errors="replace").strip()
+        try:
+            sock.close()
+        except Exception:
+            pass
+    except Exception as e:
+        log(f"ssh banner-grab {ctx.hostname}:{port} failed: {e}")
+        return
+
+    if not banner.startswith("SSH-"):
+        log(f"port {port} did not return SSH banner: {banner[:50]}")
+        return
+
+    # INFO: service detected. Always emit so the asset's open-services
+    # surface is fully indexed.
+    ctx.findings.append(LightFinding(
+        check_name=f"ssh-service-on-port-{port}",
+        title=f"SSH service exposed on port {port}",
+        severity="INFO",
+        category="recon",
+        description=(
+            f"An SSH service is responding on TCP port {port} of "
+            f"{ctx.hostname}. Banner: {banner[:120]}. Confirm this "
+            f"endpoint is intentionally internet-facing; if not, restrict "
+            f"to source-IP allow-lists."
+        ),
+        tags=["ssh", "exposed-service"],
+        raw_excerpt=banner,
+    ))
+
+    # Parse OpenSSH version if banner identifies it.
+    if banner.startswith("SSH-2.0-OpenSSH_"):
+        soft_part = banner[len("SSH-2.0-OpenSSH_"):].split()[0]
+        try:
+            tokens = soft_part.split(".")
+            major = int("".join(c for c in tokens[0] if c.isdigit()))
+            minor = int("".join(c for c in (tokens[1] if len(tokens) > 1 else "0") if c.isdigit()) or 0)
+            # OpenSSH < 7.4 has CVE-2016-10009/0777 and several other
+            # documented issues. < 8.0 lacks modern crypto defaults.
+            if (major, minor) < (7, 4):
+                ctx.findings.append(LightFinding(
+                    check_name=f"ssh-outdated-on-port-{port}",
+                    title=f"Outdated OpenSSH on port {port} (OpenSSH_{soft_part})",
+                    severity="MODERATE",
+                    category="deprecation",
+                    description=(
+                        f"OpenSSH {soft_part} predates 7.4 and is missing "
+                        f"published security patches. CVEs include "
+                        f"CVE-2016-10009 (agent local privilege escalation) "
+                        f"and CVE-2016-0777 (information disclosure)."
+                    ),
+                    tags=["ssh", "outdated", "openssh"],
+                    references=["https://www.openssh.com/security.html"],
+                    raw_excerpt=banner,
+                ))
+            elif (major, minor) < (8, 0):
+                ctx.findings.append(LightFinding(
+                    check_name=f"ssh-aging-on-port-{port}",
+                    title=f"Aging OpenSSH on port {port} (OpenSSH_{soft_part})",
+                    severity="LOW",
+                    category="deprecation",
+                    description=(
+                        f"OpenSSH {soft_part} predates 8.0 and is missing "
+                        f"modern key-exchange defaults and security hardening. "
+                        f"Upgrading is recommended."
+                    ),
+                    tags=["ssh", "aging", "openssh"],
+                    raw_excerpt=banner,
+                ))
+        except (ValueError, IndexError):
+            pass
+
+
+def check_smtp(ctx: ScanContext, port: int) -> None:
+    """
+    SMTP service detection + STARTTLS support check. Connects, reads
+    banner, sends EHLO, looks for STARTTLS capability in response.
+    Missing STARTTLS = mail can transit unencrypted.
+    """
+    ctx.tools_run.append(f"smtp-banner:{port}")
+
+    import socket
+    try:
+        sock = socket.create_connection((ctx.hostname, port), timeout=5)
+        sock.settimeout(5)
+        banner = sock.recv(1024).decode("utf-8", errors="replace").strip()
+    except Exception as e:
+        log(f"smtp banner-grab {ctx.hostname}:{port} failed: {e}")
+        return
+
+    if not banner.startswith("220"):
+        log(f"port {port} did not return SMTP 220 banner: {banner[:50]}")
+        try:
+            sock.close()
+        except Exception:
+            pass
+        return
+
+    # EHLO probe — get the capability list
+    ehlo_text = ""
+    try:
+        sock.send(b"EHLO commandsentry.scanner\r\n")
+        buf = b""
+        for _ in range(8):
+            try:
+                chunk = sock.recv(2048)
+                if not chunk:
+                    break
+                buf += chunk
+                # SMTP multiline response ends when a line starts "250 " (with
+                # space, not dash) — at that point the last line came through.
+                lines = buf.decode("utf-8", errors="replace").splitlines()
+                if any(l.startswith("250 ") for l in lines):
+                    break
+            except socket.timeout:
+                break
+        ehlo_text = buf.decode("utf-8", errors="replace")
+        try:
+            sock.send(b"QUIT\r\n")
+        except Exception:
+            pass
+        sock.close()
+    except Exception as e:
+        log(f"smtp EHLO failed: {e}")
+        ehlo_text = ""
+
+    # INFO: service detected
+    ctx.findings.append(LightFinding(
+        check_name=f"smtp-service-on-port-{port}",
+        title=f"SMTP service exposed on port {port}",
+        severity="INFO",
+        category="recon",
+        description=(
+            f"An SMTP service is responding on TCP port {port} of "
+            f"{ctx.hostname}. Banner: {banner[:120]}."
+        ),
+        tags=["smtp", "exposed-service"],
+        raw_excerpt=(banner + "\n\nEHLO response:\n" + ehlo_text)[:1500],
+    ))
+
+    # STARTTLS check — port 465 is implicit TLS so doesn't need STARTTLS.
+    # Ports 25, 587, 2525 should advertise STARTTLS if they handle real mail.
+    if port != 465 and ehlo_text:
+        if "STARTTLS" not in ehlo_text.upper():
+            ctx.findings.append(LightFinding(
+                check_name=f"smtp-no-starttls-on-port-{port}",
+                title=f"SMTP server does not advertise STARTTLS on port {port}",
+                severity="MODERATE",
+                category="tls",
+                description=(
+                    f"The SMTP server at {ctx.hostname}:{port} did not include "
+                    f"STARTTLS in its EHLO capability list. Mail transmitted "
+                    f"to/from this endpoint may travel in plaintext, exposing "
+                    f"message contents and credentials to network observers. "
+                    f"Either enable STARTTLS or restrict the endpoint to "
+                    f"implicit-TLS port 465."
+                ),
+                tags=["smtp", "starttls", "plaintext", "tls"],
+                cwe=[319],  # Cleartext Transmission of Sensitive Information
+                raw_excerpt=ehlo_text[:1500],
+            ))
+
+
+def check_ftp(ctx: ScanContext, port: int) -> None:
+    """
+    FTP service detection + anonymous-login test. If anonymous login
+    succeeds, that's HIGH — anyone on the internet can read (potentially
+    write) files via this endpoint without auth.
+    """
+    ctx.tools_run.append(f"ftp-check:{port}")
+
+    import socket
+    try:
+        sock = socket.create_connection((ctx.hostname, port), timeout=5)
+        sock.settimeout(5)
+        banner = sock.recv(1024).decode("utf-8", errors="replace").strip()
+    except Exception as e:
+        log(f"ftp banner-grab {ctx.hostname}:{port} failed: {e}")
+        return
+
+    if not banner.startswith("220"):
+        log(f"port {port} did not return FTP 220 banner: {banner[:50]}")
+        try:
+            sock.close()
+        except Exception:
+            pass
+        return
+
+    # INFO: service detected
+    ctx.findings.append(LightFinding(
+        check_name=f"ftp-service-on-port-{port}",
+        title=f"FTP service exposed on port {port}",
+        severity="INFO",
+        category="recon",
+        description=(
+            f"An FTP service is responding on TCP port {port} of "
+            f"{ctx.hostname}. Banner: {banner[:120]}. FTP transmits "
+            f"credentials in plaintext and is generally discouraged for "
+            f"public-facing endpoints in favor of SFTP."
+        ),
+        tags=["ftp", "exposed-service"],
+        raw_excerpt=banner,
+    ))
+
+    # Anonymous login attempt
+    transcript: list[str] = [f"banner: {banner}"]
+    try:
+        sock.send(b"USER anonymous\r\n")
+        user_resp = sock.recv(1024).decode("utf-8", errors="replace").strip()
+        transcript.append(f"USER anonymous → {user_resp}")
+        sock.send(b"PASS commandsentry@scanner.local\r\n")
+        pass_resp = sock.recv(1024).decode("utf-8", errors="replace").strip()
+        transcript.append(f"PASS *** → {pass_resp}")
+        try:
+            sock.send(b"QUIT\r\n")
+        except Exception:
+            pass
+        sock.close()
+
+        # Code 230 = User logged in. 530 = Not logged in.
+        if pass_resp.startswith("230"):
+            ctx.findings.append(LightFinding(
+                check_name=f"ftp-anonymous-login-on-port-{port}",
+                title=f"FTP anonymous login enabled on port {port}",
+                severity="HIGH",
+                category="auth",
+                description=(
+                    f"The FTP server at {ctx.hostname}:{port} accepted an "
+                    f"anonymous login. Anyone on the public internet can "
+                    f"connect and read files (and potentially write, depending "
+                    f"on filesystem permissions) without any credentials. "
+                    f"Disable anonymous access unless this is an intentional "
+                    f"public file-distribution endpoint."
+                ),
+                tags=["ftp", "anonymous", "authentication", "exposed"],
+                cwe=[287],  # Improper Authentication
+                raw_excerpt="\n".join(transcript)[:1500],
+            ))
+    except Exception as e:
+        log(f"ftp anon login attempt failed: {e}")
+
+
 # ─── Findings upsert ────────────────────────────────────────────────────
 
 UPSERT_FINDING_SQL = """
@@ -709,8 +1042,9 @@ def run(descriptor_path: str, dsn: str) -> int:
         scan_run_id=descriptor["scan_run_id"],
         queue_id=descriptor["queue_id"],
         intensity=descriptor["intensity"],
+        asset_kind=asset.get("kind"),
     )
-    log(f"asset_id={ctx.asset_id} hostname={ctx.hostname} scan_run_id={ctx.scan_run_id}")
+    log(f"asset_id={ctx.asset_id} hostname={ctx.hostname} kind={ctx.asset_kind} scan_run_id={ctx.scan_run_id}")
 
     try:
         conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
@@ -719,20 +1053,70 @@ def run(descriptor_path: str, dsn: str) -> int:
         return 1
 
     try:
-        log("→ check_tls")
-        check_tls(ctx)
-        log("→ check_headers")
-        check_headers(ctx)
-        log("→ check_common_paths")
-        check_common_paths(ctx)
+        # ─── Port scan preflight (M3 revision) ─────────────────────────
+        # Discover what's actually listening before dispatching checks.
+        # An empty result means naabu couldn't reach the host (firewall,
+        # no DNS, etc.) — fall back to the legacy HTTPS-only behavior so
+        # we don't silently scan less than we used to.
+        log("→ port_scan")
+        ctx.open_ports = port_scan(ctx)
+        no_scan_data = len(ctx.open_ports) == 0
+
+        # ─── HTTPS suite ───────────────────────────────────────────────
+        # Fires when port 443 was found OR we have no scan data
+        # (fallback to legacy behavior). Skipped for assets where 443 is
+        # definitely closed.
+        run_https = (443 in ctx.open_ports) or no_scan_data
+
+        # Kind-aware override — some kinds expect HTTPS regardless of
+        # what the port scan saw. Belt-and-suspenders for cases where
+        # the port scan is being filtered.
+        if ctx.asset_kind in ("portal", "marketing", "vpn-endpoint", "web-app"):
+            run_https = True
+
+        if run_https:
+            log("→ HTTPS suite")
+            log("  → check_tls")
+            check_tls(ctx)
+            log("  → check_headers")
+            check_headers(ctx)
+            log("  → check_common_paths")
+            check_common_paths(ctx)
+            log("  → check_httpx_tech")
+            check_httpx_tech(ctx)
+            log("  → check_methods")
+            check_methods(ctx)
+            log("  → check_csp_nonce")
+            check_csp_nonce(ctx)
+        else:
+            log(f"HTTPS suite SKIPPED — port 443 not in open_ports={sorted(ctx.open_ports)}, kind={ctx.asset_kind}")
+
+        # ─── DNS posture (always, not HTTP-specific) ───────────────────
         log("→ check_dns_posture")
         check_dns_posture(ctx)
-        log("→ check_httpx_tech")
-        check_httpx_tech(ctx)
-        log("→ check_methods")
-        check_methods(ctx)
-        log("→ check_csp_nonce")
-        check_csp_nonce(ctx)
+
+        # ─── Per-service checks ────────────────────────────────────────
+        # Iterate sorted for deterministic finding order.
+        for port in sorted(ctx.open_ports):
+            if port in SSH_PORTS:
+                log(f"→ check_ssh (port {port})")
+                check_ssh(ctx, port)
+            elif port in SMTP_PORTS:
+                log(f"→ check_smtp (port {port})")
+                check_smtp(ctx, port)
+            elif port in FTP_PORTS:
+                log(f"→ check_ftp (port {port})")
+                check_ftp(ctx, port)
+
+        # ─── Kind-aware fallbacks ──────────────────────────────────────
+        # If the asset is a known mail-relay kind, try SMTP on the
+        # standard ports even if port scan didn't see them — naabu may
+        # have been firewalled. Same for the other common kinds.
+        if ctx.asset_kind == "mail-relay":
+            for port in (25, 587):
+                if port not in ctx.open_ports:
+                    log(f"→ check_smtp (kind-forced, port {port})")
+                    check_smtp(ctx, port)
 
         log(f"checks complete; {len(ctx.findings)} finding(s), {len(ctx.artifacts)} artifact(s)")
 
