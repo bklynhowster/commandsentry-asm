@@ -146,17 +146,12 @@ jobs:
           # it's user-supplied and might contain shell metachars.
           ASSET_ID_QUOTED=$(printf '%q' "$ASSET_ID")
 
-          # NOTE: source value is 'manual' (not 'workflow_dispatch') because
-          # the live DB enum was applied before 'workflow_dispatch' was added
-          # to scan_source_t. Run this in Supabase to align source with code:
-          #   ALTER TYPE public.scan_source_t ADD VALUE IF NOT EXISTS 'workflow_dispatch';
-          # Then revert this back to 'workflow_dispatch' for cleaner audit trails.
           psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
             insert into public.scan_queue
               (asset_id, intensity, authenticated, source, notes)
             values
-              ('$ASSET_ID', '$INTENSITY', $AUTHENTICATED, 'manual',
-               'Ad-hoc fire via GH Actions UI (workflow_dispatch trigger, source=manual until enum updated).');
+              ('$ASSET_ID', '$INTENSITY', $AUTHENTICATED, 'workflow_dispatch',
+               'Ad-hoc fire via GH Actions UI (workflow_dispatch).');
           "
           echo "Queued $INTENSITY scan for $ASSET_ID (authenticated=$AUTHENTICATED)."
 
