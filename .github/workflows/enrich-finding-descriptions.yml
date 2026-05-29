@@ -20,7 +20,8 @@ name: Enrich finding descriptions
 # 'ai_synthesized_reviewed' or reject → revert to scanner text.
 #
 # Triggers:
-#   - workflow_run completed for asm-discover (chained after every scan)
+#   - workflow_run completed for asm-discover OR scanner (chains after
+#     every passive discover AND every active Phase 4a scan)
 #   - cron daily at 13:00 UTC (safety net — catches any drift)
 #   - workflow_dispatch (on-demand from the Actions UI)
 #
@@ -30,10 +31,15 @@ name: Enrich finding descriptions
 # 200+ existing thin findings is ~$4-5 one-time.
 
 on:
-  # Chain after every ASM discover run, so new findings get §1/§2/§3
-  # populated within minutes of a scan completing.
+  # Chain after every passive ASM discover run AND every active scanner
+  # run, so new findings get §1/§2/§3 populated within minutes of a scan
+  # completing — regardless of which workflow produced them.
+  # Added 'Scanner' 2026-05-29 — without it, Phase 4a Light scan
+  # findings only got enriched on the next 13:00 UTC cron tick (up to
+  # 24h latency), violating the "scan → immediate interpretation"
+  # workflow assumption Howie expected.
   workflow_run:
-    workflows: ["ASM Discover"]
+    workflows: ["ASM Discover", "Scanner"]
     types: [completed]
 
   # Safety net cron — catches any findings the workflow_run path missed
