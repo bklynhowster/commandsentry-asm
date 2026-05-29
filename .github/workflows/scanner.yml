@@ -69,6 +69,11 @@ on:
         required: false
         default: false
         type: boolean
+      force_vpn:
+        description: 'Force VPN egress on regardless of tier. Use for end-to-end testing of the VPN integration with a Light tier scan against a safe target. Production runs (cron-triggered) ignore this — VPN is auto-enabled only for Medium/Heavy there.'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -187,11 +192,64 @@ jobs:
              where scan_run_id   = '$SCAN_RUN_ID';
           "
 
+      # ─── VPN bring-up (M7b) ────────────────────────────────────────
+      # Wraps any Medium/Heavy scan in ExpressVPN egress so we don't get
+      # FortiGate/Cloudflare-banned on the runner IP. ALSO fires when
+      # force_vpn=true via workflow_dispatch — useful for testing the
+      # VPN integration end-to-end with a known-safe Light tier scan
+      # before pointing noisier tools through it.
+      #
+      # Light tier in production (cron path) deliberately bypasses VPN —
+      # adds ~2 min overhead per scan for an IronPort-safe check suite
+      # that nothing will ban us for.
+      - name: Determine if VPN should be brought up
+        id: vpn_decision
+        if: ${{ steps.poll.outputs.has_work == 'true' }}
+        run: |
+          INTENSITY="${{ steps.poll.outputs.intensity }}"
+          FORCE_VPN="${{ github.event.inputs.force_vpn }}"
+          if [[ "$INTENSITY" == "medium" || "$INTENSITY" == "heavy" || "$FORCE_VPN" == "true" ]]; then
+            echo "use_vpn=true" >> "$GITHUB_OUTPUT"
+            echo "VPN will be brought up (intensity=$INTENSITY, force_vpn=$FORCE_VPN)"
+          else
+            echo "use_vpn=false" >> "$GITHUB_OUTPUT"
+            echo "VPN bypassed (intensity=$INTENSITY, force_vpn=$FORCE_VPN)"
+          fi
+
+      - name: Make VPN scripts executable
+        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
+        run: |
+          chmod +x scripts/scanner/vpn_bringup.sh
+          chmod +x scripts/scanner/vpn_teardown.sh
+
+      - name: Fetch ExpressVPN installer from vpn-tools release
+        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/vpn-installer
+          gh release download vpn-tools \
+            --repo bklynhowster/commandsentry-asm \
+            --pattern 'expressvpn-*' \
+            --dir /tmp/vpn-installer
+          INSTALLER=$(ls /tmp/vpn-installer/expressvpn-* | head -1)
+          if [[ -z "$INSTALLER" ]]; then
+            echo "::error::No ExpressVPN installer asset found in vpn-tools release"
+            exit 1
+          fi
+          echo "Installer downloaded: $INSTALLER"
+          echo "EXPRESSVPN_INSTALLER_PATH=$INSTALLER" >> "$GITHUB_ENV"
+
+      - name: Bring up VPN
+        id: vpn
+        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
+        env:
+          EXPRESSVPN_ACTIVATION_CODE: ${{ secrets.EXPRESSVPN_ACTIVATION_CODE }}
+          VPN_REGION:                 ${{ vars.SCANNER_VPN_REGION || 'USA - New York' }}
+        run: scripts/scanner/vpn_bringup.sh
+
       # ─── Dispatch to tier-specific runner ──────────────────────────
-      # Only Light tier is implemented as of M3. Medium/Heavy fail the
-      # claim cleanly with a "not yet implemented" error_message so
-      # operators see clearly why the scan failed instead of getting
-      # stuck-running rows.
+      # Light + Medium implemented; Heavy still pending (M9).
 
       - name: Run Light tier
         if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'light' }}
@@ -200,30 +258,12 @@ jobs:
         run: |
           python scripts/scanner/run_light.py /tmp/scan_descriptor.json
 
-      - name: Run Medium tier (NOT YET IMPLEMENTED — M6)
+      - name: Run Medium tier
         if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'medium' }}
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
         run: |
-          SCAN_RUN_ID="${{ steps.poll.outputs.scan_run_id }}"
-          echo "::warning::Medium tier runner is not yet implemented (Phase 4a M6). Marking scan failed."
-          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
-            update public.scan_run
-               set status = 'failed',
-                   completed_at = now(),
-                   duration_seconds = extract(epoch from (now() - started_at))::int,
-                   error_message = 'Medium tier runner not yet implemented (Phase 4a M6)'
-             where scan_run_id = '$SCAN_RUN_ID';
-          "
-          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
-            update public.scan_queue
-               set status = 'failed',
-                   completed_at = now(),
-                   duration_seconds = extract(epoch from (now() - started_at))::int,
-                   error_message = 'Medium tier runner not yet implemented (Phase 4a M6)'
-             where scan_run_id = '$SCAN_RUN_ID';
-          "
-          exit 1  # mark the workflow step failed for visibility in Actions UI
+          python scripts/scanner/run_medium.py /tmp/scan_descriptor.json
 
       - name: Run Heavy tier (NOT YET IMPLEMENTED — M9)
         if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'heavy' }}
@@ -249,6 +289,13 @@ jobs:
              where scan_run_id = '$SCAN_RUN_ID';
           "
           exit 1
+
+      # ─── Tear down VPN (always, if we brought it up) ───────────────
+      # Runs even when the scan failed so we never leave a connection
+      # slot consumed against Howie's ExpressVPN device cap.
+      - name: Tear down VPN
+        if: ${{ always() && steps.vpn_decision.outputs.use_vpn == 'true' }}
+        run: scripts/scanner/vpn_teardown.sh
 
       # ─── Cleanup any orphaned 'running' rows from this invocation ──
       # If the runner died mid-step (OOM, GH Actions restart, etc.), the
