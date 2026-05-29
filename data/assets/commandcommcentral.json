@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-29T16:06:42Z_5acd7fe7",
-    "started_at": "2026-05-29T16:06:42Z",
-    "completed_at": "2026-05-29T16:10:34Z",
-    "duration_seconds": 232,
+    "id": "scan_2026-05-29T20:40:41Z_e436f4f8",
+    "started_at": "2026-05-29T20:40:41Z",
+    "completed_at": "2026-05-29T20:44:39Z",
+    "duration_seconds": 238,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -32,7 +32,7 @@
     "live_subdomain_count": 6,
     "host_count": 4,
     "service_count": 9,
-    "newest_cert_expiry_days": 250,
+    "newest_cert_expiry_days": 249,
     "top_hosting_org": "Cablevision Systems Corp.",
     "platforms": [
       "Microsoft .NET / IIS"
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-05-29T16:10:34Z",
-      "last_seen": "2026-05-29T16:10:34Z",
+      "first_discovered": "2026-05-29T20:44:40Z",
+      "last_seen": "2026-05-29T20:44:40Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -90,7 +90,7 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 250
+            "days_to_expiry": 249
           }
         }
       ],
@@ -155,8 +155,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-29T16:10:34Z",
-      "last_seen": "2026-05-29T16:10:34Z",
+      "first_discovered": "2026-05-29T20:44:40Z",
+      "last_seen": "2026-05-29T20:44:40Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -201,7 +201,7 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 250
+            "days_to_expiry": 249
           }
         }
       ],
@@ -254,8 +254,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-29T16:10:34Z",
-      "last_seen": "2026-05-29T16:10:34Z",
+      "first_discovered": "2026-05-29T20:44:40Z",
+      "last_seen": "2026-05-29T20:44:40Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -312,8 +312,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-29T16:10:34Z",
-      "last_seen": "2026-05-29T16:10:34Z",
+      "first_discovered": "2026-05-29T20:44:40Z",
+      "last_seen": "2026-05-29T20:44:40Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -348,13 +348,13 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-29T16:10:34Z",
-      "last_seen": "2026-05-29T16:10:34Z",
+      "first_discovered": "2026-05-29T20:44:40Z",
+      "last_seen": "2026-05-29T20:44:40Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 200,
-        "title": "CommandCommCentral"
+        "http_status": 500,
+        "title": "The URL you requested has been blocked"
       },
       "hosts": [
         {
@@ -394,7 +394,7 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 250
+            "days_to_expiry": 249
           }
         }
       ],
@@ -412,44 +412,13 @@
       },
       "fingerprint": {
         "server": null,
-        "platform_label": "Microsoft .NET / IIS",
-        "tech": [
-          {
-            "name": "HSTS",
-            "version": null,
-            "category": "security"
-          },
-          {
-            "name": "Microsoft ASP.NET",
-            "version": null,
-            "category": "framework"
-          },
-          {
-            "name": "Microsoft Power BI",
-            "version": null,
-            "category": "tracking"
-          },
-          {
-            "name": "Modernizr",
-            "version": null,
-            "category": "frontend"
-          },
-          {
-            "name": "jQuery",
-            "version": null,
-            "category": "frontend"
-          },
-          {
-            "name": "jQuery UI",
-            "version": null,
-            "category": null
-          }
-        ]
+        "platform_label": null,
+        "tech": []
       },
       "waf": {
-        "detected": true,
-        "vendor": "FortiWeb",
-        "confidence": "high"
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
       }
     },
     {
@@ -457,8 +426,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-05-29T16:10:34Z",
-      "last_seen": "2026-05-29T16:10:34Z",
+      "first_discovered": "2026-05-29T20:44:40Z",
+      "last_seen": "2026-05-29T20:44:40Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -503,7 +472,7 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 250
+            "days_to_expiry": 249
           }
         }
       ],
@@ -563,7 +532,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-29T10:13:44Z_dc938e5e",
+    "since_scan": "scan_2026-05-29T16:06:42Z_5acd7fe7",
     "added": {
       "subdomains": [],
       "services": [],
@@ -5119,6 +5088,58 @@
       "scan_id": "scan_2026-05-29T16:06:42Z_5acd7fe7",
       "started_at": "2026-05-29T16:06:42Z",
       "completed_at": "2026-05-29T16:10:34Z",
+      "subdomain_count": 6,
+      "live_subdomain_count": 6,
+      "host_count": 4,
+      "service_count": 9,
+      "subdomain_names": [
+        "api.commandcommcentral.com",
+        "commandcommcentral.com",
+        "ns01.commandcommcentral.com",
+        "ns02.commandcommcentral.com",
+        "test.commandcommcentral.com",
+        "www.commandcommcentral.com"
+      ],
+      "ports_by_sub": {
+        "commandcommcentral.com": {
+          "24.38.70.5": [
+            80,
+            443
+          ]
+        },
+        "api.commandcommcentral.com": {
+          "24.157.51.85": [
+            80,
+            443
+          ]
+        },
+        "ns01.commandcommcentral.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.commandcommcentral.com": {},
+        "test.commandcommcentral.com": {
+          "24.38.70.8": [
+            80,
+            443
+          ]
+        },
+        "www.commandcommcentral.com": {
+          "24.38.70.5": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "IIS": "10.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-05-29T20:40:41Z_e436f4f8",
+      "started_at": "2026-05-29T20:40:41Z",
+      "completed_at": "2026-05-29T20:44:39Z",
       "subdomain_count": 6,
       "live_subdomain_count": 6,
       "host_count": 4,
