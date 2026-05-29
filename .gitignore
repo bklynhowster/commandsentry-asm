@@ -46,3 +46,8 @@ web/build/
 # Local scanner debug output
 scanner/_debug/
 scanner/output/
+
+# ExpressVPN Linux installer binaries — staged locally before uploading
+# to the vpn-tools GH release. Do not commit (large binary + license).
+expressvpn-linux-*.run
+expressvpn*.deb
