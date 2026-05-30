@@ -1,47 +1,49 @@
 name: VPN drill
 
-# Phase 4a M7 — VPN mastery drill. Manual-only. Exercises every meaningful
-# ExpressVPN operation in one run and captures timing + egress IP at each
-# step. Gives us actual data — not speculation — for designing mid-scan
-# rotation tomorrow.
+# Phase 4a M7 — VPN mastery drill. Manual-only. Exercises every
+# meaningful Mullvad VPN operation in one run and captures timing +
+# egress IP at each step.
 #
 # The drill in order:
-#   1. Bring up at primary region   → baseline egress IP, install/connect time
-#   2. Dump full region inventory  → know our actual options
-#   3. Status probe                  → what state info is readable mid-scan
-#   4. Rotate same-region            → does NY give us a new /24? cost?
-#   5. Rotate cross-region (Chicago) → ASN swap + cost
-#   6. Rotate cross-region (LA)      → second cross-region sample
-#   7. Round-trip latency check      → real outbound RTT through each exit
-#   8. Teardown                      → logout, slot cleanup
+#   1. Bring up at primary region    → baseline egress IP, install + connect time
+#   2. Dump full region inventory   → know our actual options
+#   3. Status probe                  → what state info is readable
+#   4. Same-region rotation          → same-region switch cost
+#   5. Cross-region (second)         → ASN swap cost
+#   6. Cross-region (third)          → second cross-region sample
+#   7. Drill summary                 → table of all rotations
+#   8. Teardown                      → logout, free device slot
 #
 # Trigger: workflow_dispatch only — never schedule.
 #
 # Required secrets:
-#   EXPRESSVPN_ACTIVATION_CODE — same secret used by vpn-test.yml + scanner.yml
+#   MULLVAD_ACCOUNT_NUMBER — 16-digit Mullvad account number
+#
+# Migrated from ExpressVPN 2026-05-30 — see Obsidian
+# [[55 - Mullvad VPN Account Credentials]] for the why.
 
 on:
   workflow_dispatch:
     inputs:
       primary_region:
-        description: 'Initial region to connect to'
+        description: 'Initial region (Mullvad "country city" format)'
         required: false
-        default: 'USA - New York'
+        default: 'us nyc'
         type: string
       same_region_test:
-        description: 'Region for the same-region rotation test (should match primary)'
+        description: 'Region for same-region rotation (should match primary country)'
         required: false
-        default: 'USA - New York'
+        default: 'us nyc'
         type: string
       second_region:
-        description: 'Region for the first cross-region rotation'
+        description: 'First cross-region rotation target'
         required: false
-        default: 'USA - Chicago'
+        default: 'us chi'
         type: string
       third_region:
-        description: 'Region for the second cross-region rotation'
+        description: 'Second cross-region rotation target'
         required: false
-        default: 'USA - Los Angeles'
+        default: 'us lax'
         type: string
 
 jobs:
@@ -59,62 +61,38 @@ jobs:
           chmod +x scripts/scanner/vpn_teardown.sh
           chmod +x scripts/scanner/vpn_rotate.sh
 
-      - name: Fetch ExpressVPN installer from vpn-tools release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p /tmp/vpn-installer
-          gh release download vpn-tools \
-            --repo bklynhowster/commandsentry-asm \
-            --pattern 'expressvpn-*' \
-            --dir /tmp/vpn-installer
-          INSTALLER=$(ls /tmp/vpn-installer/expressvpn-* | head -1)
-          echo "EXPRESSVPN_INSTALLER_PATH=$INSTALLER" >> "$GITHUB_ENV"
-
       # ─── Step 1: Initial bring-up ──────────────────────────────────
       - name: 1. Bring up VPN at primary region
         id: bringup
         env:
-          EXPRESSVPN_ACTIVATION_CODE: ${{ secrets.EXPRESSVPN_ACTIVATION_CODE }}
-          VPN_REGION:                 ${{ github.event.inputs.primary_region }}
+          MULLVAD_ACCOUNT_NUMBER: ${{ secrets.MULLVAD_ACCOUNT_NUMBER }}
+          VPN_REGION:             ${{ github.event.inputs.primary_region }}
         run: scripts/scanner/vpn_bringup.sh
 
       # ─── Step 2: Region inventory ──────────────────────────────────
-      # Lock in the actual list of available regions so we stop guessing
-      # at names (some are "USA - New York", some are "USA - New Jersey
-      # - 1" with numeric suffixes, etc).
-      - name: 2. Dump full region inventory
+      - name: 2. Dump full region inventory (first 60 lines)
         run: |
-          echo "::group::All ExpressVPN regions"
-          expressvpnctl get regions 2>&1 || expressvpn get regions 2>&1 || \
-            echo "  (unable to enumerate regions)"
+          echo "::group::All Mullvad regions"
+          mullvad relay list 2>&1 | head -60 || echo "  (unable to enumerate)"
           echo "::endgroup::"
 
-      # ─── Step 3: Status / state probe ──────────────────────────────
+      # ─── Step 3: State info probe ──────────────────────────────────
       - name: 3. Dump VPN state info
         run: |
-          CLI="expressvpnctl"
-          command -v expressvpnctl &>/dev/null || CLI="expressvpn"
-
-          echo "::group::status"
-          $CLI status 2>&1 || echo "  (status not available)"
+          echo "::group::status -v"
+          mullvad status -v 2>&1 || echo "  (status unavailable)"
           echo "::endgroup::"
-
-          echo "::group::get smartlocation"
-          $CLI get smartlocation 2>&1 || echo "  (not available)"
+          echo "::group::account get"
+          mullvad account get 2>&1 || echo "  (not available)"
           echo "::endgroup::"
-
-          echo "::group::get protocol"
-          $CLI get protocol 2>&1 || echo "  (not available)"
+          echo "::group::tunnel get"
+          mullvad tunnel get 2>&1 || echo "  (not available)"
           echo "::endgroup::"
 
       # ─── Step 4: Same-region rotation ──────────────────────────────
-      - name: 4. Same-region rotation (expect new /24 in same region)
+      - name: 4. Same-region rotation (expect new exit in same region)
         id: same_region
-        env:
-          VPN_REGION:                 ${{ github.event.inputs.same_region_test }}
-          EXPRESSVPN_ACTIVATION_CODE: ${{ secrets.EXPRESSVPN_ACTIVATION_CODE }}
-        run: scripts/scanner/vpn_rotate.sh "$VPN_REGION"
+        run: scripts/scanner/vpn_rotate.sh "${{ github.event.inputs.same_region_test }}"
 
       - name: 4b. Verify same-region rotation egress
         run: |
@@ -129,10 +107,7 @@ jobs:
       # ─── Step 5: First cross-region rotation ───────────────────────
       - name: 5. Cross-region rotation → second region
         id: second_region
-        env:
-          VPN_REGION:                 ${{ github.event.inputs.second_region }}
-          EXPRESSVPN_ACTIVATION_CODE: ${{ secrets.EXPRESSVPN_ACTIVATION_CODE }}
-        run: scripts/scanner/vpn_rotate.sh "$VPN_REGION"
+        run: scripts/scanner/vpn_rotate.sh "${{ github.event.inputs.second_region }}"
 
       - name: 5b. Verify cross-region rotation egress
         run: |
@@ -151,10 +126,7 @@ jobs:
       # ─── Step 6: Second cross-region rotation ──────────────────────
       - name: 6. Cross-region rotation → third region
         id: third_region
-        env:
-          VPN_REGION:                 ${{ github.event.inputs.third_region }}
-          EXPRESSVPN_ACTIVATION_CODE: ${{ secrets.EXPRESSVPN_ACTIVATION_CODE }}
-        run: scripts/scanner/vpn_rotate.sh "$VPN_REGION"
+        run: scripts/scanner/vpn_rotate.sh "${{ github.event.inputs.third_region }}"
 
       - name: 6b. Verify third region egress + latency
         run: |
@@ -165,7 +137,7 @@ jobs:
           curl -sS --max-time 10 https://ifconfig.me/all.json || true
           echo ""
           echo "::endgroup::"
-          echo "::group::Round-trip to commandsentry-portal.netlify.app from $REGION"
+          echo "::group::Round-trip to commandsentry-portal.netlify.app from third region"
           curl -sS -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" \
             --max-time 15 https://commandsentry-portal.netlify.app/ || true
           echo "::endgroup::"
@@ -175,7 +147,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "## VPN drill — summary"
+            echo "## VPN drill — summary (Mullvad)"
             echo ""
             echo "| Step | Pre IP | Post IP | Cost |"
             echo "|------|--------|---------|------|"

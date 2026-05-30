@@ -192,16 +192,21 @@ jobs:
              where scan_run_id   = '$SCAN_RUN_ID';
           "
 
-      # ─── VPN bring-up (M7b) ────────────────────────────────────────
-      # Wraps any Medium/Heavy scan in ExpressVPN egress so we don't get
-      # FortiGate/Cloudflare-banned on the runner IP. ALSO fires when
-      # force_vpn=true via workflow_dispatch — useful for testing the
-      # VPN integration end-to-end with a known-safe Light tier scan
-      # before pointing noisier tools through it.
+      # ─── VPN bring-up (M7b, Mullvad as of 2026-05-30) ──────────────
+      # Wraps any Medium/Heavy scan in Mullvad VPN egress so we don't
+      # get FortiGate/Cloudflare-banned on the GH runner IP. Also fires
+      # when force_vpn=true via workflow_dispatch — useful for testing
+      # the VPN integration end-to-end with a known-safe Light tier
+      # scan before pointing noisier tools through it.
       #
       # Light tier in production (cron path) deliberately bypasses VPN —
-      # adds ~2 min overhead per scan for an IronPort-safe check suite
+      # ~35s install+connect overhead for an IronPort-safe check suite
       # that nothing will ban us for.
+      #
+      # Migrated from ExpressVPN 2026-05-30. Mullvad installs via apt
+      # repo (no .deb asset to manage), CLI is headless-native, atomic
+      # region switching via `relay set location`. See Obsidian
+      # [[55 - Mullvad VPN Account Credentials]] for the full why.
       - name: Determine if VPN should be brought up
         id: vpn_decision
         if: ${{ steps.poll.outputs.has_work == 'true' }}
@@ -222,30 +227,12 @@ jobs:
           chmod +x scripts/scanner/vpn_bringup.sh
           chmod +x scripts/scanner/vpn_teardown.sh
 
-      - name: Fetch ExpressVPN installer from vpn-tools release
-        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p /tmp/vpn-installer
-          gh release download vpn-tools \
-            --repo bklynhowster/commandsentry-asm \
-            --pattern 'expressvpn-*' \
-            --dir /tmp/vpn-installer
-          INSTALLER=$(ls /tmp/vpn-installer/expressvpn-* | head -1)
-          if [[ -z "$INSTALLER" ]]; then
-            echo "::error::No ExpressVPN installer asset found in vpn-tools release"
-            exit 1
-          fi
-          echo "Installer downloaded: $INSTALLER"
-          echo "EXPRESSVPN_INSTALLER_PATH=$INSTALLER" >> "$GITHUB_ENV"
-
-      - name: Bring up VPN
+      - name: Bring up VPN (Mullvad)
         id: vpn
         if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
         env:
-          EXPRESSVPN_ACTIVATION_CODE: ${{ secrets.EXPRESSVPN_ACTIVATION_CODE }}
-          VPN_REGION:                 ${{ vars.SCANNER_VPN_REGION || 'USA - New York' }}
+          MULLVAD_ACCOUNT_NUMBER: ${{ secrets.MULLVAD_ACCOUNT_NUMBER }}
+          VPN_REGION:             ${{ vars.SCANNER_VPN_REGION || 'us nyc' }}
         run: scripts/scanner/vpn_bringup.sh
 
       # ─── Dispatch to tier-specific runner ──────────────────────────
