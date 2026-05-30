@@ -129,8 +129,13 @@ fi
 #   3. Regardless of CLI exit code, verify via `mullvad account get`
 #      since login often succeeds server-side even when CLI hangs
 
-# Check existing state first
-if timeout 5 mullvad account get 2>&1 | grep -qi "mullvad account"; then
+# Check existing state first. NOTE: capture to variable rather than
+# piping — scan #46 (2026-05-30) revealed that `set -uo pipefail` was
+# making `cmd | grep` return non-zero whenever `cmd` was killed by
+# timeout, EVEN IF grep matched the output before the kill. The
+# variable-capture form sidesteps pipefail entirely.
+ACCT_OUT=$(timeout 5 mullvad account get 2>&1 || true)
+if echo "$ACCT_OUT" | grep -qi "mullvad account"; then
   log "already logged in (state persisted from prior install)"
 else
   log "logging in (timeout -k 5 30 — hard SIGKILL if SIGTERM ignored)..."
@@ -146,7 +151,9 @@ else
   log "verifying login via mullvad account get (retry loop)..."
   VERIFIED=false
   for attempt in 1 2 3 4 5; do
-    if timeout 5 mullvad account get 2>&1 | grep -qi "mullvad account"; then
+    # Variable capture (not pipe) to dodge pipefail propagation
+    ACCT_OUT=$(timeout 5 mullvad account get 2>&1 || true)
+    if echo "$ACCT_OUT" | grep -qi "mullvad account"; then
       log "✓ login verified via account get (attempt $attempt)"
       VERIFIED=true
       break
