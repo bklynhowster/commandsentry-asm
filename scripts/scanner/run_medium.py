@@ -106,7 +106,7 @@ def pick_ua() -> str:
 NUCLEI_RATE_LIMIT = 30
 NUCLEI_CONCURRENCY = 5
 NUCLEI_TIMEOUT_S = 15
-NUCLEI_CHUNK_WALL_S = 90       # each chunk caps at ~90s
+NUCLEI_CHUNK_WALL_S = 180      # each chunk caps at ~3min (was 90s — too short for real targets)
 NUCLEI_URLS_PER_CHUNK = 40     # ~30-50s of work per chunk
 
 NIKTO_PAUSE_S = 1
@@ -861,11 +861,11 @@ def run(descriptor_path: str, dsn: str) -> int:
         ctx.egress_ips_seen.append(start_egress)
         log(f"pre-scan egress IP: {start_egress}")
 
-    try:
-        conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
-    except Exception as e:
-        log(f"DB connect failed: {e}")
-        return 1
+    # DB connection deferred until write phase. Scan #35 (2026-05-30)
+    # showed Supabase closes idle connections after 7+ min, and we
+    # used to open at scan-start which idled the whole Medium tier.
+    # Now we open right before the writes.
+    conn = None
 
     end_egress = None
     try:
@@ -910,6 +910,10 @@ def run(descriptor_path: str, dsn: str) -> int:
             f"{len(ctx.egress_ips_seen)} distinct egress IP(s), "
             f"{len(ctx.ban_events)} ban event(s)")
 
+        # NOW open the DB connection — fresh + ready for writes.
+        log("opening DB connection (deferred until write phase)")
+        conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
+
         inserted, updated = write_findings_and_artifacts(conn, ctx, Json)
         write_scan_metadata_artifact(conn, ctx, Json, start_egress, end_egress)
         log(f"upserted findings: {inserted} new, {updated} existing")
@@ -921,6 +925,14 @@ def run(descriptor_path: str, dsn: str) -> int:
 
     except Exception as e:
         log(f"FATAL: {e!r}")
+        # Try to mark the run failed even if the FATAL happened mid-scan.
+        # Open a fresh DB connection if we don't have one yet.
+        if conn is None:
+            try:
+                conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
+            except Exception as e2:
+                log(f"could not open DB to mark scan failed: {e2!r}")
+                return 1
         try:
             conn.rollback()
         except Exception:
@@ -932,10 +944,11 @@ def run(descriptor_path: str, dsn: str) -> int:
             log(f"fail_out also failed: {e2!r}")
         return 1
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def main() -> None:

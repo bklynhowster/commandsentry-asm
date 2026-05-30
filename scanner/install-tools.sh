@@ -104,7 +104,7 @@ echo "  updating nuclei templates..."
 nuclei -update-templates -silent 2>&1 | tail -1 || true
 
 # ─── Python tools ────────────────────────────────────────────────
-echo "[4/5] Python tools (wafw00f)..."
+echo "[4/6] Python tools (wafw00f)..."
 if ! command -v wafw00f &>/dev/null; then
   if [[ "$PLATFORM" == "ubuntu" ]]; then
     pip3 install --quiet --break-system-packages wafw00f 2>/dev/null || pip3 install --quiet wafw00f
@@ -113,8 +113,28 @@ if ! command -v wafw00f &>/dev/null; then
   fi
 fi
 
+# ─── Medium-tier active scan tools (nikto + ffuf) ────────────────
+# Added 2026-05-30 after scan #35 surfaced 'command not found' for
+# both. Required by run_medium.py.
+echo "[5/6] Medium-tier active scan tools (nikto, ffuf)..."
+
+# ffuf — Go-installable
+go_install ffuf "github.com/ffuf/ffuf/v2@latest"
+if [[ "$PLATFORM" == "ubuntu" ]] && [[ -f "$GO_BIN/ffuf" ]]; then
+  sudo ln -sf "$GO_BIN/ffuf" /usr/local/bin/ffuf
+fi
+
+# nikto — system package on Ubuntu, brew on Mac
+if ! command -v nikto &>/dev/null; then
+  if [[ "$PLATFORM" == "ubuntu" ]]; then
+    sudo apt-get install -y -qq nikto
+  elif [[ "$PLATFORM" == "mac" ]]; then
+    brew install nikto --quiet 2>/dev/null || true
+  fi
+fi
+
 # ─── testssl.sh ──────────────────────────────────────────────────
-echo "[5/5] testssl.sh..."
+echo "[6/6] testssl.sh..."
 TESTSSL_DIR="$INSTALL_DIR/testssl.sh"
 if [[ ! -d "$TESTSSL_DIR" ]]; then
   git clone --quiet --depth 1 https://github.com/drwetter/testssl.sh.git "$TESTSSL_DIR"
@@ -127,7 +147,7 @@ fi
 # ─── Verification ────────────────────────────────────────────────
 echo ""
 echo "═══ Verification ═══"
-for tool in subfinder dnsx httpx naabu fingerprintx nuclei wafw00f whois jq yq; do
+for tool in subfinder dnsx httpx naabu fingerprintx nuclei wafw00f nikto ffuf whois jq yq; do
   if command -v "$tool" &>/dev/null; then
     printf "  ✓ %-15s %s\n" "$tool" "$(command -v $tool)"
   else
