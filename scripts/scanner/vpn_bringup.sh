@@ -229,4 +229,25 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   echo "vpn_baseline_ip=$BASELINE_IP" >> "$GITHUB_OUTPUT"
 fi
 
+# ─── Step 10: Explicit cleanup before exit (scan #37 debug) ──────────
+# Scan #37 (2026-05-30) hung for 5+ minutes AFTER printing the
+# success messages but BEFORE the workflow step transitioned. Adding
+# explicit cleanup + final markers so we can see exactly where the
+# script ends and what's still alive.
+log "publishing outputs done — cleanup phase"
+
+# Reap any leaked subprocesses from timeout-wrapped CLI calls.
+# `wait` waits for all background jobs of this shell.
+wait 2>/dev/null || true
+
+# Diagnostic: dump still-alive mullvad/curl/sleep processes to see if
+# we have zombies blocking shell exit.
+log "remaining child-style processes (should be empty or just mullvad-daemon systemd):"
+ps -ef --ppid $$ 2>&1 | tail -20 || true
+
+log "✅ vpn_bringup.sh complete — exiting now"
+# Force a stdout flush so the final marker definitely lands in the log
+# even if something is buffering.
+sync 2>/dev/null || true
+
 exit 0
