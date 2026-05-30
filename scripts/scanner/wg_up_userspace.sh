@@ -37,6 +37,17 @@ err() { echo "[wg-up-us] ERROR: $*" >&2; }
 command -v wireguard-go >/dev/null || { err "wireguard-go not on PATH"; exit 1; }
 command -v wg           >/dev/null || { err "wg not on PATH"; exit 1; }
 
+# /etc/wireguard/*.conf are 0600 root:root — we run as the regular user
+# and use sudo for state-changing commands. awk can't read them directly,
+# so slurp the whole file once via sudo and operate on the in-memory
+# copy. Stripped of trailing newline for cleaner awk handling.
+CONF_TEXT=$(sudo cat "$CONF")
+if [[ -z "$CONF_TEXT" ]]; then
+  err "sudo cat $CONF returned empty — check file exists and is readable as root"
+  sudo ls -la "$CONF" >&2 || true
+  exit 1
+fi
+
 # ─── 1. Create the userspace tunnel device ───────────────────────────
 # wireguard-go forks to background by default and creates a TUN device
 # named after its argv[1]. No kernel-link-type call, no modprobe, no
@@ -67,7 +78,7 @@ log "✓ TUN device $IFACE created"
 WG_CONF=$(mktemp)
 trap 'rm -f "$WG_CONF"' EXIT
 
-awk '
+printf '%s\n' "$CONF_TEXT" | awk '
   /^\[Interface\]/ { sect="iface"; print; next }
   /^\[Peer\]/      { sect="peer";  print; next }
   /^\[/            { sect="other"; next }
@@ -75,7 +86,7 @@ awk '
   sect=="peer"  && /^[[:space:]]*(PublicKey|PresharedKey|AllowedIPs|Endpoint|PersistentKeepalive)[[:space:]]*=/ { print; next }
   /^[[:space:]]*$/ { print; next }
   /^[[:space:]]*#/ { print; next }
-' "$CONF" > "$WG_CONF"
+' > "$WG_CONF"
 
 log "applying wg config (filtered to setconf-compatible keys)"
 if ! sudo wg setconf "$IFACE" "$WG_CONF"; then
@@ -89,14 +100,14 @@ log "✓ wg setconf applied"
 # ─── 3. Extract addresses from the [Interface] block ─────────────────
 # The patched configs keep the original Address= line (we only stripped
 # DNS / Table / PostUp / PreDown / killswitch).
-ADDR_LINE=$(awk '
+ADDR_LINE=$(printf '%s\n' "$CONF_TEXT" | awk '
   /^\[Peer\]/ { exit }
   /^[[:space:]]*Address[[:space:]]*=/ {
     sub(/^[[:space:]]*Address[[:space:]]*=[[:space:]]*/, "")
     print
     exit
   }
-' "$CONF")
+')
 if [[ -z "$ADDR_LINE" ]]; then
   err "no Address= line found in [Interface] of $CONF"
   exit 4
