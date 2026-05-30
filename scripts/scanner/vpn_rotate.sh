@@ -66,14 +66,22 @@ if [[ -z "$CLI" ]]; then
   exit 2
 fi
 
-# Capture pre-rotate egress IP.
+# Capture egress IP with retry tolerance — vpn-drill.yml run #2
+# (2026-05-30) showed that after reconnect, the route table can take
+# longer than expected to settle. Same retry pattern as the bringup
+# fix in commit d77d510: up to 5 rounds = ~30s additional wait.
 get_egress_ip() {
-  for url in https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
-    ip=$(curl -s --max-time 6 "$url" 2>/dev/null | head -1 | tr -d '[:space:]' || true)
-    if [[ -n "$ip" ]] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      echo "$ip"
-      return 0
-    fi
+  for round in 1 2 3 4 5; do
+    for url in https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
+      ip=$(curl -s --max-time 6 "$url" 2>/dev/null | head -1 | tr -d '[:space:]' || true)
+      if [[ -n "$ip" ]] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$ip"
+        return 0
+      fi
+    done
+    # First round: don't sleep — caller might already have waited.
+    # Subsequent rounds: 5s backoff between rounds.
+    [[ "$round" -lt 5 ]] && sleep 5
   done
   echo ""
 }
