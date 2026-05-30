@@ -138,13 +138,26 @@ else
   timeout -k 5 30 mullvad account login "$MULLVAD_ACCOUNT_NUMBER" 2>&1 || \
     log "login command returned non-zero (will verify via account get next)"
 
-  # Verify server-side state — Mullvad often creates the device
-  # successfully even when the CLI hangs waiting for the response.
-  log "verifying login via mullvad account get..."
-  if timeout 5 mullvad account get 2>&1 | grep -qi "mullvad account"; then
-    log "✓ login verified via account get"
-  else
-    err "login could not be verified via account get — bailing"
+  # Verify server-side state with retry — scan #45 (2026-05-30)
+  # showed the first verification call can run too fast after login,
+  # before the daemon has flushed state to its response handler. The
+  # diagnostic call 1s later returned proper output. Retry loop
+  # handles that race cleanly.
+  log "verifying login via mullvad account get (retry loop)..."
+  VERIFIED=false
+  for attempt in 1 2 3 4 5; do
+    if timeout 5 mullvad account get 2>&1 | grep -qi "mullvad account"; then
+      log "✓ login verified via account get (attempt $attempt)"
+      VERIFIED=true
+      break
+    fi
+    log "  attempt $attempt: not yet verified, sleeping 2s"
+    sleep 2
+  done
+
+  if ! $VERIFIED; then
+    err "login could not be verified after 5 attempts — bailing"
+    err "final account get output:"
     timeout 3 mullvad account get 2>&1 || true
     exit 2
   fi
