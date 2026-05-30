@@ -125,13 +125,17 @@ log "login OK"
 
 # ─── Step 5: Configure tunnel ────────────────────────────────────────
 # WireGuard is Mullvad's DEFAULT protocol — no explicit setting needed.
-# (Drill exposed that `mullvad tunnel set wireguard` is wrong syntax;
-# the correct command would be `relay set tunnel-protocol wireguard`
-# but it's also unnecessary. Skipping entirely.)
-# Lockdown mode = explicit kill switch (block all traffic if VPN drops).
-log "configuring tunnel..."
-timeout 10 mullvad lockdown-mode set on 2>&1 || true
-log "policies set: lockdown-mode (wireguard is the default)"
+#
+# Lockdown-mode INTENTIONALLY OMITTED. Scan #36 (2026-05-30) revealed
+# that `mullvad lockdown-mode set on` hangs the daemon for 6+ minutes
+# even with our 10s timeout wrapper — subsequent CLI calls also block.
+#
+# Mullvad's DEFAULT behavior on connect already blocks all non-VPN
+# traffic (built-in kill switch on the active tunnel). lockdown-mode
+# is the EXTRA protection that also blocks while DISCONNECTED —
+# useful for always-on personal VPN, irrelevant for our scan use
+# case where we explicitly disconnect at teardown.
+log "configuring tunnel (using Mullvad defaults: WireGuard + auto kill-switch)"
 
 # ─── Step 6: Set location ────────────────────────────────────────────
 # Region name format is "country" or "country city" or

@@ -18,10 +18,10 @@ if ! command -v mullvad &>/dev/null; then
   exit 0
 fi
 
-# Disable lockdown-mode first so the post-job cleanup steps that need
-# internet (apt cache, GH artifact upload, etc.) can still reach out.
-log "disabling lockdown-mode"
-timeout 5 mullvad lockdown-mode set off 2>&1 || true
+# We no longer enable lockdown-mode in bringup (it hangs the daemon
+# per scan #36). The default kill switch on the active tunnel goes
+# away when we disconnect, so post-job cleanup steps will have
+# internet again automatically.
 
 log "disconnecting"
 timeout 10 mullvad disconnect 2>&1 || true
