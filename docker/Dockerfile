@@ -81,6 +81,9 @@ RUN apt-get update -qq \
       python3 python3-pip python3-venv \
       # Active scan utilities (system pkgs)
       whois jq dnsutils nikto perl \
+      # PostgreSQL client — scanner.yml uses psql in queue/poll/cleanup
+      # steps (8 invocations total) to talk to Supabase
+      postgresql-client \
       # Misc system
       ca-certificates curl wget gawk \
       # testssl.sh needs git for clone (at image build) and bsdmainutils
@@ -101,6 +104,14 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 RUN wget -q -O /usr/local/bin/yq \
        https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 \
  && chmod +x /usr/local/bin/yq
+
+# ─── GitHub CLI (`gh`) — used by scanner.yml `gh release download` ─
+# Static binary from cli/cli releases. Not in noble's default apt repo.
+RUN wget -q -O /tmp/gh.tar.gz \
+       https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz \
+ && tar -xzf /tmp/gh.tar.gz -C /tmp \
+ && install -m 0755 /tmp/gh_2.62.0_linux_amd64/bin/gh /usr/local/bin/gh \
+ && rm -rf /tmp/gh.tar.gz /tmp/gh_2.62.0_linux_amd64
 
 # ─── testssl.sh (cloned at build time, pinned to current HEAD) ─────
 RUN git clone --depth 1 --quiet \
@@ -127,7 +138,8 @@ RUN set -eux; \
     for t in wireguard-go wg \
              subfinder dnsx httpx naabu nuclei fingerprintx \
              ffuf nikto wafw00f testssl.sh \
-             whois jq yq python3 sudo ip iptables; do \
+             whois jq yq python3 sudo ip iptables \
+             psql gh; do \
       command -v "$t" >/dev/null 2>&1 \
         || { echo "MISSING: $t"; exit 1; }; \
     done; \
