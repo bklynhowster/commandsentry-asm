@@ -1,0 +1,107 @@
+name: Build scanner image
+
+# Build + publish the COMMANDsentry scanner container image to GHCR.
+# Triggered on changes to docker/, this workflow file, or manual dispatch.
+#
+# The image bakes:
+#   - wireguard-go (M7 userspace WG implementation)
+#   - wg CLI from wireguard-tools
+#   - Full Phase 4a scan toolchain (PD tools + ffuf + nikto + wafw00f + testssl.sh)
+#   - Python + psycopg + requests
+#
+# Output tags:
+#   ghcr.io/bklynhowster/commandsentry-scanner:latest
+#   ghcr.io/bklynhowster/commandsentry-scanner:YYYYMMDD-<sha7>
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/**'
+      - '.github/workflows/build-scanner-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/commandsentry-scanner
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute tag
+        id: meta
+        run: |
+          SHA7=$(echo "${{ github.sha }}" | cut -c1-7)
+          DATE=$(date -u +%Y%m%d)
+          echo "sha7=$SHA7" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "tag=${DATE}-${SHA7}" >> "$GITHUB_OUTPUT"
+          echo "Image will be tagged: ${DATE}-${SHA7} + latest"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push
+        uses: docker/build-push-action@v6
+        with:
+          context: docker
+          file: docker/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Smoke-test the image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+          echo "═══ Tool versions in built image ═══"
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} \
+            sh -c '
+              echo "wireguard-go: $(wireguard-go --version 2>&1 | head -1 || echo n/a)";
+              echo "wg:          $(wg --version 2>&1 | head -1)";
+              echo "nuclei:      $(nuclei -version 2>&1 | head -1)";
+              echo "naabu:       $(naabu -version 2>&1 | head -1)";
+              echo "httpx:       $(httpx -version 2>&1 | head -1)";
+              echo "subfinder:   $(subfinder -version 2>&1 | head -1)";
+              echo "ffuf:        $(ffuf -V 2>&1 | head -1)";
+              echo "nikto:       $(nikto -Version 2>&1 | head -1)";
+              echo "wafw00f:     $(wafw00f --version 2>&1 | head -1)";
+              echo "testssl.sh:  $(testssl.sh --version 2>&1 | head -3 | tail -1)";
+              echo "python3:     $(python3 --version)";
+            '
+
+      - name: Summary
+        run: |
+          echo "## Built + pushed scanner image" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Tags:**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "To use in scanner.yml, set the job's \`container:\` block:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`yaml" >> "$GITHUB_STEP_SUMMARY"
+          echo "container:" >> "$GITHUB_STEP_SUMMARY"
+          echo "  image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "  options: --cap-add=NET_ADMIN --device=/dev/net/tun" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
