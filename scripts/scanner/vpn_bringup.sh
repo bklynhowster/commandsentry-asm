@@ -55,33 +55,48 @@ log "baseline runner IP (pre-VPN): ${BASELINE_IP:-<unknown>}"
 # ─── Step 2: Install wireguard-tools ─────────────────────────────────
 # Standard Ubuntu package — no third-party repo. Ships with wg + wg-quick.
 #
-# Scan #54 (2026-05-30) hung here for 3+ minutes silently — root cause
-# was Ubuntu 22.04+'s `needrestart` post-install hook waiting for
-# interactive input despite printing "No services need to be restarted"
-# (the prompt comes AFTER that message). On a runner with no TTY, the
-# script just sat there.
+# Scan history at this step on GH Actions hosted runners:
+#   #54: hung 3+ min on needrestart's interactive-input prompt
+#   #57: hung 2.5+ min AFTER needrestart printed "is suspended" —
+#        almost certainly something dpkg/systemd is doing post-install
+#        for the wireguard package (likely wg-quick.target activation).
 #
-# Defeat needrestart + apt prompts via env vars BEFORE the install.
+# Fix: purge needrestart entirely (so it can't interfere) + wrap every
+# apt invocation with a hard timeout + force line-buffered output so we
+# never sit silently again.
 export DEBIAN_FRONTEND=noninteractive
-export NEEDRESTART_MODE=a       # 'a' = auto-restart anything that needs it
-export NEEDRESTART_SUSPEND=1    # belt + suspenders: actually skip needrestart entirely
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
+
+# Timestamped log helper — shows where time is being spent.
+ts_log() { echo "[vpn-bringup] $(date '+%H:%M:%S') $*"; }
 
 if ! command -v wg-quick &>/dev/null; then
-  log "wireguard-tools not on PATH — installing via apt (noninteractive)"
-  sudo -E apt-get update -qq
-  if ! sudo -E DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
-       apt-get install -y -q \
+  ts_log "wireguard-tools not on PATH — purging needrestart first"
+  sudo -E timeout 30 apt-get -y -q purge needrestart 2>&1 \
+    | sed 's/^/[apt-purge] /' \
+    || ts_log "(needrestart purge returned non-zero or wasn't installed — continuing)"
+
+  ts_log "running apt-get update"
+  sudo -E timeout 60 apt-get update -qq 2>&1 \
+    | sed 's/^/[apt-update] /' \
+    || { err "apt-get update failed or timed out"; exit 1; }
+
+  ts_log "running apt-get install wireguard wireguard-tools resolvconf"
+  if ! sudo -E timeout 90 stdbuf -oL -eL apt-get install -y -q \
          -o Dpkg::Options::="--force-confdef" \
          -o Dpkg::Options::="--force-confold" \
-         wireguard wireguard-tools resolvconf; then
-    err "apt install wireguard failed"
+         wireguard wireguard-tools resolvconf 2>&1 \
+       | sed 's/^/[apt-install] /'; then
+    err "apt install wireguard failed or timed out (90s cap)"
     exit 1
   fi
-  log "wireguard-tools installed"
+  ts_log "wireguard-tools installed"
 fi
-log "wg version check..."
-wg --version 2>&1 || log "(wg --version failed but continuing)"
-log "wg version check done"
+
+ts_log "wg version check..."
+wg --version 2>&1 || ts_log "(wg --version failed but continuing)"
+ts_log "wg version check done"
 
 # ─── Step 3: Verify config is present ────────────────────────────────
 # scanner.yml step "Fetch WireGuard configs" downloads + extracts the
