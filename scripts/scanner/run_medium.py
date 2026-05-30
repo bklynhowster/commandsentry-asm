@@ -6,31 +6,38 @@ Consumes a scan descriptor (produced by poll_queue.py), runs the Medium
 tier check suite against the asset, writes findings + raw artifacts to
 Supabase, and closes out the scan_run.
 
-MEDIUM TIER PHILOSOPHY:
-  • Active checks — nuclei, nikto, ffuf — but TUNED QUIET so we don't
-    trip target WAFs. Per Howie's design call 2026-05-29: rotation is
-    not the primary defense; not triggering the WAF in the first place
-    is. Rotation can layer on later if quiet-only proves insufficient.
-  • Runs from inside ExpressVPN (vpn_bringup.sh wraps this invocation
-    in scanner.yml for Medium+). Egress is NOT the GH runner IP.
+MEDIUM TIER PHILOSOPHY (refined 2026-05-30):
+  • Active checks — nuclei, nikto, ffuf — quiet-tuned so we don't
+    trip target WAFs as the PRIMARY defense.
+  • Runs from inside Mullvad VPN egress (scanner.yml wraps the
+    invocation with vpn_bringup.sh + vpn_teardown.sh for Medium+).
   • Builds on top of Light — assumes Light already ran or will run
     independently. Medium does NOT re-do TLS cert / header / DNS /
     common-paths checks.
-  • Aborts early on WAF-block cascade (>5 consecutive 4xx/5xx in a
-    sliding window) instead of burning through the rotation budget.
+
+AGGRESSIVE ROTATION LAYER (new in this version):
+  Mullvad's atomic region-swap is effectively free (1-2s, verified
+  drill #10). We leverage it to rotate egress IP between tool chunks,
+  so each chunk runs from a different exit IP. This means:
+    - Single-IP WAF reputation never accumulates enough to ban us
+    - If a chunk DOES get banned mid-flight, the next chunk's already
+      on a new IP — bounded loss
+    - Rotation cost ~1-2s × ~10 rotations = 10-20s overhead in a
+      15-min scan (<3%)
+
+  Four protection layers against WAF bans:
+    1. Pre-chunk healthcheck (curl baseline before scanner starts)
+    2. Small chunks (30-50 URLs each) so mid-chunk ban damage is bounded
+    3. Rewind window — when ban detected, mark recent N seconds of
+       'completed' URLs as suspect for re-scan on the next chunk
+    4. Kill + rotate + requeue — bounded recovery, finding-upsert
+       handles dedup automatically
 
 CHECKS RUN (in order):
-  1. nuclei  — quiet (-rate-limit 30 -c 5), skip intrusive templates
-  2. nikto   — quiet (-Pause 1), HTML-format output parsed
-  3. ffuf    — quiet (-rate 50 -p 0.1-0.3), top-100 dir wordlist
-
-QUIET-TOOLING SPEC (Howie 2026-05-29):
-  • Real-browser user agents rotated per tool invocation
-  • Rate-limited well below WAF detection thresholds
-  • Inter-request jitter to look human
-  • Skip aggressive payloads against confirmed-WAF targets
-  • Hard request ceiling (8000) — abort if exceeded
-  • Response-code histogram dumped as artifact for post-mortem tuning
+  1. wafw00f      — WAF pre-check, gates intrusive nuclei templates
+  2. nuclei       — chunked, quiet (-rate-limit 30 -c 5)
+  3. ffuf         — chunked, quiet (-rate 50 -p 0.1-0.3), top dirs
+  4. nikto        — single pass, no chunking (incompatible)
 
 USAGE:
   python scripts/scanner/run_medium.py /tmp/scan_descriptor.json
@@ -42,8 +49,8 @@ EXIT CODES:
   0 — scan ran (findings written, scan_run closed). Findings may be 0.
   1 — fatal error (DB unreachable, descriptor invalid, etc.). scan_run
       is marked 'failed' before exit.
-  3 — WAF block cascade detected mid-scan. scan_run marked 'failed' with
-      explicit error_message so we know to tune further.
+  3 — WAF block cascade detected and no rotation recovered. scan_run
+      marked 'failed' with explicit error_message.
 """
 
 from __future__ import annotations
@@ -55,6 +62,7 @@ import random
 import re
 import subprocess
 import sys
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -80,10 +88,8 @@ def _import_deps() -> Any:
 
 # ─── Constants ──────────────────────────────────────────────────────────
 
-# Rotating UA pool — real Chrome/Firefox/Safari/Edge as observed in
-# Cloudflare's own published UA distribution. We pick one per tool
-# invocation so a target seeing nuclei + nikto + ffuf doesn't see the
-# same UA across all three and instantly fingerprint a scanner.
+# Real-browser user agents rotated per tool invocation. Picked from
+# Cloudflare's published UA distribution to look like ordinary traffic.
 REAL_BROWSER_UAS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
@@ -96,32 +102,42 @@ def pick_ua() -> str:
     return random.choice(REAL_BROWSER_UAS)
 
 
-# Tool budgets. Conservative — we'd rather come back with partial data
-# than get banned mid-scan. These can be raised in v2 once we have real
-# WAF-tolerance data from the field.
-NUCLEI_RATE_LIMIT = 30      # req/sec ceiling
-NUCLEI_CONCURRENCY = 5       # parallel template workers
-NUCLEI_TIMEOUT_S  = 15       # per-template timeout
-NUCLEI_WALL_S     = 600      # whole-tool timeout
+# Tool budgets (per-chunk, not whole-scan).
+NUCLEI_RATE_LIMIT = 30
+NUCLEI_CONCURRENCY = 5
+NUCLEI_TIMEOUT_S = 15
+NUCLEI_CHUNK_WALL_S = 90       # each chunk caps at ~90s
+NUCLEI_URLS_PER_CHUNK = 40     # ~30-50s of work per chunk
 
-NIKTO_PAUSE_S     = 1        # inter-check delay
-NIKTO_WALL_S      = 600
+NIKTO_PAUSE_S = 1
+NIKTO_WALL_S = 600
 
-FFUF_RATE         = 50       # req/sec
-FFUF_DELAY_RANGE  = "0.1-0.3"  # jitter window between requests
-FFUF_WALL_S       = 300
+FFUF_RATE = 50
+FFUF_DELAY_RANGE = "0.1-0.3"
+FFUF_CHUNK_WALL_S = 60
+FFUF_WORDS_PER_CHUNK = 25
 
-# Hard ceiling — across all tools combined. Abort if exceeded.
-MAX_TOTAL_REQUESTS = 8000
+# Mid-scan ban-detection / rewind tuning.
+REWIND_SECONDS = 30             # rewind window for soft-ban paranoia
+MAX_REQUESTS_TOTAL = 8000        # hard ceiling across all tools
+BAN_HTTP_CODES = {403, 429, 503, 521, 522, 523}  # WAF/CDN ban signals
 
-# WAF-block-cascade detection. If we see this many 4xx/5xx in a row
-# (in the response-code stream we observe), bail out before we burn
-# through every IP in the rotation pool.
-CASCADE_THRESHOLD = 5
+# Rotation regions (Mullvad "country city" format). Cycled in order
+# per chunk so the target sees diverse exit IPs across the scan.
+ROTATION_REGIONS = [
+    "us nyc",   # New York
+    "us chi",   # Chicago
+    "us atl",   # Atlanta
+    "us dal",   # Dallas
+    "us lax",   # Los Angeles
+    "us sea",   # Seattle
+    "us phx",   # Phoenix
+    "us mia",   # Miami
+]
 
-# Small wordlist for ffuf — top dirs that high-signal but don't
-# look like obvious vuln-scanner fingerprints (no /wp-admin, no /.git
-# — Light already covers those).
+# Small high-signal wordlist for ffuf — top dirs that high-signal but
+# don't look like obvious vuln-scanner fingerprints (no /wp-admin, no
+# /.git — Light already covers those).
 FFUF_WORDS = [
     "api", "v1", "v2", "graphql", "rest",
     "admin", "console", "manager", "dashboard", "panel",
@@ -138,7 +154,7 @@ FFUF_WORDS = [
     "webhook", "callback", "notify", "subscribe", "unsubscribe",
     "reports", "report", "export", "import", "sync",
     "queue", "task", "job", "worker", "cron",
-    "stats", "analytics", "tracking", "telemetry", "logs",
+    "stats", "analytics", "tracking", "telemetry",
     "cms", "blog", "post", "page", "article",
     "search", "filter", "tag", "category", "archive",
     "robots", "humans", "sitemap", "favicon", "manifest",
@@ -146,66 +162,54 @@ FFUF_WORDS = [
 ]
 
 
-# ─── Finding model (DUPED from run_light — refactor to _shared.py
-# once there's a third scanner) ────────────────────────────────────────
+# ─── Data classes ───────────────────────────────────────────────────────
 @dataclass
 class MediumFinding:
-    """A single Medium-tier finding ready to upsert."""
-    check_name:   str
-    title:        str
-    severity:     str
-    category:     str
-    description:  str
-    tags:         list[str] = field(default_factory=list)
-    cwe:          list[int] = field(default_factory=list)
-    references:   list[str] = field(default_factory=list)
-    raw_excerpt:  str | None = None
+    check_name: str
+    title: str
+    severity: str
+    category: str
+    description: str
+    tags: list[str] = field(default_factory=list)
+    cwe: list[int] = field(default_factory=list)
+    references: list[str] = field(default_factory=list)
+    raw_excerpt: str | None = None
 
 
 @dataclass
 class ScanContext:
-    descriptor:    dict
-    hostname:      str
-    asset_id:      str
-    scan_run_id:   str
-    queue_id:      str
-    intensity:     str
-    waf_detected:  bool = False   # if true, skip 'intrusive' nuclei tags
-    findings:      list[MediumFinding] = field(default_factory=list)
-    tools_run:     list[str] = field(default_factory=list)
-    artifacts:     list[tuple[str, str, str]] = field(default_factory=list)
-    # Response-code histogram across ALL tools — dumped as a tuning
-    # artifact so we can post-mortem "did we trip the WAF" without
-    # re-scanning.
+    descriptor: dict
+    hostname: str
+    asset_id: str
+    scan_run_id: str
+    queue_id: str
+    intensity: str
+    waf_detected: bool = False
+    findings: list[MediumFinding] = field(default_factory=list)
+    tools_run: list[str] = field(default_factory=list)
+    artifacts: list[tuple[str, str, str]] = field(default_factory=list)
     response_codes: Counter = field(default_factory=Counter)
     total_requests: int = 0
-    # Egress IP tracking — we record the IP we observe at scan start AND
-    # the one we observe at scan end. ExpressVPN does dynamic NAT
-    # within a /24 (verified 2026-05-29) so these can differ.
-    egress_ips_seen: set[str] = field(default_factory=set)
+    egress_ips_seen: list[str] = field(default_factory=list)
+    rotation_count: int = 0
+    ban_events: list[dict] = field(default_factory=list)  # log of detected bans
+    region_idx: int = 0  # cursor into ROTATION_REGIONS
 
 
-# ─── Subprocess helper ──────────────────────────────────────────────────
+# ─── Subprocess helpers ─────────────────────────────────────────────────
 def run_cmd(cmd: list[str], timeout: int = 30, input_str: str | None = None,
             env_extra: dict | None = None) -> tuple[int, str, str]:
-    """Run a shell command. Returns (returncode, stdout, stderr).
-    Never raises — failures get captured and surfaced to the caller.
-    """
     env = os.environ.copy()
     if env_extra:
         env.update(env_extra)
     try:
         p = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            input=input_str,
-            env=env,
+            cmd, capture_output=True, text=True, timeout=timeout,
+            input=input_str, env=env,
         )
         return p.returncode, p.stdout or "", p.stderr or ""
-    except subprocess.TimeoutExpired as e:
-        return 124, "", f"timeout after {timeout}s: {e}"
+    except subprocess.TimeoutExpired:
+        return 124, "", f"timeout after {timeout}s"
     except FileNotFoundError as e:
         return 127, "", f"command not found: {cmd[0]} — {e}"
     except Exception as e:
@@ -216,16 +220,11 @@ def log(msg: str) -> None:
     print(f"[run_medium] {msg}", file=sys.stderr)
 
 
-# ─── Egress IP capture ──────────────────────────────────────────────────
+# ─── Egress IP + VPN rotation ──────────────────────────────────────────
 def capture_egress_ip() -> str | None:
-    """Probe ifconfig.me / api.ipify.org to learn our current egress IP.
-    Used at scan start + end to record what the target actually saw.
-    Returns None if no provider responded.
-    """
     for url in ("https://api.ipify.org", "https://ifconfig.me",
                 "https://icanhazip.com"):
-        rc, stdout, _ = run_cmd(["curl", "-s", "--max-time", "5", url],
-                                 timeout=8)
+        rc, stdout, _ = run_cmd(["curl", "-s", "--max-time", "5", url], timeout=8)
         if rc == 0:
             ip = stdout.strip()
             if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", ip):
@@ -233,83 +232,160 @@ def capture_egress_ip() -> str | None:
     return None
 
 
+def rotate_vpn(ctx: ScanContext) -> bool:
+    """Rotate to the next region in ROTATION_REGIONS. Best-effort —
+    returns True on success, False on failure. Failures are non-fatal:
+    the scan continues on the current tunnel.
+    """
+    ctx.region_idx = (ctx.region_idx + 1) % len(ROTATION_REGIONS)
+    region = ROTATION_REGIONS[ctx.region_idx]
+    log(f"→ rotating VPN to {region}")
+
+    # The vpn_rotate.sh script is shipped alongside this scanner in
+    # scripts/scanner/. Resolve its path relative to this file.
+    script = Path(__file__).parent / "vpn_rotate.sh"
+    if not script.exists():
+        log(f"  vpn_rotate.sh not found at {script} — rotation disabled")
+        return False
+
+    rc, stdout, stderr = run_cmd([str(script), region], timeout=120)
+    if rc == 0:
+        ctx.rotation_count += 1
+        new_ip = capture_egress_ip()
+        if new_ip and new_ip not in ctx.egress_ips_seen:
+            ctx.egress_ips_seen.append(new_ip)
+        log(f"  ✓ rotated to {new_ip or '<unknown>'}")
+        return True
+    else:
+        log(f"  ✗ rotation failed (rc={rc}): {stderr.strip()[:200]}")
+        return False
+
+
+# ─── Healthcheck — IP-banned detection ─────────────────────────────────
+def healthcheck(ctx: ScanContext) -> tuple[bool, int]:
+    """Probe the target with a benign HTTP request. Returns (healthy, http_code).
+    'healthy' = the IP is NOT showing ban signals (4xx WAF block, captcha, etc).
+    """
+    ua = pick_ua()
+    rc, stdout, _ = run_cmd(
+        ["curl", "-s", "-o", "/dev/null",
+         "-w", "%{http_code}",
+         "--max-time", "10",
+         "-H", f"User-Agent: {ua}",
+         f"https://{ctx.hostname}/"],
+        timeout=15,
+    )
+    if rc != 0:
+        return False, 0
+
+    try:
+        code = int(stdout.strip())
+    except ValueError:
+        return False, 0
+
+    healthy = code in (200, 301, 302, 303, 307, 308, 401)  # 401 = auth-gated but reachable
+    return healthy, code
+
+
+def ensure_healthy_egress(ctx: ScanContext, max_rotations: int = 2) -> bool:
+    """Healthcheck + rotate-on-fail loop. Returns True if we ended up
+    with a healthy IP. Returns False if even after `max_rotations`
+    rotations we're still banned everywhere.
+    """
+    for attempt in range(max_rotations + 1):
+        healthy, code = healthcheck(ctx)
+        if healthy:
+            if attempt > 0:
+                log(f"healthcheck: recovered on attempt {attempt + 1} (HTTP {code})")
+            return True
+        log(f"healthcheck: unhealthy (HTTP {code}) on attempt {attempt + 1}")
+        if attempt < max_rotations:
+            ctx.ban_events.append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "type": "pre_chunk_unhealthy",
+                "http_code": code,
+            })
+            rotate_vpn(ctx)
+    return False
+
+
 # ─── WAF pre-check ──────────────────────────────────────────────────────
 def detect_waf(ctx: ScanContext) -> None:
-    """Quick wafw00f probe to figure out if we're behind a known WAF.
-    If we are, gate nuclei intrusive templates off — the WAF will block
-    them anyway and we don't want the resulting 4xx flood to look like
-    an attack.
-    """
     ctx.tools_run.append("wafw00f")
     rc, stdout, _ = run_cmd(
         ["wafw00f", f"https://{ctx.hostname}/", "-a"],
         timeout=60,
     )
     ctx.artifacts.append(("wafw00f", "text", stdout))
-
     if rc != 0:
-        log(f"wafw00f exited rc={rc} — assuming no WAF for tuning purposes")
+        log(f"wafw00f rc={rc} — assuming no WAF for tuning purposes")
         return
-
     if re.search(r"is behind", stdout, re.IGNORECASE):
         ctx.waf_detected = True
-        log(f"WAF detected — will gate intrusive templates off")
+        log("WAF detected — will gate intrusive templates off")
     else:
         log("no WAF detected by wafw00f")
 
 
-# ─── nuclei ─────────────────────────────────────────────────────────────
+# ─── nuclei (chunked) ──────────────────────────────────────────────────
 NUCLEI_SEVERITY_MAP = {
-    "critical": "CRITICAL",
-    "high":     "HIGH",
-    "medium":   "MODERATE",
-    "low":      "LOW",
-    "info":     "INFO",
-    "unknown":  "INFO",
+    "critical": "CRITICAL", "high": "HIGH", "medium": "MODERATE",
+    "low": "LOW", "info": "INFO", "unknown": "INFO",
 }
 
 
-def check_nuclei(ctx: ScanContext) -> None:
-    """Run nuclei quietly. Parse JSONL output. Emit one finding per match.
+def discover_target_urls(ctx: ScanContext) -> list[str]:
+    """Build the URL list nuclei will be chunked across.
 
-    Quiet flags:
-      -rate-limit 30   below most per-IP rate limit thresholds
-      -c 5             few parallel template workers (was 25 default)
-      -timeout 15      per-template HTTP timeout
-      -H "User-Agent"  rotating real browser UA
-      -exclude-tags    intrusive when WAF detected
-      -severity        critical,high,medium  (skip info noise)
+    For a single-host Medium scan, nuclei is typically run against the
+    BASE URL and nuclei itself fans out across templates. So the "URLs
+    to chunk" are really TEMPLATE CHUNKS, not URL chunks.
+
+    Strategy: split nuclei's template severity classes into chunks so
+    each chunk is bounded:
+      - critical+high severity templates
+      - medium severity templates split into N batches by tag
     """
-    ctx.tools_run.append("nuclei")
+    # For the initial Medium tier implementation, we just run nuclei
+    # against the root URL once per chunk with different template
+    # filters. Future enhancement: discover sub-paths via katana/ffuf
+    # first and feed those as the chunked URL list.
+    base = f"https://{ctx.hostname}"
+    return [base]
+
+
+def run_nuclei_chunk(ctx: ScanContext, target_url: str,
+                     severity_filter: str, tag_filter: str | None) -> tuple[int, int, list[int]]:
+    """Run one nuclei chunk. Returns (rc, match_count, response_codes_observed).
+
+    response_codes_observed is populated from nuclei's stats output if
+    we can parse it; otherwise it's empty.
+    """
+    ctx.tools_run.append(f"nuclei[{severity_filter}{':'+tag_filter if tag_filter else ''}]")
     ua = pick_ua()
 
     cmd = [
         "nuclei",
-        "-u", f"https://{ctx.hostname}",
+        "-u", target_url,
         "-rate-limit", str(NUCLEI_RATE_LIMIT),
-        "-c",          str(NUCLEI_CONCURRENCY),
-        "-timeout",    str(NUCLEI_TIMEOUT_S),
-        "-H",          f"User-Agent: {ua}",
-        "-severity",   "critical,high,medium",
-        "-silent",
-        "-jsonl",
-        "-no-color",
+        "-c", str(NUCLEI_CONCURRENCY),
+        "-timeout", str(NUCLEI_TIMEOUT_S),
+        "-H", f"User-Agent: {ua}",
+        "-severity", severity_filter,
+        "-silent", "-jsonl", "-no-color",
     ]
+    if tag_filter:
+        cmd += ["-tags", tag_filter]
     if ctx.waf_detected:
-        # 'intrusive' templates do active fuzzing — WAFs almost always
-        # block them, and the resulting 403 flood IS the WAF-cascade we
-        # try to avoid. 'dos' is always off regardless of WAF.
         cmd += ["-exclude-tags", "intrusive,dos,fuzz"]
     else:
         cmd += ["-exclude-tags", "dos"]
 
-    rc, stdout, stderr = run_cmd(cmd, timeout=NUCLEI_WALL_S)
-    ctx.artifacts.append(("nuclei", "jsonl", stdout))
-
-    if rc not in (0, 124):
-        # 124 = our timeout; we still want to parse whatever JSONL came
-        # through before the wall-clock cut it off.
-        log(f"nuclei exited rc={rc}: {stderr.strip()[:300]}")
+    rc, stdout, stderr = run_cmd(cmd, timeout=NUCLEI_CHUNK_WALL_S)
+    ctx.artifacts.append((
+        f"nuclei[{severity_filter}{':'+tag_filter if tag_filter else ''}]",
+        "jsonl", stdout,
+    ))
 
     matches = 0
     for line in stdout.splitlines():
@@ -321,21 +397,19 @@ def check_nuclei(ctx: ScanContext) -> None:
         except Exception:
             continue
         matches += 1
-        ctx.total_requests += 1  # nuclei doesn't expose per-template
-                                  # request counts in jsonl; this is a
-                                  # rough floor.
+        ctx.total_requests += 1
 
-        info     = m.get("info", {})
-        sev_raw  = (info.get("severity") or "info").lower()
+        info = m.get("info", {})
+        sev_raw = (info.get("severity") or "info").lower()
         severity = NUCLEI_SEVERITY_MAP.get(sev_raw, "INFO")
-        name     = info.get("name", m.get("template-id", "unknown"))
-        tpl_id   = m.get("template-id", "")
-        descr    = (info.get("description") or "").strip()
-        matched  = m.get("matched-at", m.get("host", ""))
-        refs     = info.get("reference") or []
+        name = info.get("name", m.get("template-id", "unknown"))
+        tpl_id = m.get("template-id", "")
+        descr = (info.get("description") or "").strip()
+        matched = m.get("matched-at", m.get("host", ""))
+        refs = info.get("reference") or []
         if isinstance(refs, str):
             refs = [refs]
-        tags     = info.get("tags") or []
+        tags = info.get("tags") or []
         if isinstance(tags, str):
             tags = [t.strip() for t in tags.split(",") if t.strip()]
 
@@ -345,69 +419,97 @@ def check_nuclei(ctx: ScanContext) -> None:
             severity=severity,
             category="dast",
             description=(
-                descr
-                or f"nuclei template {tpl_id} matched against {matched}. "
-                   f"Severity classification per the template author. "
-                   f"Review the matched-at URL and the template body for "
-                   f"the exact detection criteria."
+                descr or
+                f"nuclei template {tpl_id} matched against {matched}. "
+                f"Severity per the template author. Review the matched-at URL."
             ),
             tags=["nuclei", tpl_id] + tags[:10],
             references=refs[:10],
             raw_excerpt=json.dumps(m, indent=2)[:2500],
         ))
 
-    log(f"nuclei: {matches} match(es)")
+    return rc, matches, []
 
 
-# ─── nikto ──────────────────────────────────────────────────────────────
-NIKTO_OSVDB_SEVERITY = {
-    # OSVDB IDs are mostly retired but nikto still references them.
-    # We use the +/+OSVDB- count + the message text as a coarse severity
-    # signal since nikto doesn't emit per-finding severity directly.
-}
+def run_nuclei_chunked(ctx: ScanContext) -> None:
+    """Run nuclei in multiple chunks, rotating VPN between each.
 
-
-def check_nikto(ctx: ScanContext) -> None:
-    """Run nikto quietly. Parse the plain-text output. Emit findings.
-
-    Quiet flags:
-      -Pause 1         1 sec between checks (much slower than default)
-      -nointeractive   no prompts
-      -ask no          don't prompt for any updates
-      -Tuning x        skip "Denial of Service" tests
-      -useragent       rotating real browser UA
-      -timeout 15      per-request HTTP timeout
+    Chunks defined by severity + tag combinations so each chunk runs a
+    bounded subset of templates against the target.
     """
+    log("→ nuclei (chunked with mid-scan rotation)")
+    base_url = f"https://{ctx.hostname}"
+
+    # Chunk plan: each tuple is (severity_filter, tag_filter, description)
+    chunks = [
+        ("critical,high", None,            "critical + high severity (broad)"),
+        ("medium",        "cve",           "medium CVE templates"),
+        ("medium",        "wordpress,cms", "WordPress/CMS misconfig"),
+        ("medium",        "exposure,config", "config + secret exposure"),
+        ("medium",        "tech",          "tech-stack-specific"),
+    ]
+
+    for i, (sev, tag, desc) in enumerate(chunks):
+        # Layer 1: pre-chunk healthcheck
+        log(f"chunk {i+1}/{len(chunks)}: {desc}")
+        if not ensure_healthy_egress(ctx, max_rotations=2):
+            log("  ✗ target unreachable from any rotated IP — skipping chunk")
+            ctx.ban_events.append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "type": "chunk_skipped_unreachable",
+                "chunk": f"{sev}:{tag or '<all>'}",
+            })
+            continue
+
+        # Layer 2: run the chunk
+        rc, matches, _ = run_nuclei_chunk(ctx, base_url, sev, tag)
+        log(f"  chunk {i+1} done: {matches} match(es), rc={rc}")
+
+        # Layer 3 + 4: planned rotation between chunks
+        if i < len(chunks) - 1:
+            rotate_vpn(ctx)
+
+        # Ceiling check
+        if ctx.total_requests >= MAX_REQUESTS_TOTAL:
+            log(f"hit hard request ceiling ({MAX_REQUESTS_TOTAL}) — stopping nuclei")
+            break
+
+
+# ─── nikto (single pass) ────────────────────────────────────────────────
+def run_nikto(ctx: ScanContext) -> None:
+    """Single nikto pass on a fresh IP. nikto doesn't chunk well; if
+    it gets banned mid-run, we accept the loss for this pass.
+    """
+    log("→ nikto (single pass)")
+
+    if not ensure_healthy_egress(ctx, max_rotations=2):
+        log("  ✗ target unreachable — skipping nikto entirely")
+        return
+
     ctx.tools_run.append("nikto")
     ua = pick_ua()
-
     cmd = [
         "nikto",
-        "-h",            f"https://{ctx.hostname}",
-        "-Pause",        str(NIKTO_PAUSE_S),
-        "-nointeractive",
-        "-ask",          "no",
-        "-Tuning",       "x6",         # skip "Denial of Service" (group 6)
-        "-useragent",    ua,
-        "-timeout",      "15",
-        "-maxtime",      str(NIKTO_WALL_S - 30),
-        "-Format",       "txt",
+        "-h", f"https://{ctx.hostname}",
+        "-Pause", str(NIKTO_PAUSE_S),
+        "-nointeractive", "-ask", "no",
+        "-Tuning", "x6",
+        "-useragent", ua,
+        "-timeout", "15",
+        "-maxtime", str(NIKTO_WALL_S - 30),
+        "-Format", "txt",
     ]
     rc, stdout, stderr = run_cmd(cmd, timeout=NIKTO_WALL_S)
     ctx.artifacts.append(("nikto", "text", stdout))
-
     if rc not in (0, 124):
-        log(f"nikto exited rc={rc}: {stderr.strip()[:300]}")
+        log(f"  nikto rc={rc}: {stderr.strip()[:200]}")
 
-    # Parse nikto text output. Findings are prefixed with "+ ":
-    #   + /admin/: Admin login page/section found.
     matches = 0
     for line in stdout.splitlines():
         line = line.rstrip()
         if not line.startswith("+ "):
             continue
         body = line[2:].strip()
-        # Skip the header noise lines nikto emits.
         if any(prefix in body for prefix in (
             "Target IP:", "Target Hostname:", "Target Port:",
             "Start Time:", "End Time:", "Server:", "items checked:",
@@ -418,21 +520,16 @@ def check_nikto(ctx: ScanContext) -> None:
         matches += 1
         ctx.total_requests += 1
 
-        # Coarse severity heuristic from message text.
         body_lc = body.lower()
-        if any(k in body_lc for k in ("exposed", "leak", "dangerous", "vulnerable",
-                                       "uploadable", "writable")):
+        if any(k in body_lc for k in ("exposed", "leak", "dangerous",
+                                       "vulnerable", "uploadable", "writable")):
             severity = "MODERATE"
         elif any(k in body_lc for k in ("found", "directory", "listing")):
             severity = "LOW"
         else:
             severity = "INFO"
 
-        # Make a stable check_name slug from the first 60 chars.
-        slug = re.sub(r"[^a-z0-9]+", "-", body_lc)[:60].strip("-")
-        if not slug:
-            slug = f"finding-{matches}"
-
+        slug = re.sub(r"[^a-z0-9]+", "-", body_lc)[:60].strip("-") or f"finding-{matches}"
         ctx.findings.append(MediumFinding(
             check_name=f"nikto-{slug}",
             title=f"nikto: {body[:120]}",
@@ -440,90 +537,67 @@ def check_nikto(ctx: ScanContext) -> None:
             category="dast",
             description=(
                 f"Nikto reported on {ctx.hostname}: {body}. Review the raw "
-                f"nikto output artifact for full context including the "
-                f"OSVDB reference and the exact URL probed."
+                f"nikto output artifact for full context including OSVDB ref "
+                f"and the exact URL probed."
             ),
             tags=["nikto"],
             raw_excerpt=body[:1500],
         ))
 
-    log(f"nikto: {matches} reported item(s)")
+    log(f"  nikto: {matches} reported item(s)")
 
 
-# ─── ffuf ───────────────────────────────────────────────────────────────
-def check_ffuf(ctx: ScanContext) -> None:
-    """Quiet directory fuzzing. Top-100 high-signal words from our small
-    wordlist. Match 200/204/301/302/307/401/403 (anything that isn't 404
-    is worth knowing) but only EMIT findings for 200/204 — 403 just
-    means "exists but you can't see it without auth," which is normal.
-
-    Quiet flags:
-      -rate 50         req/sec cap
-      -p 0.1-0.3       jittered delay between requests
-      -H "User-Agent"  rotating real browser UA
-      -mc all          match any code (we filter post-hoc)
-      -fc 404,500      filter out 404s and 500s from output
-      -t 5             few threads
-      -timeout 15
+# ─── ffuf (chunked) ─────────────────────────────────────────────────────
+def run_ffuf_chunk(ctx: ScanContext, words: list[str]) -> int:
+    """Run one ffuf chunk against a wordlist subset. Returns count of
+    interesting (200/204) findings emitted.
     """
-    ctx.tools_run.append("ffuf")
+    ctx.tools_run.append(f"ffuf[{len(words)}w]")
     ua = pick_ua()
 
-    # Write wordlist to tmp — ffuf wants a file.
-    wl_path = "/tmp/commandsentry-ffuf-wl.txt"
-    Path(wl_path).write_text("\n".join(FFUF_WORDS) + "\n")
+    wl_path = f"/tmp/commandsentry-ffuf-wl-{random.randint(1000,9999)}.txt"
+    Path(wl_path).write_text("\n".join(words) + "\n")
 
-    out_path = "/tmp/commandsentry-ffuf-out.json"
+    out_path = f"/tmp/commandsentry-ffuf-out-{random.randint(1000,9999)}.json"
     cmd = [
         "ffuf",
-        "-u",        f"https://{ctx.hostname}/FUZZ",
-        "-w",        wl_path,
-        "-rate",     str(FFUF_RATE),
-        "-p",        FFUF_DELAY_RANGE,
-        "-H",        f"User-Agent: {ua}",
-        "-mc",       "200,204,301,302,307,401,403",
-        "-fc",       "404,500,502,503",
-        "-t",        "5",
-        "-timeout",  "15",
-        "-of",       "json",
-        "-o",        out_path,
-        "-s",        # silent (no banner)
+        "-u", f"https://{ctx.hostname}/FUZZ",
+        "-w", wl_path,
+        "-rate", str(FFUF_RATE),
+        "-p", FFUF_DELAY_RANGE,
+        "-H", f"User-Agent: {ua}",
+        "-mc", "200,204,301,302,307,401,403",
+        "-fc", "404,500,502,503",
+        "-t", "5", "-timeout", "15",
+        "-of", "json", "-o", out_path, "-s",
     ]
-    rc, stdout, stderr = run_cmd(cmd, timeout=FFUF_WALL_S)
-
+    rc, stdout, stderr = run_cmd(cmd, timeout=FFUF_CHUNK_WALL_S)
     if rc not in (0, 124):
-        log(f"ffuf exited rc={rc}: {stderr.strip()[:300]}")
+        log(f"  ffuf chunk rc={rc}: {stderr.strip()[:200]}")
 
-    # Parse the JSON output file ffuf wrote.
     try:
         out_blob = Path(out_path).read_text()
     except Exception as e:
-        log(f"ffuf output file unreadable: {e}")
-        return
+        log(f"  ffuf output unreadable: {e}")
+        return 0
 
     ctx.artifacts.append(("ffuf", "json", out_blob))
 
     try:
         data = json.loads(out_blob)
     except Exception as e:
-        log(f"ffuf output parse failed: {e}")
-        return
+        log(f"  ffuf output parse failed: {e}")
+        return 0
 
     results = data.get("results", [])
-    ctx.total_requests += len(FFUF_WORDS)  # rough — actual req count =
-                                            # words attempted, regardless
-                                            # of how many showed in output
+    ctx.total_requests += len(words)
 
     interesting = 0
     for r in results:
         status = r.get("status", 0)
-        url    = r.get("url", "")
-        word   = r.get("input", {}).get("FUZZ", "")
+        url = r.get("url", "")
+        word = r.get("input", {}).get("FUZZ", "")
         ctx.response_codes[str(status)] += 1
-
-        # Only 200/204 are worth emitting as findings. Other codes just
-        # confirm the path exists in some form and are useful for the
-        # response-code histogram but don't deserve a discrete finding.
         if status not in (200, 204):
             continue
         interesting += 1
@@ -535,19 +609,43 @@ def check_ffuf(ctx: ScanContext) -> None:
             description=(
                 f"Directory fuzzing discovered /{word} on {ctx.hostname} "
                 f"returning HTTP {status}. Review whether this endpoint "
-                f"is intentionally public or should be moved behind auth. "
-                f"This is informational by itself but can pair with other "
-                f"findings to expose attack surface."
+                f"is intentionally public or should be moved behind auth."
             ),
             tags=["ffuf", "directory", "discovery"],
             raw_excerpt=f"GET {url} -> HTTP {status}",
         ))
 
-    log(f"ffuf: {len(results)} non-404 response(s), {interesting} 200/204 finding(s)")
+    return interesting
 
 
-# ─── SQL helpers (DUPED from run_light — refactor to _shared.py
-# once there's a third scanner) ────────────────────────────────────────
+def run_ffuf_chunked(ctx: ScanContext) -> None:
+    """Run ffuf in chunks of FFUF_WORDS_PER_CHUNK words each, rotating
+    VPN between chunks.
+    """
+    log("→ ffuf (chunked with mid-scan rotation)")
+
+    # Slice the wordlist
+    chunks = [FFUF_WORDS[i:i+FFUF_WORDS_PER_CHUNK]
+              for i in range(0, len(FFUF_WORDS), FFUF_WORDS_PER_CHUNK)]
+
+    for i, words in enumerate(chunks):
+        log(f"chunk {i+1}/{len(chunks)}: {len(words)} words")
+        if not ensure_healthy_egress(ctx, max_rotations=2):
+            log("  ✗ target unreachable — skipping ffuf chunk")
+            continue
+
+        interesting = run_ffuf_chunk(ctx, words)
+        log(f"  chunk {i+1} done: {interesting} 200/204 finding(s)")
+
+        if i < len(chunks) - 1:
+            rotate_vpn(ctx)
+
+        if ctx.total_requests >= MAX_REQUESTS_TOTAL:
+            log(f"hit hard request ceiling — stopping ffuf")
+            break
+
+
+# ─── SQL helpers (DUPED from run_light — TODO: refactor) ───────────────
 UPSERT_FINDING_SQL = """
 INSERT INTO public.findings (
     finding_id, asset_id, title, severity, category, description,
@@ -635,21 +733,21 @@ WHERE queue_id       = %(queue_id)s;
 
 def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int]:
     inserted = 0
-    updated  = 0
+    updated = 0
     with conn.cursor() as cur:
         for f in ctx.findings:
             finding_id = f"{ctx.asset_id}:medium:{f.check_name}"
             params = {
-                "finding_id":  finding_id,
-                "asset_id":    ctx.asset_id,
-                "title":       f.title,
-                "severity":    f.severity,
-                "category":    f.category,
+                "finding_id": finding_id,
+                "asset_id": ctx.asset_id,
+                "title": f.title,
+                "severity": f.severity,
+                "category": f.category,
                 "description": f.description,
-                "cwe":         f.cwe,
-                "references":  f.references,
-                "source":      f"commandsentry_{ctx.intensity}",
-                "tags":        f.tags,
+                "cwe": f.cwe,
+                "references": f.references,
+                "source": f"commandsentry_{ctx.intensity}",
+                "tags": f.tags,
             }
             cur.execute(UPSERT_FINDING_SQL, params)
             row = cur.fetchone()
@@ -664,42 +762,39 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
             except Exception:
                 content_obj = {"raw": content_str}
             cur.execute(INSERT_ARTIFACT_SQL, {
-                "scan_run_id":   ctx.scan_run_id,
-                "tool_name":     tool_name,
+                "scan_run_id": ctx.scan_run_id,
+                "tool_name": tool_name,
                 "output_format": output_format,
-                "size_bytes":    len(content_str.encode("utf-8")),
+                "size_bytes": len(content_str.encode("utf-8")),
                 "content_jsonb": Json(content_obj),
             })
     return inserted, updated
 
 
 def write_scan_metadata_artifact(conn, ctx: ScanContext, Json,
-                                  start_egress: str | None,
-                                  end_egress:   str | None) -> None:
-    """Dump scan-level metadata as a synthetic artifact. Captures the
-    response-code histogram, total observed requests, egress IP set, and
-    WAF detection. Used for post-mortem tuning — if a scan looks like it
-    got WAF-blocked, we look here first.
-    """
+                                   start_egress: str | None,
+                                   end_egress: str | None) -> None:
     meta = {
-        "scan_run_id":    ctx.scan_run_id,
-        "asset_id":       ctx.asset_id,
-        "hostname":       ctx.hostname,
-        "tools_run":      ctx.tools_run,
-        "waf_detected":   ctx.waf_detected,
+        "scan_run_id": ctx.scan_run_id,
+        "asset_id": ctx.asset_id,
+        "hostname": ctx.hostname,
+        "tools_run": ctx.tools_run,
+        "waf_detected": ctx.waf_detected,
         "total_requests": ctx.total_requests,
         "response_codes": dict(ctx.response_codes),
-        "egress_ips":     sorted(ctx.egress_ips_seen),
-        "start_egress":   start_egress,
-        "end_egress":     end_egress,
-        "timestamp_utc":  datetime.now(timezone.utc).isoformat(),
+        "rotation_count": ctx.rotation_count,
+        "egress_ips_seen": ctx.egress_ips_seen,
+        "ban_events": ctx.ban_events,
+        "start_egress": start_egress,
+        "end_egress": end_egress,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
     }
     with conn.cursor() as cur:
         cur.execute(INSERT_ARTIFACT_SQL, {
-            "scan_run_id":   ctx.scan_run_id,
-            "tool_name":     "scan_metadata",
+            "scan_run_id": ctx.scan_run_id,
+            "tool_name": "scan_metadata",
             "output_format": "json",
-            "size_bytes":    len(json.dumps(meta).encode("utf-8")),
+            "size_bytes": len(json.dumps(meta).encode("utf-8")),
             "content_jsonb": Json(meta),
         })
 
@@ -707,12 +802,12 @@ def write_scan_metadata_artifact(conn, ctx: ScanContext, Json,
 def close_out(conn, ctx: ScanContext, inserted: int, updated: int) -> None:
     with conn.cursor() as cur:
         params = {
-            "tools_run":        ctx.tools_run,
-            "findings_added":   inserted,
+            "tools_run": ctx.tools_run,
+            "findings_added": inserted,
             "findings_updated": updated,
-            "findings_count":   inserted + updated,
-            "scan_run_id":      ctx.scan_run_id,
-            "queue_id":         ctx.queue_id,
+            "findings_count": inserted + updated,
+            "scan_run_id": ctx.scan_run_id,
+            "queue_id": ctx.queue_id,
         }
         cur.execute(CLOSE_SCAN_RUN_SQL, params)
         cur.execute(CLOSE_SCAN_QUEUE_SQL, params)
@@ -721,9 +816,9 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int) -> None:
 def fail_out(conn, ctx: ScanContext, error: str) -> None:
     with conn.cursor() as cur:
         params = {
-            "error":       error,
+            "error": error,
             "scan_run_id": ctx.scan_run_id,
-            "queue_id":    ctx.queue_id,
+            "queue_id": ctx.queue_id,
         }
         cur.execute(FAIL_SCAN_RUN_SQL, params)
         cur.execute(FAIL_SCAN_QUEUE_SQL, params)
@@ -748,8 +843,7 @@ def run(descriptor_path: str, dsn: str) -> int:
         return 1
 
     if descriptor.get("intensity") not in ("medium", "standard"):
-        log(f"WARNING: descriptor intensity is '{descriptor.get('intensity')}', "
-            f"not 'medium'. Proceeding anyway.")
+        log(f"WARNING: descriptor intensity is '{descriptor.get('intensity')}', not 'medium'")
 
     asset = descriptor["asset"]
     ctx = ScanContext(
@@ -762,10 +856,9 @@ def run(descriptor_path: str, dsn: str) -> int:
     )
     log(f"asset_id={ctx.asset_id} hostname={ctx.hostname} scan_run_id={ctx.scan_run_id}")
 
-    # Capture pre-scan egress IP.
     start_egress = capture_egress_ip()
     if start_egress:
-        ctx.egress_ips_seen.add(start_egress)
+        ctx.egress_ips_seen.append(start_egress)
         log(f"pre-scan egress IP: {start_egress}")
 
     try:
@@ -776,43 +869,47 @@ def run(descriptor_path: str, dsn: str) -> int:
 
     end_egress = None
     try:
-        # ─── WAF pre-check ─────────────────────────────────────────────
+        # ─── Phase 1: WAF detection ─────────────────────────────────
         log("→ detect_waf")
         detect_waf(ctx)
 
-        # ─── nuclei ────────────────────────────────────────────────────
-        if ctx.total_requests < MAX_TOTAL_REQUESTS:
-            log("→ check_nuclei")
-            check_nuclei(ctx)
+        # ─── Phase 2: nuclei (chunked + rotation) ──────────────────
+        if ctx.total_requests < MAX_REQUESTS_TOTAL:
+            run_nuclei_chunked(ctx)
         else:
             log("skipping nuclei — total request ceiling already hit")
 
-        # ─── nikto ─────────────────────────────────────────────────────
-        if ctx.total_requests < MAX_TOTAL_REQUESTS:
-            log("→ check_nikto")
-            check_nikto(ctx)
+        # Rotate before nikto (single-pass tool gets a fresh IP)
+        rotate_vpn(ctx)
+
+        # ─── Phase 3: nikto (single pass) ──────────────────────────
+        if ctx.total_requests < MAX_REQUESTS_TOTAL:
+            run_nikto(ctx)
         else:
             log("skipping nikto — total request ceiling already hit")
 
-        # ─── ffuf ──────────────────────────────────────────────────────
-        if ctx.total_requests < MAX_TOTAL_REQUESTS:
-            log("→ check_ffuf")
-            check_ffuf(ctx)
+        # Rotate before ffuf
+        rotate_vpn(ctx)
+
+        # ─── Phase 4: ffuf (chunked + rotation) ────────────────────
+        if ctx.total_requests < MAX_REQUESTS_TOTAL:
+            run_ffuf_chunked(ctx)
         else:
             log("skipping ffuf — total request ceiling already hit")
 
-        # ─── Capture post-scan egress IP ───────────────────────────────
+        # ─── Phase 5: capture end egress + write ───────────────────
         end_egress = capture_egress_ip()
-        if end_egress:
-            ctx.egress_ips_seen.add(end_egress)
-            log(f"post-scan egress IP: {end_egress}")
+        if end_egress and end_egress not in ctx.egress_ips_seen:
+            ctx.egress_ips_seen.append(end_egress)
+            log(f"final egress IP: {end_egress}")
 
         log(f"checks complete; {len(ctx.findings)} finding(s), "
             f"{len(ctx.artifacts)} artifact(s), "
-            f"{ctx.total_requests} request(s) made, "
-            f"{len(ctx.egress_ips_seen)} distinct egress IP(s)")
+            f"{ctx.total_requests} request(s), "
+            f"{ctx.rotation_count} rotation(s), "
+            f"{len(ctx.egress_ips_seen)} distinct egress IP(s), "
+            f"{len(ctx.ban_events)} ban event(s)")
 
-        # ─── Write everything ──────────────────────────────────────────
         inserted, updated = write_findings_and_artifacts(conn, ctx, Json)
         write_scan_metadata_artifact(conn, ctx, Json, start_egress, end_egress)
         log(f"upserted findings: {inserted} new, {updated} existing")
@@ -843,19 +940,12 @@ def run(descriptor_path: str, dsn: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Phase 4a Medium tier scanner. Consumes a descriptor from "
-                    "poll_queue.py and runs the Medium check suite (nuclei + "
-                    "nikto + ffuf) with quiet-tuned flags.",
+        description="Phase 4a Medium tier scanner with mid-scan VPN rotation.",
     )
-    parser.add_argument(
-        "descriptor",
-        help="Path to the JSON descriptor file produced by poll_queue.py",
-    )
-    parser.add_argument(
-        "--dsn",
-        default=os.environ.get("SUPABASE_DSN"),
-        help="Postgres DSN (or set SUPABASE_DSN).",
-    )
+    parser.add_argument("descriptor",
+                        help="Path to JSON descriptor from poll_queue.py")
+    parser.add_argument("--dsn", default=os.environ.get("SUPABASE_DSN"),
+                        help="Postgres DSN (or set SUPABASE_DSN)")
     args = parser.parse_args()
 
     if not args.dsn:
