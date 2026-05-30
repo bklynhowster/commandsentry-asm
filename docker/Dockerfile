@@ -79,6 +79,9 @@ RUN apt-get update -qq \
       sudo \
       # Scanner runtime deps
       python3 python3-pip python3-venv \
+      # `python` → `python3` symlink; scanner.yml + scripts call `python`
+      # (hosted runners install this by default; container images don't)
+      python-is-python3 \
       # Active scan utilities (system pkgs)
       whois jq dnsutils nikto perl \
       # PostgreSQL client — scanner.yml uses psql in queue/poll/cleanup
@@ -138,7 +141,7 @@ RUN set -eux; \
     for t in wireguard-go wg \
              subfinder dnsx httpx naabu nuclei fingerprintx \
              ffuf nikto wafw00f testssl.sh \
-             whois jq yq python3 sudo ip iptables \
+             whois jq yq python python3 sudo ip iptables \
              psql gh; do \
       command -v "$t" >/dev/null 2>&1 \
         || { echo "MISSING: $t"; exit 1; }; \
