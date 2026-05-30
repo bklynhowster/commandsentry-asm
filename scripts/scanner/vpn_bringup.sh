@@ -251,8 +251,9 @@ if "$CLI" connect "$REGION" 2>&1; then
 else
   err "connect to '$REGION' failed — trying fallback name formats"
   # Common variants ExpressVPN's CLI accepts: kebab-case, lowercase no
-  # spaces, country-only.
-  KEBAB=$(echo "$REGION" | tr 'A-Z ' 'a-z' | sed 's/ *- */-/g')
+  # spaces, country-only. Use sed for lowercase (drill #5 showed tr's
+  # source-longer-than-target semantics turn spaces into 'z').
+  KEBAB=$(echo "$REGION" | sed -e 's/.*/\L&/' -e 's/ *- */-/g' -e 's/ /-/g')
   COUNTRY=$(echo "$REGION" | sed 's/ *-.*//')
   for variant in "$KEBAB" "$COUNTRY" "us" "USA"; do
     log "  trying: $variant"

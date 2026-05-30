@@ -89,36 +89,50 @@ get_egress_ip() {
 PRE_IP=$(get_egress_ip)
 log "pre-rotate egress: ${PRE_IP:-<unknown>}"
 
-# Disconnect with timing — non-fatal. vpn-drill.yml run #4 (2026-05-30)
-# showed expressvpnctl's disconnect can time out after 5s (CLI internal
-# timeout) when a tunnel gets into a weird state. In that case the
-# subsequent `connect` will replace whatever's there, so don't bail.
-START_DISC=$(date +%s)
-log "disconnecting..."
-if ! "$CLI" disconnect 2>&1; then
-  err "disconnect failed (non-fatal — connect will replace existing tunnel)"
-fi
-END_DISC=$(date +%s)
-log "disconnect took: $((END_DISC - START_DISC))s"
+# Build region name variants up front. Fix from drill #5: previous
+# `tr 'A-Z ' 'a-z'` was buggy — tr's source longer than target meant
+# spaces got mapped to 'z' (e.g., "USA - New York" → "usaz-znewyork").
+# Use sed for both lowercase and space-to-hyphen normalization.
+KEBAB=$(echo "$REGION" | sed -e 's/.*/\L&/' -e 's/ *- */-/g' -e 's/ /-/g')
+COUNTRY=$(echo "$REGION" | sed 's/ *-.*//')
+log "region variants: primary='$REGION' kebab='$KEBAB' country='$COUNTRY'"
 
-# Brief settle delay — the route table needs a beat to release the
-# previous tunnel interface before connect can claim it.
-sleep 2
-
-# Connect with timing — same defensive fallback chain as vpn_bringup.sh
-# (expressvpnctl region lookup is flaky between runs per drill #3 obs).
+# ─── Strategy A: try direct connect WITHOUT explicit disconnect ─────
+# Drill #5 (2026-05-30) revealed that explicit disconnect can wedge
+# the daemon — every subsequent CLI call times out at 5s, including
+# connect attempts. Try the "switch in one op" pattern first: just
+# call connect with the new region while still connected. If
+# expressvpnctl supports atomic switch, we never touch the wedge-
+# prone disconnect path.
 START_CONN=$(date +%s)
-log "connecting to: $REGION ..."
 CONNECT_OK=false
-if "$CLI" connect "$REGION" 2>&1; then
+
+log "attempting direct switch (connect without explicit disconnect): $REGION ..."
+if timeout 15 "$CLI" connect "$REGION" 2>&1; then
   CONNECT_OK=true
+  log "✓ direct switch worked"
 else
+  log "direct switch failed — trying disconnect+connect dance"
+fi
+
+# ─── Strategy B: fall back to disconnect+connect dance ──────────────
+if ! $CONNECT_OK; then
+  log "disconnecting (non-fatal — connect will replace tunnel anyway)..."
+  timeout 8 "$CLI" disconnect 2>&1 || err "disconnect timed out (continuing)"
+  sleep 2
+
+  log "connecting to: $REGION ..."
+  if timeout 15 "$CLI" connect "$REGION" 2>&1; then
+    CONNECT_OK=true
+  fi
+fi
+
+# ─── Strategy C: try common region name variants ────────────────────
+if ! $CONNECT_OK; then
   err "connect to '$REGION' failed — trying fallback name formats"
-  KEBAB=$(echo "$REGION" | tr 'A-Z ' 'a-z' | sed 's/ *- */-/g')
-  COUNTRY=$(echo "$REGION" | sed 's/ *-.*//')
   for variant in "$KEBAB" "$COUNTRY" "us" "USA"; do
     log "  trying: $variant"
-    if "$CLI" connect "$variant" 2>&1; then
+    if timeout 15 "$CLI" connect "$variant" 2>&1; then
       CONNECT_OK=true
       REGION="$variant"
       break
@@ -126,17 +140,27 @@ else
   done
 fi
 
+# ─── Strategy D: Smart Location (no region arg) ─────────────────────
 if ! $CONNECT_OK; then
   err "all named-region attempts failed — falling back to Smart Location"
-  "$CLI" get regions 2>&1 | head -40 || true
-  if "$CLI" connect 2>&1; then
+  if timeout 15 "$CLI" connect 2>&1; then
     CONNECT_OK=true
     REGION="<smart-location>"
   fi
 fi
 
+# ─── Diagnostic dump if everything failed ───────────────────────────
 if ! $CONNECT_OK; then
-  err "even Smart Location connect failed"
+  err "all rotation strategies failed — dumping daemon state"
+  err "=== expressvpnctl status ==="
+  timeout 5 "$CLI" status 2>&1 || echo "  (status command also wedged)"
+  err "=== expressvpnctl get smartlocation ==="
+  timeout 5 "$CLI" get smartlocation 2>&1 || echo "  (get smartlocation wedged)"
+  err "=== expressvpnctl get regions (first 30 lines) ==="
+  timeout 10 "$CLI" get regions 2>&1 | head -30 || echo "  (get regions wedged)"
+  err "=== journalctl -u expressvpn-service (last 30 lines) ==="
+  sudo journalctl -u expressvpn-service.service --no-pager -n 30 2>&1 || \
+    echo "  (journalctl unavailable)"
   exit 2
 fi
 END_CONN=$(date +%s)
