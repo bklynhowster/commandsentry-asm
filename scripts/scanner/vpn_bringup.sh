@@ -124,13 +124,14 @@ fi
 log "login OK"
 
 # ─── Step 5: Configure tunnel ────────────────────────────────────────
-# WireGuard is Mullvad's default + recommended protocol. Faster
-# handshake than OpenVPN, less fingerprintable.
+# WireGuard is Mullvad's DEFAULT protocol — no explicit setting needed.
+# (Drill exposed that `mullvad tunnel set wireguard` is wrong syntax;
+# the correct command would be `relay set tunnel-protocol wireguard`
+# but it's also unnecessary. Skipping entirely.)
 # Lockdown mode = explicit kill switch (block all traffic if VPN drops).
 log "configuring tunnel..."
-timeout 10 mullvad tunnel set wireguard 2>&1 || true
 timeout 10 mullvad lockdown-mode set on 2>&1 || true
-log "policies set: wireguard, lockdown-mode"
+log "policies set: lockdown-mode (wireguard is the default)"
 
 # ─── Step 6: Set location ────────────────────────────────────────────
 # Region name format is "country" or "country city" or
