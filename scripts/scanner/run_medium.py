@@ -910,18 +910,42 @@ def run(descriptor_path: str, dsn: str) -> int:
             f"{len(ctx.egress_ips_seen)} distinct egress IP(s), "
             f"{len(ctx.ban_events)} ban event(s)")
 
-        # NOW open the DB connection — fresh + ready for writes.
-        log("opening DB connection (deferred until write phase)")
-        conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
-
-        inserted, updated = write_findings_and_artifacts(conn, ctx, Json)
-        write_scan_metadata_artifact(conn, ctx, Json, start_egress, end_egress)
-        log(f"upserted findings: {inserted} new, {updated} existing")
-
-        close_out(conn, ctx, inserted, updated)
-        conn.commit()
-        log("scan_run + scan_queue closed out successfully")
-        return 0
+        # DB write phase — lazy-open + retry-once-on-failure.
+        # Layer 1: lazy connection (eliminates the 7-min idle problem)
+        # Layer 2: retry once with fresh conn if write fails mid-phase
+        #          (handles transient network blips, Supabase reboots,
+        #          mid-write connection drops)
+        # Howie 2026-05-30: "I love the lazy approach, but I think
+        # there's a need for both" — belt and suspenders.
+        inserted = 0
+        updated = 0
+        MAX_WRITE_ATTEMPTS = 2
+        for attempt in range(1, MAX_WRITE_ATTEMPTS + 1):
+            try:
+                log(f"opening DB connection (attempt {attempt}/{MAX_WRITE_ATTEMPTS})")
+                conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
+                inserted, updated = write_findings_and_artifacts(conn, ctx, Json)
+                write_scan_metadata_artifact(conn, ctx, Json, start_egress, end_egress)
+                close_out(conn, ctx, inserted, updated)
+                conn.commit()
+                log(f"upserted findings: {inserted} new, {updated} existing")
+                log("scan_run + scan_queue closed out successfully")
+                return 0
+            except (psycopg.OperationalError, psycopg.InterfaceError) as db_err:
+                log(f"DB write attempt {attempt} failed: {db_err!r}")
+                try:
+                    if conn:
+                        conn.close()
+                except Exception:
+                    pass
+                conn = None
+                if attempt == MAX_WRITE_ATTEMPTS:
+                    log("write retries exhausted — re-raising for fail_out")
+                    raise
+                # Backoff before retry: 3s, 6s
+                backoff = 3 * attempt
+                log(f"retrying after {backoff}s...")
+                time.sleep(backoff)
 
     except Exception as e:
         log(f"FATAL: {e!r}")
