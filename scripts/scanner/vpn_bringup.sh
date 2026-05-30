@@ -114,12 +114,40 @@ fi
 
 # ─── Step 4: Login ───────────────────────────────────────────────────
 # Mullvad uses ONLY the 16-digit account number — no email, no
-# password. Treat it as a secret token. Pass via stdin via a tmpfile
-# rather than inline so it doesn't end up in process listings.
-log "logging in..."
-if ! timeout 15 mullvad account login "$MULLVAD_ACCOUNT_NUMBER" 2>&1; then
-  err "login failed"
-  exit 2
+# password.
+#
+# Scan #43 (2026-05-30): `mullvad account login` hangs INDEFINITELY
+# CLIENT-SIDE even when login SUCCEEDS server-side (verified by a
+# fresh device entry appearing in mullvad.net/account/devices). The
+# CLI gets stuck in socket I/O waiting on its daemon. `timeout 15`
+# only sends SIGTERM which the CLI was ignoring.
+#
+# New approach:
+#   1. Check if we're already logged in (apt-reinstall preserves state)
+#   2. If not, try login with `timeout -k 5 30` so SIGKILL fires
+#      hard after 35s if SIGTERM doesn't take
+#   3. Regardless of CLI exit code, verify via `mullvad account get`
+#      since login often succeeds server-side even when CLI hangs
+
+# Check existing state first
+if timeout 5 mullvad account get 2>&1 | grep -qi "mullvad account"; then
+  log "already logged in (state persisted from prior install)"
+else
+  log "logging in (timeout -k 5 30 — hard SIGKILL if SIGTERM ignored)..."
+  # Capture both exit code and output, never let it block forever
+  timeout -k 5 30 mullvad account login "$MULLVAD_ACCOUNT_NUMBER" 2>&1 || \
+    log "login command returned non-zero (will verify via account get next)"
+
+  # Verify server-side state — Mullvad often creates the device
+  # successfully even when the CLI hangs waiting for the response.
+  log "verifying login via mullvad account get..."
+  if timeout 5 mullvad account get 2>&1 | grep -qi "mullvad account"; then
+    log "✓ login verified via account get"
+  else
+    err "login could not be verified via account get — bailing"
+    timeout 3 mullvad account get 2>&1 || true
+    exit 2
+  fi
 fi
 log "login OK"
 
