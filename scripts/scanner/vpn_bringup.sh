@@ -72,31 +72,60 @@ log "baseline runner IP (pre-VPN): ${BASELINE_IP:-<unknown>}"
 ts_log() { echo "[vpn-bringup] $(date '+%H:%M:%S') $*"; }
 
 if ! command -v wg-quick &>/dev/null; then
-  export DEBIAN_FRONTEND=noninteractive
-
-  ts_log "downloading wireguard-tools .deb (no install — apt-get download)"
+  # Even `apt-get download` (no dpkg, no maintainer scripts) hangs on
+  # GH Actions runners — almost certainly waiting on the apt lock held
+  # by `unattended-upgrades` running in the background. timeout can't
+  # kill apt because the wait is in uninterruptible socket I/O ('D').
+  #
+  # Fix: wget the .deb directly from Azure's Ubuntu mirror. Zero apt
+  # involvement, zero shared locks, predictable URL. The package is
+  # universe/main and version-stable enough that pin-by-version is OK.
+  #
+  # If the version ever bumps and the URL 404s, the wget fails fast
+  # (set --tries=1 --timeout=15) and we surface a clean error.
+  ts_log "fetching wireguard-tools .deb directly (bypassing apt entirely)"
   mkdir -p /tmp/wg-extract
   cd /tmp/wg-extract
-  # apt-get download writes the .deb into cwd. -q is fine here — it's
-  # a pure HTTPS fetch, no dpkg involvement, returns quickly.
-  if ! sudo -E timeout 60 apt-get download wireguard-tools 2>&1 \
-       | sed 's/^/[apt-download] /'; then
-    err "apt-get download wireguard-tools failed or timed out"
+
+  # Resolve the .deb name + URL dynamically — read it out of apt's
+  # package lists without holding any lock. `apt-cache show` is a
+  # pure read-only operation against /var/lib/apt/lists/* and doesn't
+  # block on the dpkg or apt lock.
+  ts_log "resolving wireguard-tools package URL via apt-cache (no lock)"
+  PKG_INFO=$(timeout 10 apt-cache show wireguard-tools 2>&1 | head -50)
+  PKG_VER=$(echo "$PKG_INFO" | awk '/^Version:/ {print $2; exit}')
+  PKG_FN=$(echo "$PKG_INFO" | awk '/^Filename:/ {print $2; exit}')
+  if [[ -z "$PKG_VER" || -z "$PKG_FN" ]]; then
+    err "apt-cache show wireguard-tools did not return Version + Filename"
+    err "raw output:"
+    echo "$PKG_INFO" | sed 's/^/  /' >&2
     exit 1
   fi
-  DEB=$(ls /tmp/wg-extract/wireguard-tools_*.deb 2>/dev/null | head -1)
-  if [[ -z "$DEB" ]]; then
-    err "no wireguard-tools .deb found in /tmp/wg-extract/"
-    ls -la /tmp/wg-extract/ >&2 || true
+  ts_log "  version: $PKG_VER"
+  ts_log "  filename: $PKG_FN"
+
+  # The Azure mirror is what GH runners are configured to use already.
+  # Pull from there for maximum speed + minimum surprise.
+  DEB_URL="http://azure.archive.ubuntu.com/ubuntu/${PKG_FN}"
+  DEB="/tmp/wg-extract/$(basename "$PKG_FN")"
+  ts_log "downloading $DEB_URL"
+  if ! timeout 30 wget --quiet --tries=1 --timeout=20 -O "$DEB" "$DEB_URL"; then
+    err "wget of $DEB_URL failed or timed out"
     exit 1
   fi
-  ts_log "got $DEB — extracting with dpkg-deb -x (no maintainer scripts)"
+  if [[ ! -s "$DEB" ]]; then
+    err "downloaded file is empty: $DEB"
+    exit 1
+  fi
+  ts_log "got $(stat -c '%n (%s bytes)' "$DEB")"
+
+  ts_log "extracting with dpkg-deb -x (no maintainer scripts)"
   sudo dpkg-deb -x "$DEB" /tmp/wg-extract/root
-  # The .deb installs wg-quick to /usr/bin/, wg to /usr/bin/. Drop them
-  # into /usr/local/bin so the rest of the script finds them on PATH.
+  # The .deb installs wg + wg-quick to /usr/bin/. Drop them into
+  # /usr/local/bin so the rest of the script finds them on PATH.
   sudo install -m 0755 /tmp/wg-extract/root/usr/bin/wg /usr/local/bin/wg
   sudo install -m 0755 /tmp/wg-extract/root/usr/bin/wg-quick /usr/local/bin/wg-quick
-  ts_log "wg + wg-quick installed to /usr/local/bin/ (bypassed dpkg post-install)"
+  ts_log "wg + wg-quick installed to /usr/local/bin/ (bypassed apt + dpkg entirely)"
   cd - >/dev/null
 fi
 
