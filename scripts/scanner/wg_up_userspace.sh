@@ -37,14 +37,16 @@ err() { echo "[wg-up-us] ERROR: $*" >&2; }
 command -v wireguard-go >/dev/null || { err "wireguard-go not on PATH"; exit 1; }
 command -v wg           >/dev/null || { err "wg not on PATH"; exit 1; }
 
-# /etc/wireguard/*.conf are 0600 root:root — we run as the regular user
-# and use sudo for state-changing commands. awk can't read them directly,
-# so slurp the whole file once via sudo and operate on the in-memory
-# copy. Stripped of trailing newline for cleaner awk handling.
-CONF_TEXT=$(sudo cat "$CONF")
-if [[ -z "$CONF_TEXT" ]]; then
-  err "sudo cat $CONF returned empty — check file exists and is readable as root"
-  sudo ls -la "$CONF" >&2 || true
+# /etc/wireguard/*.conf are 0600 root:root by default. vpn_bringup.sh
+# chmod's THIS region's config to 0644 before invoking us so awk can
+# read it directly without a sudo cat (which mysteriously hung in scan
+# #64 — possibly sudo hitting a systemd path on the runner). Keys are
+# still root-owned; the runner is ephemeral + isolated so widening read
+# perms on one file for the duration of the job is acceptable.
+if ! [[ -r "$CONF" ]]; then
+  err "config not readable by current user: $CONF"
+  err "vpn_bringup.sh should have chmod'd it 0644 before calling us"
+  ls -la "$CONF" >&2 || true
   exit 1
 fi
 
@@ -78,7 +80,7 @@ log "✓ TUN device $IFACE created"
 WG_CONF=$(mktemp)
 trap 'rm -f "$WG_CONF"' EXIT
 
-printf '%s\n' "$CONF_TEXT" | awk '
+awk '
   /^\[Interface\]/ { sect="iface"; print; next }
   /^\[Peer\]/      { sect="peer";  print; next }
   /^\[/            { sect="other"; next }
@@ -86,7 +88,7 @@ printf '%s\n' "$CONF_TEXT" | awk '
   sect=="peer"  && /^[[:space:]]*(PublicKey|PresharedKey|AllowedIPs|Endpoint|PersistentKeepalive)[[:space:]]*=/ { print; next }
   /^[[:space:]]*$/ { print; next }
   /^[[:space:]]*#/ { print; next }
-' > "$WG_CONF"
+' "$CONF" > "$WG_CONF"
 
 log "applying wg config (filtered to setconf-compatible keys)"
 if ! sudo wg setconf "$IFACE" "$WG_CONF"; then
@@ -100,14 +102,14 @@ log "✓ wg setconf applied"
 # ─── 3. Extract addresses from the [Interface] block ─────────────────
 # The patched configs keep the original Address= line (we only stripped
 # DNS / Table / PostUp / PreDown / killswitch).
-ADDR_LINE=$(printf '%s\n' "$CONF_TEXT" | awk '
+ADDR_LINE=$(awk '
   /^\[Peer\]/ { exit }
   /^[[:space:]]*Address[[:space:]]*=/ {
     sub(/^[[:space:]]*Address[[:space:]]*=[[:space:]]*/, "")
     print
     exit
   }
-')
+' "$CONF")
 if [[ -z "$ADDR_LINE" ]]; then
   err "no Address= line found in [Interface] of $CONF"
   exit 4

@@ -200,6 +200,15 @@ if [[ ! -x "$WG_UP" ]]; then
   err "wg_up_userspace.sh not found or not executable at $WG_UP"
   exit 2
 fi
+
+# Make THIS region's config readable by the runner user so awk inside
+# wg_up_userspace.sh can parse it without sudo (scan #64 hung when
+# we tried `sudo cat` from inside that script — possibly a runner-
+# specific sudo/systemd issue). The keys are still root-owned and the
+# runner is ephemeral + isolated.
+ts_log "chmod 0644 $CONF (so awk can read as runner user)"
+sudo chmod 0644 "$CONF"
+
 if ! "$WG_UP" "$REGION" 2>&1 | sed 's/^/[wg-up] /'; then
   err "wg_up_userspace.sh failed"
   err "diagnostic - wg show:"
