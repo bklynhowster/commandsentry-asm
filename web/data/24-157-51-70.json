@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-05-30T16:23:56Z_23a644b6",
-    "started_at": "2026-05-30T16:23:56Z",
-    "completed_at": "2026-05-30T16:24:55Z",
-    "duration_seconds": 59,
+    "id": "scan_2026-05-30T19:55:15Z_b86847de",
+    "started_at": "2026-05-30T19:55:15Z",
+    "completed_at": "2026-05-30T19:56:29Z",
+    "duration_seconds": 74,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -30,9 +30,11 @@
     "live_subdomain_count": 1,
     "host_count": 1,
     "service_count": 2,
-    "newest_cert_expiry_days": 249,
+    "newest_cert_expiry_days": 248,
     "top_hosting_org": "Cablevision Systems Corp.",
-    "platforms": []
+    "platforms": [
+      "Microsoft .NET / IIS"
+    ]
   },
   "subdomains": [
     {
@@ -40,13 +42,13 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-05-30T16:24:56Z",
-      "last_seen": "2026-05-30T16:24:56Z",
+      "first_discovered": "2026-05-30T19:56:29Z",
+      "last_seen": "2026-05-30T19:56:29Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 302,
-        "title": "Object moved"
+        "http_status": 404,
+        "title": "Error"
       },
       "hosts": [
         {
@@ -86,7 +88,7 @@
             "not_before": "2026-01-02T18:09:45Z",
             "not_after": "2027-02-03T18:09:45Z",
             "self_signed": false,
-            "days_to_expiry": 249
+            "days_to_expiry": 248
           }
         }
       ],
@@ -102,12 +104,17 @@
       },
       "fingerprint": {
         "server": null,
-        "platform_label": null,
+        "platform_label": "Microsoft .NET / IIS",
         "tech": [
           {
             "name": "HSTS",
             "version": null,
             "category": "security"
+          },
+          {
+            "name": "Microsoft ASP.NET",
+            "version": null,
+            "category": "framework"
           }
         ]
       },
@@ -119,7 +126,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-05-30T14:11:46Z_741fa64b",
+    "since_scan": "scan_2026-05-30T16:23:56Z_23a644b6",
     "added": {
       "subdomains": [],
       "services": [],
@@ -1904,6 +1911,27 @@
       "scan_id": "scan_2026-05-30T16:23:56Z_23a644b6",
       "started_at": "2026-05-30T16:23:56Z",
       "completed_at": "2026-05-30T16:24:55Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_names": [
+        "24.157.51.70"
+      ],
+      "ports_by_sub": {
+        "24.157.51.70": {
+          "24.157.51.70": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-05-30T19:55:15Z_b86847de",
+      "started_at": "2026-05-30T19:55:15Z",
+      "completed_at": "2026-05-30T19:56:29Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 1,
