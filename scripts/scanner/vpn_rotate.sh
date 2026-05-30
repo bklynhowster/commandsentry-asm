@@ -89,12 +89,14 @@ get_egress_ip() {
 PRE_IP=$(get_egress_ip)
 log "pre-rotate egress: ${PRE_IP:-<unknown>}"
 
-# Disconnect with timing.
+# Disconnect with timing — non-fatal. vpn-drill.yml run #4 (2026-05-30)
+# showed expressvpnctl's disconnect can time out after 5s (CLI internal
+# timeout) when a tunnel gets into a weird state. In that case the
+# subsequent `connect` will replace whatever's there, so don't bail.
 START_DISC=$(date +%s)
 log "disconnecting..."
 if ! "$CLI" disconnect 2>&1; then
-  err "disconnect failed"
-  exit 2
+  err "disconnect failed (non-fatal — connect will replace existing tunnel)"
 fi
 END_DISC=$(date +%s)
 log "disconnect took: $((END_DISC - START_DISC))s"
