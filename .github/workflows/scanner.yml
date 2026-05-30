@@ -242,8 +242,21 @@ jobs:
           sudo tar xzf /tmp/wg-download/mullvad-wg-configs.tar.gz -C /tmp/wg-download
           sudo cp /tmp/wg-download/wg-configs/*.conf /etc/wireguard/
           sudo chmod 600 /etc/wireguard/*.conf
-          echo "Available WireGuard configs:"
+
+          # ─── PATCH: defeat the nft hang on GH Actions runners ───────
+          # Scan #55 (2026-05-30) hung on `nft -f /dev/fd/63` for 4+ min
+          # — wg-quick's ipv4 catchall rule uses nftables which can stall
+          # on hosted runners. Switch each config to Table=off + manual
+          # ip-rule routing (what wg-quick already does for ipv6, applied
+          # to v4 too). Inject PostUp/PreDown before [Peer] in every conf.
+          sudo python3 scripts/scanner/patch_wg_configs.py
+
+          echo ""
+          echo "Available WireGuard configs (post-patch):"
           sudo ls -la /etc/wireguard/
+          echo ""
+          echo "Sample (us-nyc.conf, redacted):"
+          sudo sed -E 's/(PrivateKey|PublicKey|PresharedKey) = .*/\1 = <redacted>/' /etc/wireguard/us-nyc.conf
 
       - name: Bring up VPN (WireGuard via wg-quick)
         id: vpn
