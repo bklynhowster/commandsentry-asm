@@ -54,16 +54,34 @@ log "baseline runner IP (pre-VPN): ${BASELINE_IP:-<unknown>}"
 
 # ─── Step 2: Install wireguard-tools ─────────────────────────────────
 # Standard Ubuntu package — no third-party repo. Ships with wg + wg-quick.
+#
+# Scan #54 (2026-05-30) hung here for 3+ minutes silently — root cause
+# was Ubuntu 22.04+'s `needrestart` post-install hook waiting for
+# interactive input despite printing "No services need to be restarted"
+# (the prompt comes AFTER that message). On a runner with no TTY, the
+# script just sat there.
+#
+# Defeat needrestart + apt prompts via env vars BEFORE the install.
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a       # 'a' = auto-restart anything that needs it
+export NEEDRESTART_SUSPEND=1    # belt + suspenders: actually skip needrestart entirely
+
 if ! command -v wg-quick &>/dev/null; then
-  log "wireguard-tools not on PATH — installing via apt"
-  sudo apt-get update -qq
-  if ! sudo apt-get install -y wireguard wireguard-tools resolvconf; then
+  log "wireguard-tools not on PATH — installing via apt (noninteractive)"
+  sudo -E apt-get update -qq
+  if ! sudo -E DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
+       apt-get install -y -q \
+         -o Dpkg::Options::="--force-confdef" \
+         -o Dpkg::Options::="--force-confold" \
+         wireguard wireguard-tools resolvconf; then
     err "apt install wireguard failed"
     exit 1
   fi
   log "wireguard-tools installed"
 fi
-wg --version 2>&1 || true
+log "wg version check..."
+wg --version 2>&1 || log "(wg --version failed but continuing)"
+log "wg version check done"
 
 # ─── Step 3: Verify config is present ────────────────────────────────
 # scanner.yml step "Fetch WireGuard configs" downloads + extracts the
