@@ -245,19 +245,19 @@ log "policies set: background, networklock, lightwayudp"
 #      uses Smart Location — ExpressVPN picks the closest exit. We
 #      sacrifice region-pinning but at least the scan can proceed.
 log "connecting to: $REGION"
+# Drill #7 (2026-05-30) hung for >5 min on a single connect call when
+# the daemon wedged. Wrap every CLI invocation in `timeout` so a single
+# hang can't lock the whole workflow.
 CONNECT_OK=false
-if "$CLI" connect "$REGION" 2>&1; then
+if timeout 20 "$CLI" connect "$REGION" 2>&1; then
   CONNECT_OK=true
 else
   err "connect to '$REGION' failed — trying fallback name formats"
-  # Common variants ExpressVPN's CLI accepts: kebab-case, lowercase no
-  # spaces, country-only. Use sed for lowercase (drill #5 showed tr's
-  # source-longer-than-target semantics turn spaces into 'z').
   KEBAB=$(echo "$REGION" | sed -e 's/.*/\L&/' -e 's/ *- */-/g' -e 's/ /-/g')
   COUNTRY=$(echo "$REGION" | sed 's/ *-.*//')
   for variant in "$KEBAB" "$COUNTRY" "us" "USA"; do
     log "  trying: $variant"
-    if "$CLI" connect "$variant" 2>&1; then
+    if timeout 20 "$CLI" connect "$variant" 2>&1; then
       CONNECT_OK=true
       REGION="$variant"  # so the output reflects what actually worked
       break
@@ -268,8 +268,8 @@ fi
 if ! $CONNECT_OK; then
   err "all named-region attempts failed — falling back to Smart Location"
   log "available regions per expressvpnctl get regions (first 40):"
-  "$CLI" get regions 2>&1 | head -40 || true
-  if "$CLI" connect 2>&1; then
+  timeout 10 "$CLI" get regions 2>&1 | head -40 || true
+  if timeout 20 "$CLI" connect 2>&1; then
     CONNECT_OK=true
     REGION="<smart-location>"
   fi
