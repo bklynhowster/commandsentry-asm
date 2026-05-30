@@ -89,46 +89,42 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
+    # ════ Pinned scanner container image ═══════════════════════════
+    # Built + published by .github/workflows/build-scanner-image.yml.
+    # Bakes wireguard-go, wg, the full Phase 4a toolchain (PD tools +
+    # ffuf + nikto + wafw00f + testssl.sh), Python + psycopg.
+    # See [[59 - Container Image Build Spec]] in Obsidian.
+    #
+    # Pin to a date+sha tag in production; bump explicitly when the
+    # image is rebuilt. NET_ADMIN + /dev/net/tun are required for
+    # wireguard-go to create + own a TUN device.
+    container:
+      image: ghcr.io/bklynhowster/commandsentry-scanner:latest
+      options: >-
+        --cap-add=NET_ADMIN
+        --device=/dev/net/tun
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Cache Go binaries (httpx, etc.)
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/go/bin
-            ~/.commandsentry
-          key: ${{ runner.os }}-scanner-tools-${{ hashFiles('scanner/install-tools.sh') }}
-          restore-keys: |
-            ${{ runner.os }}-scanner-tools-
-            ${{ runner.os }}-asm-tools-
-
-      - name: Install scanner tool stack
+      - name: Verify baked-in toolchain
         run: |
-          chmod +x scanner/install-tools.sh
-          scanner/install-tools.sh --platform ubuntu
-
-      - name: Verify Light tier dependencies
-        run: |
-          # Light tier needs: python3, curl, dig (dnsutils), httpx (ProjectDiscovery)
-          for t in python3 curl dig httpx openssl; do
-            if ! command -v "$t" >/dev/null 2>&1; then
-              echo "::error::Required Light-tier tool not found: $t"
+          # Sanity check — image build's smoke-test already validated these,
+          # but it's cheap insurance against a bad image being :latest.
+          echo "═══ Baked-in toolchain ═══"
+          for t in wireguard-go wg python3 \
+                   subfinder dnsx httpx naabu nuclei fingerprintx \
+                   ffuf nikto wafw00f testssl.sh \
+                   whois jq yq curl dig openssl sudo ip iptables; do
+            if command -v "$t" >/dev/null 2>&1; then
+              printf "  ✓ %-15s %s\n" "$t" "$(command -v $t)"
+            else
+              echo "::error::Required tool not found in container: $t"
               exit 1
             fi
           done
-          echo "Light tier tools present."
-
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install 'psycopg[binary]'
+          echo "All baked-in tools present."
 
       # ─── If workflow_dispatch with asset_id was supplied: queue it ──
       - name: Queue ad-hoc scan from workflow_dispatch inputs
