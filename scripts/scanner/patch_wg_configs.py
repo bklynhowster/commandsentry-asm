@@ -17,6 +17,18 @@ WHY:
 
   No more nft. No hang.
 
+WHY THE STRIP STEP:
+  Scan #56 (also 2026-05-30) failed at line 74 of the bringup log:
+    iptables -I OUTPUT ! -o us-nyc -m mark ! --mark $(wg show us-nyc fwmark) ...
+    iptables v1.8.10 (nf_tables): mark: bad integer value for option "--mark"
+  Mullvad's web config generator ships a killswitch PostUp that uses
+  $(wg show %i fwmark). With Table=off, wg-quick doesn't set fwmark, so
+  the subshell returns "off" and iptables chokes. Also, Mullvad's PostUp
+  runs BEFORE ours (their lines appear earlier in the [Interface] block).
+  We strip the existing PostUp/PreDown lines from each conf before
+  injecting ours — our PostUp sets fwmark first, so even if a killswitch
+  is needed later it would have something to work with.
+
 Idempotent: skips files already containing "Table = off".
 """
 from __future__ import annotations
@@ -61,6 +73,34 @@ def main() -> int:
         if "[Peer]" not in content:
             print(f"WARN: no [Peer] section in {path} — skipping", file=sys.stderr)
             continue
+
+        # Strip any existing PostUp / PreDown lines from the [Interface]
+        # block. Mullvad's killswitch PostUp uses $(wg show %i fwmark),
+        # which returns "off" when Table=off — and iptables can't parse
+        # "off" as a mark integer. We replace them with our own.
+        lines = content.splitlines()
+        kept: list[str] = []
+        stripped_count = 0
+        in_interface = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("["):
+                in_interface = stripped == "[Interface]"
+                kept.append(line)
+                continue
+            if in_interface and (
+                stripped.startswith("PostUp")
+                or stripped.startswith("PreUp")
+                or stripped.startswith("PreDown")
+                or stripped.startswith("PostDown")
+                or stripped.startswith("Table")
+            ):
+                stripped_count += 1
+                continue  # drop it
+            kept.append(line)
+        content = "\n".join(kept)
+        if stripped_count:
+            print(f"  stripped {stripped_count} existing PostUp/PreDown/Table line(s) from {path}")
 
         # Insert EXTRAS into the [Interface] section, just before [Peer].
         new_content = content.replace("[Peer]", EXTRAS + "\n[Peer]", 1)
