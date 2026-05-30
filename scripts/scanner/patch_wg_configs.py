@@ -94,6 +94,13 @@ def main() -> int:
                 or stripped.startswith("PreDown")
                 or stripped.startswith("PostDown")
                 or stripped.startswith("Table")
+                # Drop DNS too — we install wg + wg-quick only (no
+                # resolvconf, no openresolv). If DNS= is present,
+                # wg-quick tries to invoke resolvconf and fails. The
+                # runner already has working Azure DNS; we don't need
+                # to override it for scan traffic to route through
+                # the tunnel.
+                or stripped.startswith("DNS")
             ):
                 stripped_count += 1
                 continue  # drop it

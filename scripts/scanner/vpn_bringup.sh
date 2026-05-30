@@ -52,46 +52,52 @@ for provider in https://api.ipify.org https://ifconfig.me https://icanhazip.com;
 done
 log "baseline runner IP (pre-VPN): ${BASELINE_IP:-<unknown>}"
 
-# ─── Step 2: Install wireguard-tools ─────────────────────────────────
-# Standard Ubuntu package — no third-party repo. Ships with wg + wg-quick.
+# ─── Step 2: Install wireguard-tools by extracting the .deb ──────────
+# Standard apt-get install of `wireguard` hangs on GH Actions hosted
+# runners (Ubuntu 24.04) during dpkg's post-install maintainer scripts —
+# almost certainly trying to activate wg-quick.target via systemd in a
+# context that can't actually start it. The hang is in uninterruptible
+# kernel state ('D'), so even `timeout` can't kill it.
 #
-# Scan history at this step on GH Actions hosted runners:
-#   #54: hung 3+ min on needrestart's interactive-input prompt
-#   #57: hung 2.5+ min AFTER needrestart printed "is suspended" —
-#        almost certainly something dpkg/systemd is doing post-install
-#        for the wireguard package (likely wg-quick.target activation).
+# Scan history confirming the pattern:
+#   #54: hung 3+ min on needrestart's interactive-input prompt → fixed
+#   #57: hung 2.5+ min AFTER needrestart printed "is suspended"
+#   #58: hung 3.5+ min on apt-get install of wireguard itself (timeout
+#        wrapper ignored — dpkg in 'D' state)
 #
-# Fix: purge needrestart entirely (so it can't interfere) + wrap every
-# apt invocation with a hard timeout + force line-buffered output so we
-# never sit silently again.
-export DEBIAN_FRONTEND=noninteractive
-export NEEDRESTART_MODE=a
-export NEEDRESTART_SUSPEND=1
-
-# Timestamped log helper — shows where time is being spent.
+# Workaround: download the .deb files, extract with `dpkg-deb -x`, and
+# put the binaries on PATH manually. `wg` is a static ELF and `wg-quick`
+# is a shell script — neither needs a maintainer script to work. No
+# systemd activation, no post-install hooks, no hang.
 ts_log() { echo "[vpn-bringup] $(date '+%H:%M:%S') $*"; }
 
 if ! command -v wg-quick &>/dev/null; then
-  ts_log "wireguard-tools not on PATH — purging needrestart first"
-  sudo -E timeout 30 apt-get -y -q purge needrestart 2>&1 \
-    | sed 's/^/[apt-purge] /' \
-    || ts_log "(needrestart purge returned non-zero or wasn't installed — continuing)"
+  export DEBIAN_FRONTEND=noninteractive
 
-  ts_log "running apt-get update"
-  sudo -E timeout 60 apt-get update -qq 2>&1 \
-    | sed 's/^/[apt-update] /' \
-    || { err "apt-get update failed or timed out"; exit 1; }
-
-  ts_log "running apt-get install wireguard wireguard-tools resolvconf"
-  if ! sudo -E timeout 90 stdbuf -oL -eL apt-get install -y -q \
-         -o Dpkg::Options::="--force-confdef" \
-         -o Dpkg::Options::="--force-confold" \
-         wireguard wireguard-tools resolvconf 2>&1 \
-       | sed 's/^/[apt-install] /'; then
-    err "apt install wireguard failed or timed out (90s cap)"
+  ts_log "downloading wireguard-tools .deb (no install — apt-get download)"
+  mkdir -p /tmp/wg-extract
+  cd /tmp/wg-extract
+  # apt-get download writes the .deb into cwd. -q is fine here — it's
+  # a pure HTTPS fetch, no dpkg involvement, returns quickly.
+  if ! sudo -E timeout 60 apt-get download wireguard-tools 2>&1 \
+       | sed 's/^/[apt-download] /'; then
+    err "apt-get download wireguard-tools failed or timed out"
     exit 1
   fi
-  ts_log "wireguard-tools installed"
+  DEB=$(ls /tmp/wg-extract/wireguard-tools_*.deb 2>/dev/null | head -1)
+  if [[ -z "$DEB" ]]; then
+    err "no wireguard-tools .deb found in /tmp/wg-extract/"
+    ls -la /tmp/wg-extract/ >&2 || true
+    exit 1
+  fi
+  ts_log "got $DEB — extracting with dpkg-deb -x (no maintainer scripts)"
+  sudo dpkg-deb -x "$DEB" /tmp/wg-extract/root
+  # The .deb installs wg-quick to /usr/bin/, wg to /usr/bin/. Drop them
+  # into /usr/local/bin so the rest of the script finds them on PATH.
+  sudo install -m 0755 /tmp/wg-extract/root/usr/bin/wg /usr/local/bin/wg
+  sudo install -m 0755 /tmp/wg-extract/root/usr/bin/wg-quick /usr/local/bin/wg-quick
+  ts_log "wg + wg-quick installed to /usr/local/bin/ (bypassed dpkg post-install)"
+  cd - >/dev/null
 fi
 
 ts_log "wg version check..."
