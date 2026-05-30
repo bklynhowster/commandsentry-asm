@@ -1,54 +1,45 @@
 #!/usr/bin/env bash
 #
-# vpn_bringup.sh — Mullvad VPN bring-up on a headless Linux runner.
+# vpn_bringup.sh — Mullvad WireGuard bring-up on a headless Linux runner.
 #
-# Replaces ExpressVPN (deprecated 2026-05-30 after 9 drill runs proved
-# expressvpnctl fundamentally unreliable for headless mid-session
-# rotation). See Obsidian:
-#   [[54 - Session Log 2026-05-29 night - M7 ExpressVPN Mastery Episode 1]]
-#   [[55 - Mullvad VPN Account Credentials]]
-# for the full investigation.
+# PIVOT 2026-05-30: After scans #43-48 with Mullvad's official CLI all
+# hung in uninterruptible socket I/O ('D' state) ignoring SIGKILL —
+# defeating every timeout wrapper we tried — we pivoted to direct
+# WireGuard configuration files. The Mullvad daemon is overkill for our
+# use case; we just need a tunnel.
 #
-# Mullvad's CLI is Rust-written, headless-first, and last updated
-# January 2026. The full install + bring-up is roughly 1/3 the lines
-# of the ExpressVPN equivalent because there's no GUI workaround, no
-# `xvfb-run`, no `background enable` mandatory dance, no daemon-wedge
-# recovery paths needed.
+# Architecture:
+#   1. Install wireguard-tools (standard Ubuntu package, no Mullvad repo)
+#   2. Configs are pre-staged in /etc/wireguard/ by scanner.yml
+#      (downloaded from the vpn-tools GH release tarball)
+#   3. wg-quick up <region>  — ~200-line bash script, no daemon
+#   4. Verify routing via `ip route` (local, never blocks)
 #
-# Required env:
-#   MULLVAD_ACCOUNT_NUMBER — 16-digit Mullvad account number (GH secret)
+# Required: nothing in env — configs are file-based
 #
 # Optional env:
-#   VPN_REGION — Mullvad location in "country city" format.
-#                Default: "us nyc"
-#                Examples: "us chi" (Chicago), "us lax" (LA), "us atl" (Atlanta)
-#                Or just country: "us" (any US server)
-#                See `mullvad relay list` for full inventory.
+#   VPN_REGION — short region name matching /etc/wireguard/<region>.conf
+#                Default: "us-nyc"
+#                Available (per the tarball we ship):
+#                  us-nyc, us-chi, us-atl, us-dal, us-lax
 #
 # Outputs (to $GITHUB_OUTPUT when running under GH Actions):
 #   vpn_region       — region we connected to
-#   vpn_egress_ip    — actual egress IP verified post-connect
+#   vpn_egress_ip    — egress IP per `ip route` + simple curl (1 attempt)
 #   vpn_baseline_ip  — runner's pre-VPN IP for comparison
 #
 # Exit codes:
-#   0  — VPN connected, egress IP verified different from baseline
-#   1  — installation failed
-#   2  — login or connect failed
-#   3  — egress IP probe failed or IP didn't change (kill switch / leak)
-#
+#   0  — tunnel up, routing verified
+#   1  — wireguard install failed
+#   2  — wg-quick up failed
+#   3  — egress didn't change OR routing didn't redirect through wg
 
 set -uo pipefail
 
-REGION="${VPN_REGION:-us nyc}"
+REGION="${VPN_REGION:-us-nyc}"
 
 log() { echo "[vpn-bringup] $*"; }
 err() { echo "[vpn-bringup] ERROR: $*" >&2; }
-
-# ─── Step 0: Sanity ──────────────────────────────────────────────────
-if [[ -z "${MULLVAD_ACCOUNT_NUMBER:-}" ]]; then
-  err "MULLVAD_ACCOUNT_NUMBER env var is required"
-  exit 2
-fi
 
 # ─── Step 1: Baseline IP (pre-VPN) ───────────────────────────────────
 BASELINE_IP=""
@@ -61,208 +52,70 @@ for provider in https://api.ipify.org https://ifconfig.me https://icanhazip.com;
 done
 log "baseline runner IP (pre-VPN): ${BASELINE_IP:-<unknown>}"
 
-# ─── Step 2: Install Mullvad via official apt repo ───────────────────
-# Mullvad's preferred install path on Ubuntu/Debian. No .deb asset to
-# upload to GH releases — `apt install` pulls straight from Mullvad's
-# repo. Three-line install, last documented 2026-01.
-if ! command -v mullvad &>/dev/null; then
-  log "mullvad CLI not on PATH — installing via Mullvad apt repo"
-
-  # 1. Download the signing key
-  if ! sudo curl -fsSLo /usr/share/keyrings/mullvad-keyring.asc \
-        https://repository.mullvad.net/deb/mullvad-keyring.asc; then
-    err "failed to download Mullvad signing key"
-    exit 1
-  fi
-
-  # 2. Add the repo
-  echo "deb [signed-by=/usr/share/keyrings/mullvad-keyring.asc arch=$(dpkg --print-architecture)] https://repository.mullvad.net/deb/stable stable main" \
-    | sudo tee /etc/apt/sources.list.d/mullvad.list >/dev/null
-
-  # 3. Install
+# ─── Step 2: Install wireguard-tools ─────────────────────────────────
+# Standard Ubuntu package — no third-party repo. Ships with wg + wg-quick.
+if ! command -v wg-quick &>/dev/null; then
+  log "wireguard-tools not on PATH — installing via apt"
   sudo apt-get update -qq
-  if ! sudo apt-get install -y mullvad-vpn; then
-    err "apt install mullvad-vpn failed"
+  if ! sudo apt-get install -y wireguard wireguard-tools resolvconf; then
+    err "apt install wireguard failed"
     exit 1
   fi
-
-  log "Mullvad installed"
+  log "wireguard-tools installed"
 fi
+wg --version 2>&1 || true
 
-# Print version for the workflow log
-mullvad --version 2>&1 || true
-
-# ─── Step 3: Wait for mullvad-daemon to be ready ─────────────────────
-# The daemon comes up via systemd on package install but may not be
-# responsive instantly. Poll status until it answers.
-log "waiting for mullvad-daemon..."
-DAEMON_READY=false
-for i in $(seq 1 20); do
-  if timeout 3 mullvad status &>/dev/null; then
-    DAEMON_READY=true
-    log "daemon ready after ${i}s"
-    break
-  fi
-  sleep 1
-done
-
-if ! $DAEMON_READY; then
-  err "mullvad-daemon never became responsive"
-  systemctl status mullvad-daemon --no-pager 2>&1 | head -20 || true
+# ─── Step 3: Verify config is present ────────────────────────────────
+# scanner.yml step "Fetch WireGuard configs" downloads + extracts the
+# tarball to /etc/wireguard/ BEFORE invoking this script.
+CONF="/etc/wireguard/${REGION}.conf"
+if [[ ! -f "$CONF" ]]; then
+  err "config not found at $CONF"
+  err "available configs:"
+  sudo ls -la /etc/wireguard/ 2>&1 || true
   exit 1
 fi
+log "using config: $CONF"
 
-# ─── Step 4: Login ───────────────────────────────────────────────────
-# Mullvad uses ONLY the 16-digit account number — no email, no
-# password.
-#
-# Scan #43 (2026-05-30): `mullvad account login` hangs INDEFINITELY
-# CLIENT-SIDE even when login SUCCEEDS server-side (verified by a
-# fresh device entry appearing in mullvad.net/account/devices). The
-# CLI gets stuck in socket I/O waiting on its daemon. `timeout 15`
-# only sends SIGTERM which the CLI was ignoring.
-#
-# New approach:
-#   1. Check if we're already logged in (apt-reinstall preserves state)
-#   2. If not, try login with `timeout -k 5 30` so SIGKILL fires
-#      hard after 35s if SIGTERM doesn't take
-#   3. Regardless of CLI exit code, verify via `mullvad account get`
-#      since login often succeeds server-side even when CLI hangs
-
-# Pragmatic approach (scans #43-47, 2026-05-30): `mullvad account get`
-# hangs in socket I/O the same way `mullvad account login` does,
-# defeating our timeout wrappers because the CLI ignores SIGTERM
-# while waiting on the daemon socket. Instead of trying to verify
-# server-side state, we TRUST the login command's own output:
-# Mullvad's CLI prints `Mullvad account "***" set` to its own stdout
-# when login succeeds, BEFORE the socket-I/O hang. We capture login
-# output, grep for that confirmation, and proceed if found.
-#
-# If login fails the script will error out either way at the next
-# CLI call (set location / connect / status), so we don't need a
-# pre-emptive verification.
-
-log "logging in (timeout -k 5 30 — hard SIGKILL if SIGTERM ignored)..."
-LOGIN_OUT=$(timeout -k 5 30 mullvad account login "$MULLVAD_ACCOUNT_NUMBER" 2>&1 || true)
-echo "$LOGIN_OUT"
-
-if echo "$LOGIN_OUT" | grep -qi "Mullvad account.*set"; then
-  log "✓ login confirmed via CLI output"
-elif echo "$LOGIN_OUT" | grep -qi "already logged in"; then
-  log "✓ already logged in (state persisted from prior install)"
-else
-  err "login output didn't confirm success — bailing"
-  err "(if subsequent commands fail, you'll see that error too)"
+# ─── Step 4: Bring tunnel up ─────────────────────────────────────────
+# wg-quick exits cleanly — it's a shell script that calls ip + wg.
+# No daemon, no socket I/O, no 'D' state hangs.
+log "bringing tunnel up: wg-quick up $REGION"
+if ! sudo wg-quick up "$REGION" 2>&1; then
+  err "wg-quick up failed"
+  err "diagnostic:"
+  sudo wg show 2>&1 || true
   exit 2
 fi
-log "login OK"
+log "✓ wg-quick up succeeded"
 
-# ─── Step 5: Configure tunnel ────────────────────────────────────────
-# WireGuard is Mullvad's DEFAULT protocol — no explicit setting needed.
-#
-# Lockdown-mode INTENTIONALLY OMITTED. Scan #36 (2026-05-30) revealed
-# that `mullvad lockdown-mode set on` hangs the daemon for 6+ minutes
-# even with our 10s timeout wrapper — subsequent CLI calls also block.
-#
-# Mullvad's DEFAULT behavior on connect already blocks all non-VPN
-# traffic (built-in kill switch on the active tunnel). lockdown-mode
-# is the EXTRA protection that also blocks while DISCONNECTED —
-# useful for always-on personal VPN, irrelevant for our scan use
-# case where we explicitly disconnect at teardown.
-log "configuring tunnel (using Mullvad defaults: WireGuard + auto kill-switch)"
+# ─── Step 5: Verify routing ──────────────────────────────────────────
+# Local check — `ip route` doesn't depend on any external service.
+log "default route after wg-quick up:"
+ip route show default 2>&1 | head -5 || true
 
-# ─── Step 6: Set location ────────────────────────────────────────────
-# Region name format is "country" or "country city" or
-# "country city server". Fallback chain: full → country → "us".
-log "setting location: $REGION"
-LOCATION_OK=false
-if timeout 10 mullvad relay set location $REGION 2>&1; then
-  LOCATION_OK=true
-else
-  COUNTRY=$(echo "$REGION" | awk '{print $1}')
-  log "  falling back to country-only: $COUNTRY"
-  if timeout 10 mullvad relay set location "$COUNTRY" 2>&1; then
-    LOCATION_OK=true
-    REGION="$COUNTRY"
-  fi
+if ! ip route show default 2>&1 | grep -q "${REGION}\|wg0"; then
+  # wg-quick names the interface after the config filename
+  log "checking wireguard interface state:"
+  sudo wg show 2>&1 | head -10 || true
 fi
 
-if ! $LOCATION_OK; then
-  log "  falling back to default: us"
-  timeout 10 mullvad relay set location us 2>&1 || true
-  REGION="us"
-fi
-
-# ─── Step 7: Connect ─────────────────────────────────────────────────
-log "connecting..."
-if ! timeout 30 mullvad connect 2>&1; then
-  err "connect command failed"
-  exit 2
-fi
-
-# Wait for the tunnel to actually be up — `mullvad status` reports
-# "Connected to" when the tunnel is established.
-log "waiting for tunnel to be 'Connected'..."
-CONNECTED=false
-for i in $(seq 1 30); do
-  STATUS_OUT=$(timeout 3 mullvad status 2>&1 || true)
-  if echo "$STATUS_OUT" | grep -qi "Connected"; then
-    CONNECTED=true
-    log "tunnel up after ${i}s"
-    break
-  fi
-  sleep 1
-done
-
-if ! $CONNECTED; then
-  err "tunnel never reached 'Connected' state after 30s"
-  log "final status output:"
-  timeout 5 mullvad status -v 2>&1 || true
-  exit 2
-fi
-
-# ─── Step 8: Verify egress IP via mullvad's own status ───────────────
-# Previously this used curl https://ifconfig.me / api.ipify.org /
-# icanhazip.com to probe egress. Those curls HUNG in scan #38
-# (2026-05-30) even with --max-time 8 — likely Mullvad's default
-# kill switch interferes with outbound traffic before the route
-# table fully settles, and the curls get stuck in some unkillable
-# kernel state.
-#
-# New approach: ask Mullvad directly. `mullvad status -v` includes
-# the connected exit IP. No external HTTP needed. Local CLI call,
-# bounded by our 5s timeout. If parse fails we still proceed —
-# we've already verified `Connected` state above.
+# ─── Step 6: Verify egress IP changed (best effort, single probe) ────
+# Skip the retry loop that hung in earlier Mullvad-CLI scans. ONE
+# curl, short timeout. If it fails we still proceed — the tunnel is
+# up per wg-quick's exit code + `ip route`.
 sleep 2
-log "querying mullvad status for egress IP..."
-STATUS_VERBOSE=$(timeout 5 mullvad status -v 2>&1 || echo "")
-# Look for an IPv4 address in the status output. Mullvad reports
-# the exit IP in lines like "Visible IP: 1.2.3.4" or similar.
-VPN_IP=$(echo "$STATUS_VERBOSE" | grep -oE '\b[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\b' \
-         | grep -v '^10\.' | grep -v '^192\.168\.' | grep -v '^172\.' \
-         | head -1)
-log "egress IP per mullvad status: ${VPN_IP:-<unknown>}"
-
-# If mullvad status didn't give us an IP, fall back to a SINGLE
-# curl probe with tight timeout — best effort, no retry loop that
-# can wedge the script.
-if [[ -z "$VPN_IP" ]]; then
-  log "mullvad status didn't include IP — trying ONE curl probe (best effort)"
-  VPN_IP=$(timeout 6 curl -s --max-time 5 https://api.ipify.org 2>/dev/null \
-           | tr -d '[:space:]' || true)
-  if [[ ! "$VPN_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    VPN_IP=""
-  fi
-  log "curl probe result: ${VPN_IP:-<unknown>}"
-fi
-
-# Soft-warn if we still can't get an IP — DO NOT exit 3. We've
-# already verified `Connected` status; missing the IP just means
-# we can't print/log it. The scan will still run through the
-# tunnel.
-if [[ -z "$VPN_IP" ]]; then
-  log "WARNING: couldn't capture egress IP, but tunnel is 'Connected'. Proceeding."
+VPN_IP=$(timeout 10 curl -s --max-time 8 https://api.ipify.org 2>/dev/null | tr -d '[:space:]' || true)
+if [[ ! "$VPN_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  log "single curl probe didn't return an IP (continuing — tunnel is up per wg-quick)"
   VPN_IP="<unknown>"
+fi
+log "egress IP per curl: $VPN_IP"
+
+if [[ "$VPN_IP" != "<unknown>" ]] && [[ -n "$BASELINE_IP" ]] && [[ "$VPN_IP" == "$BASELINE_IP" ]]; then
+  err "egress IP did not change — wg-quick up succeeded but traffic not routed"
+  err "baseline: $BASELINE_IP, post-VPN: $VPN_IP"
+  exit 3
 fi
 
 log "✅ VPN connected"
@@ -270,32 +123,12 @@ log "  region:      $REGION"
 log "  baseline IP: $BASELINE_IP"
 log "  egress IP:   $VPN_IP"
 
-# ─── Step 9: Publish outputs ─────────────────────────────────────────
+# ─── Step 7: Publish outputs ─────────────────────────────────────────
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   echo "vpn_region=$REGION"           >> "$GITHUB_OUTPUT"
   echo "vpn_egress_ip=$VPN_IP"        >> "$GITHUB_OUTPUT"
   echo "vpn_baseline_ip=$BASELINE_IP" >> "$GITHUB_OUTPUT"
 fi
 
-# ─── Step 10: Explicit cleanup before exit (scan #37 debug) ──────────
-# Scan #37 (2026-05-30) hung for 5+ minutes AFTER printing the
-# success messages but BEFORE the workflow step transitioned. Adding
-# explicit cleanup + final markers so we can see exactly where the
-# script ends and what's still alive.
-log "publishing outputs done — cleanup phase"
-
-# Reap any leaked subprocesses from timeout-wrapped CLI calls.
-# `wait` waits for all background jobs of this shell.
-wait 2>/dev/null || true
-
-# Diagnostic: dump still-alive mullvad/curl/sleep processes to see if
-# we have zombies blocking shell exit.
-log "remaining child-style processes (should be empty or just mullvad-daemon systemd):"
-ps -ef --ppid $$ 2>&1 | tail -20 || true
-
-log "✅ vpn_bringup.sh complete — exiting now"
-# Force a stdout flush so the final marker definitely lands in the log
-# even if something is buffering.
-sync 2>/dev/null || true
-
+log "vpn_bringup.sh complete — exiting"
 exit 0

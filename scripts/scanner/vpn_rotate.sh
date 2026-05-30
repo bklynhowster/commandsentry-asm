@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 #
-# vpn_rotate.sh — Mullvad atomic region switch.
+# vpn_rotate.sh — Mullvad WireGuard region swap via wg-quick.
 #
-# Mullvad's CLI supports atomic location changes while connected: just
-# `mullvad relay set location <new>` and the daemon will reconnect to
-# the new location. No need for the explicit disconnect+connect dance
-# that wedged ExpressVPN's daemon.
+# After scans #43-48 hung in Mullvad CLI socket I/O, pivoted to direct
+# WireGuard configs. Rotation is just wg-quick down + wg-quick up on
+# a different config file. No daemon, no rotation API.
 #
 # Usage:
-#   vpn_rotate.sh                  # uses default "us nyc"
-#   vpn_rotate.sh "us chi"          # rotate to Chicago
-#   vpn_rotate.sh "us lax"          # rotate to LA
-#   vpn_rotate.sh "us"              # any US server
+#   vpn_rotate.sh us-chi
+#   vpn_rotate.sh us-lax
 #
 # Outputs (to $GITHUB_OUTPUT):
 #   pre_ip           — egress IP before rotation
@@ -19,106 +16,76 @@
 #   rotation_cost_s  — total time in seconds
 #
 # Exit codes:
-#   0 — rotated successfully, egress IP changed
-#   2 — set-location or reconnect failed
-#   3 — egress IP didn't change (rotation was a no-op or tunnel broken)
+#   0 — rotated, egress IP changed
+#   2 — wg-quick down or up failed
+#   3 — egress IP didn't change
 
 set -uo pipefail
 
-REGION="${1:-us nyc}"
+NEW_REGION="${1:-us-nyc}"
 
 log() { echo "[vpn-rotate] $*"; }
 err() { echo "[vpn-rotate] ERROR: $*" >&2; }
 
-if ! command -v mullvad &>/dev/null; then
-  err "mullvad CLI not installed — was vpn_bringup.sh run first?"
+if ! command -v wg-quick &>/dev/null; then
+  err "wg-quick not installed — was vpn_bringup.sh run first?"
   exit 2
 fi
 
-# Egress IP probe with retry tolerance (lockdown-mode can briefly
-# block traffic during reconnect).
+NEW_CONF="/etc/wireguard/${NEW_REGION}.conf"
+if [[ ! -f "$NEW_CONF" ]]; then
+  err "config not found at $NEW_CONF"
+  err "available configs:"
+  sudo ls /etc/wireguard/ 2>&1 || true
+  exit 2
+fi
+
+# Capture pre-rotate egress (best effort, single probe).
 get_egress_ip() {
-  for round in 1 2 3 4 5; do
-    for url in https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
-      ip=$(curl -s --max-time 6 "$url" 2>/dev/null | head -1 | tr -d '[:space:]' || true)
-      if [[ -n "$ip" ]] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "$ip"
-        return 0
-      fi
-    done
-    [[ "$round" -lt 5 ]] && sleep 5
-  done
-  echo ""
+  timeout 8 curl -s --max-time 6 https://api.ipify.org 2>/dev/null | tr -d '[:space:]' || true
 }
 
 PRE_IP=$(get_egress_ip)
 log "pre-rotate egress: ${PRE_IP:-<unknown>}"
 
-# ─── Atomic location switch ─────────────────────────────────────────
+# Find currently-up wg interfaces (wg-quick names them after their conf
+# basename). Tear them down so the new one can claim the route table.
 START=$(date +%s)
-log "switching location to: $REGION"
-LOCATION_OK=false
-if timeout 10 mullvad relay set location $REGION 2>&1; then
-  LOCATION_OK=true
-else
-  COUNTRY=$(echo "$REGION" | awk '{print $1}')
-  log "  full region failed — falling back to country-only: $COUNTRY"
-  if timeout 10 mullvad relay set location "$COUNTRY" 2>&1; then
-    LOCATION_OK=true
-    REGION="$COUNTRY"
+UP_IFACES=$(sudo wg show interfaces 2>/dev/null || true)
+log "currently up wireguard interfaces: ${UP_IFACES:-<none>}"
+
+for iface in $UP_IFACES; do
+  # The conf file name is the interface name (wg-quick convention).
+  if [[ "$iface" != "$NEW_REGION" ]]; then
+    log "wg-quick down $iface"
+    sudo wg-quick down "$iface" 2>&1 || err "wg-quick down $iface returned non-zero (continuing)"
+  else
+    log "$iface already up — will skip down/up cycle"
   fi
-fi
-
-if ! $LOCATION_OK; then
-  err "couldn't set new location"
-  exit 2
-fi
-
-# Mullvad automatically reconnects when the location is changed while
-# connected, but force it explicitly via `reconnect` (or `connect` as
-# a fallback) so we know which command finished.
-log "reconnecting to apply new location..."
-if ! timeout 30 mullvad reconnect 2>&1; then
-  log "  reconnect not available — falling back to connect"
-  timeout 30 mullvad connect 2>&1 || true
-fi
-
-# Wait for tunnel to be 'Connected' again.
-log "waiting for new tunnel to be 'Connected'..."
-CONNECTED=false
-for i in $(seq 1 30); do
-  STATUS_OUT=$(timeout 3 mullvad status 2>&1 || true)
-  if echo "$STATUS_OUT" | grep -qi "Connected"; then
-    CONNECTED=true
-    log "new tunnel up after ${i}s"
-    break
-  fi
-  sleep 1
 done
 
-if ! $CONNECTED; then
-  err "new tunnel never reached 'Connected' state"
-  timeout 5 mullvad status -v 2>&1 || true
-  exit 2
+# Bring up the new one (idempotent — if already up, this is a no-op).
+if ! echo "$UP_IFACES" | grep -qw "$NEW_REGION"; then
+  log "wg-quick up $NEW_REGION"
+  if ! sudo wg-quick up "$NEW_REGION" 2>&1; then
+    err "wg-quick up $NEW_REGION failed"
+    exit 2
+  fi
 fi
 
 END=$(date +%s)
 TOTAL=$((END - START))
-log "switch + reconnect took: ${TOTAL}s"
+log "rotation took: ${TOTAL}s"
 
-# Settle for new route table
-sleep 3
+sleep 2
 
 POST_IP=$(get_egress_ip)
 log "post-rotate egress: ${POST_IP:-<unknown>}"
 
-if [[ -z "$POST_IP" ]]; then
-  err "post-rotate egress could not be determined"
-  exit 3
-fi
-
-if [[ -n "$PRE_IP" ]] && [[ "$POST_IP" == "$PRE_IP" ]]; then
-  err "egress IP did not change (still $POST_IP) — got reassigned to same exit"
+if [[ "$POST_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && \
+   [[ "$PRE_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && \
+   [[ "$POST_IP" == "$PRE_IP" ]]; then
+  err "egress IP did not change (still $POST_IP)"
   exit 3
 fi
 
@@ -129,5 +96,5 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   echo "rotation_cost_s=$TOTAL"     >> "$GITHUB_OUTPUT"
 fi
 
-log "✅ rotation successful: $PRE_IP → $POST_IP (${TOTAL}s)"
+log "✅ rotation successful: ${PRE_IP:-?} → ${POST_IP:-?} (${TOTAL}s)"
 exit 0

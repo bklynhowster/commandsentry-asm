@@ -125,15 +125,14 @@ BAN_HTTP_CODES = {403, 429, 503, 521, 522, 523}  # WAF/CDN ban signals
 # Rotation regions (Mullvad "country city" format). Cycled in order
 # per chunk so the target sees diverse exit IPs across the scan.
 ROTATION_REGIONS = [
-    "us nyc",   # New York
-    "us chi",   # Chicago
-    "us atl",   # Atlanta
-    "us dal",   # Dallas
-    "us lax",   # Los Angeles
-    "us sea",   # Seattle
-    "us phx",   # Phoenix
-    "us mia",   # Miami
+    "us-nyc",   # New York
+    "us-chi",   # Chicago
+    "us-atl",   # Atlanta
+    "us-dal",   # Dallas
+    "us-lax",   # Los Angeles
 ]
+# Match the regions for which we've shipped WireGuard configs in the
+# vpn-tools GH release. Add more by generating + uploading more confs.
 
 # Small high-signal wordlist for ffuf — top dirs that high-signal but
 # don't look like obvious vuln-scanner fingerprints (no /wp-admin, no

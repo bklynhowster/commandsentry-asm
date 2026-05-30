@@ -225,14 +225,31 @@ jobs:
         if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
         run: |
           chmod +x scripts/scanner/vpn_bringup.sh
+          chmod +x scripts/scanner/vpn_rotate.sh
           chmod +x scripts/scanner/vpn_teardown.sh
 
-      - name: Bring up VPN (Mullvad)
+      - name: Fetch + extract WireGuard configs
+        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/wg-download
+          gh release download vpn-tools \
+            --repo bklynhowster/commandsentry-asm \
+            --pattern 'mullvad-wg-configs.tar.gz' \
+            --dir /tmp/wg-download
+          sudo mkdir -p /etc/wireguard
+          sudo tar xzf /tmp/wg-download/mullvad-wg-configs.tar.gz -C /tmp/wg-download
+          sudo cp /tmp/wg-download/wg-configs/*.conf /etc/wireguard/
+          sudo chmod 600 /etc/wireguard/*.conf
+          echo "Available WireGuard configs:"
+          sudo ls -la /etc/wireguard/
+
+      - name: Bring up VPN (WireGuard via wg-quick)
         id: vpn
         if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
         env:
-          MULLVAD_ACCOUNT_NUMBER: ${{ secrets.MULLVAD_ACCOUNT_NUMBER }}
-          VPN_REGION:             ${{ vars.SCANNER_VPN_REGION || 'us nyc' }}
+          VPN_REGION: ${{ vars.SCANNER_VPN_REGION || 'us-nyc' }}
         run: scripts/scanner/vpn_bringup.sh
 
       # ─── Dispatch to tier-specific runner ──────────────────────────
