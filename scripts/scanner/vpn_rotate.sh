@@ -149,13 +149,60 @@ if ! $CONNECT_OK; then
   fi
 fi
 
+# ─── Strategy E: Full daemon restart + re-login + reconnect ─────────
+# Drill #5 + #8 (2026-05-30) revealed the ExpressVPN daemon enters an
+# unresponsive state after bringup — every CLI call hits the 5s
+# internal timeout and there's no in-band recovery. The only fix is
+# `systemctl restart expressvpn-service.service` followed by a fresh
+# login + reconnect from scratch. Heavy (~30-40s recovery cost), but
+# the ONLY way out of a wedged daemon.
+#
+# Requires EXPRESSVPN_ACTIVATION_CODE in env (passed through from
+# scanner.yml / vpn-drill.yml workflow secrets).
+if ! $CONNECT_OK && [[ -n "${EXPRESSVPN_ACTIVATION_CODE:-}" ]]; then
+  err "all in-band strategies failed — attempting full daemon restart recovery"
+
+  log "restarting expressvpn-service.service..."
+  sudo systemctl restart expressvpn-service.service 2>&1 || \
+    err "systemctl restart returned non-zero (continuing anyway)"
+  sleep 5  # give the daemon time to come back
+
+  log "re-login with activation code..."
+  ACTCODE_FILE=$(mktemp /tmp/expressvpn-actcode.XXXXXX)
+  chmod 600 "$ACTCODE_FILE"
+  printf '%s' "$EXPRESSVPN_ACTIVATION_CODE" > "$ACTCODE_FILE"
+  if timeout 15 "$CLI" login "$ACTCODE_FILE" 2>&1; then
+    log "re-login OK"
+  else
+    err "re-login failed"
+  fi
+  rm -f "$ACTCODE_FILE"
+
+  log "re-applying policies (background, networklock, lightwayudp)..."
+  timeout 5 "$CLI" background enable 2>&1 || true
+  timeout 5 "$CLI" set networklock true 2>&1 || true
+  timeout 5 "$CLI" set protocol lightwayudp 2>&1 || true
+
+  log "post-restart connect attempt: $REGION"
+  if timeout 20 "$CLI" connect "$REGION" 2>&1; then
+    CONNECT_OK=true
+    log "✓ recovered via daemon restart"
+  else
+    # Last shot: smart location after restart
+    log "post-restart named connect failed — trying Smart Location"
+    if timeout 20 "$CLI" connect 2>&1; then
+      CONNECT_OK=true
+      REGION="<smart-location-after-restart>"
+      log "✓ recovered via Smart Location after daemon restart"
+    fi
+  fi
+fi
+
 # ─── Diagnostic dump if everything failed ───────────────────────────
 if ! $CONNECT_OK; then
-  err "all rotation strategies failed — dumping daemon state"
+  err "all rotation strategies failed (including daemon restart) — dumping state"
   err "=== expressvpnctl status ==="
   timeout 5 "$CLI" status 2>&1 || echo "  (status command also wedged)"
-  err "=== expressvpnctl get smartlocation ==="
-  timeout 5 "$CLI" get smartlocation 2>&1 || echo "  (get smartlocation wedged)"
   err "=== expressvpnctl get regions (first 30 lines) ==="
   timeout 10 "$CLI" get regions 2>&1 | head -30 || echo "  (get regions wedged)"
   err "=== journalctl -u expressvpn-service (last 30 lines) ==="

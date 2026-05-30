@@ -112,7 +112,8 @@ jobs:
       - name: 4. Same-region rotation (expect new /24 in same region)
         id: same_region
         env:
-          VPN_REGION: ${{ github.event.inputs.same_region_test }}
+          VPN_REGION:                 ${{ github.event.inputs.same_region_test }}
+          EXPRESSVPN_ACTIVATION_CODE: ${{ secrets.EXPRESSVPN_ACTIVATION_CODE }}
         run: scripts/scanner/vpn_rotate.sh "$VPN_REGION"
 
       - name: 4b. Verify same-region rotation egress
@@ -129,7 +130,8 @@ jobs:
       - name: 5. Cross-region rotation → second region
         id: second_region
         env:
-          VPN_REGION: ${{ github.event.inputs.second_region }}
+          VPN_REGION:                 ${{ github.event.inputs.second_region }}
+          EXPRESSVPN_ACTIVATION_CODE: ${{ secrets.EXPRESSVPN_ACTIVATION_CODE }}
         run: scripts/scanner/vpn_rotate.sh "$VPN_REGION"
 
       - name: 5b. Verify cross-region rotation egress
@@ -150,7 +152,8 @@ jobs:
       - name: 6. Cross-region rotation → third region
         id: third_region
         env:
-          VPN_REGION: ${{ github.event.inputs.third_region }}
+          VPN_REGION:                 ${{ github.event.inputs.third_region }}
+          EXPRESSVPN_ACTIVATION_CODE: ${{ secrets.EXPRESSVPN_ACTIVATION_CODE }}
         run: scripts/scanner/vpn_rotate.sh "$VPN_REGION"
 
       - name: 6b. Verify third region egress + latency
