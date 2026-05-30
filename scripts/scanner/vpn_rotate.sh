@@ -173,7 +173,10 @@ sleep 3
 POST_IP=$(get_egress_ip)
 log "post-rotate egress: ${POST_IP:-<unknown>}"
 
-TOTAL=$((END_CONN - START_DISC + 5))  # +5 for the two sleeps + IP probes
+# When the direct-switch path is taken, START_DISC is never set
+# (disconnect was skipped entirely). Use START_CONN as the rotation
+# start in that case — direct switch IS the rotation start.
+TOTAL=$((END_CONN - ${START_DISC:-$START_CONN} + 5))
 log "total rotation cost: ~${TOTAL}s"
 
 if [[ -z "$POST_IP" ]]; then
