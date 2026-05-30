@@ -81,6 +81,13 @@ permissions:
   # image from ghcr.io (the image is private by default).
   packages: read
 
+# Default to bash for every `run:` block. Inside a `container:` job
+# the default shell is `sh` (dash on Ubuntu 24.04) which doesn't
+# support bash-isms like `printf %q`. Scan #68 died on exactly that.
+defaults:
+  run:
+    shell: bash
+
 # Per-invocation timeout sized for Heavy worst case + headroom. Light = ~5s,
 # Medium = ~15 min, Heavy = ~60-90 min, plus ~5 min for tool install/cache.
 # 120 min ceiling matches the enrich workflow.
