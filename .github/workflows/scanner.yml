@@ -227,6 +227,7 @@ jobs:
           chmod +x scripts/scanner/vpn_bringup.sh
           chmod +x scripts/scanner/vpn_rotate.sh
           chmod +x scripts/scanner/vpn_teardown.sh
+          chmod +x scripts/scanner/wg_up_userspace.sh
 
       - name: Fetch + extract WireGuard configs
         if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
@@ -258,7 +259,7 @@ jobs:
           echo "Sample (us-nyc.conf, redacted):"
           sudo sed -E 's/(PrivateKey|PublicKey|PresharedKey) = .*/\1 = <redacted>/' /etc/wireguard/us-nyc.conf
 
-      - name: Bring up VPN (WireGuard via wg-quick)
+      - name: Bring up VPN (WireGuard via wireguard-go userspace)
         id: vpn
         if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
         env:

@@ -133,6 +133,50 @@ ts_log "wg version check..."
 wg --version 2>&1 || ts_log "(wg --version failed but continuing)"
 ts_log "wg version check done"
 
+# ─── Step 2.5: Install wireguard-go (userspace WG implementation) ────
+# Scan #60 (2026-05-30) confirmed that wg-quick's `ip link add type
+# wireguard` hangs forever on GH Actions hosted runners — the kernel
+# triggers module auto-load via systemd-modules-load.service, which
+# wedges in uninterruptible 'D' state.
+#
+# Pivot: use wireguard-go (zx2c4's official userspace impl). Creates
+# a TUN device instead of a wireguard-typed link → no kernel module
+# load → no systemd path → no hang.
+#
+# Install via `go install` from the runner's preinstalled Go toolchain.
+# No third-party prebuilt binary dependency (GH runners always have Go).
+# Compile takes ~20s the first time.
+if ! command -v wireguard-go &>/dev/null; then
+  ts_log "installing wireguard-go (userspace WG) via go install"
+  if ! command -v go &>/dev/null; then
+    err "go toolchain not on PATH — cannot build wireguard-go"
+    err "GH Actions hosted runners normally have Go preinstalled. Verify:"
+    err "  which go; go version"
+    exit 1
+  fi
+  ts_log "  go version: $(go version)"
+  # GOBIN defaults to $HOME/go/bin — pin it so we know where to look.
+  export GOBIN=/tmp/wg-go-bin
+  mkdir -p "$GOBIN"
+  ts_log "  GOBIN=$GOBIN"
+  ts_log "  building golang.zx2c4.com/wireguard@latest ..."
+  if ! timeout 120 go install golang.zx2c4.com/wireguard@latest 2>&1 \
+       | sed 's/^/[go-install] /'; then
+    err "go install golang.zx2c4.com/wireguard@latest failed or timed out"
+    exit 1
+  fi
+  if [[ ! -x "$GOBIN/wireguard" ]]; then
+    err "expected binary not found at $GOBIN/wireguard"
+    ls -la "$GOBIN/" >&2 || true
+    exit 1
+  fi
+  # Canonical name is `wireguard-go`. Install under that name to /usr/local/bin
+  # so wg_up_userspace.sh finds it on PATH.
+  sudo install -m 0755 "$GOBIN/wireguard" /usr/local/bin/wireguard-go
+  ts_log "  wireguard-go installed: $(/usr/local/bin/wireguard-go --version 2>&1 | head -1 || echo 'version flag not supported')"
+fi
+ts_log "wireguard-go ready"
+
 # ─── Step 3: Verify config is present ────────────────────────────────
 # scanner.yml step "Fetch WireGuard configs" downloads + extracts the
 # tarball to /etc/wireguard/ BEFORE invoking this script.
@@ -145,28 +189,31 @@ if [[ ! -f "$CONF" ]]; then
 fi
 log "using config: $CONF"
 
-# ─── Step 4: Bring tunnel up ─────────────────────────────────────────
-# wg-quick exits cleanly — it's a shell script that calls ip + wg.
-# No daemon, no socket I/O, no 'D' state hangs.
-log "bringing tunnel up: wg-quick up $REGION"
-if ! sudo wg-quick up "$REGION" 2>&1; then
-  err "wg-quick up failed"
-  err "diagnostic:"
-  sudo wg show 2>&1 || true
+# ─── Step 4: Bring tunnel up via wireguard-go (userspace) ────────────
+# Replaces the wg-quick call that hung on scan #60. wg_up_userspace.sh
+# does the same operations wg-quick would (TUN create, wg setconf,
+# ip address, fwmark + ip rule + ip route) but via wireguard-go for
+# the TUN creation step.
+ts_log "bringing tunnel up via wireguard-go userspace impl"
+WG_UP="$(dirname "$0")/wg_up_userspace.sh"
+if [[ ! -x "$WG_UP" ]]; then
+  err "wg_up_userspace.sh not found or not executable at $WG_UP"
   exit 2
 fi
-log "✓ wg-quick up succeeded"
+if ! "$WG_UP" "$REGION" 2>&1 | sed 's/^/[wg-up] /'; then
+  err "wg_up_userspace.sh failed"
+  err "diagnostic - wg show:"
+  sudo wg show 2>&1 | sed 's/^/  /' || true
+  err "diagnostic - ip link:"
+  ip -br link 2>&1 | sed 's/^/  /' || true
+  exit 2
+fi
+ts_log "✓ tunnel up via wireguard-go"
 
 # ─── Step 5: Verify routing ──────────────────────────────────────────
 # Local check — `ip route` doesn't depend on any external service.
-log "default route after wg-quick up:"
+log "default route after tunnel bring-up:"
 ip route show default 2>&1 | head -5 || true
-
-if ! ip route show default 2>&1 | grep -q "${REGION}\|wg0"; then
-  # wg-quick names the interface after the config filename
-  log "checking wireguard interface state:"
-  sudo wg show 2>&1 | head -10 || true
-fi
 
 # ─── Step 6: Verify egress IP changed (best effort, single probe) ────
 # Skip the retry loop that hung in earlier Mullvad-CLI scans. ONE
