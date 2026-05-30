@@ -243,19 +243,33 @@ fi
 sleep 4
 
 # ─── Step 6: Verify egress IP changed ────────────────────────────────
+# Retry loop: vpn-drill.yml run #1 (2026-05-30) showed that after a
+# full GUI install (xvfb-run successfully tricked the installer into
+# running the GUI path), the post-connect tunnel takes longer than 4s
+# to be route-able. networklock=true means IP-probe curls hit the
+# killswitch and time out before we recover.
+#
+# Strategy: probe each provider; if all three fail, sleep 5s and try
+# again. Total cap of 5 rounds = up to ~30s additional wait beyond the
+# initial 4s sleep before declaring the tunnel dead.
 VPN_IP=""
-for provider in https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
-  ip=$(curl -s --max-time 8 "$provider" 2>/dev/null | head -1 | tr -d '[:space:]' || true)
-  if [[ -n "$ip" ]] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    VPN_IP="$ip"
-    break
-  fi
+for round in 1 2 3 4 5; do
+  for provider in https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
+    ip=$(curl -s --max-time 8 "$provider" 2>/dev/null | head -1 | tr -d '[:space:]' || true)
+    if [[ -n "$ip" ]] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      VPN_IP="$ip"
+      log "egress IP captured on round $round via $provider"
+      break 2
+    fi
+  done
+  log "no egress IP yet on round $round — sleeping 5s and retrying"
+  sleep 5
 done
 
 log "egress IP after connect: ${VPN_IP:-<unknown>}"
 
 if [[ -z "$VPN_IP" ]]; then
-  err "couldn't determine egress IP from any provider"
+  err "couldn't determine egress IP from any provider after 5 retry rounds (~30s)"
   exit 3
 fi
 
