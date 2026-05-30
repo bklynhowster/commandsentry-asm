@@ -103,11 +103,38 @@ log "disconnect took: $((END_DISC - START_DISC))s"
 # previous tunnel interface before connect can claim it.
 sleep 2
 
-# Connect with timing.
+# Connect with timing — same defensive fallback chain as vpn_bringup.sh
+# (expressvpnctl region lookup is flaky between runs per drill #3 obs).
 START_CONN=$(date +%s)
 log "connecting to: $REGION ..."
-if ! "$CLI" connect "$REGION" 2>&1; then
-  err "connect to '$REGION' failed"
+CONNECT_OK=false
+if "$CLI" connect "$REGION" 2>&1; then
+  CONNECT_OK=true
+else
+  err "connect to '$REGION' failed — trying fallback name formats"
+  KEBAB=$(echo "$REGION" | tr 'A-Z ' 'a-z' | sed 's/ *- */-/g')
+  COUNTRY=$(echo "$REGION" | sed 's/ *-.*//')
+  for variant in "$KEBAB" "$COUNTRY" "us" "USA"; do
+    log "  trying: $variant"
+    if "$CLI" connect "$variant" 2>&1; then
+      CONNECT_OK=true
+      REGION="$variant"
+      break
+    fi
+  done
+fi
+
+if ! $CONNECT_OK; then
+  err "all named-region attempts failed — falling back to Smart Location"
+  "$CLI" get regions 2>&1 | head -40 || true
+  if "$CLI" connect 2>&1; then
+    CONNECT_OK=true
+    REGION="<smart-location>"
+  fi
+fi
+
+if ! $CONNECT_OK; then
+  err "even Smart Location connect failed"
   exit 2
 fi
 END_CONN=$(date +%s)

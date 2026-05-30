@@ -233,9 +233,49 @@ log "login OK"
 log "policies set: background, networklock, lightwayudp"
 
 # ─── Step 5: Connect ─────────────────────────────────────────────────
+# Region lookup proved FLAKY in vpn-drill.yml run #3 (2026-05-30):
+# expressvpnctl normalizes "USA - New York" to "usa-new-york" and
+# sometimes can't find the region (probably an ExpressVPN backend
+# hiccup — the SAME name worked fine in run #2 minutes earlier).
+#
+# Defensive fallback chain:
+#   1. Try the exact region name as provided
+#   2. If that fails, try common normalization variants
+#   3. If all named regions fail, fall back to `connect` (no arg) which
+#      uses Smart Location — ExpressVPN picks the closest exit. We
+#      sacrifice region-pinning but at least the scan can proceed.
 log "connecting to: $REGION"
-if ! "$CLI" connect "$REGION" 2>&1; then
-  err "connect to '$REGION' failed"
+CONNECT_OK=false
+if "$CLI" connect "$REGION" 2>&1; then
+  CONNECT_OK=true
+else
+  err "connect to '$REGION' failed — trying fallback name formats"
+  # Common variants ExpressVPN's CLI accepts: kebab-case, lowercase no
+  # spaces, country-only.
+  KEBAB=$(echo "$REGION" | tr 'A-Z ' 'a-z' | sed 's/ *- */-/g')
+  COUNTRY=$(echo "$REGION" | sed 's/ *-.*//')
+  for variant in "$KEBAB" "$COUNTRY" "us" "USA"; do
+    log "  trying: $variant"
+    if "$CLI" connect "$variant" 2>&1; then
+      CONNECT_OK=true
+      REGION="$variant"  # so the output reflects what actually worked
+      break
+    fi
+  done
+fi
+
+if ! $CONNECT_OK; then
+  err "all named-region attempts failed — falling back to Smart Location"
+  log "available regions per expressvpnctl get regions (first 40):"
+  "$CLI" get regions 2>&1 | head -40 || true
+  if "$CLI" connect 2>&1; then
+    CONNECT_OK=true
+    REGION="<smart-location>"
+  fi
+fi
+
+if ! $CONNECT_OK; then
+  err "even Smart Location connect failed — VPN cannot be brought up"
   exit 2
 fi
 
