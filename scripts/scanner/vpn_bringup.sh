@@ -129,45 +129,31 @@ fi
 #   3. Regardless of CLI exit code, verify via `mullvad account get`
 #      since login often succeeds server-side even when CLI hangs
 
-# Check existing state first. NOTE: capture to variable rather than
-# piping — scan #46 (2026-05-30) revealed that `set -uo pipefail` was
-# making `cmd | grep` return non-zero whenever `cmd` was killed by
-# timeout, EVEN IF grep matched the output before the kill. The
-# variable-capture form sidesteps pipefail entirely.
-ACCT_OUT=$(timeout 5 mullvad account get 2>&1 || true)
-if echo "$ACCT_OUT" | grep -qi "mullvad account"; then
-  log "already logged in (state persisted from prior install)"
+# Pragmatic approach (scans #43-47, 2026-05-30): `mullvad account get`
+# hangs in socket I/O the same way `mullvad account login` does,
+# defeating our timeout wrappers because the CLI ignores SIGTERM
+# while waiting on the daemon socket. Instead of trying to verify
+# server-side state, we TRUST the login command's own output:
+# Mullvad's CLI prints `Mullvad account "***" set` to its own stdout
+# when login succeeds, BEFORE the socket-I/O hang. We capture login
+# output, grep for that confirmation, and proceed if found.
+#
+# If login fails the script will error out either way at the next
+# CLI call (set location / connect / status), so we don't need a
+# pre-emptive verification.
+
+log "logging in (timeout -k 5 30 — hard SIGKILL if SIGTERM ignored)..."
+LOGIN_OUT=$(timeout -k 5 30 mullvad account login "$MULLVAD_ACCOUNT_NUMBER" 2>&1 || true)
+echo "$LOGIN_OUT"
+
+if echo "$LOGIN_OUT" | grep -qi "Mullvad account.*set"; then
+  log "✓ login confirmed via CLI output"
+elif echo "$LOGIN_OUT" | grep -qi "already logged in"; then
+  log "✓ already logged in (state persisted from prior install)"
 else
-  log "logging in (timeout -k 5 30 — hard SIGKILL if SIGTERM ignored)..."
-  # Capture both exit code and output, never let it block forever
-  timeout -k 5 30 mullvad account login "$MULLVAD_ACCOUNT_NUMBER" 2>&1 || \
-    log "login command returned non-zero (will verify via account get next)"
-
-  # Verify server-side state with retry — scan #45 (2026-05-30)
-  # showed the first verification call can run too fast after login,
-  # before the daemon has flushed state to its response handler. The
-  # diagnostic call 1s later returned proper output. Retry loop
-  # handles that race cleanly.
-  log "verifying login via mullvad account get (retry loop)..."
-  VERIFIED=false
-  for attempt in 1 2 3 4 5; do
-    # Variable capture (not pipe) to dodge pipefail propagation
-    ACCT_OUT=$(timeout 5 mullvad account get 2>&1 || true)
-    if echo "$ACCT_OUT" | grep -qi "mullvad account"; then
-      log "✓ login verified via account get (attempt $attempt)"
-      VERIFIED=true
-      break
-    fi
-    log "  attempt $attempt: not yet verified, sleeping 2s"
-    sleep 2
-  done
-
-  if ! $VERIFIED; then
-    err "login could not be verified after 5 attempts — bailing"
-    err "final account get output:"
-    timeout 3 mullvad account get 2>&1 || true
-    exit 2
-  fi
+  err "login output didn't confirm success — bailing"
+  err "(if subsequent commands fail, you'll see that error too)"
+  exit 2
 fi
 log "login OK"
 
