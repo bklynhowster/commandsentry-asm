@@ -77,6 +77,9 @@ on:
 
 permissions:
   contents: read
+  # Required so the job's GITHUB_TOKEN can pull the scanner container
+  # image from ghcr.io (the image is private by default).
+  packages: read
 
 # Per-invocation timeout sized for Heavy worst case + headroom. Light = ~5s,
 # Medium = ~15 min, Heavy = ~60-90 min, plus ~5 min for tool install/cache.
@@ -100,6 +103,9 @@ jobs:
     # wireguard-go to create + own a TUN device.
     container:
       image: ghcr.io/bklynhowster/commandsentry-scanner:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
       options: >-
         --cap-add=NET_ADMIN
         --device=/dev/net/tun
