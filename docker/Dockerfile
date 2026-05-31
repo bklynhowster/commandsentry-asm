@@ -49,6 +49,7 @@ RUN go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
  && go install github.com/projectdiscovery/httpx/cmd/httpx@latest \
  && go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest \
  && go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest \
+ && go install github.com/projectdiscovery/katana/cmd/katana@latest \
  && go install github.com/praetorian-inc/fingerprintx/cmd/fingerprintx@latest \
  && go install github.com/ffuf/ffuf/v2@latest
 
@@ -130,6 +131,7 @@ COPY --from=builder /root/go/bin/dnsx            /usr/local/bin/
 COPY --from=builder /root/go/bin/httpx           /usr/local/bin/
 COPY --from=builder /root/go/bin/naabu           /usr/local/bin/
 COPY --from=builder /root/go/bin/nuclei          /usr/local/bin/
+COPY --from=builder /root/go/bin/katana          /usr/local/bin/
 COPY --from=builder /root/go/bin/fingerprintx    /usr/local/bin/
 COPY --from=builder /root/go/bin/ffuf            /usr/local/bin/
 
@@ -139,7 +141,7 @@ RUN nuclei -update-templates -silent 2>/dev/null || true
 # ─── Sanity check — fail the build if any expected tool is missing ─
 RUN set -eux; \
     for t in wireguard-go wg \
-             subfinder dnsx httpx naabu nuclei fingerprintx \
+             subfinder dnsx httpx naabu nuclei katana fingerprintx \
              ffuf nikto wafw00f testssl.sh \
              whois jq yq python python3 sudo ip iptables \
              psql gh; do \
