@@ -674,16 +674,27 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
 
     for i, (sev, tag, desc) in enumerate(chunks):
         # Layer 1: pre-chunk healthcheck
+        # Rate resolution: PROBE ladder always wins (it's a diagnostic test).
+        # Otherwise, "most conservative rate wins" across all active modes.
+        # Bug fix 2026-05-31 PM: previously PATIENT_MODE's rate (10) silently
+        # overrode STEALTH_UA's rate (2) when both were enabled. Cost ~10 min
+        # of a banned scan before catching it.
         if THRESHOLD_PROBE_MODE and i < len(THRESHOLD_PROBE_RATE_LADDER):
             rate_for_chunk = THRESHOLD_PROBE_RATE_LADDER[i]
-        elif PATIENT_MODE:
-            rate_for_chunk = PATIENT_RATE_LIMIT
+            mode_label = f"PROBE @ {rate_for_chunk}"
         else:
-            rate_for_chunk = NUCLEI_RATE_LIMIT
-        if THRESHOLD_PROBE_MODE:
-            log(f"chunk {i+1}/{len(chunks)} [PROBE @ {rate_for_chunk} req/s]: {desc}")
-        elif PATIENT_MODE:
-            log(f"chunk {i+1}/{len(chunks)} [PATIENT @ {rate_for_chunk} req/s]: {desc}")
+            candidates = [NUCLEI_RATE_LIMIT]
+            active_modes = []
+            if PATIENT_MODE:
+                candidates.append(PATIENT_RATE_LIMIT)
+                active_modes.append("PATIENT")
+            if STEALTH_UA:
+                candidates.append(STEALTH_RATE_LIMIT)
+                active_modes.append("STEALTH")
+            rate_for_chunk = min(candidates)
+            mode_label = f"{'+'.join(active_modes) or 'DEFAULT'} @ {rate_for_chunk}"
+        if active_modes_or_probe := (THRESHOLD_PROBE_MODE or PATIENT_MODE or STEALTH_UA):
+            log(f"chunk {i+1}/{len(chunks)} [{mode_label} req/s]: {desc}")
         else:
             log(f"chunk {i+1}/{len(chunks)}: {desc}")
 
@@ -716,7 +727,7 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # Layer 2: run the chunk
         rc, matches, _ = run_nuclei_chunk(
             ctx, base_url, sev, tag,
-            rate_override=rate_for_chunk if (THRESHOLD_PROBE_MODE or PATIENT_MODE) else None,
+            rate_override=rate_for_chunk if (THRESHOLD_PROBE_MODE or PATIENT_MODE or STEALTH_UA) else None,
             url_list_file=url_list_file,
         )
         log(f"  chunk {i+1} done: {matches} match(es), rc={rc}")
