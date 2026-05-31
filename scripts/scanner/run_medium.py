@@ -211,6 +211,20 @@ PATIENT_INTER_CHUNK_DELAY_S = int(os.environ.get("PATIENT_INTER_CHUNK_DELAY_S", 
 # Rate-limit override when PATIENT_MODE is true. Matches Mac runbook.
 PATIENT_RATE_LIMIT = int(os.environ.get("PATIENT_RATE_LIMIT", "10"))
 
+# ─── Softened rate (Plan A2 + B, 2026-05-31 PM) ────────────────────────
+# Gentler nuclei rate for non-FortiGate targets that nevertheless have a
+# WAF or are running WordPress. FortiGate gets full PATIENT (cooldowns
+# + rotation recovery). These targets just need slower probing so the
+# WAF doesn't silently 403-filter scanner-shaped requests.
+#
+# Origin: Scan B (CMI) 2026-05-31 PM. Default rate 30 against Pressable
+# (which has generic WAF — 403s on attack strings, doesn't ban IPs).
+# 0 new findings on a site with 44 known existing findings. Mac runbook
+# uses --rate-limit 2 + per-phase delays against the same target and
+# finds the WP plugin CVEs cleanly. Cloud rate of 5 is a defensive
+# middle ground between cloud's broken 30 and Mac's gentle 2.
+SOFTENED_RATE_LIMIT = int(os.environ.get("SOFTENED_RATE_LIMIT", "5"))
+
 # ─── Stealth UA mode (advisor-brief audit fallout, 2026-05-31 PM) ──────
 # Mirrors the Mac stringent script line 94: "Browser-like headers —
 # looks authenticated, not like a scanner." Pins User-Agent to a single
@@ -428,10 +442,18 @@ def ensure_healthy_egress(ctx: ScanContext, max_rotations: int = 2) -> bool:
 def detect_waf(ctx: ScanContext) -> None:
     """Run wafw00f. Sets ctx.waf_detected + ctx.waf_kind on hit.
 
-    waf_kind values seen in practice: 'fortiweb' (Fortinet's WAF, sits in
-    front of FortiGate-protected vhosts), 'cloudflare', 'akamai',
-    'cloudfront', 'incapsula', 'sucuri', 'wordfence' (when WP plugin
-    is the active WAF). Lowercased for downstream matching.
+    Two detection paths:
+      (1) Named-signature match — "is behind <Name>" with a known WAF
+          identifier like FortiWeb, Cloudflare, Akamai, etc.
+      (2) Generic detection — wafw00f sees attack-string requests get
+          403'd but can't ID the WAF by signature. Common for Pressable,
+          smaller managed-host WAFs, and bespoke FortiGate configs.
+
+    Previously only (1) set waf_detected=True. (2) was logged as 'no WAF'
+    which caused the cloud scanner to fire broad templates at rate 30
+    against Pressable (commandmarketinginnovations.com 2026-05-31 PM),
+    triggering silent 403-filtering by Pressable's WAF and returning
+    0 findings against a site we knew had real findings.
     """
     ctx.tools_run.append("wafw00f")
     rc, stdout, _ = run_cmd(
@@ -442,14 +464,23 @@ def detect_waf(ctx: ScanContext) -> None:
     if rc != 0:
         log(f"wafw00f rc={rc} — assuming no WAF for tuning purposes")
         return
-    # Match "is behind <WAFName>" e.g. "is behind FortiWeb (Fortinet Inc.)"
+    # Path 1: named-signature match. "is behind FortiWeb (Fortinet Inc.)"
     m = re.search(r"is behind\s+([A-Za-z][A-Za-z0-9_\-]+)", stdout)
     if m:
         ctx.waf_detected = True
         ctx.waf_kind = m.group(1).lower()
         log(f"WAF detected: {ctx.waf_kind} — will gate intrusive templates off")
-    else:
-        log("no WAF detected by wafw00f")
+        return
+    # Path 2: generic detection. "seems to be behind a WAF or some sort
+    # of security solution" — wafw00f's response-code-heuristic firing
+    # without a signature match. Set waf_kind='generic' so downstream
+    # softening kicks in even though we don't know the specific WAF.
+    if re.search(r"seems to be behind", stdout, re.IGNORECASE):
+        ctx.waf_detected = True
+        ctx.waf_kind = "generic"
+        log("WAF detected: generic (wafw00f generic detection — kind unknown)")
+        return
+    log("no WAF detected by wafw00f")
 
 
 # ─── Tech stack detection (P2.5) ───────────────────────────────────────
@@ -608,6 +639,31 @@ def is_effective_patient_mode(ctx: ScanContext) -> bool:
     if os.environ.get("PATIENT_MODE_OFF", "").lower() in ("true", "1", "yes"):
         return False
     return PATIENT_MODE or is_fortigate_target(ctx)
+
+
+def needs_softened_rate(ctx: ScanContext) -> bool:
+    """True if the target deserves a gentler nuclei rate but doesn't
+    need full PATIENT mode (no cooldowns, no rotation recovery — just
+    slower probing so the WAF doesn't silently filter scanner traffic).
+
+    Triggers:
+    - Any WAF detected (FortiGate already covered by PATIENT)
+    - WordPress in tech_stack (Mac runbook treats WP gently regardless
+      of WAF detection — managed WP hosts often filter scanner-shape
+      traffic without announcing themselves)
+
+    FortiGate targets get PATIENT instead, which already includes the
+    slower rate plus cooldowns and inter-chunk delays. Don't double up.
+    """
+    if is_fortigate_target(ctx):
+        return False
+    if ctx.waf_detected:
+        return True
+    # Substring match on tech_stack — httpx -td sometimes emits plugin
+    # names like "email encoder for wordpress" rather than clean tokens.
+    if any("wordpress" in t or t == "wp" for t in ctx.tech_stack):
+        return True
+    return False
 
 
 # ─── nuclei (chunked) ──────────────────────────────────────────────────
@@ -854,9 +910,13 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
             if STEALTH_UA:
                 candidates.append(STEALTH_RATE_LIMIT)
                 active_modes.append("STEALTH")
+            if needs_softened_rate(ctx):
+                candidates.append(SOFTENED_RATE_LIMIT)
+                reason = "waf" if ctx.waf_detected else "wp"
+                active_modes.append(f"SOFTENED-{reason}")
             rate_for_chunk = min(candidates)
             mode_label = f"{'+'.join(active_modes) or 'DEFAULT'} @ {rate_for_chunk}"
-        if active_modes_or_probe := (THRESHOLD_PROBE_MODE or patient_effective or STEALTH_UA):
+        if active_modes_or_probe := (THRESHOLD_PROBE_MODE or patient_effective or STEALTH_UA or needs_softened_rate(ctx)):
             log(f"chunk {i+1}/{len(chunks)} [{mode_label} req/s]: {desc}")
         else:
             log(f"chunk {i+1}/{len(chunks)}: {desc}")
@@ -890,7 +950,7 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # Layer 2: run the chunk
         rc, matches, _ = run_nuclei_chunk(
             ctx, base_url, sev, tag,
-            rate_override=rate_for_chunk if (THRESHOLD_PROBE_MODE or patient_effective or STEALTH_UA) else None,
+            rate_override=rate_for_chunk if (THRESHOLD_PROBE_MODE or patient_effective or STEALTH_UA or needs_softened_rate(ctx)) else None,
             url_list_file=url_list_file,
         )
         log(f"  chunk {i+1} done: {matches} match(es), rc={rc}")
@@ -1278,6 +1338,7 @@ def write_scan_metadata_artifact(conn, ctx: ScanContext, Json,
         "tech_stack": sorted(ctx.tech_stack),
         "target_class": "fortigate" if is_fortigate_target(ctx) else "standard",
         "patient_mode_effective": is_effective_patient_mode(ctx),
+        "softened_rate_effective": needs_softened_rate(ctx),
         "total_requests": ctx.total_requests,
         "response_codes": dict(ctx.response_codes),
         "rotation_count": ctx.rotation_count,
