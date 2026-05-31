@@ -170,6 +170,13 @@ jobs:
           echo "All baked-in tools present."
 
       # ─── If workflow_dispatch with asset_id was supplied: queue it ──
+      # Idempotent — checks for an existing queued/running row first so
+      # re-fires don't trip the scan_queue_one_running_per_asset unique
+      # index. Re-fire is treated as "join the existing scan" rather than
+      # an error. Pairs with the 20260531a auto-sync trigger that prevents
+      # stale 'running' queue rows from blocking re-fires after a scan
+      # successfully completes. See [[64 - Session Log 2026-05-31 PM]]
+      # P-bug-2.
       - name: Queue ad-hoc scan from workflow_dispatch inputs
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.asset_id != '' }}
         env:
@@ -181,18 +188,35 @@ jobs:
           AUTHENTICATED="${{ github.event.inputs.authenticated }}"
 
           # Defensive shell-quote: psql -c with double-quoted SQL.
-          # Note: ASSET_ID gets interpolated via printf %q escape since
-          # it's user-supplied and might contain shell metachars.
+          # ASSET_ID gets interpolated via printf %q escape since it's
+          # user-supplied and might contain shell metachars.
           ASSET_ID_QUOTED=$(printf '%q' "$ASSET_ID")
 
-          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
-            insert into public.scan_queue
-              (asset_id, intensity, authenticated, source, notes)
-            values
-              ('$ASSET_ID', '$INTENSITY', $AUTHENTICATED, 'workflow_dispatch',
-               'Ad-hoc fire via GH Actions UI (workflow_dispatch).');
-          "
-          echo "Queued $INTENSITY scan for $ASSET_ID (authenticated=$AUTHENTICATED)."
+          # Check for an already-active queue row for this asset.
+          EXISTING=$(psql "$SUPABASE_DSN" -t -A -v ON_ERROR_STOP=1 -c "
+            select queue_id || '|' || status
+              from public.scan_queue
+             where asset_id = '$ASSET_ID'
+               and status in ('queued', 'running')
+             order by triggered_at desc
+             limit 1;
+          ")
+
+          if [ -n "$EXISTING" ]; then
+            EXIST_QUEUE_ID="${EXISTING%%|*}"
+            EXIST_STATUS="${EXISTING##*|}"
+            echo "::warning::Asset $ASSET_ID already has an active queue row "\
+"($EXIST_STATUS, queue_id=$EXIST_QUEUE_ID). Skipping INSERT — the existing row will be claimed by poll_queue."
+          else
+            psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
+              insert into public.scan_queue
+                (asset_id, intensity, authenticated, source, notes)
+              values
+                ('$ASSET_ID', '$INTENSITY', $AUTHENTICATED, 'workflow_dispatch',
+                 'Ad-hoc fire via GH Actions UI (workflow_dispatch).');
+            "
+            echo "Queued $INTENSITY scan for $ASSET_ID (authenticated=$AUTHENTICATED)."
+          fi
 
       # ─── Atomically claim the next queued scan ─────────────────────
       - name: Poll queue + claim next scan
