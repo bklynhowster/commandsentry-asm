@@ -84,6 +84,16 @@ on:
         required: false
         default: false
         type: boolean
+      patient_mode:
+        description: 'Run Medium tier in PATIENT MODE — mirrors the Mac runbook tuning that survives FortiGate (rate-limit 10, 5s inter-chunk delay, 30 min cooldown before rotating on ban). Runs the standard 5-chunk broad-template plan. Expected runtime: 15-150 min depending on bans. Only takes effect when intensity=medium.'
+        required: false
+        default: false
+        type: boolean
+      patient_ban_cooldown_s:
+        description: 'Override the patient-mode ban cooldown (seconds). Default 1800 (30 min, Mac runbook). Drop to 300 (5 min) for faster experiments.'
+        required: false
+        default: '1800'
+        type: string
 
 permissions:
   contents: read
@@ -320,6 +330,13 @@ jobs:
           # bans in scans #82+#87. Isolates whether template content is
           # the actual ban trigger.
           THRESHOLD_PROBE_SAFE_ONLY: ${{ github.event.inputs.threshold_probe_safe_only }}
+          # PATIENT MODE — mirrors Mac runbook tuning (-rl 10, 5s delays,
+          # 30 min cooldown on ban before rotating). Hypothesis: bans are
+          # velocity-driven, not source-IP-class-driven, so the same
+          # patience pattern that lets the Mac scan survive FortiGate
+          # should also let cloud scans survive.
+          PATIENT_MODE: ${{ github.event.inputs.patient_mode }}
+          PATIENT_BAN_COOLDOWN_S: ${{ github.event.inputs.patient_ban_cooldown_s }}
         run: |
           python scripts/scanner/run_medium.py /tmp/scan_descriptor.json
 

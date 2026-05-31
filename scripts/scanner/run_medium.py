@@ -182,6 +182,30 @@ THRESHOLD_PROBE_SAFE_ONLY = os.environ.get("THRESHOLD_PROBE_SAFE_ONLY", "").lowe
 # Per-chunk rate ladder when probe mode is active. Brackets the current
 # default (30) below and above so a single scan maps the threshold curve.
 THRESHOLD_PROBE_RATE_LADDER = [5, 15, 30, 50, 100]
+
+# ─── Patient mode ──────────────────────────────────────────────────────
+# Mirrors Howie's Mac runbook (RUNBOOK-CCC-Triple-Scan-2026-05-12) which
+# runs the FULL nuclei template battery against FortiGate-protected targets
+# and survives via patience: rate-limit 10, 5-sec delays between phases,
+# wait 30 min before rotating egress when banned. Scans take 60-90 min
+# but stay alive.
+#
+# Hypothesis: bans are velocity-driven, not source-IP-class-driven.
+# Test by replicating the Mac tuning in cloud and seeing if broad-template
+# scans survive on Mullvad IPs.
+PATIENT_MODE = os.environ.get("PATIENT_MODE", "").lower() in ("true", "1", "yes")
+
+# Seconds to sleep after a post-chunk healthcheck shows BANNED, before
+# rotating to the next region. Mac runbook = 1800 (30 min). Tunable
+# for faster experiments. Only used when PATIENT_MODE is true.
+PATIENT_BAN_COOLDOWN_S = int(os.environ.get("PATIENT_BAN_COOLDOWN_S", "1800"))
+
+# Seconds to sleep between chunks regardless of ban state. Mac runbook
+# uses 5s between phases. Only used when PATIENT_MODE is true.
+PATIENT_INTER_CHUNK_DELAY_S = int(os.environ.get("PATIENT_INTER_CHUNK_DELAY_S", "5"))
+
+# Rate-limit override when PATIENT_MODE is true. Matches Mac runbook.
+PATIENT_RATE_LIMIT = int(os.environ.get("PATIENT_RATE_LIMIT", "10"))
 # Match the regions for which we've shipped WireGuard configs in the
 # vpn-tools GH release. Add more by generating + uploading more confs.
 
@@ -509,6 +533,13 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         else:
             log("→ nuclei (THRESHOLD PROBE MODE — rate ladder per chunk)")
             log(f"  rate ladder: {THRESHOLD_PROBE_RATE_LADDER} req/s (one per chunk)")
+    elif PATIENT_MODE:
+        log("→ nuclei (PATIENT MODE — mirrors Mac runbook tuning)")
+        log(f"  rate-limit: {PATIENT_RATE_LIMIT} req/s (vs default {NUCLEI_RATE_LIMIT})")
+        log(f"  inter-chunk delay: {PATIENT_INTER_CHUNK_DELAY_S}s")
+        log(f"  ban cooldown: {PATIENT_BAN_COOLDOWN_S}s ({PATIENT_BAN_COOLDOWN_S//60} min) before rotating")
+        log(f"  expected runtime: ~{(NUCLEI_CHUNK_WALL_S * 5 + PATIENT_INTER_CHUNK_DELAY_S * 4) // 60} min baseline,")
+        log(f"  up to ~{((NUCLEI_CHUNK_WALL_S * 5 + PATIENT_BAN_COOLDOWN_S * 4) // 60)} min if every chunk bans")
     else:
         log("→ nuclei (chunked with mid-scan rotation)")
     base_url = f"https://{ctx.hostname}"
@@ -533,13 +564,16 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
 
     for i, (sev, tag, desc) in enumerate(chunks):
         # Layer 1: pre-chunk healthcheck
-        rate_for_chunk = (
-            THRESHOLD_PROBE_RATE_LADDER[i] if THRESHOLD_PROBE_MODE
-            and i < len(THRESHOLD_PROBE_RATE_LADDER)
-            else NUCLEI_RATE_LIMIT
-        )
+        if THRESHOLD_PROBE_MODE and i < len(THRESHOLD_PROBE_RATE_LADDER):
+            rate_for_chunk = THRESHOLD_PROBE_RATE_LADDER[i]
+        elif PATIENT_MODE:
+            rate_for_chunk = PATIENT_RATE_LIMIT
+        else:
+            rate_for_chunk = NUCLEI_RATE_LIMIT
         if THRESHOLD_PROBE_MODE:
             log(f"chunk {i+1}/{len(chunks)} [PROBE @ {rate_for_chunk} req/s]: {desc}")
+        elif PATIENT_MODE:
+            log(f"chunk {i+1}/{len(chunks)} [PATIENT @ {rate_for_chunk} req/s]: {desc}")
         else:
             log(f"chunk {i+1}/{len(chunks)}: {desc}")
 
@@ -560,41 +594,68 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
                 })
             continue
 
-        # PROBE: capture the egress IP we're about to scan from + a baseline
-        # health code RIGHT BEFORE the chunk runs.
+        # PROBE/PATIENT: capture the egress IP we're about to scan from +
+        # a baseline health code RIGHT BEFORE the chunk runs.
         probe_egress_ip = ctx.egress_ips_seen[-1] if ctx.egress_ips_seen else None
-        if THRESHOLD_PROBE_MODE:
+        pre_code = None
+        if THRESHOLD_PROBE_MODE or PATIENT_MODE:
             _, pre_code = healthcheck(ctx)
-            log(f"  PROBE pre-chunk healthcheck on {probe_egress_ip}: HTTP {pre_code}")
+            tag_lbl = "PROBE" if THRESHOLD_PROBE_MODE else "PATIENT"
+            log(f"  {tag_lbl} pre-chunk healthcheck on {probe_egress_ip}: HTTP {pre_code}")
 
         # Layer 2: run the chunk
         rc, matches, _ = run_nuclei_chunk(
             ctx, base_url, sev, tag,
-            rate_override=rate_for_chunk if THRESHOLD_PROBE_MODE else None,
+            rate_override=rate_for_chunk if (THRESHOLD_PROBE_MODE or PATIENT_MODE) else None,
         )
         log(f"  chunk {i+1} done: {matches} match(es), rc={rc}")
 
-        # PROBE: healthcheck on the SAME tunnel BEFORE rotating. This is
-        # the key data point — did this rate just ban the IP we used?
-        if THRESHOLD_PROBE_MODE:
+        # PROBE/PATIENT: healthcheck on the SAME tunnel BEFORE rotating.
+        # In PROBE mode this is data-gathering. In PATIENT mode it gates
+        # whether we trigger the ban-cooldown sleep before rotating.
+        post_banned = False
+        if THRESHOLD_PROBE_MODE or PATIENT_MODE:
             _, post_code = healthcheck(ctx)
-            banned = post_code not in (200, 301, 302, 303, 307, 308, 401)
-            log(f"  PROBE post-chunk healthcheck on {probe_egress_ip}: HTTP {post_code} → "
-                f"{'BANNED' if banned else 'still reachable'}")
-            ctx.threshold_probe_results.append({
-                "chunk_index": i + 1,
-                "rate": rate_for_chunk,
+            post_banned = post_code not in (200, 301, 302, 303, 307, 308, 401)
+            tag_lbl = "PROBE" if THRESHOLD_PROBE_MODE else "PATIENT"
+            log(f"  {tag_lbl} post-chunk healthcheck on {probe_egress_ip}: HTTP {post_code} → "
+                f"{'BANNED' if post_banned else 'still reachable'}")
+            if THRESHOLD_PROBE_MODE:
+                ctx.threshold_probe_results.append({
+                    "chunk_index": i + 1,
+                    "rate": rate_for_chunk,
+                    "egress_ip": probe_egress_ip,
+                    "pre_chunk_code": pre_code,
+                    "post_chunk_code": post_code,
+                    "matches": matches,
+                    "rc": rc,
+                    "banned": post_banned,
+                })
+
+        # PATIENT: if the post-check showed a ban, sleep the cooldown
+        # before rotating — mirrors Mac runbook's "wait 30 min, rotate
+        # egress, resume" pattern. The hypothesis is that immediate
+        # rotation accelerates cross-IP reputation tracking.
+        if PATIENT_MODE and post_banned and i < len(chunks) - 1:
+            log(f"  PATIENT: banned IP detected — sleeping {PATIENT_BAN_COOLDOWN_S}s "
+                f"({PATIENT_BAN_COOLDOWN_S//60} min) before rotation")
+            ctx.ban_events.append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "type": "patient_mode_cooldown",
+                "chunk": f"{sev}:{tag or '<all>'}",
                 "egress_ip": probe_egress_ip,
-                "pre_chunk_code": pre_code,
-                "post_chunk_code": post_code,
-                "matches": matches,
-                "rc": rc,
-                "banned": banned,
+                "cooldown_s": PATIENT_BAN_COOLDOWN_S,
             })
+            time.sleep(PATIENT_BAN_COOLDOWN_S)
 
         # Layer 3 + 4: planned rotation between chunks
         if i < len(chunks) - 1:
             rotate_vpn(ctx)
+            # PATIENT: short delay regardless of ban state — mirrors
+            # the 5-second WAF_DELAY between phases in deep-probe-v2.sh
+            if PATIENT_MODE:
+                log(f"  PATIENT: {PATIENT_INTER_CHUNK_DELAY_S}s inter-chunk delay")
+                time.sleep(PATIENT_INTER_CHUNK_DELAY_S)
 
         # Ceiling check
         if ctx.total_requests >= MAX_REQUESTS_TOTAL:
