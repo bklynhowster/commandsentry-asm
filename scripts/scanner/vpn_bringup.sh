@@ -36,10 +36,22 @@
 
 set -uo pipefail
 
-REGION="${VPN_REGION:-us-nyc}"
-
 log() { echo "[vpn-bringup] $*"; }
 err() { echo "[vpn-bringup] ERROR: $*" >&2; }
+
+# After the 5-region → 205-region pool expansion, configs are now named
+# us-nyc-wg-001.conf etc. (per-server) rather than us-nyc.conf (per-city).
+# If the requested VPN_REGION matches an existing .conf, use it. Otherwise
+# pick the first available .conf alphabetically — works whether the pool
+# is 5 or 205 regions.
+REGION="${VPN_REGION:-}"
+if [[ -z "$REGION" ]] || [[ ! -f "/etc/wireguard/${REGION}.conf" ]]; then
+  FIRST_CONF=$(sudo ls /etc/wireguard/ 2>/dev/null | grep '\.conf$' | head -1)
+  if [[ -n "$FIRST_CONF" ]]; then
+    REGION="${FIRST_CONF%.conf}"
+    log "VPN_REGION='${VPN_REGION:-<unset>}' not available — falling back to first config: $REGION"
+  fi
+fi
 
 # ─── Step 1: Baseline IP (pre-VPN) ───────────────────────────────────
 BASELINE_IP=""

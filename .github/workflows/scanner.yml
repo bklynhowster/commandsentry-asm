@@ -283,7 +283,13 @@ jobs:
         id: vpn
         if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
         env:
-          VPN_REGION: ${{ vars.SCANNER_VPN_REGION || 'us-nyc' }}
+          # Leave VPN_REGION empty by default — vpn_bringup.sh picks the
+          # first available .conf alphabetically when unset. With the
+          # 205-region pool, hardcoding a single starting region (us-nyc)
+          # would always start at us-nyc-wg-001 which we don't want.
+          # SCANNER_VPN_REGION can still be set as a workflow var to pin
+          # a specific bring-up region for debugging.
+          VPN_REGION: ${{ vars.SCANNER_VPN_REGION || '' }}
         run: scripts/scanner/vpn_bringup.sh
 
       # ─── Dispatch to tier-specific runner ──────────────────────────
