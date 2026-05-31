@@ -79,6 +79,11 @@ on:
         required: false
         default: false
         type: boolean
+      threshold_probe_safe_only:
+        description: 'In THRESHOLD PROBE MODE, replace the standard 5-chunk plan with 5 identical chunks of `medium,tech` templates (the only chunk that did NOT trigger bans in scans #82+#87). If all 5 pass post-check, template content is confirmed as the ban trigger. Requires threshold_probe_mode=true.'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -310,6 +315,11 @@ jobs:
           # uses a per-chunk rate ladder + post-chunk healthchecks to map
           # the rate-to-ban threshold (skips nikto/ffuf for isolation).
           THRESHOLD_PROBE_MODE: ${{ github.event.inputs.threshold_probe_mode }}
+          # When threshold_probe_safe_only ALSO true, all 5 chunks use the
+          # `medium,tech` template tag — the only chunk that didn't trigger
+          # bans in scans #82+#87. Isolates whether template content is
+          # the actual ban trigger.
+          THRESHOLD_PROBE_SAFE_ONLY: ${{ github.event.inputs.threshold_probe_safe_only }}
         run: |
           python scripts/scanner/run_medium.py /tmp/scan_descriptor.json
 

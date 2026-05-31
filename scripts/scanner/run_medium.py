@@ -172,6 +172,13 @@ ROTATION_REGIONS = _load_rotation_regions()
 # Or set as a step env var in scanner.yml's "Run Medium tier" step.
 THRESHOLD_PROBE_MODE = os.environ.get("THRESHOLD_PROBE_MODE", "").lower() in ("true", "1", "yes")
 
+# When THRESHOLD_PROBE_SAFE_ONLY=true (only meaningful WITH probe mode on),
+# all 5 chunks use the `medium,tech` template tag — the one chunk that
+# survived scans #82 + #87 without banning its IP. Confirms that the
+# template content is the trigger, not rate or fingerprint. If all 5
+# chunks come back HTTP 200 post-chunk, we have the smoking gun.
+THRESHOLD_PROBE_SAFE_ONLY = os.environ.get("THRESHOLD_PROBE_SAFE_ONLY", "").lower() in ("true", "1", "yes")
+
 # Per-chunk rate ladder when probe mode is active. Brackets the current
 # default (30) below and above so a single scan maps the threshold curve.
 THRESHOLD_PROBE_RATE_LADDER = [5, 15, 30, 50, 100]
@@ -494,20 +501,35 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
     rate-to-ban behavior in a single scan.
     """
     if THRESHOLD_PROBE_MODE:
-        log("→ nuclei (THRESHOLD PROBE MODE — rate ladder per chunk)")
-        log(f"  rate ladder: {THRESHOLD_PROBE_RATE_LADDER} req/s (one per chunk)")
+        if THRESHOLD_PROBE_SAFE_ONLY:
+            log("→ nuclei (THRESHOLD PROBE MODE — SAFE-ONLY: all 5 chunks use medium,tech)")
+            log(f"  rate ladder: {THRESHOLD_PROBE_RATE_LADDER} req/s (one per chunk)")
+            log("  isolating template-content variable — if all 5 chunks pass post-check,")
+            log("  template paths are confirmed as the ban trigger (not rate / not fingerprint)")
+        else:
+            log("→ nuclei (THRESHOLD PROBE MODE — rate ladder per chunk)")
+            log(f"  rate ladder: {THRESHOLD_PROBE_RATE_LADDER} req/s (one per chunk)")
     else:
         log("→ nuclei (chunked with mid-scan rotation)")
     base_url = f"https://{ctx.hostname}"
 
     # Chunk plan: each tuple is (severity_filter, tag_filter, description)
-    chunks = [
-        ("critical,high", None,            "critical + high severity (broad)"),
-        ("medium",        "cve",           "medium CVE templates"),
-        ("medium",        "wordpress,cms", "WordPress/CMS misconfig"),
-        ("medium",        "exposure,config", "config + secret exposure"),
-        ("medium",        "tech",          "tech-stack-specific"),
-    ]
+    if THRESHOLD_PROBE_MODE and THRESHOLD_PROBE_SAFE_ONLY:
+        # All 5 chunks use the only template tag that didn't trigger bans
+        # in scans #82 + #87. If this still gets banned, template content
+        # is NOT the trigger and we need to look elsewhere.
+        chunks = [
+            ("medium", "tech", f"tech-stack-specific (safe-only probe #{i+1}/5)")
+            for i in range(5)
+        ]
+    else:
+        chunks = [
+            ("critical,high", None,            "critical + high severity (broad)"),
+            ("medium",        "cve",           "medium CVE templates"),
+            ("medium",        "wordpress,cms", "WordPress/CMS misconfig"),
+            ("medium",        "exposure,config", "config + secret exposure"),
+            ("medium",        "tech",          "tech-stack-specific"),
+        ]
 
     for i, (sev, tag, desc) in enumerate(chunks):
         # Layer 1: pre-chunk healthcheck
