@@ -205,8 +205,7 @@ jobs:
           if [ -n "$EXISTING" ]; then
             EXIST_QUEUE_ID="${EXISTING%%|*}"
             EXIST_STATUS="${EXISTING##*|}"
-            echo "::warning::Asset $ASSET_ID already has an active queue row "\
-"($EXIST_STATUS, queue_id=$EXIST_QUEUE_ID). Skipping INSERT — the existing row will be claimed by poll_queue."
+            echo "::warning::Asset $ASSET_ID already has an active queue row ($EXIST_STATUS, queue_id=$EXIST_QUEUE_ID). Skipping INSERT — the existing row will be claimed by poll_queue."
           else
             psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
               insert into public.scan_queue
