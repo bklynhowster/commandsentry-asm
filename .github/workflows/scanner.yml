@@ -94,6 +94,16 @@ on:
         required: false
         default: '1800'
         type: string
+      stealth_ua:
+        description: 'STEP 1 of the two-step diagnostic (post-advisor-brief audit 2026-05-31 PM). Pins User-Agent to a single Chrome/131 string (matches Mac stringent script line 95) + drops nuclei rate to 2 req/s. Tests: does cloud nuclei broad templates survive on FortiGate when it presents as a browser at the same gentle rate the Mac uses?'
+        required: false
+        default: false
+        type: boolean
+      crawl_first_mode:
+        description: 'STEP 2 of the two-step diagnostic (use only if STEP 1 with stealth_ua=true bans). Runs katana FIRST to crawl the target, then nuclei against the discovered URL list ONLY — skips template-driven path enumeration entirely so the scanner never requests /wp-login, /admin, /.env, etc. unless the crawl found them. Mirrors what the Mac stringent scan actually does (Pass 1 against 529 crawled URLs). Composable with stealth_ua.'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -337,6 +347,14 @@ jobs:
           # should also let cloud scans survive.
           PATIENT_MODE: ${{ github.event.inputs.patient_mode }}
           PATIENT_BAN_COOLDOWN_S: ${{ github.event.inputs.patient_ban_cooldown_s }}
+          # STEP 1 of the two-step diagnostic (post-advisor-brief audit
+          # 2026-05-31 PM). Pin Chrome/131 UA + rate-2. Tests whether
+          # browser-shaped requests at Mac rate survive FortiGate.
+          STEALTH_UA: ${{ github.event.inputs.stealth_ua }}
+          # STEP 2 — only useful if STEP 1 bans. Runs katana preflight,
+          # then nuclei scans only the crawled URL list (no path enum).
+          # Composable with STEALTH_UA.
+          CRAWL_FIRST_MODE: ${{ github.event.inputs.crawl_first_mode }}
         run: |
           python scripts/scanner/run_medium.py /tmp/scan_descriptor.json
 

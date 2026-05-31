@@ -99,6 +99,10 @@ REAL_BROWSER_UAS = [
 ]
 
 def pick_ua() -> str:
+    if STEALTH_UA:
+        # Pin the single Chrome/131 UA — match the Mac stringent script
+        # exactly so FortiGate sees identical fingerprint across requests.
+        return STEALTH_FIXED_UA
     return random.choice(REAL_BROWSER_UAS)
 
 
@@ -206,6 +210,38 @@ PATIENT_INTER_CHUNK_DELAY_S = int(os.environ.get("PATIENT_INTER_CHUNK_DELAY_S", 
 
 # Rate-limit override when PATIENT_MODE is true. Matches Mac runbook.
 PATIENT_RATE_LIMIT = int(os.environ.get("PATIENT_RATE_LIMIT", "10"))
+
+# ─── Stealth UA mode (advisor-brief audit fallout, 2026-05-31 PM) ──────
+# Mirrors the Mac stringent script line 94: "Browser-like headers —
+# looks authenticated, not like a scanner." Pins User-Agent to a single
+# Chrome/131 string (vs our randomized pool) and drops nuclei rate to 2
+# (vs PATIENT's 10, vs default 30). Step 1 of the two-step diagnostic
+# test — Howie's refinement of my one-step proposal so we can isolate
+# UA-vs-rate-vs-content as the surviving lever instead of flipping
+# multiple variables at once.
+STEALTH_UA = os.environ.get("STEALTH_UA", "").lower() in ("true", "1", "yes")
+STEALTH_RATE_LIMIT = int(os.environ.get("STEALTH_RATE_LIMIT", "2"))
+# Pinned UA matches the Mac runbook test-stringent-retest-2026-05-14.sh
+# line 95 exactly. If we want to vary later, env-override-able.
+STEALTH_FIXED_UA = os.environ.get(
+    "STEALTH_FIXED_UA",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+)
+
+# ─── Crawl-first mode (step 2 of the two-step diagnostic) ──────────────
+# When true, runs katana to crawl the target FIRST, captures the URL
+# list, then invokes nuclei with -list against the crawled URLs instead
+# of -u target. Skips template-driven path enumeration entirely — the
+# scanner never requests /wp-login, /admin, /.env, etc. unless katana
+# discovered them via real links. This is what the Mac stringent script
+# actually does (line: `Pass 1: critical+high only, rps=2, c=1, against
+# 529 URLs`). Composable with STEALTH_UA — typical use is both together.
+CRAWL_FIRST_MODE = os.environ.get("CRAWL_FIRST_MODE", "").lower() in ("true", "1", "yes")
+# katana depth cap. Mac uses default (3). Bound it to keep crawl quick.
+CRAWL_DEPTH = int(os.environ.get("CRAWL_DEPTH", "3"))
+# katana wall (seconds). Crawl runs once at scan start, so budget enough.
+CRAWL_WALL_S = int(os.environ.get("CRAWL_WALL_S", "300"))
 # Match the regions for which we've shipped WireGuard configs in the
 # vpn-tools GH release. Add more by generating + uploading more confs.
 
@@ -431,9 +467,56 @@ def discover_target_urls(ctx: ScanContext) -> list[str]:
     return [base]
 
 
+def run_katana_crawl(ctx: ScanContext, base_url: str) -> str | None:
+    """Run katana against the target ONCE at scan start to produce a URL
+    list. Used by CRAWL_FIRST_MODE to scope nuclei to crawled URLs only
+    (no template-driven path enumeration that would hit /wp-login,
+    /admin, /.env and trip FortiGate bot-trap signatures).
+
+    Returns the path to a file containing one URL per line, or None on
+    failure (caller falls back to template-driven scanning).
+    """
+    ctx.tools_run.append("katana")
+    ua = pick_ua()
+    out_file = f"/tmp/katana_urls_{ctx.scan_run_id}.txt"
+    cmd = [
+        "katana",
+        "-u", base_url,
+        "-d", str(CRAWL_DEPTH),
+        "-H", f"User-Agent: {ua}",
+        "-silent",
+        "-jc",  # include javascript-discovered endpoints
+        "-o", out_file,
+    ]
+    # Pace the crawl on FortiGate targets — STEALTH_UA implies gentleness.
+    if STEALTH_UA or PATIENT_MODE:
+        cmd += ["-rate-limit", "10"]
+    log(f"crawl-first: katana crawling {base_url} (depth={CRAWL_DEPTH}, wall={CRAWL_WALL_S}s)")
+    rc, stdout, stderr = run_cmd(cmd, timeout=CRAWL_WALL_S)
+    if rc != 0:
+        log(f"  katana rc={rc} — crawl failed, falling back to template-driven mode")
+        log(f"  stderr: {stderr[:300]}")
+        return None
+    # Count URLs discovered + log a preview
+    try:
+        with open(out_file) as f:
+            urls = [u.strip() for u in f if u.strip()]
+        log(f"  katana discovered {len(urls)} URL(s)")
+        if len(urls) == 0:
+            log("  empty crawl — falling back to template-driven mode")
+            return None
+        # Persist as artifact for forensics
+        ctx.artifacts.append(("katana", "text", "\n".join(urls)))
+        return out_file
+    except Exception as e:
+        log(f"  could not read katana output: {e}")
+        return None
+
+
 def run_nuclei_chunk(ctx: ScanContext, target_url: str,
                      severity_filter: str, tag_filter: str | None,
-                     rate_override: int | None = None) -> tuple[int, int, list[int]]:
+                     rate_override: int | None = None,
+                     url_list_file: str | None = None) -> tuple[int, int, list[int]]:
     """Run one nuclei chunk. Returns (rc, match_count, response_codes_observed).
 
     response_codes_observed is populated from nuclei's stats output if
@@ -441,14 +524,26 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
 
     rate_override: if set, used instead of NUCLEI_RATE_LIMIT. Threshold
     probe mode passes a per-chunk rate from the ladder.
+
+    url_list_file: if set, nuclei runs with -list <file> against the
+    crawled URLs instead of -u target_url. CRAWL_FIRST_MODE uses this
+    to avoid template-driven path enumeration on WAF-sensitive targets.
     """
     ctx.tools_run.append(f"nuclei[{severity_filter}{':'+tag_filter if tag_filter else ''}]")
     ua = pick_ua()
-    effective_rate = rate_override if rate_override is not None else NUCLEI_RATE_LIMIT
+    if rate_override is not None:
+        effective_rate = rate_override
+    elif STEALTH_UA:
+        effective_rate = STEALTH_RATE_LIMIT
+    else:
+        effective_rate = NUCLEI_RATE_LIMIT
 
-    cmd = [
-        "nuclei",
-        "-u", target_url,
+    cmd = ["nuclei"]
+    if url_list_file:
+        cmd += ["-list", url_list_file]
+    else:
+        cmd += ["-u", target_url]
+    cmd += [
         "-rate-limit", str(effective_rate),
         "-c", str(NUCLEI_CONCURRENCY),
         "-timeout", str(NUCLEI_TIMEOUT_S),
@@ -542,7 +637,22 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         log(f"  up to ~{((NUCLEI_CHUNK_WALL_S * 5 + PATIENT_BAN_COOLDOWN_S * 4) // 60)} min if every chunk bans")
     else:
         log("→ nuclei (chunked with mid-scan rotation)")
+    if STEALTH_UA:
+        log(f"  STEALTH_UA on: pinned UA + rate {STEALTH_RATE_LIMIT} req/s "
+            f"(overrides chunk rate unless probe-mode active)")
     base_url = f"https://{ctx.hostname}"
+
+    # CRAWL_FIRST_MODE: run katana once at scan start, then pass the URL
+    # list to every nuclei chunk via -list. Skips template-driven path
+    # enumeration entirely. Step 2 of Howie's two-step diagnostic.
+    url_list_file = None
+    if CRAWL_FIRST_MODE:
+        log("→ CRAWL_FIRST_MODE on — running katana preflight to build URL list")
+        url_list_file = run_katana_crawl(ctx, base_url)
+        if url_list_file:
+            log(f"  nuclei chunks will run against -list {url_list_file}")
+        else:
+            log("  katana failed or empty — chunks will fall back to -u target_url")
 
     # Chunk plan: each tuple is (severity_filter, tag_filter, description)
     if THRESHOLD_PROBE_MODE and THRESHOLD_PROBE_SAFE_ONLY:
@@ -607,6 +717,7 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         rc, matches, _ = run_nuclei_chunk(
             ctx, base_url, sev, tag,
             rate_override=rate_for_chunk if (THRESHOLD_PROBE_MODE or PATIENT_MODE) else None,
+            url_list_file=url_list_file,
         )
         log(f"  chunk {i+1} done: {matches} match(es), rc={rc}")
 
