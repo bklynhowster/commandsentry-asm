@@ -1,0 +1,215 @@
+name: VPN egress reachability test
+
+# Probe-only workflow — NO scanning. Brings up each WireGuard region one
+# at a time, captures egress IP + target HTTP response, tears down,
+# moves on. Used to characterize whether our Mullvad US pool is on a
+# durable FortiGate ban list or just rate-limited.
+#
+# Test protocol (per [[61 - Scan 73 Exhaustive Log Analysis]] in Obsidian):
+#   Test A — cold baseline: fire with no recent scans (12h+ since last scan)
+#   Test B — post-scan: fire immediately after a Medium scan completes
+#   Test C — recovery curve: fire at 5/10/15/20/30/60 min intervals after a scan
+#
+# Outcomes determine action:
+#   All regions 200 cold + 0 post-scan + recovery in <30 min → short-term rate limit
+#   All regions 0 cold → durable IP/ASN block; swap VPN provider
+#   Mixed cold → per-IP burns; regenerate Mullvad keys for affected regions
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target hostname (no protocol)'
+        required: false
+        default: 'test.commandcommcentral.com'
+        type: string
+      cooldown_seconds:
+        description: 'Seconds to sleep between region probes'
+        required: false
+        default: '60'
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  reach-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/bklynhowster/commandsentry-scanner:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: >-
+        --cap-add=NET_ADMIN
+        --device=/dev/net/tun
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify baked-in toolchain
+        run: |
+          for t in wireguard-go wg gh curl jq python3; do
+            command -v "$t" >/dev/null 2>&1 \
+              || { echo "::error::missing baked tool: $t"; exit 1; }
+          done
+          echo "✓ baked toolchain present"
+
+      - name: Fetch + patch WireGuard configs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/wg-download
+          gh release download vpn-tools \
+            --repo bklynhowster/commandsentry-asm \
+            --pattern 'mullvad-wg-configs.tar.gz' \
+            --dir /tmp/wg-download
+          sudo mkdir -p /etc/wireguard
+          sudo tar xzf /tmp/wg-download/mullvad-wg-configs.tar.gz -C /tmp/wg-download
+          sudo cp /tmp/wg-download/wg-configs/*.conf /etc/wireguard/
+          sudo chmod 600 /etc/wireguard/*.conf
+          sudo python3 scripts/scanner/patch_wg_configs.py
+          echo "WG configs ready:"
+          ls -la /etc/wireguard/
+
+      - name: Make VPN scripts executable
+        run: chmod +x scripts/scanner/*.sh
+
+      - name: Reachability probe across all regions
+        env:
+          TARGET: ${{ inputs.target }}
+          COOLDOWN: ${{ inputs.cooldown_seconds }}
+        run: |
+          REGIONS=(us-nyc us-chi us-atl us-dal us-lax)
+          RESULTS=/tmp/reachability.jsonl
+          : > "$RESULTS"
+
+          probe_region() {
+            local region="$1"
+            local ts pre_ip up_rc egress_ip target_code target_time teardown_rc
+
+            ts=$(date -u +%FT%TZ)
+            echo "═══════════════════════════════════════════════════════"
+            echo "[$ts] probing region: $region"
+            echo "═══════════════════════════════════════════════════════"
+
+            # Step 1: capture baseline (pre-VPN) egress so we know what
+            # the runner's "natural" IP is for this row.
+            pre_ip=$(curl -s --max-time 8 https://api.ipify.org 2>/dev/null || echo "<unknown>")
+            echo "  pre-VPN egress: $pre_ip"
+
+            # Step 2: chmod the config readable (per scanner.yml pattern)
+            sudo chmod 0644 "/etc/wireguard/${region}.conf"
+
+            # Step 3: bring up the tunnel via our userspace script
+            if ! sudo scripts/scanner/wg_up_userspace.sh "$region" 2>&1 | sed "s/^/  [wg-up] /"; then
+              up_rc=$?
+              echo "  ✗ wg_up_userspace.sh failed (rc=$up_rc)"
+              jq -nc \
+                --arg ts "$ts" --arg region "$region" --arg pre "$pre_ip" \
+                '{ts:$ts, region:$region, pre_vpn_ip:$pre, tunnel_up:false, egress_ip:null, target_code:null, target_time_s:null, note:"tunnel bring-up failed"}' \
+                >> "$RESULTS"
+              return
+            fi
+
+            # Step 4: confirm the tunnel routed our traffic out a new IP
+            egress_ip=$(curl -s --max-time 10 https://api.ipify.org 2>/dev/null || echo "<unknown>")
+            echo "  post-VPN egress: $egress_ip"
+
+            # Step 5: probe the target (single GET, no follow-redirects,
+            # short timeout, capture HTTP code + time)
+            local probe_out
+            probe_out=$(curl -s -o /dev/null \
+              -w '%{http_code}|%{time_total}' \
+              --max-time 15 \
+              "https://${TARGET}/" 2>/dev/null || echo "0|0")
+            target_code="${probe_out%%|*}"
+            target_time="${probe_out##*|}"
+            echo "  target ${TARGET}: HTTP $target_code in ${target_time}s"
+
+            # Step 6: teardown
+            if ! sudo scripts/scanner/vpn_teardown.sh 2>&1 | sed "s/^/  [teardown] /"; then
+              teardown_rc=$?
+              echo "  ⚠ teardown returned $teardown_rc (continuing)"
+            fi
+
+            # Step 7: log structured result
+            jq -nc \
+              --arg ts "$ts" \
+              --arg region "$region" \
+              --arg pre "$pre_ip" \
+              --arg egress "$egress_ip" \
+              --arg code "$target_code" \
+              --arg time "$target_time" \
+              '{ts:$ts, region:$region, pre_vpn_ip:$pre, tunnel_up:true, egress_ip:$egress, target_code:($code|tonumber), target_time_s:($time|tonumber)}' \
+              >> "$RESULTS"
+          }
+
+          for region in "${REGIONS[@]}"; do
+            probe_region "$region"
+            echo "  (sleeping ${COOLDOWN}s before next region)"
+            sleep "$COOLDOWN"
+          done
+
+          echo ""
+          echo "═══ Final reachability results (target: ${TARGET}) ═══"
+          jq -s '.' "$RESULTS"
+
+      - name: Build summary table
+        if: always()
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          RESULTS=/tmp/reachability.jsonl
+          [[ -s "$RESULTS" ]] || { echo "no results to summarize"; exit 0; }
+
+          {
+            echo "## VPN egress reachability — \`${TARGET}\`"
+            echo ""
+            echo "| Region | Tunnel | Egress IP | Target HTTP | Time (s) | Verdict |"
+            echo "|---|---|---|---|---|---|"
+            jq -r '
+              [.region, (.tunnel_up|tostring), (.egress_ip//"-"),
+               (.target_code|tostring), (.target_time_s|tostring),
+               (if .target_code == 200 then "✅ REACHABLE"
+                elif .target_code == 0 then "❌ BLOCKED (HTTP 0)"
+                elif .target_code >= 400 and .target_code < 500 then "⚠ WAF (\(.target_code))"
+                else "❓ \(.target_code)" end)
+              ] | "| " + (join(" | ")) + " |"
+            ' "$RESULTS"
+            echo ""
+            echo "### Aggregate"
+            echo ""
+            UP=$(jq -s '[.[] | select(.target_code == 200)] | length' "$RESULTS")
+            BLOCKED=$(jq -s '[.[] | select(.target_code == 0)] | length' "$RESULTS")
+            WAF=$(jq -s '[.[] | select(.target_code >= 400 and .target_code < 500)] | length' "$RESULTS")
+            TOTAL=$(jq -s 'length' "$RESULTS")
+            echo "- ✅ reachable (200): **$UP / $TOTAL**"
+            echo "- ❌ blocked (HTTP 0): **$BLOCKED / $TOTAL**"
+            echo "- ⚠ WAF challenge (4xx): **$WAF / $TOTAL**"
+            echo ""
+            echo "### Diagnosis hint"
+            echo ""
+            if [[ "$UP" == "$TOTAL" ]]; then
+              echo "All regions reachable cold → no durable block. If this is **Test A**, the previous scan's bans were short-term. Proceed with rate-limit characterization."
+            elif [[ "$BLOCKED" == "$TOTAL" ]]; then
+              echo "All regions blocked cold → likely Mullvad ASN-level threat-list block. Time to evaluate ProtonVPN free swap."
+            else
+              echo "Mixed result → per-IP bans. Identify the blocked regions and rotate Mullvad keys for them, OR add new regions."
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reachability log as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reachability-${{ github.run_id }}
+          path: /tmp/reachability.jsonl
+          retention-days: 30
