@@ -295,6 +295,8 @@ class ScanContext:
     queue_id: str
     intensity: str
     waf_detected: bool = False
+    waf_kind: str | None = None  # 'fortiweb', 'cloudflare', 'akamai', etc. — from wafw00f
+    tech_stack: set[str] = field(default_factory=set)  # lowercased techs from httpx -td
     findings: list[MediumFinding] = field(default_factory=list)
     tools_run: list[str] = field(default_factory=list)
     artifacts: list[tuple[str, str, str]] = field(default_factory=list)
@@ -424,6 +426,13 @@ def ensure_healthy_egress(ctx: ScanContext, max_rotations: int = 2) -> bool:
 
 # ─── WAF pre-check ──────────────────────────────────────────────────────
 def detect_waf(ctx: ScanContext) -> None:
+    """Run wafw00f. Sets ctx.waf_detected + ctx.waf_kind on hit.
+
+    waf_kind values seen in practice: 'fortiweb' (Fortinet's WAF, sits in
+    front of FortiGate-protected vhosts), 'cloudflare', 'akamai',
+    'cloudfront', 'incapsula', 'sucuri', 'wordfence' (when WP plugin
+    is the active WAF). Lowercased for downstream matching.
+    """
     ctx.tools_run.append("wafw00f")
     rc, stdout, _ = run_cmd(
         ["wafw00f", f"https://{ctx.hostname}/", "-a"],
@@ -433,11 +442,172 @@ def detect_waf(ctx: ScanContext) -> None:
     if rc != 0:
         log(f"wafw00f rc={rc} — assuming no WAF for tuning purposes")
         return
-    if re.search(r"is behind", stdout, re.IGNORECASE):
+    # Match "is behind <WAFName>" e.g. "is behind FortiWeb (Fortinet Inc.)"
+    m = re.search(r"is behind\s+([A-Za-z][A-Za-z0-9_\-]+)", stdout)
+    if m:
         ctx.waf_detected = True
-        log("WAF detected — will gate intrusive templates off")
+        ctx.waf_kind = m.group(1).lower()
+        log(f"WAF detected: {ctx.waf_kind} — will gate intrusive templates off")
     else:
         log("no WAF detected by wafw00f")
+
+
+# ─── Tech stack detection (P2.5) ───────────────────────────────────────
+def detect_tech_stack(ctx: ScanContext) -> None:
+    """Run httpx -td against the target, populate ctx.tech_stack.
+
+    Tech names httpx emits include: 'WordPress', 'Nginx', 'Apache',
+    'IIS', 'ASP.NET', 'PHP', 'jQuery', 'Cloudflare', etc. Lowercased
+    for downstream matching against the chunk-plan stack keys.
+    """
+    ctx.tools_run.append("httpx[-td]")
+    rc, stdout, stderr = run_cmd(
+        [
+            "httpx",
+            "-u", f"https://{ctx.hostname}",
+            "-td",
+            "-silent",
+            "-json",
+            "-timeout", "10",
+            "-no-color",
+        ],
+        timeout=30,
+    )
+    if rc != 0:
+        log(f"httpx tech-detect rc={rc} — skipping (chunk plan stays default)")
+        log(f"  stderr: {stderr[:200]}")
+        return
+    # httpx -json emits one JSON object per line; we asked for a single URL
+    line = stdout.strip().splitlines()[0] if stdout.strip() else ""
+    if not line:
+        log("httpx tech-detect: no output")
+        return
+    try:
+        data = json.loads(line)
+        techs = data.get("tech") or data.get("technologies") or []
+        ctx.tech_stack = {t.lower() for t in techs if isinstance(t, str)}
+        ctx.artifacts.append(("httpx_tech", "json", line))
+        log(f"tech detected: {sorted(ctx.tech_stack) if ctx.tech_stack else '<none>'}")
+    except Exception as e:
+        log(f"httpx tech-detect parse failed: {e!r}")
+
+
+# ─── Target routing — FortiGate detection (P1) ─────────────────────────
+# Hostname allowlist for known FortiGate-protected vhosts. wafw00f
+# detection is the primary signal, but a permissively-configured
+# FortiGate may not announce itself in headers. The allowlist is the
+# defensive fallback so we apply safe-only + patient defaults reliably.
+#
+# Source-of-truth: CLAUDE.md "Command hosting topology" memory +
+# 2026-05-31 audit. Update when new Command vhosts come into scope or
+# move between hosting tiers.
+FORTIGATE_HOSTNAMES: set[str] = {
+    "test.commandcommcentral.com",
+    "www.commandcommcentral.com",
+    "api.commandcommcentral.com",  # Monitor mode, but still FortiGate
+    "sciimage.com",
+    "www.sciimage.com",
+    "vpn.sciimage.com",
+    "ftp.sciimage.com",
+}
+
+# Apex domains where every subdomain is on Command's FortiGate. Cheaper
+# than enumerating every vhost; safer than relying only on wafw00f.
+FORTIGATE_APEXES: set[str] = {
+    "commandcommcentral.com",
+    "sciimage.com",
+}
+
+
+def is_fortigate_target(ctx: ScanContext) -> bool:
+    """True if the scan target sits behind Command's FortiGate.
+
+    Order of evidence:
+      1. wafw00f said so (ctx.waf_kind contains 'forti')
+      2. exact hostname match against FORTIGATE_HOSTNAMES
+      3. apex domain match against FORTIGATE_APEXES
+    """
+    if ctx.waf_kind and "forti" in ctx.waf_kind:
+        return True
+    if ctx.hostname in FORTIGATE_HOSTNAMES:
+        return True
+    # Apex / subdomain match
+    parts = ctx.hostname.split(".")
+    for i in range(len(parts)):
+        candidate = ".".join(parts[i:])
+        if candidate in FORTIGATE_APEXES:
+            return True
+    return False
+
+
+# ─── Chunk plan builder (P1 + P2.5 combined) ───────────────────────────
+def build_chunk_plan(ctx: ScanContext) -> list[tuple[str, str | None, str]]:
+    """Return the list of (severity_filter, tag_filter, description) for
+    this target's nuclei chunks.
+
+    Routing logic:
+      • THRESHOLD_PROBE_MODE+SAFE_ONLY → 5x medium,tech (existing behavior)
+      • is_fortigate_target → 5x medium,tech (safe-only, proven survives)
+      • Otherwise → stack-aware plan:
+          - Always: critical+high (broad), medium CVE, exposure/config,
+            tech baseline
+          - WordPress detected → +medium,wordpress,cms
+          - IIS/.NET detected → +medium,iis,asp,aspnet,dotnet
+          - PHP detected → +medium,php
+          - Drupal detected → +medium,drupal,cms
+          - Joomla detected → +medium,joomla,cms
+    """
+    # PROBE+SAFE_ONLY still has its own plan
+    if THRESHOLD_PROBE_MODE and THRESHOLD_PROBE_SAFE_ONLY:
+        return [
+            ("medium", "tech", f"tech-stack (safe-only probe #{i+1}/5)")
+            for i in range(5)
+        ]
+
+    # P1: FortiGate → safe-only. Broad templates proven to ban every
+    # time on these targets regardless of patience/UA/crawl-first; only
+    # medium,tech reliably completes. Five identical safe chunks rotate
+    # IPs for breadth-via-rotation rather than breadth-via-templates.
+    if is_fortigate_target(ctx):
+        log(f"  target_class=FortiGate (waf_kind={ctx.waf_kind}, "
+            f"hostname_match={ctx.hostname in FORTIGATE_HOSTNAMES}) → safe-only plan")
+        return [
+            ("medium", "tech", f"FortiGate safe-only chunk {i+1}/5")
+            for i in range(5)
+        ]
+
+    # P2.5: stack-aware plan for non-FortiGate targets
+    stack = ctx.tech_stack
+    chunks: list[tuple[str, str | None, str]] = [
+        ("critical,high", None,            "critical + high severity (broad)"),
+        ("medium",        "cve",           "medium CVE templates"),
+    ]
+    # Stack-specific chunks — only fire templates that could possibly match
+    if any(t in stack for t in ("wordpress", "wp")):
+        chunks.append(("medium", "wordpress,cms", "WordPress/CMS misconfig"))
+    if any(t in stack for t in ("iis", "asp.net", "aspnet", "asp", "dotnet", ".net", "microsoft-iis")):
+        chunks.append(("medium", "iis,asp,aspnet,dotnet,microsoft,windows", "IIS/.NET stack"))
+    if "php" in stack:
+        chunks.append(("medium", "php", "PHP stack"))
+    if "drupal" in stack:
+        chunks.append(("medium", "drupal,cms", "Drupal/CMS misconfig"))
+    if "joomla" in stack:
+        chunks.append(("medium", "joomla,cms", "Joomla/CMS misconfig"))
+    # Always-on closers
+    chunks.append(("medium", "exposure,config", "config + secret exposure"))
+    chunks.append(("medium", "tech",            "tech-stack-specific"))
+    log(f"  target_class=standard (stack={sorted(stack) or '<unknown>'}) → "
+        f"{len(chunks)}-chunk plan")
+    return chunks
+
+
+def is_effective_patient_mode(ctx: ScanContext) -> bool:
+    """Patient mode auto-on for FortiGate targets even if workflow input
+    is false. Operator can still disable via PATIENT_MODE_OFF=true env.
+    """
+    if os.environ.get("PATIENT_MODE_OFF", "").lower() in ("true", "1", "yes"):
+        return False
+    return PATIENT_MODE or is_fortigate_target(ctx)
 
 
 # ─── nuclei (chunked) ──────────────────────────────────────────────────
@@ -488,8 +658,9 @@ def run_katana_crawl(ctx: ScanContext, base_url: str) -> str | None:
         "-jc",  # include javascript-discovered endpoints
         "-o", out_file,
     ]
-    # Pace the crawl on FortiGate targets — STEALTH_UA implies gentleness.
-    if STEALTH_UA or PATIENT_MODE:
+    # Pace the crawl on FortiGate targets — STEALTH_UA + auto-patient
+    # for FortiGate-hostnames both imply gentleness.
+    if STEALTH_UA or is_effective_patient_mode(ctx):
         cmd += ["-rate-limit", "10"]
     log(f"crawl-first: katana crawling {base_url} (depth={CRAWL_DEPTH}, wall={CRAWL_WALL_S}s)")
     rc, stdout, stderr = run_cmd(cmd, timeout=CRAWL_WALL_S)
@@ -619,6 +790,9 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
     is run on the SAME egress IP before rotating away — so we can map
     rate-to-ban behavior in a single scan.
     """
+    # Effective mode resolution. PATIENT_MODE may be inherited from the
+    # workflow input OR auto-enabled by target class (FortiGate → on).
+    patient_effective = is_effective_patient_mode(ctx)
     if THRESHOLD_PROBE_MODE:
         if THRESHOLD_PROBE_SAFE_ONLY:
             log("→ nuclei (THRESHOLD PROBE MODE — SAFE-ONLY: all 5 chunks use medium,tech)")
@@ -628,8 +802,9 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         else:
             log("→ nuclei (THRESHOLD PROBE MODE — rate ladder per chunk)")
             log(f"  rate ladder: {THRESHOLD_PROBE_RATE_LADDER} req/s (one per chunk)")
-    elif PATIENT_MODE:
-        log("→ nuclei (PATIENT MODE — mirrors Mac runbook tuning)")
+    elif patient_effective:
+        why = "workflow input" if PATIENT_MODE else f"auto-on for FortiGate target"
+        log(f"→ nuclei (PATIENT MODE — {why} — mirrors Mac runbook tuning)")
         log(f"  rate-limit: {PATIENT_RATE_LIMIT} req/s (vs default {NUCLEI_RATE_LIMIT})")
         log(f"  inter-chunk delay: {PATIENT_INTER_CHUNK_DELAY_S}s")
         log(f"  ban cooldown: {PATIENT_BAN_COOLDOWN_S}s ({PATIENT_BAN_COOLDOWN_S//60} min) before rotating")
@@ -654,23 +829,10 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         else:
             log("  katana failed or empty — chunks will fall back to -u target_url")
 
-    # Chunk plan: each tuple is (severity_filter, tag_filter, description)
-    if THRESHOLD_PROBE_MODE and THRESHOLD_PROBE_SAFE_ONLY:
-        # All 5 chunks use the only template tag that didn't trigger bans
-        # in scans #82 + #87. If this still gets banned, template content
-        # is NOT the trigger and we need to look elsewhere.
-        chunks = [
-            ("medium", "tech", f"tech-stack-specific (safe-only probe #{i+1}/5)")
-            for i in range(5)
-        ]
-    else:
-        chunks = [
-            ("critical,high", None,            "critical + high severity (broad)"),
-            ("medium",        "cve",           "medium CVE templates"),
-            ("medium",        "wordpress,cms", "WordPress/CMS misconfig"),
-            ("medium",        "exposure,config", "config + secret exposure"),
-            ("medium",        "tech",          "tech-stack-specific"),
-        ]
+    # P1 + P2.5: target-class + stack-aware chunk plan. See build_chunk_plan()
+    # for routing logic. PROBE+SAFE_ONLY still gets its diagnostic-specific
+    # 5-chunk plan inside the builder.
+    chunks = build_chunk_plan(ctx)
 
     for i, (sev, tag, desc) in enumerate(chunks):
         # Layer 1: pre-chunk healthcheck
@@ -685,15 +847,16 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         else:
             candidates = [NUCLEI_RATE_LIMIT]
             active_modes = []
-            if PATIENT_MODE:
+            if patient_effective:
                 candidates.append(PATIENT_RATE_LIMIT)
-                active_modes.append("PATIENT")
+                # Distinguish auto-on from workflow-input for log clarity
+                active_modes.append("PATIENT" if PATIENT_MODE else "PATIENT-auto")
             if STEALTH_UA:
                 candidates.append(STEALTH_RATE_LIMIT)
                 active_modes.append("STEALTH")
             rate_for_chunk = min(candidates)
             mode_label = f"{'+'.join(active_modes) or 'DEFAULT'} @ {rate_for_chunk}"
-        if active_modes_or_probe := (THRESHOLD_PROBE_MODE or PATIENT_MODE or STEALTH_UA):
+        if active_modes_or_probe := (THRESHOLD_PROBE_MODE or patient_effective or STEALTH_UA):
             log(f"chunk {i+1}/{len(chunks)} [{mode_label} req/s]: {desc}")
         else:
             log(f"chunk {i+1}/{len(chunks)}: {desc}")
@@ -719,7 +882,7 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # a baseline health code RIGHT BEFORE the chunk runs.
         probe_egress_ip = ctx.egress_ips_seen[-1] if ctx.egress_ips_seen else None
         pre_code = None
-        if THRESHOLD_PROBE_MODE or PATIENT_MODE:
+        if THRESHOLD_PROBE_MODE or patient_effective:
             _, pre_code = healthcheck(ctx)
             tag_lbl = "PROBE" if THRESHOLD_PROBE_MODE else "PATIENT"
             log(f"  {tag_lbl} pre-chunk healthcheck on {probe_egress_ip}: HTTP {pre_code}")
@@ -727,7 +890,7 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # Layer 2: run the chunk
         rc, matches, _ = run_nuclei_chunk(
             ctx, base_url, sev, tag,
-            rate_override=rate_for_chunk if (THRESHOLD_PROBE_MODE or PATIENT_MODE or STEALTH_UA) else None,
+            rate_override=rate_for_chunk if (THRESHOLD_PROBE_MODE or patient_effective or STEALTH_UA) else None,
             url_list_file=url_list_file,
         )
         log(f"  chunk {i+1} done: {matches} match(es), rc={rc}")
@@ -736,7 +899,7 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # In PROBE mode this is data-gathering. In PATIENT mode it gates
         # whether we trigger the ban-cooldown sleep before rotating.
         post_banned = False
-        if THRESHOLD_PROBE_MODE or PATIENT_MODE:
+        if THRESHOLD_PROBE_MODE or patient_effective:
             _, post_code = healthcheck(ctx)
             post_banned = post_code not in (200, 301, 302, 303, 307, 308, 401)
             tag_lbl = "PROBE" if THRESHOLD_PROBE_MODE else "PATIENT"
@@ -758,7 +921,7 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # before rotating — mirrors Mac runbook's "wait 30 min, rotate
         # egress, resume" pattern. The hypothesis is that immediate
         # rotation accelerates cross-IP reputation tracking.
-        if PATIENT_MODE and post_banned and i < len(chunks) - 1:
+        if patient_effective and post_banned and i < len(chunks) - 1:
             log(f"  PATIENT: banned IP detected — sleeping {PATIENT_BAN_COOLDOWN_S}s "
                 f"({PATIENT_BAN_COOLDOWN_S//60} min) before rotation")
             ctx.ban_events.append({
@@ -775,7 +938,7 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
             rotate_vpn(ctx)
             # PATIENT: short delay regardless of ban state — mirrors
             # the 5-second WAF_DELAY between phases in deep-probe-v2.sh
-            if PATIENT_MODE:
+            if patient_effective:
                 log(f"  PATIENT: {PATIENT_INTER_CHUNK_DELAY_S}s inter-chunk delay")
                 time.sleep(PATIENT_INTER_CHUNK_DELAY_S)
 
@@ -1111,6 +1274,10 @@ def write_scan_metadata_artifact(conn, ctx: ScanContext, Json,
         "hostname": ctx.hostname,
         "tools_run": ctx.tools_run,
         "waf_detected": ctx.waf_detected,
+        "waf_kind": ctx.waf_kind,
+        "tech_stack": sorted(ctx.tech_stack),
+        "target_class": "fortigate" if is_fortigate_target(ctx) else "standard",
+        "patient_mode_effective": is_effective_patient_mode(ctx),
         "total_requests": ctx.total_requests,
         "response_codes": dict(ctx.response_codes),
         "rotation_count": ctx.rotation_count,
@@ -1206,6 +1373,8 @@ def run(descriptor_path: str, dsn: str) -> int:
         # ─── Phase 1: WAF detection ─────────────────────────────────
         log("→ detect_waf")
         detect_waf(ctx)
+        log("→ detect_tech_stack")
+        detect_tech_stack(ctx)
 
         # ─── Phase 2: nuclei (chunked + rotation) ──────────────────
         if ctx.total_requests < MAX_REQUESTS_TOTAL:
