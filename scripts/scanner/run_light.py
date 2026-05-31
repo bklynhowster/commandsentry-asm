@@ -518,6 +518,177 @@ def check_csp_nonce(ctx: ScanContext) -> None:
             ))
 
 
+# ─── Behavioral probes (P-behavioral-probes, 2026-05-31 PM) ─────────────
+#
+# Targeted HTTP probes that detect bespoke / stealth / app-logic findings
+# that neither nuclei templates nor version-fingerprint APIs can catch.
+# Each probe is a small function that does specific HTTP requests and
+# appends a LightFinding if its match conditions are satisfied.
+#
+# Three classes of finding this track exists to cover (advisor brief #3,
+# 2026-05-31 PM):
+#   1. Stealth-by-design plugins (WPS Hide Login — hides itself from
+#      fingerprinting; wpvulnerability.net can't see it)
+#   2. Bespoke app-logic vulns (CCC class — hardcoded keys, static
+#      nonces, auth bypass) — already partially covered by check_csp_nonce
+#      and check_methods, behavioral_probes is the home for new ones
+#   3. HTTP-method / WAF-bypass classes (URL-encoded traversal, etc.)
+#
+# Design rules:
+#   - Each probe self-gates: if the target doesn't look like its
+#     applicable surface (e.g. non-WordPress site for a WP-specific
+#     probe), the probe returns without appending a finding.
+#   - Each probe is single-purpose (one finding type, one match condition).
+#     Don't conflate multiple checks in one probe — makes testing painful.
+#   - Probes are LOW-VOLUME (≤5 requests each). Light tier hard caps
+#     total request count across all checks.
+#   - Probe registry below grows over time as we accumulate the inventory
+#     from Mac deep-probe-v2.sh + CCC scan history + future findings.
+
+def probe_wps_hide_login_bypass(ctx: ScanContext) -> None:
+    """CVE-2024-2473 — WPS Hide Login plugin bypass via ?action=postpass.
+
+    Detection path verified 2026-05-31 PM via direct curl probe against
+    commandmarketinginnovations.com (Mac's intensive-scan-2026-05-04
+    finding F-10). Two-step probe:
+
+      Step 1: GET /wp-login.php — if 403/404, hiding plugin is active.
+              If 200, no hiding plugin = no vuln to bypass = no finding.
+      Step 2: GET /wp-admin/?action=postpass — if 302 to wp-login, the
+              hidden login URL is being disclosed via the bypass.
+
+    Both must match to flag. Single-step matching produces false positives
+    on bare WordPress (wp-admin always redirects to wp-login for unauthed
+    users; the signal is "wp-login was hidden AND bypass disclosed it").
+
+    Why nuclei misses this: existing cve-2024-2473 template uses a POST
+    to /wp-login.php?action=postpass + body match — different request
+    shape than the GET-based detection. On sites where the POST path
+    doesn't trigger the matchable response, the template returns 0
+    matches even though the GET-based bypass is demonstrably present.
+    Behavioral probe catches what the template can't.
+    """
+    ctx.tools_run.append("probe_wps_hide_login_bypass")
+
+    # NB on User-Agent strategy (verified empirically against CMI 2026-05-31):
+    # WPS Hide Login can be UA-aware. With a real-browser UA it returns 200
+    # on wp-login.php (lets browsers through). With a scanner-shape UA it
+    # returns 403 (the hiding behavior). Both reveal different things:
+    #   - Browser UA on wp-login: 200 → can't distinguish "no plugin" from
+    #     "plugin lets browsers through" — masks vulnerability presence
+    #   - Scanner UA on wp-login: 403 → plugin is actively hiding the URL
+    #     (or the host returns 403 for some other reason — combined with
+    #     step 2 we get the full signal)
+    #
+    # So step 1 deliberately uses a minimal "Mozilla/5.0" UA to TRIGGER
+    # the hiding plugin's gate. If hiding is active, we see 403/404.
+    # Step 2 uses a real-browser UA to confirm the bypass works for the
+    # most-permissive client class — same attack pattern a real attacker
+    # would use.
+    SCANNER_UA = "Mozilla/5.0"  # bare-minimum UA — triggers hiding plugin's gate
+    BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+
+    # Step 1: is wp-login.php hidden from scanner-shape traffic?
+    rc1, stdout1, _ = run_cmd(
+        ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+         "--max-time", "10",
+         "-A", SCANNER_UA,
+         f"https://{ctx.hostname}/wp-login.php"],
+        timeout=12,
+    )
+    if rc1 != 0:
+        return
+    try:
+        wp_login_code = int(stdout1.strip())
+    except ValueError:
+        return
+    if wp_login_code not in (403, 404):
+        # Login is openly accessible even to scanner UAs — no hiding
+        # plugin (or plugin is inactive). No vuln to bypass.
+        return
+
+    # Step 2: does ?action=postpass disclose the login URL to a
+    # browser-shape request?
+    rc2, stdout2, _ = run_cmd(
+        ["curl", "-s", "-I", "--max-time", "10",
+         "-A", BROWSER_UA,
+         f"https://{ctx.hostname}/wp-admin/?action=postpass"],
+        timeout=12,
+    )
+    if rc2 != 0:
+        return
+    # Look for 302 + Location header pointing to wp-login.php
+    status_match = re.search(r"^HTTP/[\d.]+\s+(\d{3})", stdout2, re.MULTILINE)
+    location_match = re.search(r"^location:\s*(\S+)", stdout2, re.IGNORECASE | re.MULTILINE)
+    if not status_match or not location_match:
+        return
+    status_code = int(status_match.group(1))
+    location = location_match.group(1)
+    if status_code != 302 or "wp-login.php" not in location:
+        return
+
+    # Both steps confirmed — flag the finding.
+    ctx.findings.append(LightFinding(
+        check_name="wps-hide-login-bypass-cve-2024-2473",
+        title="WPS Hide Login bypass — hidden login URL disclosed via ?action=postpass",
+        severity="MODERATE",
+        category="auth",
+        description=(
+            f"The WPS Hide Login plugin appears active on {ctx.hostname} "
+            f"(direct /wp-login.php access returns HTTP {wp_login_code}), "
+            f"but the hidden login URL is disclosed via the "
+            f"/wp-admin/?action=postpass redirect bypass — the server "
+            f"responded with 302 → {location[:200]}. This is CVE-2024-2473 "
+            f"(WPS Hide Login ≤ 1.9.15.2). The bypass defeats the security-"
+            f"through-obscurity control and enables credential stuffing / "
+            f"brute force against the now-disclosed login URL. "
+            f"Remediation: update WPS Hide Login to a version newer than "
+            f"1.9.15.2; if already on latest and the bypass still works, "
+            f"replace with proper IP-allowlist or 2FA-on-login."
+        ),
+        tags=["cve", "cve2024", "wordpress", "wp-plugin", "wps-hide-login",
+              "disclosure", "behavioral-probe"],
+        cwe=[200],  # CWE-200 Exposure of Sensitive Information
+        references=[
+            "https://nvd.nist.gov/vuln/detail/CVE-2024-2473",
+            "https://www.wordfence.com/threat-intel/vulnerabilities/wordpress-plugins/wps-hide-login/wps-hide-login-19152-login-page-disclosure",
+        ],
+        raw_excerpt=(
+            f"Step 1: GET /wp-login.php → HTTP {wp_login_code}\n"
+            f"Step 2: GET /wp-admin/?action=postpass → HTTP {status_code}\n"
+            f"        Location: {location}"
+        )[:2000],
+    ))
+
+
+# Probe registry. Each entry is a (name, function) tuple. New probes are
+# appended here; check_behavioral_probes iterates the whole list.
+#
+# Naming: probe_<vuln_class_short>. Function signature is (ctx) -> None
+# (probe appends LightFinding to ctx.findings on match, returns nothing).
+BEHAVIORAL_PROBES = [
+    ("wps_hide_login_bypass", probe_wps_hide_login_bypass),
+]
+
+
+def check_behavioral_probes(ctx: ScanContext) -> None:
+    """Run all registered behavioral probes against the target.
+
+    Each probe is responsible for its own surface-applicability gating
+    (e.g. a WordPress-specific probe should bail early if the target
+    isn't WordPress). This check just iterates the registry and catches
+    per-probe failures so one broken probe doesn't kill the whole step.
+    """
+    ctx.tools_run.append("behavioral_probes")
+    for name, probe_fn in BEHAVIORAL_PROBES:
+        try:
+            log(f"  → {name}")
+            probe_fn(ctx)
+        except Exception as e:
+            log(f"  ✗ behavioral probe {name} failed: {e!r}")
+
+
 # ─── Port scan + per-service checks (M3 revision, 2026-05-29) ──────────
 #
 # The original Light tier was HTTPS-only — useless for SSH/SMTP/FTP/mail-
@@ -1090,6 +1261,8 @@ def run(descriptor_path: str, dsn: str) -> int:
             check_methods(ctx)
             log("  → check_csp_nonce")
             check_csp_nonce(ctx)
+            log("→ check_behavioral_probes")
+            check_behavioral_probes(ctx)
         else:
             log(f"HTTPS suite SKIPPED — port 443 not in open_ports={sorted(ctx.open_ports)}, kind={ctx.asset_kind}")
 
