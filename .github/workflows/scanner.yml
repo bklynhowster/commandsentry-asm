@@ -270,8 +270,14 @@ jobs:
           echo "Available WireGuard configs (post-patch):"
           sudo ls -la /etc/wireguard/
           echo ""
-          echo "Sample (us-nyc.conf, redacted):"
-          sudo sed -E 's/(PrivateKey|PublicKey|PresharedKey) = .*/\1 = <redacted>/' /etc/wireguard/us-nyc.conf
+          # Show a sample of the first conf found (pool went from 5 city-level
+          # names to 205 per-server names — us-nyc.conf no longer exists; we
+          # have us-nyc-wg-001.conf etc. Just grab whatever's first).
+          FIRST_CONF=$(sudo ls /etc/wireguard/ | grep '\.conf$' | head -1)
+          echo "Sample (${FIRST_CONF}, redacted):"
+          sudo sed -E 's/(PrivateKey|PublicKey|PresharedKey) = .*/\1 = <redacted>/' "/etc/wireguard/${FIRST_CONF}"
+          echo ""
+          echo "Total configs available for rotation: $(sudo ls /etc/wireguard/ | grep -c '\.conf$')"
 
       - name: Bring up VPN (WireGuard via wireguard-go userspace)
         id: vpn
