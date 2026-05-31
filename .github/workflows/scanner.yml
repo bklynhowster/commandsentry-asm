@@ -74,6 +74,11 @@ on:
         required: false
         default: false
         type: boolean
+      threshold_probe_mode:
+        description: 'Run Medium tier in THRESHOLD PROBE MODE — nuclei uses a per-chunk rate ladder (5/15/30/50/100 req/s), post-chunk healthchecks log which rate triggered the WAF ban. Skips nikto + ffuf. Only takes effect when intensity=medium.'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -289,6 +294,10 @@ jobs:
         if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'medium' }}
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          # When threshold_probe_mode workflow input is true, run_medium.py
+          # uses a per-chunk rate ladder + post-chunk healthchecks to map
+          # the rate-to-ban threshold (skips nikto/ffuf for isolation).
+          THRESHOLD_PROBE_MODE: ${{ github.event.inputs.threshold_probe_mode }}
         run: |
           python scripts/scanner/run_medium.py /tmp/scan_descriptor.json
 

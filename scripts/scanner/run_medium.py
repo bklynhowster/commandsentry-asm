@@ -131,6 +131,26 @@ ROTATION_REGIONS = [
     "us-dal",   # Dallas
     "us-lax",   # Los Angeles
 ]
+
+# ─── Threshold probe mode ───────────────────────────────────────────────
+# When THRESHOLD_PROBE_MODE=true in env, the scan runs in calibration mode:
+# nuclei uses a per-chunk rate ladder (instead of fixed NUCLEI_RATE_LIMIT),
+# and after each chunk completes we run a healthcheck on the SAME egress
+# IP (before rotating) to detect whether that rate triggered a ban. nikto
+# and ffuf are skipped — we're isolating the nuclei rate variable.
+#
+# Output: ctx.threshold_probe_results list with per-chunk
+#   {chunk, rate, egress_ip, pre_chunk_code, post_chunk_code,
+#    matches, rc, banned}
+# logged to scan_metadata artifact for analysis.
+#
+# Fire via:  -e THRESHOLD_PROBE_MODE=true ./scripts/scanner/run_medium.py ...
+# Or set as a step env var in scanner.yml's "Run Medium tier" step.
+THRESHOLD_PROBE_MODE = os.environ.get("THRESHOLD_PROBE_MODE", "").lower() in ("true", "1", "yes")
+
+# Per-chunk rate ladder when probe mode is active. Brackets the current
+# default (30) below and above so a single scan maps the threshold curve.
+THRESHOLD_PROBE_RATE_LADDER = [5, 15, 30, 50, 100]
 # Match the regions for which we've shipped WireGuard configs in the
 # vpn-tools GH release. Add more by generating + uploading more confs.
 
@@ -193,6 +213,9 @@ class ScanContext:
     rotation_count: int = 0
     ban_events: list[dict] = field(default_factory=list)  # log of detected bans
     region_idx: int = 0  # cursor into ROTATION_REGIONS
+    # Threshold probe (only populated when THRESHOLD_PROBE_MODE=true).
+    # One dict per nuclei chunk: rate, egress_ip, pre/post HTTP code, banned bool.
+    threshold_probe_results: list[dict] = field(default_factory=list)
 
 
 # ─── Subprocess helpers ─────────────────────────────────────────────────
@@ -354,19 +377,24 @@ def discover_target_urls(ctx: ScanContext) -> list[str]:
 
 
 def run_nuclei_chunk(ctx: ScanContext, target_url: str,
-                     severity_filter: str, tag_filter: str | None) -> tuple[int, int, list[int]]:
+                     severity_filter: str, tag_filter: str | None,
+                     rate_override: int | None = None) -> tuple[int, int, list[int]]:
     """Run one nuclei chunk. Returns (rc, match_count, response_codes_observed).
 
     response_codes_observed is populated from nuclei's stats output if
     we can parse it; otherwise it's empty.
+
+    rate_override: if set, used instead of NUCLEI_RATE_LIMIT. Threshold
+    probe mode passes a per-chunk rate from the ladder.
     """
     ctx.tools_run.append(f"nuclei[{severity_filter}{':'+tag_filter if tag_filter else ''}]")
     ua = pick_ua()
+    effective_rate = rate_override if rate_override is not None else NUCLEI_RATE_LIMIT
 
     cmd = [
         "nuclei",
         "-u", target_url,
-        "-rate-limit", str(NUCLEI_RATE_LIMIT),
+        "-rate-limit", str(effective_rate),
         "-c", str(NUCLEI_CONCURRENCY),
         "-timeout", str(NUCLEI_TIMEOUT_S),
         "-H", f"User-Agent: {ua}",
@@ -435,8 +463,17 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
 
     Chunks defined by severity + tag combinations so each chunk runs a
     bounded subset of templates against the target.
+
+    When THRESHOLD_PROBE_MODE is active, the rate is overridden per
+    chunk from THRESHOLD_PROBE_RATE_LADDER, and a post-chunk healthcheck
+    is run on the SAME egress IP before rotating away — so we can map
+    rate-to-ban behavior in a single scan.
     """
-    log("→ nuclei (chunked with mid-scan rotation)")
+    if THRESHOLD_PROBE_MODE:
+        log("→ nuclei (THRESHOLD PROBE MODE — rate ladder per chunk)")
+        log(f"  rate ladder: {THRESHOLD_PROBE_RATE_LADDER} req/s (one per chunk)")
+    else:
+        log("→ nuclei (chunked with mid-scan rotation)")
     base_url = f"https://{ctx.hostname}"
 
     # Chunk plan: each tuple is (severity_filter, tag_filter, description)
@@ -450,7 +487,16 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
 
     for i, (sev, tag, desc) in enumerate(chunks):
         # Layer 1: pre-chunk healthcheck
-        log(f"chunk {i+1}/{len(chunks)}: {desc}")
+        rate_for_chunk = (
+            THRESHOLD_PROBE_RATE_LADDER[i] if THRESHOLD_PROBE_MODE
+            and i < len(THRESHOLD_PROBE_RATE_LADDER)
+            else NUCLEI_RATE_LIMIT
+        )
+        if THRESHOLD_PROBE_MODE:
+            log(f"chunk {i+1}/{len(chunks)} [PROBE @ {rate_for_chunk} req/s]: {desc}")
+        else:
+            log(f"chunk {i+1}/{len(chunks)}: {desc}")
+
         if not ensure_healthy_egress(ctx, max_rotations=2):
             log("  ✗ target unreachable from any rotated IP — skipping chunk")
             ctx.ban_events.append({
@@ -458,11 +504,47 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
                 "type": "chunk_skipped_unreachable",
                 "chunk": f"{sev}:{tag or '<all>'}",
             })
+            if THRESHOLD_PROBE_MODE:
+                ctx.threshold_probe_results.append({
+                    "chunk_index": i + 1, "rate": rate_for_chunk,
+                    "egress_ip": ctx.egress_ips_seen[-1] if ctx.egress_ips_seen else None,
+                    "pre_chunk_code": 0, "post_chunk_code": None,
+                    "matches": 0, "rc": None, "banned": True,
+                    "note": "skipped — already unreachable before chunk",
+                })
             continue
 
+        # PROBE: capture the egress IP we're about to scan from + a baseline
+        # health code RIGHT BEFORE the chunk runs.
+        probe_egress_ip = ctx.egress_ips_seen[-1] if ctx.egress_ips_seen else None
+        if THRESHOLD_PROBE_MODE:
+            _, pre_code = healthcheck(ctx)
+            log(f"  PROBE pre-chunk healthcheck on {probe_egress_ip}: HTTP {pre_code}")
+
         # Layer 2: run the chunk
-        rc, matches, _ = run_nuclei_chunk(ctx, base_url, sev, tag)
+        rc, matches, _ = run_nuclei_chunk(
+            ctx, base_url, sev, tag,
+            rate_override=rate_for_chunk if THRESHOLD_PROBE_MODE else None,
+        )
         log(f"  chunk {i+1} done: {matches} match(es), rc={rc}")
+
+        # PROBE: healthcheck on the SAME tunnel BEFORE rotating. This is
+        # the key data point — did this rate just ban the IP we used?
+        if THRESHOLD_PROBE_MODE:
+            _, post_code = healthcheck(ctx)
+            banned = post_code not in (200, 301, 302, 303, 307, 308, 401)
+            log(f"  PROBE post-chunk healthcheck on {probe_egress_ip}: HTTP {post_code} → "
+                f"{'BANNED' if banned else 'still reachable'}")
+            ctx.threshold_probe_results.append({
+                "chunk_index": i + 1,
+                "rate": rate_for_chunk,
+                "egress_ip": probe_egress_ip,
+                "pre_chunk_code": pre_code,
+                "post_chunk_code": post_code,
+                "matches": matches,
+                "rc": rc,
+                "banned": banned,
+            })
 
         # Layer 3 + 4: planned rotation between chunks
         if i < len(chunks) - 1:
@@ -472,6 +554,27 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         if ctx.total_requests >= MAX_REQUESTS_TOTAL:
             log(f"hit hard request ceiling ({MAX_REQUESTS_TOTAL}) — stopping nuclei")
             break
+
+    # PROBE: print the final threshold table
+    if THRESHOLD_PROBE_MODE and ctx.threshold_probe_results:
+        log("")
+        log("═══ THRESHOLD PROBE RESULTS ═══")
+        log(f"{'Chunk':<6}{'Rate':<8}{'Egress IP':<20}{'Pre':<6}{'Post':<6}{'Banned?':<10}")
+        for r in ctx.threshold_probe_results:
+            log(f"{r['chunk_index']:<6}{r['rate']:<8}{(r['egress_ip'] or '?'):<20}"
+                f"{r['pre_chunk_code']:<6}{r['post_chunk_code'] or '?':<6}"
+                f"{'YES' if r['banned'] else 'no':<10}")
+        # Identify the threshold band
+        clean_rates = [r['rate'] for r in ctx.threshold_probe_results if not r['banned']]
+        banned_rates = [r['rate'] for r in ctx.threshold_probe_results if r['banned']]
+        if clean_rates and banned_rates:
+            log(f"  → highest clean rate: {max(clean_rates)} req/s")
+            log(f"  → lowest banned rate: {min(banned_rates)} req/s")
+            log(f"  → THRESHOLD is between {max(clean_rates)} and {min(banned_rates)} req/s")
+        elif clean_rates:
+            log(f"  → all rates clean (no bans across {clean_rates}) — rate is NOT the trigger")
+        elif banned_rates:
+            log(f"  → all rates banned ({banned_rates}) — even lowest tested rate trips WAF; not pure rate")
 
 
 # ─── nikto (single pass) ────────────────────────────────────────────────
@@ -787,6 +890,9 @@ def write_scan_metadata_artifact(conn, ctx: ScanContext, Json,
         "start_egress": start_egress,
         "end_egress": end_egress,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        # Threshold probe results (empty list if not in probe mode).
+        "threshold_probe_mode": THRESHOLD_PROBE_MODE,
+        "threshold_probe_results": ctx.threshold_probe_results,
     }
     with conn.cursor() as cur:
         cur.execute(INSERT_ARTIFACT_SQL, {
@@ -878,23 +984,26 @@ def run(descriptor_path: str, dsn: str) -> int:
         else:
             log("skipping nuclei — total request ceiling already hit")
 
-        # Rotate before nikto (single-pass tool gets a fresh IP)
-        rotate_vpn(ctx)
-
-        # ─── Phase 3: nikto (single pass) ──────────────────────────
-        if ctx.total_requests < MAX_REQUESTS_TOTAL:
-            run_nikto(ctx)
+        if THRESHOLD_PROBE_MODE:
+            log("THRESHOLD PROBE MODE — skipping nikto + ffuf (isolating nuclei rate variable)")
         else:
-            log("skipping nikto — total request ceiling already hit")
+            # Rotate before nikto (single-pass tool gets a fresh IP)
+            rotate_vpn(ctx)
 
-        # Rotate before ffuf
-        rotate_vpn(ctx)
+            # ─── Phase 3: nikto (single pass) ──────────────────────────
+            if ctx.total_requests < MAX_REQUESTS_TOTAL:
+                run_nikto(ctx)
+            else:
+                log("skipping nikto — total request ceiling already hit")
 
-        # ─── Phase 4: ffuf (chunked + rotation) ────────────────────
-        if ctx.total_requests < MAX_REQUESTS_TOTAL:
-            run_ffuf_chunked(ctx)
-        else:
-            log("skipping ffuf — total request ceiling already hit")
+            # Rotate before ffuf
+            rotate_vpn(ctx)
+
+            # ─── Phase 4: ffuf (chunked + rotation) ────────────────────
+            if ctx.total_requests < MAX_REQUESTS_TOTAL:
+                run_ffuf_chunked(ctx)
+            else:
+                log("skipping ffuf — total request ceiling already hit")
 
         # ─── Phase 5: capture end egress + write ───────────────────
         end_egress = capture_egress_ip()
