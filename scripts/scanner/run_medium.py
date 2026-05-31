@@ -122,15 +122,39 @@ REWIND_SECONDS = 30             # rewind window for soft-ban paranoia
 MAX_REQUESTS_TOTAL = 8000        # hard ceiling across all tools
 BAN_HTTP_CODES = {403, 429, 503, 521, 522, 523}  # WAF/CDN ban signals
 
-# Rotation regions (Mullvad "country city" format). Cycled in order
-# per chunk so the target sees diverse exit IPs across the scan.
-ROTATION_REGIONS = [
-    "us-nyc",   # New York
-    "us-chi",   # Chicago
-    "us-atl",   # Atlanta
-    "us-dal",   # Dallas
-    "us-lax",   # Los Angeles
-]
+# Rotation regions are now loaded DYNAMICALLY from /etc/wireguard/*.conf
+# at script startup. Pool size went from 12 → 205 after Howie's "All
+# cities / All servers" Mullvad download 2026-05-31 — way more rotation
+# headroom + no code edits needed when the pool changes.
+#
+# Earlier reasoning preserved for the record:
+# - Threshold probe #82 showed bans hit at every rate tested
+# - Cross-IP propagation burned Chicago without scanning it
+# - Phoenix is on Tzulo ASN; most others are M247 / DataPacket
+# - With 205 IPs we can rotate per-chunk (and eventually per-N-requests)
+#   without ever waiting for cooldowns
+def _load_rotation_regions(conf_dir: str = "/etc/wireguard",
+                           shuffle: bool = True) -> list[str]:
+    """Discover the rotation pool from .conf files in conf_dir.
+
+    Returns the region names (filename without .conf), SHUFFLED by
+    default so each scan uses a different subset of the (large) pool.
+    Falls back to the original 5-region pool if the dir is missing.
+
+    `shuffle=False` gives sorted/deterministic order (useful for tests).
+    """
+    try:
+        names = sorted(p.stem for p in Path(conf_dir).glob("*.conf"))
+        if names:
+            if shuffle:
+                random.shuffle(names)
+            return names
+    except Exception:
+        pass
+    # Fallback for local dev / when /etc/wireguard isn't populated
+    return ["us-nyc", "us-chi", "us-atl", "us-dal", "us-lax"]
+
+ROTATION_REGIONS = _load_rotation_regions()
 
 # ─── Threshold probe mode ───────────────────────────────────────────────
 # When THRESHOLD_PROBE_MODE=true in env, the scan runs in calibration mode:
