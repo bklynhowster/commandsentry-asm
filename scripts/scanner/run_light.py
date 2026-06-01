@@ -827,9 +827,20 @@ def probe_wps_hide_login_bypass(ctx: ScanContext) -> None:
     they're wired in as negative fixtures and verify_probes.py enforces
     that this probe returns 0 findings against them on every run.
 
-    POSITIVE FIXTURE: NONE currently. The prior CMI positive fixture
-    was an artifact of the broken logic — removed in this rewrite. Add
-    a positive when a real WPS Hide Login ≤ 1.9.15.2 target shows up.
+    POSITIVE FIXTURE: NONE. ⚠ POSITIVE-UNVALIDATED STATUS.
+    The prior CMI positive fixture (F-10 manual finding) was itself a
+    false positive — F-10's 5/04 evidence cited the same broken signals
+    this rewrite eliminates (scanner-UA 403 + postpass 302 = "vuln
+    present"), with no browser-UA confirmation and no plugin in the
+    enumerated inventory. F-10 was assumed-true and validated the
+    probe; the probe then re-amplified the assumption across the
+    fleet.
+    This rewrite has been proven NOT to over-fire (three negative
+    fixtures, all clean). It has NOT been proven to detect a real
+    WPS Hide Login ≤ 1.9.15.2 bypass. Treat any future match against
+    this probe as a HYPOTHESIS pending manual verification, not a
+    confirmed finding, until at least one positive fixture has been
+    captured against a known-real instance.
 
     Why nuclei misses this: existing cve-2024-2473 template uses a POST
     to /wp-login.php?action=postpass + body match — different request
@@ -1234,12 +1245,21 @@ BEHAVIORAL_PROBES = [
 #     0 findings = probe is STALE (target's response shape changed, or
 #     vuln was remediated). Triage: probe stale first, vuln gone second.
 #   • negative: known-clean hosts where the probe MUST produce ZERO
-#     findings. 1+ findings = probe is FALSE-POSITIVE. Catch the kind
+#     findings. 1+ findings = probe is FALSE-POSITIVE. Catches the kind
 #     of bug we just shipped in wps_hide_login_bypass — a probe that
 #     fires on any WordPress site behind any WAF.
 #
 # verify_probes.py runs BOTH lists every time it's invoked. Either
 # failure aborts (exit 1).
+#
+# IMPORTANT — manual_named findings are NOT automatically ground truth.
+# F-10 (WPS Hide Login on CMI) was used as the WPS probe's positive
+# fixture and was itself a false positive — same broken signals,
+# scaled. A manual baseline qualifies as a fixture ONLY when its
+# evidence is re-verifiable from current state (e.g. browser-UA curl
+# returns the expected response shape, the plugin is enumerated in
+# tech_profile, the host appears in a CVE database, etc.). Audit any
+# manual finding before depending on it.
 #
 # Schema (2026-06-01 PM rewrite — supersedes the flat list-only form):
 #   { probe_name: {"positive": [hosts], "negative": [hosts]} }
