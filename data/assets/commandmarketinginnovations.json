@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-01T12:00:14Z_d3904e4f",
-    "started_at": "2026-06-01T12:00:14Z",
-    "completed_at": "2026-06-01T12:02:40Z",
-    "duration_seconds": 146,
+    "id": "scan_2026-06-01T18:06:20Z_4adbc51c",
+    "started_at": "2026-06-01T18:06:20Z",
+    "completed_at": "2026-06-01T18:08:44Z",
+    "duration_seconds": 144,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-01T12:02:40Z",
-      "last_seen": "2026-06-01T12:02:40Z",
+      "first_discovered": "2026-06-01T18:08:44Z",
+      "last_seen": "2026-06-01T18:08:44Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -300,7 +300,7 @@
           },
           {
             "name": "WPMU DEV Smush",
-            "version": "4.0.3",
+            "version": "4.1.0",
             "category": "wp-plugin"
           },
           {
@@ -361,8 +361,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-01T12:02:40Z",
-      "last_seen": "2026-06-01T12:02:40Z",
+      "first_discovered": "2026-06-01T18:08:44Z",
+      "last_seen": "2026-06-01T18:08:44Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -617,7 +617,7 @@
           },
           {
             "name": "WPMU DEV Smush",
-            "version": "4.0.3",
+            "version": "4.1.0",
             "category": "wp-plugin"
           },
           {
@@ -675,7 +675,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-06-01T05:10:27Z_d06f3b51",
+    "since_scan": "scan_2026-06-01T12:00:14Z_d3904e4f",
     "added": {
       "subdomains": [],
       "services": [],
@@ -687,7 +687,20 @@
       "hosts": []
     },
     "changed": {
-      "fingerprint": [],
+      "fingerprint": [
+        {
+          "subdomain": "commandmarketinginnovations.com",
+          "name": "WPMU DEV Smush",
+          "from": "4.0.3",
+          "to": "4.1.0"
+        },
+        {
+          "subdomain": "www.commandmarketinginnovations.com",
+          "name": "WPMU DEV Smush",
+          "from": "4.0.3",
+          "to": "4.1.0"
+        }
+      ],
       "cert": [],
       "reachability": []
     }
@@ -1744,6 +1757,50 @@
         "Mailcheck": "1.1.2",
         "Slider Revolution": "6.7.56",
         "WPMU DEV Smush": "4.0.3",
+        "Yoast SEO": "27.7",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-06-01T18:06:20Z_4adbc51c",
+      "started_at": "2026-06-01T18:06:20Z",
+      "completed_at": "2026-06-01T18:08:44Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.7.56",
+        "WPMU DEV Smush": "4.1.0",
         "Yoast SEO": "27.7",
         "jQuery Migrate": "3.4.1",
         "punycode": "1.0.0"

@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-01T11:50:35Z_6cfe5d25",
-    "started_at": "2026-06-01T11:50:36Z",
-    "completed_at": "2026-06-01T11:52:15Z",
-    "duration_seconds": 99,
+    "id": "scan_2026-06-01T17:56:16Z_2eab9769",
+    "started_at": "2026-06-01T17:56:16Z",
+    "completed_at": "2026-06-01T17:58:16Z",
+    "duration_seconds": 120,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-01T11:52:16Z",
-      "last_seen": "2026-06-01T11:52:16Z",
+      "first_discovered": "2026-06-01T17:58:16Z",
+      "last_seen": "2026-06-01T17:58:16Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -132,10 +132,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
-          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
+          "apple-domain-verification=cWkfjNKuM61a3EZ6",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "MS=ms93622757",
-          "apple-domain-verification=cWkfjNKuM61a3EZ6"
+          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
+          "MS=ms93622757"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -181,7 +181,7 @@
           },
           {
             "name": "Slider Revolution",
-            "version": "6.7.55",
+            "version": "6.7.56",
             "category": "wp-plugin"
           },
           {
@@ -191,7 +191,7 @@
           },
           {
             "name": "WPMU DEV Smush",
-            "version": "4.0.3",
+            "version": "4.1.0",
             "category": "wp-plugin"
           },
           {
@@ -247,8 +247,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-01T11:52:16Z",
-      "last_seen": "2026-06-01T11:52:16Z",
+      "first_discovered": "2026-06-01T17:58:16Z",
+      "last_seen": "2026-06-01T17:58:16Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -376,7 +376,7 @@
           },
           {
             "name": "Slider Revolution",
-            "version": "6.7.55",
+            "version": "6.7.56",
             "category": "wp-plugin"
           },
           {
@@ -386,7 +386,7 @@
           },
           {
             "name": "WPMU DEV Smush",
-            "version": "4.0.3",
+            "version": "4.1.0",
             "category": "wp-plugin"
           },
           {
@@ -439,7 +439,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-06-01T05:01:39Z_312765d7",
+    "since_scan": "scan_2026-06-01T11:50:35Z_6cfe5d25",
     "added": {
       "subdomains": [],
       "services": [],
@@ -451,7 +451,32 @@
       "hosts": []
     },
     "changed": {
-      "fingerprint": [],
+      "fingerprint": [
+        {
+          "subdomain": "commandcompanies.com",
+          "name": "Slider Revolution",
+          "from": "6.7.55",
+          "to": "6.7.56"
+        },
+        {
+          "subdomain": "commandcompanies.com",
+          "name": "WPMU DEV Smush",
+          "from": "4.0.3",
+          "to": "4.1.0"
+        },
+        {
+          "subdomain": "www.commandcompanies.com",
+          "name": "Slider Revolution",
+          "from": "6.7.55",
+          "to": "6.7.56"
+        },
+        {
+          "subdomain": "www.commandcompanies.com",
+          "name": "WPMU DEV Smush",
+          "from": "4.0.3",
+          "to": "4.1.0"
+        }
+      ],
       "cert": [],
       "reachability": []
     }
@@ -3964,6 +3989,42 @@
         "Slider Revolution": "6.7.55",
         "WP Google Map Plugin": "4.9.5",
         "WPMU DEV Smush": "4.0.3",
+        "Yoast SEO": "27.7",
+        "imagesLoaded": "5.0.0",
+        "jQuery Migrate": "3.4.1"
+      }
+    },
+    {
+      "scan_id": "scan_2026-06-01T17:56:16Z_2eab9769",
+      "started_at": "2026-06-01T17:56:16Z",
+      "completed_at": "2026-06-01T17:58:16Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 1,
+      "service_count": 4,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.54": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Contact Form 7": "6.1.6",
+        "Slider Revolution": "6.7.56",
+        "WP Google Map Plugin": "4.9.5",
+        "WPMU DEV Smush": "4.1.0",
         "Yoast SEO": "27.7",
         "imagesLoaded": "5.0.0",
         "jQuery Migrate": "3.4.1"

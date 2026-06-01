@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-01T12:08:37Z_38e06d98",
-    "started_at": "2026-06-01T12:08:37Z",
-    "completed_at": "2026-06-01T12:10:35Z",
-    "duration_seconds": 118,
+    "id": "scan_2026-06-01T18:14:15Z_f4504f99",
+    "started_at": "2026-06-01T18:14:15Z",
+    "completed_at": "2026-06-01T18:16:04Z",
+    "duration_seconds": 109,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -30,7 +30,7 @@
     "live_subdomain_count": 1,
     "host_count": 1,
     "service_count": 1,
-    "newest_cert_expiry_days": 247,
+    "newest_cert_expiry_days": 246,
     "top_hosting_org": "Cablevision Systems Corp.",
     "platforms": []
   },
@@ -40,8 +40,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-06-01T12:10:35Z",
-      "last_seen": "2026-06-01T12:10:35Z",
+      "first_discovered": "2026-06-01T18:16:04Z",
+      "last_seen": "2026-06-01T18:16:04Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -78,7 +78,7 @@
             "not_before": "2026-01-02T18:09:45Z",
             "not_after": "2027-02-03T18:09:45Z",
             "self_signed": false,
-            "days_to_expiry": 247
+            "days_to_expiry": 246
           }
         }
       ],
@@ -111,7 +111,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-06-01T05:18:02Z_8a064100",
+    "since_scan": "scan_2026-06-01T12:08:37Z_38e06d98",
     "added": {
       "subdomains": [],
       "services": [],
@@ -1951,6 +1951,26 @@
       "scan_id": "scan_2026-06-01T12:08:37Z_38e06d98",
       "started_at": "2026-06-01T12:08:37Z",
       "completed_at": "2026-06-01T12:10:35Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 1,
+      "subdomain_names": [
+        "24.157.51.84"
+      ],
+      "ports_by_sub": {
+        "24.157.51.84": {
+          "24.157.51.84": [
+            443
+          ]
+        }
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-06-01T18:14:15Z_f4504f99",
+      "started_at": "2026-06-01T18:14:15Z",
+      "completed_at": "2026-06-01T18:16:04Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 1,
