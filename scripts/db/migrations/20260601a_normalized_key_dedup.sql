@@ -262,17 +262,15 @@ COMMENT ON VIEW public.v_open_findings_dedup IS
 -- arrays into one array." Define one if it doesn't exist. Used by the
 -- view's CVE aggregation to flatten cve[][] arrays into a single cve[].
 
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_proc WHERE proname = 'array_cat_agg'
-  ) THEN
-    CREATE AGGREGATE array_cat_agg(anyarray) (
-      SFUNC = array_cat,
-      STYPE = anyarray
-    );
-  END IF;
-END$$;
+-- Use specific text[] type instead of anyarray — Postgres 14+ requires
+-- concrete types for CREATE AGGREGATE since array_cat is no longer
+-- defined for the deprecated 'anyarray' polymorphic type. findings.cve
+-- is text[], so text[] is the right choice.
+DROP AGGREGATE IF EXISTS array_cat_agg(text[]);
+CREATE AGGREGATE array_cat_agg(text[]) (
+  SFUNC = array_cat,
+  STYPE = text[]
+);
 
 COMMIT;
 
