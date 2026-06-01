@@ -1,0 +1,123 @@
+name: WPS Hide Login Probe — Diagnostic
+
+# One-shot diagnostic to compare what the WPS Hide Login probe sees
+# from a GH Actions hosted runner (Azure datacenter IP) vs what we
+# see from residential IPs.
+#
+# Background (2026-06-01):
+#   • probe_wps_hide_login_bypass in run_light.py matches CMI from
+#     residential vantage points (verified manually 2026-05-31 and
+#     re-verified from a Verizon FiOS sandbox 2026-06-01: Step 1
+#     wp-login.php → 403, Step 2 wp-admin/?action=postpass → 302 to
+#     wp-login).
+#   • Same probe run from GH Actions during normal Light scans
+#     produces NO finding on CMI (no commandsentry_light row exists).
+#   • Hypothesis: Pressable's WAF treats GH Actions IPs (Azure
+#     datacenter ASN 8075) differently than residential ASNs —
+#     either returning different status codes, redirecting elsewhere,
+#     or serving cached/generic content that breaks the match
+#     conditions.
+#
+# This workflow runs the SAME two curl commands the probe uses, logs
+# the full response (status, headers, body excerpt), and reports the
+# runner egress IP + ASN so we can correlate. No DB writes, no
+# scanning — just diagnostic curl + log.
+#
+# Trigger via Actions UI → Run workflow. Defaults target CMI but
+# accepts any hostname so we can also probe commanddigital for a
+# baseline comparison.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Hostname to probe (no scheme)'
+        type: string
+        required: true
+        default: commandmarketinginnovations.com
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Runner vantage point
+        run: |
+          echo "=== Runner egress IP + ASN ==="
+          IP=$(curl -s -m 5 https://api.ipify.org || echo unknown)
+          echo "Egress IP: $IP"
+          if [ "$IP" != "unknown" ]; then
+            curl -s -m 5 "https://ipinfo.io/$IP" || true
+          fi
+          echo ""
+          echo "=== Target ==="
+          echo "Target: ${{ inputs.target }}"
+
+      - name: Step 1 — GET /wp-login.php with scanner UA
+        run: |
+          TARGET="${{ inputs.target }}"
+          echo "=== Step 1: GET /wp-login.php (UA=Mozilla/5.0) ==="
+          echo "(probe expects 403 or 404 for hiding plugin to be flagged as active)"
+          echo ""
+          echo "--- Response headers ---"
+          curl -s -i -o /tmp/step1.txt --max-time 10 \
+            -A "Mozilla/5.0" \
+            "https://${TARGET}/wp-login.php"
+          head -40 /tmp/step1.txt
+          echo ""
+          echo "--- Status code (machine-readable) ---"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+            -A "Mozilla/5.0" \
+            "https://${TARGET}/wp-login.php")
+          echo "STATUS=$STATUS"
+          echo ""
+          echo "--- Body excerpt (first 600 chars) ---"
+          curl -s --max-time 10 \
+            -A "Mozilla/5.0" \
+            "https://${TARGET}/wp-login.php" | head -c 600
+          echo ""
+          echo "--- Probe verdict ---"
+          if [ "$STATUS" = "403" ] || [ "$STATUS" = "404" ]; then
+            echo "✓ Step 1 PASSES — hiding plugin appears active"
+          else
+            echo "✗ Step 1 EARLY-RETURNS — probe bails here, no finding"
+            echo "  Reason: probe expects 403/404 but got $STATUS"
+          fi
+
+      - name: Step 2 — GET /wp-admin/?action=postpass with browser UA
+        run: |
+          TARGET="${{ inputs.target }}"
+          BROWSER_UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
+          echo "=== Step 2: GET /wp-admin/?action=postpass (browser UA) ==="
+          echo "(probe expects 302 with Location containing wp-login.php)"
+          echo ""
+          echo "--- Response headers ---"
+          curl -s -I --max-time 10 -A "$BROWSER_UA" \
+            "https://${TARGET}/wp-admin/?action=postpass" | head -25
+          echo ""
+          echo "--- Status code + Location ---"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -A "$BROWSER_UA" \
+            "https://${TARGET}/wp-admin/?action=postpass")
+          LOCATION=$(curl -s -I --max-time 10 -A "$BROWSER_UA" \
+            "https://${TARGET}/wp-admin/?action=postpass" \
+            | grep -i "^location:" | head -1 | sed 's/\r$//')
+          echo "STATUS=$STATUS"
+          echo "$LOCATION"
+          echo ""
+          echo "--- Probe verdict ---"
+          if [ "$STATUS" = "302" ] && echo "$LOCATION" | grep -qi "wp-login.php"; then
+            echo "✓ Step 2 PASSES — postpass bypass discloses login URL"
+            echo "✓ FULL PROBE MATCH — finding would be flagged"
+          else
+            echo "✗ Step 2 FAILS — probe early-returns, no finding"
+            echo "  Reason: expected 302 to wp-login.php, got $STATUS"
+          fi
+
+      - name: Body comparison — what does the page look like from this IP?
+        if: always()
+        run: |
+          TARGET="${{ inputs.target }}"
+          echo "=== Server-revealing headers ==="
+          curl -s -I --max-time 10 -A "Mozilla/5.0" \
+            "https://${TARGET}/wp-login.php" \
+            | grep -iE "^(server|x-|via|cf-|host-header|x-redirect-by|x-pass-why|x-cache):" || true
