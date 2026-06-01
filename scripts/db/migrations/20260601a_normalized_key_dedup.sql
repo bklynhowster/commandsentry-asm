@@ -98,7 +98,10 @@ SET normalized_key = CASE
 END
 WHERE finding_id LIKE '%:manual:%'
   AND normalized_key IS NULL
-  AND (cve IS NULL OR array_length(cve, 1) = 0);
+  -- cardinality() returns 0 for '{}' (empty array); array_length(arr, 1)
+  -- returns NULL for empty arrays which would break this check. Burned
+  -- 30 min on this 2026-06-01 — M-02/M-03 had cve='{}' and got filtered.
+  AND (cve IS NULL OR cardinality(cve) = 0);
 
 -- Manual rows that DO have a CVE (e.g. F-10 WPS Hide Login with
 -- cve=['CVE-2024-2473']) are intentionally NOT mapped explicitly here.
