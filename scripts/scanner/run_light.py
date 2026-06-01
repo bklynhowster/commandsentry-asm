@@ -662,14 +662,179 @@ def probe_wps_hide_login_bypass(ctx: ScanContext) -> None:
     ))
 
 
+def probe_hardcoded_client_crypto(ctx: ScanContext) -> None:
+    """Detect hardcoded crypto keys / weak crypto patterns in client-side
+    JavaScript that the app actually serves.
+
+    Architecture (matters for WAF-protected targets):
+      1. GET homepage with browser UA → parse <script src=...> references
+      2. For each referenced .js file, GET it (also browser UA) → grep
+         response body for hardcoded-key patterns
+      3. Flag a finding per high-confidence match
+
+    Why follow app's reference chain instead of guessing /Scripts/aes.js
+    style paths: FortiGate (and similar WAFs) maintain a path allowlist.
+    Arbitrary file-path probes get filtered (403/Invalid Request) before
+    they see the file. App-referenced asset paths are allowlisted because
+    the app actually serves them — those GETs survive the WAF.
+
+    Verified 2026-06-01 against test.commandcommcentral.com (FortiGate):
+      GET /Scripts/encryption.js → 200 OK (referenced from homepage)
+      GET /Scripts/jquery.js     → 403 Invalid Request (NOT referenced)
+      GET /Scripts/aes.js        → 403 Invalid Request (dead-code leftover)
+
+    The probe will correctly NOT match against test.ccc today because
+    C-01 was remediated 2026-05-02 (encryption.js migrated to AES-256-GCM
+    + Web Crypto API). Probe value is fleet-wide application to future
+    findings of this class, not retroactive discovery on remediated assets.
+    """
+    ctx.tools_run.append("probe_hardcoded_client_crypto")
+    BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+
+    # Step 1: fetch homepage
+    rc, html, _ = run_cmd(
+        ["curl", "-s", "-L", "--max-time", "15",
+         "-A", BROWSER_UA,
+         f"https://{ctx.hostname}/"],
+        timeout=20,
+    )
+    if rc != 0 or not html:
+        return
+
+    # Step 2: parse script refs (relative paths only — external CDN refs
+    # would 1) usually be referenced via known-clean CDNs and 2) not be
+    # under our coverage scope)
+    script_paths = re.findall(
+        r'<script[^>]+src=["\']([^"\']+)["\']',
+        html,
+        re.IGNORECASE,
+    )
+    # Keep only same-origin (relative or absolute-path) script refs
+    same_origin = [
+        p for p in script_paths
+        if p.startswith("/") or (not p.startswith("http") and not p.startswith("//"))
+    ]
+    if not same_origin:
+        return
+
+    # Light-tier discipline: cap how many JS files we fetch per probe.
+    # 12 is generous for most apps (CCC has 9).
+    SCRIPT_FETCH_CAP = 12
+    same_origin = same_origin[:SCRIPT_FETCH_CAP]
+
+    # Patterns we consider high-signal for hardcoded client-side crypto.
+    # Order matters — first-match wins per file (don't double-flag).
+    SUSPECT_PATTERNS = [
+        # Direct hardcoded passphrase strings (the literal CCC C-01 case)
+        (r'pass#\d{3,}', "hardcoded-passphrase-string",
+         "Plain-text passphrase literal embedded in client JS — appears "
+         "to match the 'pass#NNN' pattern, indicating a hardcoded secret."),
+        # CryptoJS with Hex.parse on what looks like a literal key
+        (r'CryptoJS\.enc\.Hex\.parse\(["\'][0-9a-fA-F]{16,64}["\']\)',
+         "hardcoded-cryptojs-hex-key",
+         "CryptoJS.enc.Hex.parse called with a hardcoded hex literal "
+         "(not a runtime-derived value) — indicates a baked-in encryption key."),
+        # AES-CBC or ECB mode — weak crypto regardless of key handling
+        (r'CryptoJS\.AES\.(encrypt|decrypt)\([^)]*mode:\s*CryptoJS\.mode\.(CBC|ECB)',
+         "weak-crypto-mode-cbc-ecb",
+         "CryptoJS.AES used with CBC or ECB mode. Both are vulnerable "
+         "to attacks (CBC: padding oracle; ECB: pattern preservation) "
+         "when used without authenticated encryption (HMAC) or in "
+         "padding-sensitive contexts. Prefer GCM."),
+    ]
+
+    # Step 3: fetch + grep each referenced script
+    for script_path in same_origin:
+        rc_s, body, _ = run_cmd(
+            ["curl", "-s", "--max-time", "10",
+             "-A", BROWSER_UA,
+             f"https://{ctx.hostname}{script_path}"],
+            timeout=15,
+        )
+        if rc_s != 0 or not body:
+            continue
+        # Sanity cap — don't grep huge bundles, but most app JS is <200KB
+        if len(body) > 1_000_000:
+            continue
+
+        for pattern, check_suffix, description in SUSPECT_PATTERNS:
+            m = re.search(pattern, body)
+            if m:
+                excerpt_start = max(0, m.start() - 80)
+                excerpt_end = min(len(body), m.end() + 80)
+                excerpt = body[excerpt_start:excerpt_end]
+                # Redact the actual match in the excerpt — we want to
+                # surface "there's a problem here" without leaking the
+                # exact key in the findings table
+                redacted_excerpt = (
+                    body[excerpt_start:m.start()]
+                    + "<<MATCH REDACTED — see source>>"
+                    + body[m.end():excerpt_end]
+                )
+
+                ctx.findings.append(LightFinding(
+                    check_name=f"client-js-{check_suffix}",
+                    title=(
+                        f"Client-side JavaScript contains "
+                        f"{check_suffix.replace('-', ' ')}"
+                    ),
+                    severity="MODERATE",
+                    category="secret" if "passphrase" in check_suffix or "key" in check_suffix else "config",
+                    description=(
+                        f"{description}\n\n"
+                        f"Detected in {script_path} served by {ctx.hostname}. "
+                        f"Client-side crypto secrets / weak modes are visible "
+                        f"to any user — the security boundary they imply (server "
+                        f"can't be fooled) doesn't actually exist. Recommendation: "
+                        f"move crypto operations server-side, or use the browser's "
+                        f"Web Crypto API with session-derived keys and authenticated "
+                        f"encryption (AES-GCM)."
+                    ),
+                    tags=["secret", "client-js", "crypto", "behavioral-probe",
+                          check_suffix],
+                    cwe=[798] if "passphrase" in check_suffix or "key" in check_suffix else [327],
+                    references=[
+                        "https://cwe.mitre.org/data/definitions/798.html",
+                        "https://owasp.org/www-community/vulnerabilities/Use_of_hard-coded_credentials",
+                    ],
+                    raw_excerpt=(
+                        f"File: {script_path}\n"
+                        f"Match pattern: {check_suffix}\n"
+                        f"Context (key/secret redacted):\n"
+                        f"...{redacted_excerpt}..."
+                    )[:2000],
+                ))
+                break  # one finding per file, move on
+
+
 # Probe registry. Each entry is a (name, function) tuple. New probes are
 # appended here; check_behavioral_probes iterates the whole list.
 #
 # Naming: probe_<vuln_class_short>. Function signature is (ctx) -> None
 # (probe appends LightFinding to ctx.findings on match, returns nothing).
 BEHAVIORAL_PROBES = [
-    ("wps_hide_login_bypass", probe_wps_hide_login_bypass),
+    ("wps_hide_login_bypass",        probe_wps_hide_login_bypass),
+    ("hardcoded_client_crypto",      probe_hardcoded_client_crypto),
 ]
+
+# Per-probe fixtures (P-PROBE-FIXTURES, 2026-05-31 PM advisor brief #4).
+# Maps probe name to list of known-positive hostnames. verify_probes.py
+# runs each probe against its fixtures; any probe that returns None on
+# a fixture host is STALE — match condition no longer fits, OR the
+# fixture vuln was remediated (downgrade the fixture in that case).
+#
+# Discipline: when a fixture stops matching, FIRST hypothesis is probe
+# stale, NOT vuln gone. Only downgrade after manual verification.
+PROBE_FIXTURES: dict[str, list[str]] = {
+    # CMI's WPS Hide Login bypass is risk-accepted (marketing site,
+    # Security-accepted) — permanently positive fixture.
+    "wps_hide_login_bypass": ["commandmarketinginnovations.com"],
+    # No current positive fixture for hardcoded_client_crypto — CCC's
+    # C-01 was remediated 2026-05-02. Will add when next finding of
+    # this class appears OR when we capture a historical snapshot.
+    "hardcoded_client_crypto": [],
+}
 
 
 def check_behavioral_probes(ctx: ScanContext) -> None:
