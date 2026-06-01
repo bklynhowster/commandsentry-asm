@@ -791,52 +791,62 @@ def check_csp_nonce(ctx: ScanContext) -> None:
 def probe_wps_hide_login_bypass(ctx: ScanContext) -> None:
     """CVE-2024-2473 — WPS Hide Login plugin bypass via ?action=postpass.
 
-    Detection path verified 2026-05-31 PM via direct curl probe against
-    commandmarketinginnovations.com (Mac's intensive-scan-2026-05-04
-    finding F-10). Two-step probe:
+    REWRITTEN 2026-06-01 PM after a false-positive audit caught the
+    original logic flagging any WordPress site behind any WAF.
 
-      Step 1: GET /wp-login.php — if 403/404, hiding plugin is active.
-              If 200, no hiding plugin = no vuln to bypass = no finding.
-      Step 2: GET /wp-admin/?action=postpass — if 302 to wp-login, the
-              hidden login URL is being disclosed via the bypass.
+    PRIOR LOGIC (broken — kept here as a cautionary record):
+      Step 1 used a bare 'Mozilla/5.0' scanner UA and accepted 403/404
+      as "hiding plugin active." But every common WAF (Cloudflare bot
+      challenge, Pressable nginx, Fortinet) returns 403 to scanner UAs
+      regardless of plugin presence. Step 2 accepted 302 to /wp-login.php
+      as "bypass disclosure," but that's standard WordPress unauthed
+      redirect behavior — every WP site does this. Net result: probe
+      false-positived on every WordPress site behind any WAF.
 
-    Both must match to flag. Single-step matching produces false positives
-    on bare WordPress (wp-admin always redirects to wp-login for unauthed
-    users; the signal is "wp-login was hidden AND bypass disclosed it").
+    NEW ANCHOR: browser-UA on /wp-login.php.
+      WPS Hide Login actively HIDES /wp-login.php — when configured, a
+      real-browser GET returns 404 (URL is not reachable, login moved
+      to a custom path). If a browser gets 200 back with the WordPress
+      login form, NOTHING is hidden — CVE-2024-2473 is logically
+      impossible. Definitive negative; bail immediately. Anything other
+      than 200/404 (403 / 5xx / redirect / etc.) is inconclusive; bail
+      rather than risk another FP class. Tightening trades false
+      negatives for zero false positives — the correct tradeoff per
+      Howie's standing rule.
+
+    DETECTION (only fires when Step 1 confirms hiding is real):
+      Step 2 — GET /wp-admin/?action=postpass with browser UA.
+      The buggy plugin fails to apply hiding to this specific redirect,
+      so the response is a 302 whose Location header still names
+      /wp-login.php — disclosing the path that should have been kept
+      hidden. Status 302 + 'wp-login.php' in Location = match.
+
+    NEGATIVE FIXTURES GUARANTEE: any site whose /wp-login.php returns
+    200 to a browser cannot be flagged. CMI, commanddigital, and
+    unimacgraphics all confirmed clean 2026-06-01 by direct curl;
+    they're wired in as negative fixtures and verify_probes.py enforces
+    that this probe returns 0 findings against them on every run.
+
+    POSITIVE FIXTURE: NONE currently. The prior CMI positive fixture
+    was an artifact of the broken logic — removed in this rewrite. Add
+    a positive when a real WPS Hide Login ≤ 1.9.15.2 target shows up.
 
     Why nuclei misses this: existing cve-2024-2473 template uses a POST
     to /wp-login.php?action=postpass + body match — different request
-    shape than the GET-based detection. On sites where the POST path
-    doesn't trigger the matchable response, the template returns 0
-    matches even though the GET-based bypass is demonstrably present.
-    Behavioral probe catches what the template can't.
+    shape. Behavioral probe complements that template when its
+    conditions also hold (browser sees 404 on wp-login).
     """
     ctx.tools_run.append("probe_wps_hide_login_bypass")
 
-    # NB on User-Agent strategy (verified empirically against CMI 2026-05-31):
-    # WPS Hide Login can be UA-aware. With a real-browser UA it returns 200
-    # on wp-login.php (lets browsers through). With a scanner-shape UA it
-    # returns 403 (the hiding behavior). Both reveal different things:
-    #   - Browser UA on wp-login: 200 → can't distinguish "no plugin" from
-    #     "plugin lets browsers through" — masks vulnerability presence
-    #   - Scanner UA on wp-login: 403 → plugin is actively hiding the URL
-    #     (or the host returns 403 for some other reason — combined with
-    #     step 2 we get the full signal)
-    #
-    # So step 1 deliberately uses a minimal "Mozilla/5.0" UA to TRIGGER
-    # the hiding plugin's gate. If hiding is active, we see 403/404.
-    # Step 2 uses a real-browser UA to confirm the bypass works for the
-    # most-permissive client class — same attack pattern a real attacker
-    # would use.
-    SCANNER_UA = "Mozilla/5.0"  # bare-minimum UA — triggers hiding plugin's gate
     BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                  "AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/131.0.0.0 Safari/537.36")
 
-    # Step 1: is wp-login.php hidden from scanner-shape traffic?
+    # Step 1 — definitive hidden-or-not check via a real-browser UA.
     rc1, stdout1, _ = run_cmd(
         ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
          "--max-time", "10",
-         "-A", SCANNER_UA,
+         "-A", BROWSER_UA,
          f"https://{ctx.hostname}/wp-login.php"],
         timeout=12,
     )
@@ -846,13 +856,13 @@ def probe_wps_hide_login_bypass(ctx: ScanContext) -> None:
         wp_login_code = int(stdout1.strip())
     except ValueError:
         return
-    if wp_login_code not in (403, 404):
-        # Login is openly accessible even to scanner UAs — no hiding
-        # plugin (or plugin is inactive). No vuln to bypass.
+    if wp_login_code != 404:
+        # 200 = login renders, plugin is NOT hiding → CVE impossible.
+        # Anything else (403, 5xx, redirect, etc.) = inconclusive → bail.
         return
 
-    # Step 2: does ?action=postpass disclose the login URL to a
-    # browser-shape request?
+    # Step 2 — postpass bypass. With hiding confirmed by Step 1, a 302
+    # whose Location names /wp-login.php is the disclosure.
     rc2, stdout2, _ = run_cmd(
         ["curl", "-s", "-I", "--max-time", "10",
          "-A", BROWSER_UA,
@@ -861,7 +871,6 @@ def probe_wps_hide_login_bypass(ctx: ScanContext) -> None:
     )
     if rc2 != 0:
         return
-    # Look for 302 + Location header pointing to wp-login.php
     status_match = re.search(r"^HTTP/[\d.]+\s+(\d{3})", stdout2, re.MULTILINE)
     location_match = re.search(r"^location:\s*(\S+)", stdout2, re.IGNORECASE | re.MULTILINE)
     if not status_match or not location_match:
@@ -1218,27 +1227,67 @@ BEHAVIORAL_PROBES = [
     ("static_csp_nonces_per_directive",  probe_static_csp_nonces_per_directive),
 ]
 
-# Per-probe fixtures (P-PROBE-FIXTURES, 2026-05-31 PM advisor brief #4).
-# Maps probe name to list of known-positive hostnames. verify_probes.py
-# runs each probe against its fixtures; any probe that returns None on
-# a fixture host is STALE — match condition no longer fits, OR the
-# fixture vuln was remediated (downgrade the fixture in that case).
+# Per-probe fixtures (P-PROBE-FIXTURES).
 #
-# Discipline: when a fixture stops matching, FIRST hypothesis is probe
-# stale, NOT vuln gone. Only downgrade after manual verification.
-PROBE_FIXTURES: dict[str, list[str]] = {
-    # CMI's WPS Hide Login bypass is risk-accepted (marketing site,
-    # Security-accepted) — permanently positive fixture.
-    "wps_hide_login_bypass": ["commandmarketinginnovations.com"],
-    # No current positive fixture for hardcoded_client_crypto — CCC's
-    # C-01 was remediated 2026-05-02. Will add when next finding of
-    # this class appears OR when we capture a historical snapshot.
-    "hardcoded_client_crypto": [],
-    # M-02 verified LIVE on test.ccc 2026-06-01: script-src nonce
-    # randomized (good), style-src has static 'CSS_10001'..'CSS_10010'
-    # across every request (bad). Fixture confirms this class is
-    # detectable cloud-native through FortiGate.
-    "static_csp_nonces_per_directive": ["test.commandcommcentral.com"],
+# Each probe carries TWO lists:
+#   • positive: hosts where the probe MUST produce at least one finding.
+#     0 findings = probe is STALE (target's response shape changed, or
+#     vuln was remediated). Triage: probe stale first, vuln gone second.
+#   • negative: known-clean hosts where the probe MUST produce ZERO
+#     findings. 1+ findings = probe is FALSE-POSITIVE. Catch the kind
+#     of bug we just shipped in wps_hide_login_bypass — a probe that
+#     fires on any WordPress site behind any WAF.
+#
+# verify_probes.py runs BOTH lists every time it's invoked. Either
+# failure aborts (exit 1).
+#
+# Schema (2026-06-01 PM rewrite — supersedes the flat list-only form):
+#   { probe_name: {"positive": [hosts], "negative": [hosts]} }
+PROBE_FIXTURES: dict[str, dict[str, list[str]]] = {
+    "wps_hide_login_bypass": {
+        # NONE currently — prior CMI positive removed 2026-06-01 after FP
+        # audit confirmed CMI's /wp-login.php returns 200 to a browser UA
+        # (page renders normally → nothing is hidden → CVE not present).
+        # Add a positive when a real WPS Hide Login ≤ 1.9.15.2 target
+        # turns up.
+        "positive": [],
+        # All three Command WP sites empirically confirmed clean
+        # 2026-06-01: browser-UA GET /wp-login.php returns 200 with the
+        # standard WordPress login page. CVE-2024-2473 is logically
+        # impossible on any of them; probe must not fire.
+        "negative": [
+            "commandmarketinginnovations.com",
+            "www.commanddigital.com",
+            "unimacgraphics.com",
+        ],
+    },
+    "hardcoded_client_crypto": {
+        # CCC's C-01 was remediated 2026-05-02 (encryption.js migrated to
+        # AES-256-GCM + Web Crypto API). No live positive in inventory.
+        "positive": [],
+        # commanddigital and unimacgraphics serve WordPress pages with no
+        # hardcoded-key crypto in their JS — probe must stay quiet.
+        # (CMI deliberately omitted while we still don't know its full JS
+        # surface; add it as a negative after one clean scan confirms it.)
+        "negative": [
+            "www.commanddigital.com",
+            "unimacgraphics.com",
+        ],
+    },
+    "static_csp_nonces_per_directive": {
+        # M-02 verified LIVE on test.ccc 2026-06-01: script-src nonce
+        # randomized, style-src has 10 static 'CSS_10001'..'CSS_10010'
+        # nonces across every request.
+        "positive": ["test.commandcommcentral.com"],
+        # commanddigital + CMI don't set static CSP nonces in their
+        # responses; probe must not fire. (If a cached-page edge case
+        # ever does cause a FP here, it'll surface at the next
+        # verify_probes run — which is the point.)
+        "negative": [
+            "www.commanddigital.com",
+            "commandmarketinginnovations.com",
+        ],
+    },
 }
 
 
