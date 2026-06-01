@@ -139,6 +139,14 @@ class LightFinding:
     description:  str           # 1-3 sentence scanner-side summary (enrichment expands this)
     tags:         list[str] = field(default_factory=list)
     cwe:          list[int] = field(default_factory=list)
+    # CVE IDs when known. Populated by probes/checks that detect a specific
+    # CVE (wpvulnerability lookups, WPS Hide Login probe, etc.). Empty for
+    # findings that don't map to a CVE (CSP nonce posture, missing headers).
+    # The portal groupBySharedCve() render-time dedup keys off this — so
+    # wpscan-imported + manual_named + commandsentry_light findings of the
+    # same CVE render as a single "N sources" row when all three populate
+    # this field.
+    cve:          list[str] = field(default_factory=list)
     references:   list[str] = field(default_factory=list)
     raw_excerpt:  str | None = None
 
@@ -648,6 +656,10 @@ def _wpvuln_emit_finding(ctx: ScanContext, v, wpc) -> None:
         tags=["wordpress", "wpvulnerability", "version-cve",
               v.affected_target.split(":")[0]],
         cwe=[1395],  # CWE-1395 Dependency on Vulnerable Third-Party Component
+        # CVE ID(s) when present — enables portal groupBySharedCve render-
+        # time dedup so cloud (commandsentry_light) merges with wpscan-
+        # imported + manual_named findings of the same CVE
+        cve=[v.cve_id] if v.cve_id else [],
         references=references,
         raw_excerpt=(
             f"Target: {v.affected_target}\n"
@@ -881,6 +893,7 @@ def probe_wps_hide_login_bypass(ctx: ScanContext) -> None:
         tags=["cve", "cve2024", "wordpress", "wp-plugin", "wps-hide-login",
               "disclosure", "behavioral-probe"],
         cwe=[200],  # CWE-200 Exposure of Sensitive Information
+        cve=["CVE-2024-2473"],  # enables portal cross-source dedup
         references=[
             "https://nvd.nist.gov/vuln/detail/CVE-2024-2473",
             "https://www.wordfence.com/threat-intel/vulnerabilities/wordpress-plugins/wps-hide-login/wps-hide-login-19152-login-page-disclosure",
@@ -1578,16 +1591,25 @@ def check_ftp(ctx: ScanContext, port: int) -> None:
 UPSERT_FINDING_SQL = """
 INSERT INTO public.findings (
     finding_id, asset_id, title, severity, category, description,
-    cwe, "references", current_status, first_detected_at,
+    cwe, cve, "references", current_status, first_detected_at,
     last_observed_at, source, tags
 )
 VALUES (%(finding_id)s, %(asset_id)s, %(title)s, %(severity)s, %(category)s,
-        %(description)s, %(cwe)s, %(references)s, 'detected',
+        %(description)s, %(cwe)s, %(cve)s, %(references)s, 'detected',
         now(), now(), %(source)s, %(tags)s)
 ON CONFLICT (finding_id) DO UPDATE SET
     title             = EXCLUDED.title,
     category          = EXCLUDED.category,
     description       = EXCLUDED.description,
+    -- Backfill cve on re-detection. Only OVERWRITE when EXCLUDED.cve is
+    -- non-empty — never blow away a populated array with NULL/[] from a
+    -- subsequent emission of the same finding via a code path that
+    -- doesn't carry the CVE list.
+    cve = CASE
+      WHEN EXCLUDED.cve IS NOT NULL AND array_length(EXCLUDED.cve, 1) > 0
+        THEN EXCLUDED.cve
+      ELSE findings.cve
+    END,
     -- Status-downgrade guard (same pattern as import_jsonl.py):
     -- re-detecting an issue does NOT reopen a closed finding.
     current_status = CASE
@@ -1686,6 +1708,7 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 "category":    f.category,
                 "description": f.description,
                 "cwe":         f.cwe,
+                "cve":         f.cve,
                 "references":  f.references,
                 # Source is derived from ctx.intensity so this same upsert
                 # path is reusable by run_medium.py / run_heavy.py without
