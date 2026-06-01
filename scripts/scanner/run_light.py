@@ -1591,11 +1591,12 @@ def check_ftp(ctx: ScanContext, port: int) -> None:
 UPSERT_FINDING_SQL = """
 INSERT INTO public.findings (
     finding_id, asset_id, title, severity, category, description,
-    cwe, cve, "references", current_status, first_detected_at,
+    cwe, cve, normalized_key, "references", current_status, first_detected_at,
     last_observed_at, source, tags
 )
 VALUES (%(finding_id)s, %(asset_id)s, %(title)s, %(severity)s, %(category)s,
-        %(description)s, %(cwe)s, %(cve)s, %(references)s, 'detected',
+        %(description)s, %(cwe)s, %(cve)s, %(normalized_key)s,
+        %(references)s, 'detected',
         now(), now(), %(source)s, %(tags)s)
 ON CONFLICT (finding_id) DO UPDATE SET
     title             = EXCLUDED.title,
@@ -1610,6 +1611,11 @@ ON CONFLICT (finding_id) DO UPDATE SET
         THEN EXCLUDED.cve
       ELSE findings.cve
     END,
+    -- Same protection for normalized_key — only overwrite when EXCLUDED is
+    -- non-NULL. Going forward all cloud emissions populate this, but a
+    -- legacy code path or a manual SQL UPDATE backfill should never get
+    -- blown away by a subsequent scanner pass.
+    normalized_key = COALESCE(EXCLUDED.normalized_key, findings.normalized_key),
     -- Status-downgrade guard (same pattern as import_jsonl.py):
     -- re-detecting an issue does NOT reopen a closed finding.
     current_status = CASE
@@ -1700,16 +1706,30 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
     with conn.cursor() as cur:
         for f in ctx.findings:
             finding_id = f"{ctx.asset_id}:light:{f.check_name}"
+            # Compute normalized_key at write time using the same rule as
+            # migration 20260601a's rule 2b/2c:
+            #   - If cve populated → sorted, lowercased, comma-joined
+            #   - Else → check_name slug (which is finding_id's :light:<slug>)
+            # Cloud probes that want explicit cross-source mapping (e.g.
+            # behavioral probes that should merge with a specific manual_named
+            # finding) should ensure their check_name matches the migration's
+            # 2a target slug.
+            if f.cve:
+                normalized_key = ",".join(sorted(c.lower() for c in f.cve))
+            else:
+                normalized_key = f.check_name
+
             params = {
-                "finding_id":  finding_id,
-                "asset_id":    ctx.asset_id,
-                "title":       f.title,
-                "severity":    f.severity,
-                "category":    f.category,
-                "description": f.description,
-                "cwe":         f.cwe,
-                "cve":         f.cve,
-                "references":  f.references,
+                "finding_id":     finding_id,
+                "asset_id":       ctx.asset_id,
+                "title":          f.title,
+                "severity":       f.severity,
+                "category":       f.category,
+                "description":    f.description,
+                "cwe":            f.cwe,
+                "cve":            f.cve,
+                "normalized_key": normalized_key,
+                "references":     f.references,
                 # Source is derived from ctx.intensity so this same upsert
                 # path is reusable by run_medium.py / run_heavy.py without
                 # forking the function. All three values were added to
