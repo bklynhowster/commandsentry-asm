@@ -429,6 +429,237 @@ def check_httpx_tech(ctx: ScanContext) -> None:
         ))
 
 
+# ─── WordPress version-CVE lookup via wpvulnerability.net (Plan C day 1) ──
+#
+# Closes the version → CVE detection class for WordPress targets that
+# neither nuclei templates nor behavioral probes cover. Lookup-only —
+# detected versions go to the API, CVEs come back. WAF-immune.
+
+def _detect_wp_plugin_versions(html: str, hostname: str) -> dict[str, str]:
+    """Parse rendered HTML for plugin slug + version pairs.
+
+    WordPress emits referenced assets with ?ver=<version> cache-busting
+    query strings. Example pattern from CMI:
+
+      wp-content/plugins/revslider/public/css/sr7.css?ver=6.7.56
+      wp-content/plugins/wpforms/.../wpforms-full.min.css?ver=1.10.1
+
+    Yields a {slug: version} dict, picking the highest unambiguous version
+    per slug if multiple assets reference different versions (e.g. when
+    cache-bust hashes are mixed with semver tags).
+
+    Versions that look like cache-bust hashes (long hex strings, or
+    epoch-style integers) are skipped — they're not semver and can't be
+    matched against CVE operator ranges.
+    """
+    # Match: wp-content/plugins/<slug>/...?ver=<version>
+    # Version capture stops at quote, ampersand, or whitespace.
+    pattern = r"wp-content/plugins/([a-zA-Z0-9_\-]+)/[^\"'?]+\?ver=([^\"'&\s]+)"
+    matches = re.findall(pattern, html)
+    slug_versions: dict[str, str] = {}
+    for slug, version in matches:
+        # Skip cache-bust hashes (long hex, epoch ints, MD5-shaped)
+        if re.match(r"^[0-9a-fA-F]{20,}$", version):
+            continue
+        # Skip epoch-style integers (10+ digits)
+        if re.match(r"^\d{10,}$", version):
+            continue
+        # Must look like at least one numeric component
+        if not re.match(r"^\d+(\.\d+)*", version):
+            continue
+        # Keep the longest version string seen per slug (resolves
+        # cases where ?ver=6.7 and ?ver=6.7.56 both appear)
+        existing = slug_versions.get(slug)
+        if existing is None or len(version) > len(existing):
+            slug_versions[slug] = version
+    return slug_versions
+
+
+def _detect_wp_core_version(ctx: ScanContext) -> str | None:
+    """Try several sources for the WordPress core version.
+
+    Returns version string ('6.5.4') or None if undetectable. Pressable
+    and other managed-WP hosts often strip the meta generator tag and
+    readme.html headers, so this returns None more often than not — but
+    when it works, it works cheaply.
+    """
+    BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+
+    # Source 1: meta generator on the homepage
+    rc, html, _ = run_cmd(
+        ["curl", "-s", "-L", "--max-time", "12",
+         "-A", BROWSER_UA, f"https://{ctx.hostname}/"],
+        timeout=15,
+    )
+    if rc == 0 and html:
+        m = re.search(
+            r'<meta\s+name=["\']generator["\']\s+content=["\']WordPress\s+([0-9.]+)',
+            html, re.IGNORECASE,
+        )
+        if m:
+            return m.group(1)
+        # Inline JS often references wp_version
+        m2 = re.search(r'wp_version["\']?\s*[:=]\s*["\']([0-9.]+)["\']', html)
+        if m2:
+            return m2.group(1)
+
+    # Source 2: /feed/ RSS sometimes leaks WordPress version
+    rc2, feed, _ = run_cmd(
+        ["curl", "-s", "--max-time", "10",
+         "-A", BROWSER_UA, f"https://{ctx.hostname}/feed/"],
+        timeout=15,
+    )
+    if rc2 == 0 and feed:
+        m = re.search(r'<generator>https?://wordpress\.org/\?v=([0-9.]+)</generator>', feed)
+        if m:
+            return m.group(1)
+
+    return None
+
+
+def check_wpvulnerability(ctx: ScanContext) -> None:
+    """Detect WordPress versions on the target and query wpvulnerability.net
+    for matching CVEs.
+
+    Plan C day 1 lead — closes the version → CVE detection class for
+    WordPress targets. WAF-immune because the only network calls beyond
+    the target's homepage/feed go to wpvulnerability.net's API, not the
+    target.
+
+    Self-gates: bails early if the homepage doesn't look like WordPress
+    (no wp-content references). Skips silently if no plugins detected
+    even on a WP site.
+    """
+    ctx.tools_run.append("wpvulnerability")
+    # Import lazily so a missing module doesn't kill the whole Light tier
+    try:
+        import wpvulnerability_client as wpc
+    except Exception as e:
+        log(f"wpvulnerability: client import failed: {e!r}")
+        return
+
+    BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+
+    # Step 1: fetch homepage
+    rc, html, _ = run_cmd(
+        ["curl", "-s", "-L", "--max-time", "15",
+         "-A", BROWSER_UA, f"https://{ctx.hostname}/"],
+        timeout=20,
+    )
+    if rc != 0 or not html:
+        log(f"  wpvulnerability: homepage fetch rc={rc}, skipping")
+        return
+
+    # Step 2: is this even a WordPress site?
+    if "wp-content" not in html.lower():
+        log(f"  wpvulnerability: no wp-content references — not a WordPress site, skipping")
+        return
+
+    # Step 3: detect plugin slugs + versions
+    plugins = _detect_wp_plugin_versions(html, ctx.hostname)
+    core_version = _detect_wp_core_version(ctx)
+    log(f"  wpvulnerability: detected core={core_version or '<unknown>'}, "
+        f"{len(plugins)} plugin(s): {sorted(plugins.keys())}")
+
+    if not plugins and not core_version:
+        log(f"  wpvulnerability: no detectable versions, skipping API lookups")
+        return
+
+    # Record the detection inventory as an artifact for audit
+    ctx.artifacts.append(("wpvulnerability_detection", "json", json.dumps({
+        "core_version": core_version,
+        "plugins": plugins,
+    })))
+
+    # Step 4: API lookups
+    findings_added = 0
+
+    if core_version:
+        try:
+            core_vulns = wpc.lookup_core(core_version)
+            for v in core_vulns:
+                _wpvuln_emit_finding(ctx, v, wpc)
+                findings_added += 1
+        except Exception as e:
+            log(f"  wpvulnerability: core lookup failed: {e!r}")
+
+    for slug, version in sorted(plugins.items()):
+        try:
+            plugin_vulns = wpc.lookup_plugin(slug, version)
+            for v in plugin_vulns:
+                _wpvuln_emit_finding(ctx, v, wpc)
+                findings_added += 1
+        except Exception as e:
+            log(f"  wpvulnerability: plugin {slug} lookup failed: {e!r}")
+
+    log(f"  wpvulnerability: {findings_added} finding(s) added across "
+        f"{len(plugins)} plugin(s){' + core' if core_version else ''}")
+
+
+def _wpvuln_emit_finding(ctx: ScanContext, v, wpc) -> None:
+    """Convert a WpVulnerability into a LightFinding and append to ctx.
+
+    Separated out so the loop in check_wpvulnerability stays tidy and
+    so each finding-emission failure is isolated.
+    """
+    severity = wpc.severity_from_cve_metadata(v.cve_id, v.description)
+    # Stable check_name keyed on CVE ID (preferred) or UUID (fallback for
+    # vulnerabilities without a CVE assignment). This lets the dedup
+    # engine recognize the same vuln across multiple scans + sources.
+    if v.cve_id:
+        check_name = f"wpvuln-{v.cve_id.lower()}"
+    elif v.uuid:
+        check_name = f"wpvuln-uuid-{v.uuid[:16]}"
+    else:
+        check_name = f"wpvuln-{v.affected_target.replace(':', '-')}-{v.affected_version}"
+
+    references = []
+    if v.source_link:
+        references.append(v.source_link)
+    if v.cve_id:
+        references.append(f"https://nvd.nist.gov/vuln/detail/{v.cve_id}")
+
+    description_lines = [
+        f"{v.affected_target.replace(':', ' ').title()} detected on {ctx.hostname} "
+        f"at version {v.affected_version} matches the vulnerable range {v.operator_summary}."
+    ]
+    if v.description:
+        description_lines.append(v.description.strip()[:600])
+    if v.unfixed:
+        description_lines.append(
+            "NOTE: wpvulnerability.net flags this as UNFIXED — no patched "
+            "version is currently available. Mitigation requires WAF rules, "
+            "configuration changes, or plugin removal."
+        )
+    description_lines.append(
+        "Detection: wpvulnerability.net CVE-by-fingerprint API lookup. "
+        "Cross-source dedup will merge this with wpscan-imported findings "
+        "of the same CVE."
+    )
+
+    ctx.findings.append(LightFinding(
+        check_name=check_name,
+        title=v.title[:200],
+        severity=severity,
+        category="config",  # wp-plugin-cve isn't a finding_category_t value
+        description="\n\n".join(description_lines),
+        tags=["wordpress", "wpvulnerability", "version-cve",
+              v.affected_target.split(":")[0]],
+        cwe=[1395],  # CWE-1395 Dependency on Vulnerable Third-Party Component
+        references=references,
+        raw_excerpt=(
+            f"Target: {v.affected_target}\n"
+            f"Detected version: {v.affected_version}\n"
+            f"Vulnerable range: {v.operator_summary}\n"
+            f"CVE: {v.cve_id or '(no CVE assigned)'}\n"
+            f"wpvulnerability.net UUID: {v.uuid or '(none)'}\n"
+            f"Unfixed: {v.unfixed}"
+        )[:2000],
+    ))
+
+
 def check_methods(ctx: ScanContext) -> None:
     """Run OPTIONS, parse Allow header, flag dangerous methods."""
     ctx.tools_run.append("methods_check")
@@ -662,6 +893,161 @@ def probe_wps_hide_login_bypass(ctx: ScanContext) -> None:
     ))
 
 
+def probe_static_csp_nonces_per_directive(ctx: ScanContext) -> None:
+    """M-02 class — detect static CSP nonces, per-directive.
+
+    The existing check_csp_nonce only captures the FIRST nonce in the
+    CSP header (typically script-src). When script-src is randomized but
+    other directives (style-src, etc.) keep static nonces, the first-only
+    check misses the live vulnerability. Empirically verified 2026-06-01
+    against test.commandcommcentral.com: script-src nonce randomizes per
+    request (remediated), but style-src has 10 static 'CSS_10001'..
+    'CSS_10010' nonces across every request.
+
+    Detection logic:
+      1. Fetch / 5 times with cache-busting headers
+      2. Parse the Content-Security-Policy header into directives
+      3. For each directive that uses nonce-based CSP (script-src,
+         style-src, etc.), extract its nonce values
+      4. Compare nonces of each directive across the 5 requests
+      5. Flag any directive whose nonces are IDENTICAL across requests
+         — that's a static nonce defeating CSP for that resource class
+
+    Each affected directive gets its own finding so the dedup engine
+    can track them independently and remediation status per-directive is
+    visible in the portal.
+
+    Why this is a behavioral probe (not just a header check):
+    requires SAMPLING across multiple requests to compare nonces. Single-
+    request inspection can't tell static from random.
+
+    Architecture note: this probe runs against the homepage (the
+    target's most-allowlisted endpoint), so it survives FortiGate-style
+    path filtering. M-02-class findings live in response HEADERS, which
+    are returned for every allowlisted-path response.
+    """
+    ctx.tools_run.append("probe_static_csp_nonces_per_directive")
+    BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+
+    # Step 1: collect 5 samples
+    samples: list[str] = []  # raw CSP header values
+    for _ in range(5):
+        rc, stdout, _ = run_cmd(
+            ["curl", "-s", "-I", "--max-time", "10",
+             "-H", "Cache-Control: no-cache",
+             "-H", "Pragma: no-cache",
+             "-A", BROWSER_UA,
+             f"https://{ctx.hostname}/"],
+            timeout=12,
+        )
+        if rc != 0:
+            continue
+        csp_line = next(
+            (l for l in stdout.splitlines()
+             if l.lower().startswith("content-security-policy:")),
+            "",
+        )
+        if csp_line:
+            # Strip "Content-Security-Policy:" prefix, keep value
+            samples.append(csp_line.split(":", 1)[1].strip())
+
+    if len(samples) < 3:
+        # Insufficient data to compare — bail
+        return
+
+    # Step 2: parse each sample into {directive: [nonces]}
+    def _parse_csp(csp: str) -> dict[str, list[str]]:
+        """Split CSP into directives, extract nonces from each."""
+        result: dict[str, list[str]] = {}
+        # Directives are separated by ';'
+        for chunk in csp.split(";"):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            parts = chunk.split(None, 1)  # split on first whitespace
+            if not parts:
+                continue
+            directive = parts[0].lower()
+            value = parts[1] if len(parts) > 1 else ""
+            nonces = re.findall(r"'nonce-([A-Za-z0-9+/=_\-]+)'", value)
+            if nonces:
+                result[directive] = nonces
+        return result
+
+    parsed_samples = [_parse_csp(s) for s in samples]
+
+    # Step 3: for each directive that appears in samples, check if nonces
+    # are identical across all samples (=static, =vulnerable)
+    all_directives = set()
+    for p in parsed_samples:
+        all_directives.update(p.keys())
+
+    ctx.artifacts.append(("csp_nonce_per_directive", "json", json.dumps({
+        "samples_collected": len(samples),
+        "parsed_samples": parsed_samples,
+    })))
+
+    for directive in sorted(all_directives):
+        # Gather the nonce-set for this directive from each sample.
+        # Use sorted tuple as the comparable hash (order shouldn't matter,
+        # but we want order-independent comparison)
+        directive_samples: list[tuple[str, ...]] = []
+        for p in parsed_samples:
+            nonces = p.get(directive)
+            if nonces is not None:
+                directive_samples.append(tuple(sorted(nonces)))
+
+        # Only flag if the directive appears in ALL samples (not flaky
+        # presence) AND all sample nonce-sets are identical
+        if len(directive_samples) != len(samples):
+            continue
+        unique_sets = set(directive_samples)
+        if len(unique_sets) != 1:
+            continue  # nonces vary across requests = randomized = OK
+        static_nonces = list(unique_sets)[0]
+        if not static_nonces:
+            continue
+
+        # Live finding — flag it
+        ctx.findings.append(LightFinding(
+            check_name=f"csp-static-nonce-{directive.replace('-', '_')}",
+            title=(f"CSP {directive} nonce is static across requests "
+                   f"({len(static_nonces)} value(s) repeated)"),
+            severity="MODERATE",
+            category="headers",
+            description=(
+                f"The Content-Security-Policy {directive} directive on "
+                f"{ctx.hostname} uses nonce-based CSP, but the nonce "
+                f"value(s) are IDENTICAL across {len(samples)} consecutive "
+                f"requests. Static nonces defeat the purpose of nonce-based "
+                f"CSP — an attacker who observes one response can predict "
+                f"valid nonce values for the same resource class across "
+                f"every session. The server must generate a fresh "
+                f"cryptographically random nonce per response for each "
+                f"nonce-using directive.\n\n"
+                f"Observed static {directive} nonce(s) "
+                f"(first 16 chars each): "
+                f"{', '.join(n[:16]+'...' for n in static_nonces[:5])}"
+                f"{' (truncated)' if len(static_nonces) > 5 else ''}"
+            ),
+            tags=["csp", "nonce", "static", directive, "behavioral-probe"],
+            cwe=[1021],  # CWE-1021 Improper Restriction of Rendered UI
+            references=[
+                "https://content-security-policy.com/nonce/",
+                "https://cwe.mitre.org/data/definitions/1021.html",
+            ],
+            raw_excerpt=(
+                f"Directive: {directive}\n"
+                f"Samples: {len(samples)}\n"
+                f"Unique nonce-sets across samples: 1 (=static)\n"
+                f"Static nonce-set ({len(static_nonces)} value(s)):\n"
+                + "\n".join(f"  - {n}" for n in static_nonces[:10])
+                + ("\n  ..." if len(static_nonces) > 10 else "")
+            )[:2000],
+        ))
+
+
 def probe_hardcoded_client_crypto(ctx: ScanContext) -> None:
     """Detect hardcoded crypto keys / weak crypto patterns in client-side
     JavaScript that the app actually serves.
@@ -814,8 +1200,9 @@ def probe_hardcoded_client_crypto(ctx: ScanContext) -> None:
 # Naming: probe_<vuln_class_short>. Function signature is (ctx) -> None
 # (probe appends LightFinding to ctx.findings on match, returns nothing).
 BEHAVIORAL_PROBES = [
-    ("wps_hide_login_bypass",        probe_wps_hide_login_bypass),
-    ("hardcoded_client_crypto",      probe_hardcoded_client_crypto),
+    ("wps_hide_login_bypass",            probe_wps_hide_login_bypass),
+    ("hardcoded_client_crypto",          probe_hardcoded_client_crypto),
+    ("static_csp_nonces_per_directive",  probe_static_csp_nonces_per_directive),
 ]
 
 # Per-probe fixtures (P-PROBE-FIXTURES, 2026-05-31 PM advisor brief #4).
@@ -834,6 +1221,11 @@ PROBE_FIXTURES: dict[str, list[str]] = {
     # C-01 was remediated 2026-05-02. Will add when next finding of
     # this class appears OR when we capture a historical snapshot.
     "hardcoded_client_crypto": [],
+    # M-02 verified LIVE on test.ccc 2026-06-01: script-src nonce
+    # randomized (good), style-src has static 'CSS_10001'..'CSS_10010'
+    # across every request (bad). Fixture confirms this class is
+    # detectable cloud-native through FortiGate.
+    "static_csp_nonces_per_directive": ["test.commandcommcentral.com"],
 }
 
 
@@ -1426,6 +1818,8 @@ def run(descriptor_path: str, dsn: str) -> int:
             check_methods(ctx)
             log("  → check_csp_nonce")
             check_csp_nonce(ctx)
+            log("  → check_wpvulnerability")
+            check_wpvulnerability(ctx)
             log("→ check_behavioral_probes")
             check_behavioral_probes(ctx)
         else:
