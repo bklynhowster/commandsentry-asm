@@ -228,11 +228,17 @@ jobs:
             INTENSITY=$(python -c "import json; print(json.load(open('/tmp/scan_descriptor.json'))['intensity'])")
             ASSET_ID=$(python -c "import json; print(json.load(open('/tmp/scan_descriptor.json'))['asset_id'])")
             SCAN_RUN_ID=$(python -c "import json; print(json.load(open('/tmp/scan_descriptor.json'))['scan_run_id'])")
+            # 2026-06-02: surface top_hosting_org so vpn_decision can
+            # route Pressable Light scans through VPN. Empty string when
+            # no asset_surface row exists yet (brand-new asset before
+            # first ASM Discover sync).
+            HOSTING_ORG=$(python -c "import json; print((json.load(open('/tmp/scan_descriptor.json'))['asset'].get('top_hosting_org') or '').strip())")
             echo "intensity=$INTENSITY"     >> "$GITHUB_OUTPUT"
             echo "asset_id=$ASSET_ID"       >> "$GITHUB_OUTPUT"
             echo "scan_run_id=$SCAN_RUN_ID" >> "$GITHUB_OUTPUT"
+            echo "hosting_org=$HOSTING_ORG" >> "$GITHUB_OUTPUT"
             echo "has_work=true"            >> "$GITHUB_OUTPUT"
-            echo "Claimed: $INTENSITY scan on $ASSET_ID (scan_run_id=$SCAN_RUN_ID)"
+            echo "Claimed: $INTENSITY scan on $ASSET_ID (scan_run_id=$SCAN_RUN_ID, hosting='$HOSTING_ORG')"
           else
             echo "has_work=false" >> "$GITHUB_OUTPUT"
             echo "No queued scans to claim — nothing to do."
@@ -265,6 +271,16 @@ jobs:
       # ~35s install+connect overhead for an IronPort-safe check suite
       # that nothing will ban us for.
       #
+      # 2026-06-02: ALSO fires for Light scans on Pressable / Automattic
+      # Atomic targets. Pressable's WAF (atomic_bur) rate-limits Azure
+      # ASN on /wp-admin/* paths regardless of intensity — verified
+      # 2026-06-01: GET /wp-admin/?action=postpass from a GH runner
+      # returns 429, same request from a residential IP returns 302.
+      # Without VPN, wp-admin probes (WPS Hide Login, common_paths
+      # /wp-admin/install.php) silently fail on Pressable targets.
+      # The hosting-aware routing trades ~35s for working wp-admin
+      # coverage on those ~3 assets.
+      #
       # Migrated from ExpressVPN 2026-05-30. Mullvad installs via apt
       # repo (no .deb asset to manage), CLI is headless-native, atomic
       # region switching via `relay set location`. See Obsidian
@@ -275,12 +291,30 @@ jobs:
         run: |
           INTENSITY="${{ steps.poll.outputs.intensity }}"
           FORCE_VPN="${{ github.event.inputs.force_vpn }}"
-          if [[ "$INTENSITY" == "medium" || "$INTENSITY" == "heavy" || "$FORCE_VPN" == "true" ]]; then
+          HOSTING_ORG="${{ steps.poll.outputs.hosting_org }}"
+
+          # Pressable / Automattic detection — case-insensitive substring.
+          # Surface emits hosting_org strings like:
+          #   "Automattic (Pressable/WordPress.com)"
+          #   "Automattic Inc."
+          # Both forms hit the same Atomic WAF, both need VPN routing.
+          IS_PRESSABLE=false
+          if echo "$HOSTING_ORG" | grep -iE 'automattic|pressable|wordpress\.com' >/dev/null; then
+            IS_PRESSABLE=true
+          fi
+
+          if [[ "$INTENSITY" == "medium" || "$INTENSITY" == "heavy" \
+             || "$FORCE_VPN" == "true" \
+             || "$IS_PRESSABLE" == "true" ]]; then
             echo "use_vpn=true" >> "$GITHUB_OUTPUT"
-            echo "VPN will be brought up (intensity=$INTENSITY, force_vpn=$FORCE_VPN)"
+            REASON=""
+            if [[ "$INTENSITY" == "medium" || "$INTENSITY" == "heavy" ]]; then REASON="intensity=$INTENSITY"; fi
+            if [[ "$FORCE_VPN" == "true" ]]; then REASON="${REASON:+$REASON, }force_vpn=true"; fi
+            if [[ "$IS_PRESSABLE" == "true" ]]; then REASON="${REASON:+$REASON, }pressable=true (hosting='$HOSTING_ORG')"; fi
+            echo "VPN will be brought up — $REASON"
           else
             echo "use_vpn=false" >> "$GITHUB_OUTPUT"
-            echo "VPN bypassed (intensity=$INTENSITY, force_vpn=$FORCE_VPN)"
+            echo "VPN bypassed (intensity=$INTENSITY, force_vpn=$FORCE_VPN, hosting='$HOSTING_ORG')"
           fi
 
       - name: Make VPN scripts executable

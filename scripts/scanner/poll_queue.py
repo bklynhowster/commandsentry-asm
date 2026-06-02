@@ -30,14 +30,15 @@ DESCRIPTOR SHAPE (stdout):
     "intensity":      "light" | "medium" | "heavy",
     "authenticated":  true | false,
     "asset": {
-      "asset_id":       "<id>",
-      "name":           "<name>",
-      "organization":   "<org>",
-      "type":           "<type>",
-      "kind":           "<kind>",
-      "apex_domain":    "<apex>",
-      "aliases":        ["..."],
-      "current_risk":   "<risk>"
+      "asset_id":        "<id>",
+      "name":            "<name>",
+      "organization":    "<org>",
+      "type":            "<type>",
+      "kind":            "<kind>",
+      "apex_domain":     "<apex>",
+      "aliases":         ["..."],
+      "current_risk":    "<risk>",
+      "top_hosting_org": "<hosting org name | null>"
     },
     "auth_config": null | {
       "login_url":                "<url>",
@@ -156,12 +157,21 @@ where queue_id = %(queue_id)s;
 """
 
 
-# ─── Fetch asset metadata (joined with surface kind etc.) ──────────────
+# ─── Fetch asset metadata (joined with surface for hosting info) ──────
+# LEFT JOIN to asset_surface so we surface top_hosting_org alongside the
+# asset row. This drives the Pressable-aware VPN routing decision in
+# scanner.yml's vpn_decision step (2026-06-02): Light tier normally
+# skips VPN for speed, but Pressable/Atomic-hosted targets need VPN
+# because Pressable rate-limits Azure ASN on wp-admin paths regardless
+# of intensity. LEFT JOIN keeps the asset row even if no surface data
+# has been imported yet.
 FETCH_ASSET_SQL = """
-select asset_id, name, organization, type, kind, apex_domain, aliases,
-       current_risk
-from public.assets
-where asset_id = %s;
+select a.asset_id, a.name, a.organization, a.type, a.kind, a.apex_domain,
+       a.aliases, a.current_risk,
+       s.top_hosting_org
+from public.assets a
+left join public.asset_surface s on s.asset_id = a.asset_id
+where a.asset_id = %s;
 """
 
 
@@ -277,6 +287,12 @@ def build_descriptor(
             "apex_domain":  asset.get("apex_domain"),
             "aliases":      asset.get("aliases") or [],
             "current_risk": asset.get("current_risk"),
+            # 2026-06-02: surface top_hosting_org so scanner.yml's
+            # vpn_decision step can route Light scans through VPN for
+            # IP-class-sensitive hosts (Pressable / Atomic). None when
+            # no asset_surface row exists yet (e.g. brand-new asset
+            # before first ASM Discover run).
+            "top_hosting_org": asset.get("top_hosting_org"),
         },
         "auth_config": None,
     }
