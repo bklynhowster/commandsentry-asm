@@ -41,6 +41,7 @@ from .common import (
     relative_to_scan_root,
     resolve_finding_asset_id,
     stable_finding_id,
+    strip_ansi,
     subdomain_from_url,
     to_utc_iso,
 )
@@ -157,8 +158,11 @@ def parse_text_file(
             # warnings; skip them silently.
             continue
 
-        tpl = m.group("tpl").strip()
-        sub = (m.group("sub") or "").strip()
+        # Strip ANSI SGR escapes nuclei sometimes emits in colored output
+        # (e.g. `[92mhttp-missing-security-headers[0m`). Burned 2026-06-01
+        # when these survived into normalized_key and the dedup view.
+        tpl = strip_ansi(m.group("tpl").strip())
+        sub = strip_ansi((m.group("sub") or "").strip())
 
         # Skip pure tech-fingerprinting / bare-presence templates before
         # doing any further parsing — saves time and stops these from ever

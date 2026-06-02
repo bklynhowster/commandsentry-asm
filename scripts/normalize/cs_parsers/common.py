@@ -17,10 +17,32 @@ Never compound (no LOW-MODERATE etc).
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+
+# ─── ANSI escape stripping ────────────────────────────────────────────────────
+# Tools that emit colored output (nuclei is the worst offender, wpscan too)
+# can leak ANSI SGR escapes into the strings we end up storing in
+# finding_id / normalized_key / title. The user-facing artifact is ugly
+# (e.g. `[92mhttp-missing-security-headers[0m`) and breaks string
+# comparisons for dedup. Strip them at every ingest boundary AND defensively
+# bake the strip into stable_finding_id so a forgetful parser can't leak.
+#
+# Pattern covers both forms seen in the wild:
+#   • Full ANSI: ESC[XXm  (e.g. \x1b[92m)
+#   • Bare bracketed: [XXm  (the ESC byte got dropped somewhere upstream)
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m|\[\d+m")
+
+
+def strip_ansi(s: str) -> str:
+    """Remove ANSI SGR escapes from a string. Idempotent. None-safe."""
+    if not s:
+        return s
+    return ANSI_RE.sub("", s)
 
 
 # ─── canonical severity scale ─────────────────────────────────────────────────
@@ -76,8 +98,13 @@ def stable_finding_id(asset_id: str, source: str, template_id: str, matched_at: 
     instance of the same vuln pattern).
     """
     matched = matched_at or ""
+    # Defense in depth: strip ANSI escapes from template_id at the ID-build
+    # boundary. Parsers SHOULD strip at capture (see nuclei_text.py 2026-06-02
+    # fix), but this guarantees ANSI never leaks into a finding_id even if a
+    # future parser forgets.
+    template_id_clean = strip_ansi(template_id or "")
     h = hashlib.sha256(matched.encode("utf-8")).hexdigest()[:7]
-    return f"{asset_id}:{source}:{template_id}:{h}"
+    return f"{asset_id}:{source}:{template_id_clean}:{h}"
 
 
 # ─── timestamps ───────────────────────────────────────────────────────────────
