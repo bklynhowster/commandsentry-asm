@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-03T04:58:29Z_79076051",
-    "started_at": "2026-06-03T04:58:29Z",
-    "completed_at": "2026-06-03T05:01:01Z",
-    "duration_seconds": 152,
+    "id": "scan_2026-06-03T11:17:10Z_f239bd34",
+    "started_at": "2026-06-03T11:17:10Z",
+    "completed_at": "2026-06-03T11:19:54Z",
+    "duration_seconds": 164,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -28,8 +28,8 @@
   },
   "registration": {},
   "summary": {
-    "subdomain_count": 4,
-    "live_subdomain_count": 4,
+    "subdomain_count": 2,
+    "live_subdomain_count": 2,
     "host_count": 2,
     "service_count": 8,
     "newest_cert_expiry_days": 77,
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-03T05:01:01Z",
-      "last_seen": "2026-06-03T05:01:01Z",
+      "first_discovered": "2026-06-03T11:19:54Z",
+      "last_seen": "2026-06-03T11:19:54Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -198,9 +198,9 @@
         ],
         "txt": [
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
           "MS=ms93622757",
-          "apple-domain-verification=cWkfjNKuM61a3EZ6",
-          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430"
+          "apple-domain-verification=cWkfjNKuM61a3EZ6"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -308,84 +308,12 @@
       }
     },
     {
-      "name": "app.commandcompanies.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-06-03T05:01:01Z",
-      "last_seen": "2026-06-03T05:01:01Z",
-      "tags": [],
-      "reachability": {
-        "live": false,
-        "http_status": null,
-        "title": null
-      },
-      "hosts": [],
-      "services": [],
-      "dns": {
-        "a": [],
-        "aaaa": [],
-        "cname": null,
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": null,
-        "platform_label": null,
-        "tech": []
-      },
-      "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
-      }
-    },
-    {
-      "name": "smtp2.commandcompanies.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-06-03T05:01:02Z",
-      "last_seen": "2026-06-03T05:01:02Z",
-      "tags": [],
-      "reachability": {
-        "live": false,
-        "http_status": null,
-        "title": null
-      },
-      "hosts": [],
-      "services": [],
-      "dns": {
-        "a": [],
-        "aaaa": [],
-        "cname": null,
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": null,
-        "platform_label": null,
-        "tech": []
-      },
-      "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
-      }
-    },
-    {
       "name": "www.commandcompanies.com",
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-03T05:01:02Z",
-      "last_seen": "2026-06-03T05:01:02Z",
+      "first_discovered": "2026-06-03T11:19:55Z",
+      "last_seen": "2026-06-03T11:19:55Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -539,8 +467,8 @@
         "txt": [
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
           "MS=ms93622757",
-          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
-          "apple-domain-verification=cWkfjNKuM61a3EZ6"
+          "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -649,119 +577,19 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-06-02T21:18:47Z_bfce8bac",
+    "since_scan": "scan_2026-06-03T04:58:29Z_79076051",
     "added": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "removed": {
       "subdomains": [
         "app.commandcompanies.com",
         "smtp2.commandcompanies.com"
       ],
-      "services": [
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.172.42",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.172.42",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.173.153",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.173.153",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.172.42",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.172.42",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.173.153",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.173.153",
-          "port": 443,
-          "protocol": "tcp"
-        }
-      ],
-      "hosts": [
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.172.42"
-        },
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.173.153"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.172.42"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.173.153"
-        }
-      ]
-    },
-    "removed": {
-      "subdomains": [],
-      "services": [
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.172.54",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.172.54",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.172.54",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.172.54",
-          "port": 443,
-          "protocol": "tcp"
-        }
-      ],
-      "hosts": [
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.172.54"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.172.54"
-        }
-      ]
+      "services": [],
+      "hosts": []
     },
     "changed": {
       "fingerprint": [],
@@ -4525,6 +4353,50 @@
         },
         "app.commandcompanies.com": {},
         "smtp2.commandcompanies.com": {},
+        "www.commandcompanies.com": {
+          "199.16.172.42": [
+            80,
+            443
+          ],
+          "199.16.173.153": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Contact Form 7": "6.1.6",
+        "Slider Revolution": "6.7.56",
+        "WP Google Map Plugin": "4.9.5",
+        "WPMU DEV Smush": "4.1.0",
+        "Yoast SEO": "27.7",
+        "imagesLoaded": "5.0.0",
+        "jQuery Migrate": "3.4.1"
+      }
+    },
+    {
+      "scan_id": "scan_2026-06-03T11:17:10Z_f239bd34",
+      "started_at": "2026-06-03T11:17:10Z",
+      "completed_at": "2026-06-03T11:19:54Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.42": [
+            80,
+            443
+          ],
+          "199.16.173.153": [
+            80,
+            443
+          ]
+        },
         "www.commandcompanies.com": {
           "199.16.172.42": [
             80,
