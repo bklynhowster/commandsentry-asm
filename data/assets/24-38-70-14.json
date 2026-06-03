@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-03T11:33:55Z_e165eb57",
-    "started_at": "2026-06-03T11:33:55Z",
-    "completed_at": "2026-06-03T11:35:53Z",
-    "duration_seconds": 118,
+    "id": "scan_2026-06-03T17:20:23Z_337dd675",
+    "started_at": "2026-06-03T17:20:23Z",
+    "completed_at": "2026-06-03T17:22:01Z",
+    "duration_seconds": 98,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -40,8 +40,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-06-03T11:35:53Z",
-      "last_seen": "2026-06-03T11:35:53Z",
+      "first_discovered": "2026-06-03T17:22:01Z",
+      "last_seen": "2026-06-03T17:22:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -55,7 +55,7 @@
           "asn_org": "Cablevision Systems Corp.",
           "country": "US",
           "region": "New York",
-          "city": "New York City",
+          "city": "Plainview",
           "reverse_dns": "1826460e.cst.lightpath.net",
           "is_private": false
         }
@@ -113,7 +113,7 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-06-03T05:12:29Z_e54fd73a",
+    "since_scan": "scan_2026-06-03T11:33:55Z_e165eb57",
     "added": {
       "subdomains": [],
       "services": [],
@@ -2213,6 +2213,27 @@
       "scan_id": "scan_2026-06-03T11:33:55Z_e165eb57",
       "started_at": "2026-06-03T11:33:55Z",
       "completed_at": "2026-06-03T11:35:53Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_names": [
+        "24.38.70.14"
+      ],
+      "ports_by_sub": {
+        "24.38.70.14": {
+          "24.38.70.14": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-06-03T17:20:23Z_337dd675",
+      "started_at": "2026-06-03T17:20:23Z",
+      "completed_at": "2026-06-03T17:22:01Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 1,

@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-03T11:31:08Z_d44a832e",
-    "started_at": "2026-06-03T11:31:08Z",
-    "completed_at": "2026-06-03T11:33:18Z",
-    "duration_seconds": 130,
+    "id": "scan_2026-06-03T17:17:40Z_9151e9b5",
+    "started_at": "2026-06-03T17:17:40Z",
+    "completed_at": "2026-06-03T17:19:45Z",
+    "duration_seconds": 125,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -27,8 +27,8 @@
   },
   "registration": {},
   "summary": {
-    "subdomain_count": 7,
-    "live_subdomain_count": 7,
+    "subdomain_count": 6,
+    "live_subdomain_count": 6,
     "host_count": 4,
     "service_count": 6,
     "newest_cert_expiry_days": 245,
@@ -41,8 +41,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-03T11:33:18Z",
-      "last_seen": "2026-06-03T11:33:18Z",
+      "first_discovered": "2026-06-03T17:19:45Z",
+      "last_seen": "2026-06-03T17:19:45Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -60,9 +60,9 @@
           "ns01.sciimage.com"
         ],
         "txt": [
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
           "0ed1fe018a578bb877e8354235b4b5eb5a2f99c17c",
-          "v=verifydomain MS=2796493",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
+          "v=verifydomain MS=2796493"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -83,8 +83,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-03T11:33:18Z",
-      "last_seen": "2026-06-03T11:33:18Z",
+      "first_discovered": "2026-06-03T17:19:45Z",
+      "last_seen": "2026-06-03T17:19:45Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -175,8 +175,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-03T11:33:18Z",
-      "last_seen": "2026-06-03T11:33:18Z",
+      "first_discovered": "2026-06-03T17:19:45Z",
+      "last_seen": "2026-06-03T17:19:45Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -233,44 +233,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-03T11:33:18Z",
-      "last_seen": "2026-06-03T11:33:18Z",
-      "tags": [],
-      "reachability": {
-        "live": false,
-        "http_status": null,
-        "title": null
-      },
-      "hosts": [],
-      "services": [],
-      "dns": {
-        "a": [],
-        "aaaa": [],
-        "cname": null,
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": null,
-        "platform_label": null,
-        "tech": []
-      },
-      "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
-      }
-    },
-    {
-      "name": "queue.sciimage.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-06-03T11:33:18Z",
-      "last_seen": "2026-06-03T11:33:18Z",
+      "first_discovered": "2026-06-03T17:19:45Z",
+      "last_seen": "2026-06-03T17:19:45Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -305,8 +269,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-03T11:33:18Z",
-      "last_seen": "2026-06-03T11:33:18Z",
+      "first_discovered": "2026-06-03T17:19:45Z",
+      "last_seen": "2026-06-03T17:19:45Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -381,8 +345,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-03T11:33:18Z",
-      "last_seen": "2026-06-03T11:33:18Z",
+      "first_discovered": "2026-06-03T17:19:45Z",
+      "last_seen": "2026-06-03T17:19:45Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -454,16 +418,16 @@
     }
   ],
   "deltas": {
-    "since_scan": "scan_2026-06-03T05:10:23Z_bb096392",
+    "since_scan": "scan_2026-06-03T11:31:08Z_d44a832e",
     "added": {
-      "subdomains": [
-        "queue.sciimage.com"
-      ],
+      "subdomains": [],
       "services": [],
       "hosts": []
     },
     "removed": {
-      "subdomains": [],
+      "subdomains": [
+        "queue.sciimage.com"
+      ],
       "services": [],
       "hosts": []
     },
@@ -5194,6 +5158,50 @@
         },
         "ns02.sciimage.com": {},
         "queue.sciimage.com": {},
+        "vpn.sciimage.com": {
+          "24.157.51.66": [
+            443
+          ]
+        },
+        "vpn2.sciimage.com": {
+          "52.119.65.2": [
+            443
+          ]
+        }
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-06-03T17:17:40Z_9151e9b5",
+      "started_at": "2026-06-03T17:17:40Z",
+      "completed_at": "2026-06-03T17:19:45Z",
+      "subdomain_count": 6,
+      "live_subdomain_count": 6,
+      "host_count": 4,
+      "service_count": 6,
+      "subdomain_names": [
+        "ftp.sciimage.com",
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "ports_by_sub": {
+        "sciimage.com": {},
+        "ftp.sciimage.com": {
+          "24.157.51.76": [
+            22,
+            80,
+            443
+          ]
+        },
+        "ns01.sciimage.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.sciimage.com": {},
         "vpn.sciimage.com": {
           "24.157.51.66": [
             443
