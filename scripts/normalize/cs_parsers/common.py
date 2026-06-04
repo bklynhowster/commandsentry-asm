@@ -227,6 +227,23 @@ class FindingEvent:
     # to count-based heuristic.
     status_hint: Optional[str] = None   # "open", "remediated", "regressed", "validated_remediated"
 
+    def __post_init__(self):
+        # Title normalization happens once at construction so every parser
+        # gets it for free without each one having to remember.
+        #
+        # 1. Strip ANSI escape sequences (some scanners leak colored output
+        #    into title strings).
+        # 2. Collapse any whitespace run (multiple spaces, tabs, embedded
+        #    newlines) to a single space. nuclei + testssl frequently emit
+        #    titles like "ssl-issuer  [Let's Encrypt]" with a double-space
+        #    between the slug and the bracketed metadata; this normalizes
+        #    them at ingest so the portal never has to.
+        # 3. Trim leading/trailing whitespace.
+        if self.title:
+            cleaned = strip_ansi(self.title)
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            self.title = cleaned
+
 
 def event_to_dict(ev: FindingEvent) -> dict:
     return asdict(ev)
