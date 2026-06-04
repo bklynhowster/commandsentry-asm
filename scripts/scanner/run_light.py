@@ -361,7 +361,7 @@ def check_dns_posture(ctx: ScanContext) -> None:
                         f"Without SPF, attackers can spoof mail from this domain "
                         f"without receiving-server rejection.",
             tags=["dns", "email-auth", "spf"],
-            cwe=[1021],
+            cwe=[290],  # CWE-290 Authentication Bypass by Spoofing
             raw_excerpt=stdout[:1000],
         ))
 
@@ -380,7 +380,7 @@ def check_dns_posture(ctx: ScanContext) -> None:
                         f"DMARC instructs receiving servers what to do with mail that "
                         f"fails SPF/DKIM — without it, spoofed mail passes through.",
             tags=["dns", "email-auth", "dmarc"],
-            cwe=[1021],
+            cwe=[290],  # CWE-290 Authentication Bypass by Spoofing
             raw_excerpt=stdout[:1000],
         ))
     else:
@@ -756,7 +756,7 @@ def check_csp_nonce(ctx: ScanContext) -> None:
                             f"The server must generate a fresh cryptographically random "
                             f"nonce per response.",
                 tags=["csp", "nonce", "static"],
-                cwe=[1021],
+                cwe=[330],  # CWE-330 Use of Insufficiently Random Values
                 raw_excerpt="\n".join(csp_samples[:3])[:2000],
             ))
 
@@ -1065,10 +1065,10 @@ def probe_static_csp_nonces_per_directive(ctx: ScanContext) -> None:
                 f"{' (truncated)' if len(static_nonces) > 5 else ''}"
             ),
             tags=["csp", "nonce", "static", directive, "behavioral-probe"],
-            cwe=[1021],  # CWE-1021 Improper Restriction of Rendered UI
+            cwe=[330],  # CWE-330 Use of Insufficiently Random Values
             references=[
                 "https://content-security-policy.com/nonce/",
-                "https://cwe.mitre.org/data/definitions/1021.html",
+                "https://cwe.mitre.org/data/definitions/330.html",
             ],
             raw_excerpt=(
                 f"Directive: {directive}\n"
