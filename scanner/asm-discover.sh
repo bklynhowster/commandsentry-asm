@@ -140,6 +140,18 @@ discover_one() {
     *)    fail "Unknown target type: $type"; return 1 ;;
   esac
 
+  # ─── Empty-result guard — check for the abort marker ─────────────────
+  # Per Advisor 4.7 (2026-06-06): if discover_apex / discover_fqdn / etc.
+  # set _abort_reason because resolution returned empty, we MUST NOT
+  # write the asset JSON. Doing so would bump last_seen on a zero-data
+  # row and false-fire "went dark" alerts 72h later. Bail clean — the
+  # previous run's data stays canonical and the next cron cycle retries.
+  if [[ -f "$work_dir/_abort_reason" ]]; then
+    local reason=$(cat "$work_dir/_abort_reason")
+    warn "SCAN ABORTED for $id (reason: $reason) — no JSON written, no last_seen bump"
+    return 1
+  fi
+
   local completed_at; completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   echo "$completed_at" > "$work_dir/_completed"
 
@@ -170,22 +182,52 @@ discover_fqdn() {
   local target="$1" wd="$2"
   local mode="${3:-full}"    # "full" (default) or "fast" — fast skips testssl
 
-  phase "DNS resolution + records (dnsx)"
+  phase "DNS resolution + records (dig)"
+  # 2026-06-06 — switched from dnsx to dig per Advisor 4.7. dnsx empirically
+  # fails on GH Actions runners (Azure DNS view quirk — see the comment near
+  # line ~285 of this file). The Tier 2 phantom gate was bitten by exactly
+  # this 2026-06-06 evening; same risk applies here. If dnsx silently fails
+  # here, _resolved_ips.txt comes back empty → naabu+httpx+testssl all run
+  # against nothing → normalize.py writes an empty deep-scan JSON → importer
+  # bumps last_seen with zero data → 72h later "asset went dark" alerts fire
+  # on every owned asset. Dig is rock-solid in this environment.
+  : > "$wd/_resolved_ips.txt"
+  dig +short +time=3 +tries=2 A    "$target" 2>/dev/null \
+    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' >> "$wd/_resolved_ips.txt" || true
+  dig +short +time=3 +tries=2 AAAA "$target" 2>/dev/null \
+    | grep -E '^[0-9a-fA-F:]+$' >> "$wd/_resolved_ips.txt" || true
+  sort -u -o "$wd/_resolved_ips.txt" "$wd/_resolved_ips.txt"
+
+  # Also write a best-effort dnsx records snapshot for the normalizer's
+  # MX/NS/TXT consumers. Failure here is non-fatal — _resolved_ips.txt
+  # already came from dig.
   echo "$target" | dnsx -silent -resp -a -aaaa -cname -mx -ns -txt -json \
     -t "${DNSX_THREADS:-25}" -timeout 5 \
-    > "$wd/dnsx.json" 2> "$wd/dnsx.err" || warn "dnsx phase had errors (see dnsx.err)"
+    > "$wd/dnsx.json" 2> "$wd/dnsx.err" || warn "dnsx records snapshot had errors (non-fatal — _resolved_ips.txt is from dig)"
 
   phase "WHOIS lookup"
   whois "$target" > "$wd/whois.txt" 2> "$wd/whois.err" || warn "whois phase had errors"
 
-  # Extract resolved IPs for downstream phases
-  jq -r '.a[]?, .aaaa[]?' "$wd/dnsx.json" 2>/dev/null | sort -u > "$wd/_resolved_ips.txt"
   local ip_count=$(wc -l < "$wd/_resolved_ips.txt")
   log "Resolved $ip_count IP(s)"
 
   if [[ $ip_count -eq 0 ]]; then
-    warn "No IPs resolved — skipping IP-dependent phases"
-    return 0
+    # ─── EMPTY-RESULT GUARD ─────────────────────────────────────────────
+    # Per Advisor 4.7 (2026-06-06): "couldn't resolve" must NOT be
+    # conflated with "resolved to nothing." An empty resolution result
+    # means EITHER the host is genuinely gone OR the resolver had a
+    # transient blip. If we proceed with empty input, the cascade is:
+    #   empty _resolved_ips → empty naabu/httpx/testssl output → empty
+    #   deep-scan JSON → importer bumps last_seen on a zero-data row →
+    #   72h later 'asset went dark' alerts fire on what was actually
+    #   just a network glitch.
+    # Even dig can blip. Abort the scan for this target instead. Set a
+    # marker that the caller (discover_one) checks before invoking the
+    # normalizer. No JSON written → no last_seen bump → previous scan's
+    # data stays canonical. Next cron cycle retries naturally.
+    warn "RESOLUTION FAILURE on $target — aborting scan (no JSON write, no last_seen bump). Will retry next cycle."
+    echo "resolution_failure" > "$wd/_abort_reason"
+    return 1
   fi
 
   phase "Port discovery (naabu)"
