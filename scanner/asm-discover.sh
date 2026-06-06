@@ -403,20 +403,30 @@ discover_apex() {
   #   _phantom_subdomains.txt  — no resolution (CT-log artifact suspected)
   # Only the resolved list goes through the deep-scan loop below; the
   # phantom list is preserved for the importer to tag discovery_status=ct_ghost.
+  #
+  # IMPORTANT: per the comment around line 285 of this same file, dnsx
+  # empirically fails to resolve names from GH Actions runners (Azure DNS
+  # view quirk). Initial Tier 2 implementation used dnsx and classified
+  # EVERY candidate as phantom (including real hosts like www.cmi) — fixed
+  # 2026-06-06 evening by switching to per-host dig (same pattern that
+  # works for the wildcard-DNS check upstream).
   phase "Subdomain DNS resolution gate (Tier 2)"
   : > "$wd/_resolved_subdomains.txt"
   : > "$wd/_phantom_subdomains.txt"
   if [[ -s "$wd/_live_subdomains.txt" ]]; then
-    cat "$wd/_live_subdomains.txt" | \
-      dnsx -silent -a -aaaa -resp -json \
-        > "$wd/_subdomain_resolution.json" 2>/dev/null </dev/null || \
-        warn "dnsx resolution pass had errors"
-    if [[ -s "$wd/_subdomain_resolution.json" ]]; then
-      jq -r 'select(.a or .aaaa) | .host' "$wd/_subdomain_resolution.json" \
-        2>/dev/null | sort -u > "$wd/_resolved_subdomains.txt"
-    fi
-    comm -23 "$wd/_live_subdomains.txt" "$wd/_resolved_subdomains.txt" \
-      > "$wd/_phantom_subdomains.txt"
+    while IFS= read -r _candidate; do
+      [[ -z "$_candidate" ]] && continue
+      local _a _aaaa
+      _a=$(dig +short +time=3 +tries=2 A    "$_candidate" 2>/dev/null | head -1)
+      _aaaa=$(dig +short +time=3 +tries=2 AAAA "$_candidate" 2>/dev/null | head -1)
+      if [[ -n "$_a" || -n "$_aaaa" ]]; then
+        echo "$_candidate" >> "$wd/_resolved_subdomains.txt"
+      else
+        echo "$_candidate" >> "$wd/_phantom_subdomains.txt"
+      fi
+    done < "$wd/_live_subdomains.txt"
+    sort -u -o "$wd/_resolved_subdomains.txt" "$wd/_resolved_subdomains.txt"
+    sort -u -o "$wd/_phantom_subdomains.txt"  "$wd/_phantom_subdomains.txt"
   fi
   local resolved_count phantom_count
   resolved_count=$(wc -l < "$wd/_resolved_subdomains.txt" | tr -d ' ')
