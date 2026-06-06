@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-06T15:45:21Z_87cf77cb",
-    "started_at": "2026-06-06T15:45:21Z",
-    "completed_at": "2026-06-06T15:45:28Z",
-    "duration_seconds": 7,
+    "id": "scan_2026-06-06T19:41:45Z_8f52c12f",
+    "started_at": "2026-06-06T19:41:45Z",
+    "completed_at": "2026-06-06T19:41:55Z",
+    "duration_seconds": 10,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -36,8 +36,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-06T15:45:28Z",
-      "last_seen": "2026-06-06T15:45:28Z",
+      "first_discovered": "2026-06-06T19:41:55Z",
+      "last_seen": "2026-06-06T19:41:55Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -72,126 +72,24 @@
     "www.commandcompanies.com"
   ],
   "deltas": {
-    "since_scan": "scan_2026-06-06T14:00:02Z_efe64cc4",
+    "since_scan": "scan_2026-06-06T15:45:21Z_87cf77cb",
     "added": {
       "subdomains": [],
       "services": [],
       "hosts": []
     },
     "removed": {
-      "subdomains": [
-        "www.commandcompanies.com"
-      ],
-      "services": [
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.172.42",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.172.42",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.173.153",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.173.153",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.172.42",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.172.42",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.173.153",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.173.153",
-          "port": 443,
-          "protocol": "tcp"
-        }
-      ],
-      "hosts": [
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.172.42"
-        },
-        {
-          "subdomain": "commandcompanies.com",
-          "ip": "199.16.173.153"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.172.42"
-        },
-        {
-          "subdomain": "www.commandcompanies.com",
-          "ip": "199.16.173.153"
-        }
-      ]
+      "subdomains": [],
+      "services": [],
+      "hosts": []
     },
     "changed": {
       "fingerprint": [],
       "cert": [],
-      "reachability": [
-        {
-          "subdomain": "commandcompanies.com",
-          "from": true,
-          "to": false,
-          "is_root": true
-        }
-      ]
+      "reachability": []
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-05-10T19:15:44Z_34b4cb49",
-      "started_at": "2026-05-10T19:15:44Z",
-      "completed_at": "2026-05-10T19:18:29Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 1,
-      "service_count": 4,
-      "subdomain_names": [
-        "commandcompanies.com",
-        "www.commandcompanies.com"
-      ],
-      "ports_by_sub": {
-        "commandcompanies.com": {
-          "199.16.172.54": [
-            80,
-            443
-          ]
-        },
-        "www.commandcompanies.com": {
-          "199.16.172.54": [
-            80,
-            443
-          ]
-        }
-      }
-    },
     {
       "scan_id": "scan_2026-05-10T21:40:51Z_5336ffea",
       "started_at": "2026-05-10T21:40:51Z",
@@ -4333,6 +4231,22 @@
       "scan_id": "scan_2026-06-06T15:45:21Z_87cf77cb",
       "started_at": "2026-06-06T15:45:21Z",
       "completed_at": "2026-06-06T15:45:28Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 0,
+      "service_count": 0,
+      "subdomain_names": [
+        "commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {}
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-06-06T19:41:45Z_8f52c12f",
+      "started_at": "2026-06-06T19:41:45Z",
+      "completed_at": "2026-06-06T19:41:55Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 0,

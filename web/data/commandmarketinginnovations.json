@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-06T15:46:41Z_5abbce64",
-    "started_at": "2026-06-06T15:46:41Z",
-    "completed_at": "2026-06-06T15:47:17Z",
-    "duration_seconds": 36,
+    "id": "scan_2026-06-06T19:43:37Z_c9d233b1",
+    "started_at": "2026-06-06T19:43:37Z",
+    "completed_at": "2026-06-06T19:43:59Z",
+    "duration_seconds": 22,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -36,8 +36,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-06T15:47:17Z",
-      "last_seen": "2026-06-06T15:47:17Z",
+      "first_discovered": "2026-06-06T19:43:59Z",
+      "last_seen": "2026-06-06T19:43:59Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -72,96 +72,21 @@
     "www.commandmarketinginnovations.com"
   ],
   "deltas": {
-    "since_scan": "scan_2026-06-06T14:10:19Z_428ab04d",
+    "since_scan": "scan_2026-06-06T15:46:41Z_5abbce64",
     "added": {
       "subdomains": [],
       "services": [],
       "hosts": []
     },
     "removed": {
-      "subdomains": [
-        "www.commandmarketinginnovations.com"
-      ],
-      "services": [
-        {
-          "subdomain": "commandmarketinginnovations.com",
-          "ip": "199.16.172.41",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "commandmarketinginnovations.com",
-          "ip": "199.16.172.41",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "commandmarketinginnovations.com",
-          "ip": "199.16.173.231",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "commandmarketinginnovations.com",
-          "ip": "199.16.173.231",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandmarketinginnovations.com",
-          "ip": "199.16.172.41",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandmarketinginnovations.com",
-          "ip": "199.16.172.41",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandmarketinginnovations.com",
-          "ip": "199.16.173.231",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandmarketinginnovations.com",
-          "ip": "199.16.173.231",
-          "port": 443,
-          "protocol": "tcp"
-        }
-      ],
-      "hosts": [
-        {
-          "subdomain": "commandmarketinginnovations.com",
-          "ip": "199.16.172.41"
-        },
-        {
-          "subdomain": "commandmarketinginnovations.com",
-          "ip": "199.16.173.231"
-        },
-        {
-          "subdomain": "www.commandmarketinginnovations.com",
-          "ip": "199.16.172.41"
-        },
-        {
-          "subdomain": "www.commandmarketinginnovations.com",
-          "ip": "199.16.173.231"
-        }
-      ]
+      "subdomains": [],
+      "services": [],
+      "hosts": []
     },
     "changed": {
       "fingerprint": [],
       "cert": [],
-      "reachability": [
-        {
-          "subdomain": "commandmarketinginnovations.com",
-          "from": true,
-          "to": false,
-          "is_root": true
-        }
-      ]
+      "reachability": []
     }
   },
   "history": [
@@ -2175,6 +2100,22 @@
       "scan_id": "scan_2026-06-06T15:46:41Z_5abbce64",
       "started_at": "2026-06-06T15:46:41Z",
       "completed_at": "2026-06-06T15:47:17Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 0,
+      "service_count": 0,
+      "subdomain_names": [
+        "commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {}
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-06-06T19:43:37Z_c9d233b1",
+      "started_at": "2026-06-06T19:43:37Z",
+      "completed_at": "2026-06-06T19:43:59Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 0,

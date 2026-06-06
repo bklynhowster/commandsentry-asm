@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-06T15:45:51Z_4d3a5160",
-    "started_at": "2026-06-06T15:45:51Z",
-    "completed_at": "2026-06-06T15:46:41Z",
-    "duration_seconds": 50,
+    "id": "scan_2026-06-06T19:42:42Z_11bebd19",
+    "started_at": "2026-06-06T19:42:42Z",
+    "completed_at": "2026-06-06T19:43:37Z",
+    "duration_seconds": 55,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -36,8 +36,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-06T15:46:41Z",
-      "last_seen": "2026-06-06T15:46:41Z",
+      "first_discovered": "2026-06-06T19:43:37Z",
+      "last_seen": "2026-06-06T19:43:37Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -76,150 +76,24 @@
     "www.commandcommcentral.com"
   ],
   "deltas": {
-    "since_scan": "scan_2026-06-06T14:06:34Z_a5e3a709",
+    "since_scan": "scan_2026-06-06T15:45:51Z_4d3a5160",
     "added": {
       "subdomains": [],
       "services": [],
       "hosts": []
     },
     "removed": {
-      "subdomains": [
-        "api.commandcommcentral.com",
-        "ns01.commandcommcentral.com",
-        "ns02.commandcommcentral.com",
-        "prod.commandcommcentral.com",
-        "remote.commandcommcentral.com",
-        "test.commandcommcentral.com",
-        "www.commandcommcentral.com"
-      ],
-      "services": [
-        {
-          "subdomain": "api.commandcommcentral.com",
-          "ip": "24.157.51.85",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "api.commandcommcentral.com",
-          "ip": "24.157.51.85",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "commandcommcentral.com",
-          "ip": "24.38.70.5",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "commandcommcentral.com",
-          "ip": "24.38.70.5",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "ns01.commandcommcentral.com",
-          "ip": "13.248.212.206",
-          "port": 53,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "test.commandcommcentral.com",
-          "ip": "24.38.70.8",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "test.commandcommcentral.com",
-          "ip": "24.38.70.8",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcommcentral.com",
-          "ip": "24.38.70.5",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcommcentral.com",
-          "ip": "24.38.70.5",
-          "port": 443,
-          "protocol": "tcp"
-        }
-      ],
-      "hosts": [
-        {
-          "subdomain": "api.commandcommcentral.com",
-          "ip": "24.157.51.85"
-        },
-        {
-          "subdomain": "commandcommcentral.com",
-          "ip": "24.38.70.5"
-        },
-        {
-          "subdomain": "ns01.commandcommcentral.com",
-          "ip": "13.248.212.206"
-        },
-        {
-          "subdomain": "test.commandcommcentral.com",
-          "ip": "24.38.70.8"
-        },
-        {
-          "subdomain": "www.commandcommcentral.com",
-          "ip": "24.38.70.5"
-        }
-      ]
+      "subdomains": [],
+      "services": [],
+      "hosts": []
     },
     "changed": {
       "fingerprint": [],
       "cert": [],
-      "reachability": [
-        {
-          "subdomain": "commandcommcentral.com",
-          "from": true,
-          "to": false,
-          "is_root": true
-        }
-      ]
+      "reachability": []
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-05-10T19:40:45Z_1913890d",
-      "started_at": "2026-05-10T19:40:45Z",
-      "completed_at": "2026-05-10T19:45:29Z",
-      "subdomain_count": 4,
-      "live_subdomain_count": 4,
-      "host_count": 2,
-      "service_count": 5,
-      "subdomain_names": [
-        "commandcommcentral.com",
-        "ns01.commandcommcentral.com",
-        "ns02.commandcommcentral.com",
-        "www.commandcommcentral.com"
-      ],
-      "ports_by_sub": {
-        "commandcommcentral.com": {
-          "24.38.70.5": [
-            80,
-            443
-          ]
-        },
-        "ns01.commandcommcentral.com": {
-          "13.248.212.206": [
-            53
-          ]
-        },
-        "ns02.commandcommcentral.com": {},
-        "www.commandcommcentral.com": {
-          "24.38.70.5": [
-            80,
-            443
-          ]
-        }
-      }
-    },
     {
       "scan_id": "scan_2026-05-10T22:05:55Z_2be180a9",
       "started_at": "2026-05-10T22:05:55Z",
@@ -6308,6 +6182,22 @@
       "scan_id": "scan_2026-06-06T15:45:51Z_4d3a5160",
       "started_at": "2026-06-06T15:45:51Z",
       "completed_at": "2026-06-06T15:46:41Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 0,
+      "service_count": 0,
+      "subdomain_names": [
+        "commandcommcentral.com"
+      ],
+      "ports_by_sub": {
+        "commandcommcentral.com": {}
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-06-06T19:42:42Z_11bebd19",
+      "started_at": "2026-06-06T19:42:42Z",
+      "completed_at": "2026-06-06T19:43:37Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 0,

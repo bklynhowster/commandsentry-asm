@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-06T15:45:28Z_3bbd9097",
-    "started_at": "2026-06-06T15:45:28Z",
-    "completed_at": "2026-06-06T15:45:51Z",
-    "duration_seconds": 23,
+    "id": "scan_2026-06-06T19:41:55Z_98a7512f",
+    "started_at": "2026-06-06T19:41:55Z",
+    "completed_at": "2026-06-06T19:42:42Z",
+    "duration_seconds": 47,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -36,8 +36,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-06T15:45:51Z",
-      "last_seen": "2026-06-06T15:45:51Z",
+      "first_discovered": "2026-06-06T19:42:42Z",
+      "last_seen": "2026-06-06T19:42:42Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -80,366 +80,24 @@
     "zoetislabs.unimacgraphics.com"
   ],
   "deltas": {
-    "since_scan": "scan_2026-06-06T14:02:43Z_1db6b6c9",
+    "since_scan": "scan_2026-06-06T15:45:28Z_3bbd9097",
     "added": {
       "subdomains": [],
       "services": [],
       "hosts": []
     },
     "removed": {
-      "subdomains": [
-        "mail.unimacgraphics.com",
-        "myorders-test.unimacgraphics.com",
-        "myorders.unimacgraphics.com",
-        "portal-test.unimacgraphics.com",
-        "portal.unimacgraphics.com",
-        "uoltest.unimacgraphics.com",
-        "www.unimacgraphics.com",
-        "xen.unimacgraphics.com",
-        "zoetislabs.unimacgraphics.com"
-      ],
-      "services": [
-        {
-          "subdomain": "mail.unimacgraphics.com",
-          "ip": "199.16.172.68",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "mail.unimacgraphics.com",
-          "ip": "199.16.172.68",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "mail.unimacgraphics.com",
-          "ip": "199.16.173.113",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "mail.unimacgraphics.com",
-          "ip": "199.16.173.113",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "myorders-test.unimacgraphics.com",
-          "ip": "40.71.11.138",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "myorders-test.unimacgraphics.com",
-          "ip": "40.71.11.138",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "myorders.unimacgraphics.com",
-          "ip": "40.71.11.138",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "myorders.unimacgraphics.com",
-          "ip": "40.71.11.138",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "portal-test.unimacgraphics.com",
-          "ip": "40.71.11.138",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "portal-test.unimacgraphics.com",
-          "ip": "40.71.11.138",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "portal.unimacgraphics.com",
-          "ip": "40.71.11.138",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "portal.unimacgraphics.com",
-          "ip": "40.71.11.138",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "unimacgraphics.com",
-          "ip": "199.16.172.68",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "unimacgraphics.com",
-          "ip": "199.16.172.68",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "unimacgraphics.com",
-          "ip": "199.16.173.113",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "unimacgraphics.com",
-          "ip": "199.16.173.113",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "uoltest.unimacgraphics.com",
-          "ip": "40.71.11.138",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "uoltest.unimacgraphics.com",
-          "ip": "40.71.11.138",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.unimacgraphics.com",
-          "ip": "199.16.172.68",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.unimacgraphics.com",
-          "ip": "199.16.172.68",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.unimacgraphics.com",
-          "ip": "199.16.173.113",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.unimacgraphics.com",
-          "ip": "199.16.173.113",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "xen.unimacgraphics.com",
-          "ip": "199.16.172.68",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "xen.unimacgraphics.com",
-          "ip": "199.16.172.68",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "xen.unimacgraphics.com",
-          "ip": "199.16.173.113",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "xen.unimacgraphics.com",
-          "ip": "199.16.173.113",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "zoetislabs.unimacgraphics.com",
-          "ip": "40.71.11.138",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "zoetislabs.unimacgraphics.com",
-          "ip": "40.71.11.138",
-          "port": 443,
-          "protocol": "tcp"
-        }
-      ],
-      "hosts": [
-        {
-          "subdomain": "mail.unimacgraphics.com",
-          "ip": "199.16.172.68"
-        },
-        {
-          "subdomain": "mail.unimacgraphics.com",
-          "ip": "199.16.173.113"
-        },
-        {
-          "subdomain": "myorders-test.unimacgraphics.com",
-          "ip": "40.71.11.138"
-        },
-        {
-          "subdomain": "myorders.unimacgraphics.com",
-          "ip": "40.71.11.138"
-        },
-        {
-          "subdomain": "portal-test.unimacgraphics.com",
-          "ip": "40.71.11.138"
-        },
-        {
-          "subdomain": "portal.unimacgraphics.com",
-          "ip": "40.71.11.138"
-        },
-        {
-          "subdomain": "unimacgraphics.com",
-          "ip": "199.16.172.68"
-        },
-        {
-          "subdomain": "unimacgraphics.com",
-          "ip": "199.16.173.113"
-        },
-        {
-          "subdomain": "uoltest.unimacgraphics.com",
-          "ip": "40.71.11.138"
-        },
-        {
-          "subdomain": "www.unimacgraphics.com",
-          "ip": "199.16.172.68"
-        },
-        {
-          "subdomain": "www.unimacgraphics.com",
-          "ip": "199.16.173.113"
-        },
-        {
-          "subdomain": "xen.unimacgraphics.com",
-          "ip": "199.16.172.68"
-        },
-        {
-          "subdomain": "xen.unimacgraphics.com",
-          "ip": "199.16.173.113"
-        },
-        {
-          "subdomain": "zoetislabs.unimacgraphics.com",
-          "ip": "40.71.11.138"
-        }
-      ]
+      "subdomains": [],
+      "services": [],
+      "hosts": []
     },
     "changed": {
       "fingerprint": [],
       "cert": [],
-      "reachability": [
-        {
-          "subdomain": "unimacgraphics.com",
-          "from": true,
-          "to": false,
-          "is_root": true
-        }
-      ]
+      "reachability": []
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-05-10T19:18:29Z_d602361b",
-      "started_at": "2026-05-10T19:18:29Z",
-      "completed_at": "2026-05-10T19:40:44Z",
-      "subdomain_count": 10,
-      "live_subdomain_count": 10,
-      "host_count": 3,
-      "service_count": 28,
-      "subdomain_names": [
-        "mail.unimacgraphics.com",
-        "myorders-test.unimacgraphics.com",
-        "myorders.unimacgraphics.com",
-        "portal-test.unimacgraphics.com",
-        "portal.unimacgraphics.com",
-        "unimacgraphics.com",
-        "uoltest.unimacgraphics.com",
-        "www.unimacgraphics.com",
-        "xen.unimacgraphics.com",
-        "zoetislabs.unimacgraphics.com"
-      ],
-      "ports_by_sub": {
-        "unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "mail.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "myorders-test.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "myorders.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "portal-test.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "portal.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "uoltest.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "www.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "xen.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "zoetislabs.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        }
-      }
-    },
     {
       "scan_id": "scan_2026-05-10T21:43:40Z_9df0ada1",
       "started_at": "2026-05-10T21:43:40Z",
@@ -12921,6 +12579,22 @@
       "scan_id": "scan_2026-06-06T15:45:28Z_3bbd9097",
       "started_at": "2026-06-06T15:45:28Z",
       "completed_at": "2026-06-06T15:45:51Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 0,
+      "service_count": 0,
+      "subdomain_names": [
+        "unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {}
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-06-06T19:41:55Z_98a7512f",
+      "started_at": "2026-06-06T19:41:55Z",
+      "completed_at": "2026-06-06T19:42:42Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 0,
