@@ -655,6 +655,22 @@ def main():
     except Exception:
         duration = 0
 
+    # ─── Tier 2 phantom defense — surface the DNS-gate's phantom list ────
+    # asm-discover.sh splits enumerated subdomains into _resolved + _phantom
+    # before the per-sub deep-scan loop runs. The resolved ones become full
+    # subdomain records (above); the phantoms get carried as plain names so
+    # the importer can mark them discovery_status='ct_ghost' at UPSERT time.
+    # No port/cert data because we never reached them — there was nothing
+    # to reach. Per Security Advisor 4.7 + Tier 2 design 2026-06-06.
+    phantom_subdomains: list[str] = []
+    phantom_file = work / "_phantom_subdomains.txt"
+    if phantom_file.exists():
+        for line in phantom_file.read_text().splitlines():
+            n = line.strip()
+            if n and n != target_value:
+                phantom_subdomains.append(n)
+        phantom_subdomains = sorted(set(phantom_subdomains))
+
     asset_json = {
         "schema_version": SCHEMA_VERSION,
         "asset": {
@@ -678,6 +694,10 @@ def main():
         "registration": registration,
         "summary":      build_summary(subdomains),
         "subdomains":   subdomains,
+        # Plain list of hostname strings, no port/cert/tech data — by
+        # definition we couldn't reach them. Importer reads this and
+        # UPSERTs each as discovery_status='ct_ghost', ownership='owned'.
+        "phantom_subdomains": phantom_subdomains,
         "deltas":       {},
         "history":      [],
     }

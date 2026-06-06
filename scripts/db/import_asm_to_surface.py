@@ -374,7 +374,14 @@ SELECT
   s.primary_ptr,
   s.top_hosting_org
 FROM public.asset_surface s
-WHERE s.last_seen IS NOT NULL
+-- Tier 2 phantom defense — join assets and skip ct_ghost rows.
+-- A ghost going "dark" is restating yesterday's classification, not real
+-- news; the alerter shouldn't email about it. Also skip namesakes and
+-- unknown-ownership rows for the same reasons that gate the scan cron.
+JOIN public.assets a ON a.asset_id = s.asset_id
+WHERE a.discovery_status = 'confirmed_live'
+  AND a.ownership = 'owned'
+  AND s.last_seen IS NOT NULL
   AND s.last_seen < (now() - (%s::int * interval '1 hour'))
   AND NOT EXISTS (
     SELECT 1 FROM public.asset_surface_event e
@@ -491,6 +498,35 @@ def dispatch_event_notifications(
     by_asset: dict[str, list[dict]] = {}
     for ev in all_events:
         by_asset.setdefault(ev["asset_id"], []).append(ev)
+
+    # ─── Tier 2 phantom defense — suppress emails for non-confirmed_live ──
+    # The events themselves stay in asset_surface_event (audit trail),
+    # but we don't email subscribers about phantoms / namesakes / unverified
+    # rows. Real-time email is reserved for genuinely confirmed-live new
+    # exposure. Yesterday's noise problem (10+ emails per night about ghosts
+    # restating yesterday's classification) is fixed by this single gate.
+    # Per Security Advisor 4.7 + Tier 2 design 2026-06-06.
+    if by_asset:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT asset_id, discovery_status, ownership "
+                "FROM public.assets WHERE asset_id = ANY(%s)",
+                (list(by_asset.keys()),),
+            )
+            classification = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+        suppressed_count = 0
+        for aid in list(by_asset.keys()):
+            disc, own = classification.get(aid, ("unverified", "unknown"))
+            # Only confirmed_live + owned assets get real-time emails.
+            # Any other classification = suppressed for this run.
+            if disc != "confirmed_live" or own != "owned":
+                suppressed_count += len(by_asset.pop(aid))
+        if suppressed_count > 0:
+            print(
+                f"  ! suppressed {suppressed_count} event email(s) for "
+                f"non-confirmed_live or non-owned assets (Tier 2 gate)",
+                file=sys.stderr,
+            )
 
     # For each subscriber, decide which events they care about.
     import urllib.request
@@ -919,25 +955,88 @@ def build_sliced_doc(orig_doc: dict, sub_list: list[dict]) -> dict:
 
 
 UPSERT_ASSET = """
-INSERT INTO public.assets (asset_id, name, type, organization, first_observed, last_observed)
-VALUES (%(asset_id)s, %(name)s, %(type)s, %(organization)s, %(first_observed)s, %(last_observed)s)
+INSERT INTO public.assets
+  (asset_id, name, type, organization, ownership, discovery_status,
+   first_observed, last_observed)
+VALUES (%(asset_id)s, %(name)s, %(type)s, %(organization)s,
+        %(ownership)s, %(discovery_status)s,
+        %(first_observed)s, %(last_observed)s)
 ON CONFLICT (asset_id) DO UPDATE SET
-  last_observed = GREATEST(public.assets.last_observed, EXCLUDED.last_observed)
+  last_observed = GREATEST(public.assets.last_observed, EXCLUDED.last_observed),
+  -- Tier 2 phantom defense: promote ct_ghost → confirmed_live if a later
+  -- scan resolves the host. Don't downgrade in the other direction — that
+  -- happens via the nightly DNS heartbeat (Tier 3, separate workflow) so
+  -- we don't oscillate on transient DNS hiccups.
+  discovery_status = CASE
+    WHEN EXCLUDED.discovery_status = 'confirmed_live'
+      AND public.assets.discovery_status IN ('ct_ghost', 'unverified')
+      THEN 'confirmed_live'
+    ELSE public.assets.discovery_status
+  END,
+  -- Same idea for ownership — if asm-discover is processing a target from
+  -- data/targets.yml (which is the scope_verified allowlist), promote
+  -- 'unknown' or NULL to 'owned'. Never downgrade.
+  ownership = CASE
+    WHEN EXCLUDED.ownership = 'owned'
+      AND public.assets.ownership IN ('unknown', 'unverified')
+      THEN 'owned'
+    ELSE public.assets.ownership
+  END
 RETURNING asset_id, (xmax = 0) AS inserted;
 """
 
 # Auto-create row for a newly-discovered subdomain. Sets kind + apex_domain
 # so the new asset appears properly in the dashboard from the moment it's
-# discovered. ON CONFLICT updates last_observed only — preserves any kind
-# the admin has manually flipped.
+# discovered. ON CONFLICT updates last_observed (+ promotion rules same as
+# UPSERT_ASSET) — preserves any kind the admin has manually flipped.
 UPSERT_NEW_SUBDOMAIN_ASSET = """
 INSERT INTO public.assets
-  (asset_id, name, type, organization, kind, apex_domain, first_observed, last_observed)
+  (asset_id, name, type, organization, kind, apex_domain,
+   ownership, discovery_status,
+   first_observed, last_observed)
 VALUES
   (%(asset_id)s, %(asset_id)s, 'single_host', %(organization)s,
-   %(kind)s, %(apex_domain)s, %(first_observed)s, %(last_observed)s)
+   %(kind)s, %(apex_domain)s,
+   %(ownership)s, %(discovery_status)s,
+   %(first_observed)s, %(last_observed)s)
 ON CONFLICT (asset_id) DO UPDATE SET
+  last_observed = GREATEST(public.assets.last_observed, EXCLUDED.last_observed),
+  discovery_status = CASE
+    WHEN EXCLUDED.discovery_status = 'confirmed_live'
+      AND public.assets.discovery_status IN ('ct_ghost', 'unverified')
+      THEN 'confirmed_live'
+    ELSE public.assets.discovery_status
+  END,
+  ownership = CASE
+    WHEN EXCLUDED.ownership = 'owned'
+      AND public.assets.ownership IN ('unknown', 'unverified')
+      THEN 'owned'
+    ELSE public.assets.ownership
+  END
+RETURNING asset_id, (xmax = 0) AS inserted;
+"""
+
+# Tier 2 phantom defense — separate UPSERT path for phantom subdomains.
+# Same shape as UPSERT_NEW_SUBDOMAIN_ASSET but stamped with discovery_status
+# ='ct_ghost' from the start. No surface row written (we have no data
+# to populate it — by definition we couldn't reach the host). The row
+# exists purely so /admin/phantoms surfaces it for review.
+UPSERT_PHANTOM_SUBDOMAIN = """
+INSERT INTO public.assets
+  (asset_id, name, type, organization, kind, apex_domain,
+   ownership, discovery_status,
+   first_observed, last_observed)
+VALUES
+  (%(asset_id)s, %(asset_id)s, 'single_host', %(organization)s,
+   'unknown', %(apex_domain)s,
+   'owned', 'ct_ghost',
+   %(first_observed)s, %(last_observed)s)
+ON CONFLICT (asset_id) DO UPDATE SET
+  -- Always bump last_observed — proves the phantom is still in CT logs.
   last_observed = GREATEST(public.assets.last_observed, EXCLUDED.last_observed)
+  -- Note: do NOT update discovery_status here. If a phantom was previously
+  -- promoted to confirmed_live by a successful scan, keep that classification.
+  -- Only the nightly DNS heartbeat (Tier 3) can demote live → ghost.
 RETURNING asset_id, (xmax = 0) AS inserted;
 """
 
@@ -1069,12 +1168,19 @@ def import_one(
             #    UPSERT_ASSET (preserves its existing kind/aliases).
             #    Non-apex subdomains use UPSERT_NEW_SUBDOMAIN_ASSET which
             #    auto-classifies kind on insert and sets apex_domain.
+            # Tier 2 phantom defense — any row written by asm-discover is
+            # by definition in scope (targets.yml = scope_verified) and
+            # has resolved DNS (asm-discover.sh dnsx gate filtered phantoms
+            # out of the deep-scan loop before we got here). Stamp the
+            # row 'owned' + 'confirmed_live' so downstream gates work.
             if is_apex:
                 cur.execute(UPSERT_ASSET, {
                     "asset_id": bucket_id,
                     "name": bucket_id,
                     "type": asset_type,
                     "organization": organization,
+                    "ownership": "owned",
+                    "discovery_status": "confirmed_live",
                     "first_observed": bucket_lifecycle["first_discovered"],
                     "last_observed": bucket_lifecycle["last_seen"],
                 })
@@ -1084,6 +1190,8 @@ def import_one(
                     "organization": organization,
                     "kind": classify_subdomain_kind(bucket_id),
                     "apex_domain": apex_asset_id,
+                    "ownership": "owned",
+                    "discovery_status": "confirmed_live",
                     "first_observed": bucket_lifecycle["first_discovered"],
                     "last_observed": bucket_lifecycle["last_seen"],
                 })
@@ -1119,6 +1227,40 @@ def import_one(
                         file=sys.stderr,
                     )
 
+    # ─── Tier 2 phantom defense — record phantom subdomains as ct_ghost rows ─
+    # The normalizer surfaces non-resolving subdomain candidates from
+    # asm-discover.sh's DNS gate as asm_doc["phantom_subdomains"]: a plain
+    # list of hostname strings. UPSERT each as a ct_ghost asset so the
+    # /admin/phantoms page surfaces it for review without emitting a
+    # real-time "new asset" notification (the alerter gate filters by
+    # discovery_status). No asset_surface row — we have no data to write
+    # there because we couldn't reach the host. The audit story is in the
+    # asset row itself (ownership=owned, discovery_status=ct_ghost) plus
+    # the data/phantoms/{target}_{ts}.json file kept by asm-discover.sh.
+    phantom_inserted = 0
+    phantom_names = asm_doc.get("phantom_subdomains") or []
+    if phantom_names:
+        first_seen = (asm_doc.get("scan") or {}).get("completed_at") or utc_now()
+        with conn.cursor() as cur:
+            for phantom_name in phantom_names:
+                if not phantom_name:
+                    continue
+                # Skip if it would collide with the apex/aliases bucket
+                # processed above — those are real assets that happen to
+                # not be in this scan's phantom list (defensive).
+                if phantom_name.lower() == apex_asset_id.lower():
+                    continue
+                cur.execute(UPSERT_PHANTOM_SUBDOMAIN, {
+                    "asset_id": phantom_name,
+                    "organization": organization,
+                    "apex_domain": apex_asset_id,
+                    "first_observed": first_seen,
+                    "last_observed": first_seen,
+                })
+                p_row = cur.fetchone()
+                if p_row and p_row[1]:
+                    phantom_inserted += 1
+
     return {
         "status": "ok",
         "asset_id": apex_asset_id,
@@ -1126,6 +1268,8 @@ def import_one(
         "buckets_processed": len(buckets),
         "assets_inserted": assets_inserted,
         "surfaces_written": surfaces_written,
+        "phantoms_seen": len(phantom_names),
+        "phantoms_inserted": phantom_inserted,
         "events": all_events,
         "events_emitted": len(all_events),
     }

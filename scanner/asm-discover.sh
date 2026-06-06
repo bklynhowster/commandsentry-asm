@@ -390,6 +390,45 @@ discover_apex() {
   [[ -s "$wd/_src_cert_sans.txt"   ]] && cat "$wd/_src_cert_sans.txt"   >> "$wd/_live_subdomains.txt"
   sort -u -o "$wd/_live_subdomains.txt" "$wd/_live_subdomains.txt"
 
+  # ─── Tier 2 phantom defense — DNS resolution gate ───────────────────
+  # 2026-06-06 — Cert SAN harvesting (source 4) extracts subjectAltName
+  # entries from the apex TLS cert without verifying any of them actually
+  # resolve in public DNS. CT logs are append-only and permanent — they
+  # contain SANs from certs issued years ago for hosts that were
+  # decommissioned (or never deployed). Yesterday's phantom defense work
+  # confirmed 12 ct_ghosts in inventory from exactly this pathway.
+  #
+  # Split the merged candidate list into:
+  #   _resolved_subdomains.txt — at least one A or AAAA record returned
+  #   _phantom_subdomains.txt  — no resolution (CT-log artifact suspected)
+  # Only the resolved list goes through the deep-scan loop below; the
+  # phantom list is preserved for the importer to tag discovery_status=ct_ghost.
+  phase "Subdomain DNS resolution gate (Tier 2)"
+  : > "$wd/_resolved_subdomains.txt"
+  : > "$wd/_phantom_subdomains.txt"
+  if [[ -s "$wd/_live_subdomains.txt" ]]; then
+    cat "$wd/_live_subdomains.txt" | \
+      dnsx -silent -a -aaaa -resp -json \
+        > "$wd/_subdomain_resolution.json" 2>/dev/null </dev/null || \
+        warn "dnsx resolution pass had errors"
+    if [[ -s "$wd/_subdomain_resolution.json" ]]; then
+      jq -r 'select(.a or .aaaa) | .host' "$wd/_subdomain_resolution.json" \
+        2>/dev/null | sort -u > "$wd/_resolved_subdomains.txt"
+    fi
+    comm -23 "$wd/_live_subdomains.txt" "$wd/_resolved_subdomains.txt" \
+      > "$wd/_phantom_subdomains.txt"
+  fi
+  local resolved_count phantom_count
+  resolved_count=$(wc -l < "$wd/_resolved_subdomains.txt" | tr -d ' ')
+  phantom_count=$(wc -l < "$wd/_phantom_subdomains.txt" | tr -d ' ')
+  log "  DNS gate: $resolved_count resolved, $phantom_count phantom (CT-log artifacts suspected)"
+
+  # Replace the merged candidate list with the resolved-only list. The
+  # phantom list lives in _phantom_subdomains.txt for the normalizer to
+  # surface in the JSON output. The deep-scan loop below now only iterates
+  # over real hosts, saving runner time AND keeping the assets table clean.
+  cp "$wd/_resolved_subdomains.txt" "$wd/_live_subdomains.txt"
+
   # Sanity cap — runaway sub counts blow the workflow's 90-min timeout.
   # Each sub deep-scan is ~3-5 min (naabu+httpx+wafw00f+testssl), so 40 subs
   # ≈ 2-3 hours wall-clock which is the real ceiling. Override per-target via
