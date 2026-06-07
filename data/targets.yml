@@ -56,6 +56,12 @@ targets:
     owner: command_digital
     tags: []
     notes: ftp.sciimage.com is discovered as a subdomain (was a separate target until 2026-05-11).
+    # Watchdog canary opt-out: sciimage.com has no www subdomain in DNS
+    # (apex itself has only MX/NS records — web presence lives on ftp,
+    # vpn, vpn2 subdomains). Confirmed via DoH 2026-06-07: www.sciimage.com
+    # returns NXDOMAIN. Without this opt-out, the canary tripwire in
+    # scripts/alerter/run_alerter.py would false-positive every run.
+    canary_no_www: true
   - id: 24-38-70-6
     type: ip
     value: 24.38.70.6
