@@ -1206,7 +1206,17 @@ def run_nikto(ctx: ScanContext) -> None:
         # WAF-fronted asset (cc/cmi/unimac/ccc/sciimage).
         "-timeout", "15",
         "-maxtime", str(NIKTO_WALL_S - 30),
-        "-Format", "txt",
+        # Bug E (2026-06-07 PM, scan_run c14e2fe2): -Format requires
+        # -output FILE; without it, nikto's report plugin tries to write
+        # to '' and dies at /var/lib/nikto/plugins/nikto_report_text.plugin
+        # line 41 with "Unable to open '' for write:" rc=2. This is a
+        # nikto config-rule (-Format pairs with -output), same on Mac/apt/
+        # upstream — not an Ubuntu quirk, so the tripwire correctly
+        # didn't fire. Dropping -Format restores nikto's default
+        # human-readable stdout output, which is the format the runner's
+        # parser at the bottom of this function already reads
+        # (filters '+ '-prefixed lines, skips Target/Server/etc. headers,
+        # promotes the rest as findings).
     ]
     # input_str="" — pre-empt any future prompt from hanging the runner
     # (defensive; not the cause of the current arg-rejection bug, but cheap
