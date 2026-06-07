@@ -1172,29 +1172,38 @@ def run_nikto(ctx: ScanContext) -> None:
         return
 
     ctx.tools_run.append("nikto")
-    ua = pick_ua()
-    # Bug D fix (2026-06-07 PM, ADR-001 Step 3):
-    # nikto uses Perl Getopt::Long with prefix matching. "-h" is ambiguous —
-    # it prefix-matches BOTH "-host" (target host, requires value) AND
-    # "-Help" (extended help, no value). nikto's behavior on ambiguous
-    # prefix is to print the short usage banner and exit immediately.
+    # Bug D — root cause is "crusty apt nikto fighting modern arg semantics":
+    #   - "-h" prefix-matched ambiguously between -host/-Help (fixed 58ca05a)
+    #   - "-useragent" rejected by Ubuntu apt's nikto with stderr
+    #     "Unknown option: useragent" (verified via scan_run e1825c68
+    #     after unconditional stderr logging shipped in 7db0978)
     #
-    # Symptom (silently present from before 2026-05-30 through testfire
-    # run 59ad6a13 on 2026-06-07): nikto artifact is 1256 bytes of help
-    # text instead of real scan output. status='complete'. findings_added
-    # from nikto = 0. Bug invisible because the runner closes out cleanly.
-    # The 14 prior CMI/test.ccc medium runs all carry the same
-    # 1256-byte help-text artifact — verify post-fix that the testfire
-    # re-fire produces real scan output.
+    # TEMPORARY fix in this commit: drop -useragent so nikto can run at
+    # all. nikto's DEFAULT user-agent contains the literal "Nikto" string —
+    # an instant WAF tell. This is fine for demo.testfire.net (WAF-free)
+    # but unsafe for any owned WAF-fronted asset. UA spoofing is
+    # LOAD-BEARING for medium-on-WAF; restoring it is a REQUIRED Stage-3
+    # guardrail, not optional.
     #
-    # Fix: use the full "-host" flag, which is unambiguous.
+    # DURABLE FIX (Task #6, gates medium fleet rollout): install upstream
+    # nikto from git (sullo/nikto, pure Perl, no compile) in
+    # scanner/install-tools.sh. That fixes arg semantics (matches Mac
+    # nikto) AND restores -useragent natively in one move. Subsumes the
+    # nikto.conf USERAGENT= alternative.
+    #
+    # TRIPWIRE — if this commit's re-fire bails on -maxtime (the likely
+    # next bail since it sits after -useragent in the original cmd) or
+    # any other flag, STOP per-flag iteration and switch to upstream
+    # nikto immediately. One change kills the whole class.
     cmd = [
         "nikto",
         "-host", f"https://{ctx.hostname}",
         "-Pause", str(NIKTO_PAUSE_S),
         "-nointeractive", "-ask", "no",
         "-Tuning", "x6",
-        "-useragent", ua,
+        # NOTE: -useragent intentionally absent. Restore via upstream
+        # nikto migration (Task #6) BEFORE medium runs against any owned
+        # WAF-fronted asset (cc/cmi/unimac/ccc/sciimage).
         "-timeout", "15",
         "-maxtime", str(NIKTO_WALL_S - 30),
         "-Format", "txt",
