@@ -126,6 +126,57 @@ REWIND_SECONDS = 30             # rewind window for soft-ban paranoia
 MAX_REQUESTS_TOTAL = 8000        # hard ceiling across all tools
 BAN_HTTP_CODES = {403, 429, 503, 521, 522, 523}  # WAF/CDN ban signals
 
+
+# ─── ADR-001 — Validated-SHA key ────────────────────────────────────────
+#
+# Per-tier allowlist of scanner SHAs whose findings can be stamped as
+# 'validated' instead of the default 'unvalidated'. Starts empty:
+# no SHA is validated until ADR-001 Step 5 promotes the first one,
+# AFTER Bug D (nikto invocation) is fixed and the silent-tool-failure
+# detector is in place, AND the proving run on demo.testfire.net
+# confirms all expected findings land with all tools producing real
+# output (not help-text, not empty stdout from a WAF ban).
+#
+# Promotion mechanics:
+#   - Add the full 40-char GITHUB_SHA of the proving commit to the
+#     appropriate tier's set below.
+#   - Re-fire that commit's runner once; subsequent inserts get
+#     validation_status='validated' automatically.
+#   - Older legacy/unvalidated rows that get re-emitted by a validated
+#     SHA are upgraded by the UPSERT heal logic.
+#
+# Demotion is impossible by design. Once a SHA is in the allowlist
+# its findings stay validated forever — if a SHA is later found to
+# produce bad output, REMOVE it from the allowlist but do NOT
+# retroactively flip rows; that's the role of remediated/false_positive
+# on current_status, not the validation regime.
+#
+# See migration scripts/db/migrations/20260607a_findings_validation_key.sql
+# and the project log [[75 - Session Log 2026-06-07]] for the rationale.
+
+VALIDATED_VERSIONS: dict[str, set[str]] = {
+    "light":  set(),
+    "medium": set(),
+    "heavy":  set(),
+}
+
+
+def get_scanner_version() -> str:
+    """Return the runner's git SHA from GITHUB_SHA env (GH Actions
+    populates this on every workflow run) or 'unknown' if absent.
+    Always full 40-char SHA — never abbreviate, the allowlist match
+    is exact-string."""
+    return os.environ.get("GITHUB_SHA") or "unknown"
+
+
+def derive_validation_status(intensity: str, sha: str) -> str:
+    """Return 'validated' iff (intensity, sha) is in the allowlist;
+    'unvalidated' otherwise. Never returns 'legacy' — that's reserved
+    for rows that existed before ADR-001 (migration 20260607a)."""
+    if sha in VALIDATED_VERSIONS.get(intensity, set()):
+        return "validated"
+    return "unvalidated"
+
 # Rotation regions are now loaded DYNAMICALLY from /etc/wireguard/*.conf
 # at script startup. Pool size went from 12 → 205 after Howie's "All
 # cities / All servers" Mullvad download 2026-05-31 — way more rotation
@@ -323,6 +374,79 @@ class ScanContext:
     # Threshold probe (only populated when THRESHOLD_PROBE_MODE=true).
     # One dict per nuclei chunk: rate, egress_ip, pre/post HTTP code, banned bool.
     threshold_probe_results: list[dict] = field(default_factory=list)
+    # ADR-001 Step 4 — per-tool completeness map. After each tool runs,
+    # a narrow predicate decides whether the tool actually produced real
+    # output. {tool_name: {"ok": True} | {"degraded": "<reason_slug>"}}.
+    # Written to scan_run.tool_status at close-out.
+    tool_status: dict[str, dict] = field(default_factory=dict)
+
+
+# ─── Tool-status helpers (ADR-001 Step 4) ───────────────────────────────
+#
+# A degraded flag means "tool FAILED," NEVER "tool worked, found nothing."
+# Only wire detectors that key on unambiguous failure (help-banner-on-bad-args,
+# parse-error, absence-of-verdict-line). Do NOT wire empty-output detectors
+# on tools where empty is a healthy outcome (e.g. nuclei against a clean
+# stack legitimately returns empty stdout). Per Howie 2026-06-07: a detector
+# that cries wolf on healthy runs trains the team to ignore 'degraded' and
+# defeats the regime.
+#
+# Each detector is named `tool_is_degraded(...)` and returns
+# (False, "")  if the tool's output looks like a real scan
+# (True,  "<reason>") if a failure shape is recognized.
+
+
+def mark_tool_ok(ctx: ScanContext, tool_name: str) -> None:
+    """Record that a tool produced real output."""
+    ctx.tool_status[tool_name] = {"ok": True}
+
+
+def mark_tool_degraded(ctx: ScanContext, tool_name: str, reason: str) -> None:
+    """Record that a tool failed in a recognized way. reason is a stable
+    machine-readable slug (snake_case) — downstream reports group on it."""
+    ctx.tool_status[tool_name] = {"degraded": reason}
+
+
+def nikto_is_degraded(stdout: str, rc: int) -> tuple[bool, str]:
+    """Bug D detector. nikto prints its short usage banner on ambiguous
+    arg or unknown flag. Look for the exact phrases nikto's help text
+    emits — narrow enough that real scan output never matches."""
+    if "Note: This is the short help output" in stdout:
+        return True, "help_text_returned"
+    if "Use -H for full help text" in stdout:
+        return True, "help_text_returned"
+    return False, ""
+
+
+def ffuf_is_degraded(out_blob: str | None, parsed: dict | None) -> tuple[bool, str]:
+    """ffuf is degraded only when the OUTPUT FILE can't be read (handled
+    inline as 'unreadable') or the JSON has no `results` key at all.
+    `results == []` is healthy — it just means no path in the chunk matched.
+    Per Howie's rule: NEVER flag empty-found as degraded."""
+    if out_blob is None:
+        return True, "output_unreadable"
+    if parsed is None:
+        return True, "parse_failed"
+    if "results" not in parsed:
+        return True, "results_key_missing"
+    return False, ""
+
+
+def wafw00f_is_degraded(stdout: str, rc: int) -> tuple[bool, str]:
+    """wafw00f always emits either a '[+] ' positive verdict line or
+    '[-] No WAF detected by the generic detection'. If neither is in
+    the output, something went wrong (network failure, unsupported
+    target, etc.). rc != 0 with no verdict is also degraded — but
+    rc==1 with a clean 'No WAF' verdict is healthy (wafw00f exits 1
+    when no WAF found, weirdly)."""
+    if "[+] " in stdout:
+        return False, ""
+    if "No WAF detected by the generic detection" in stdout:
+        return False, ""
+    if "is behind a" in stdout or "is behind " in stdout:
+        # Older wafw00f phrasing — still a positive identification
+        return False, ""
+    return True, "no_verdict"
 
 
 # ─── Subprocess helpers ─────────────────────────────────────────────────
@@ -461,6 +585,13 @@ def detect_waf(ctx: ScanContext) -> None:
         timeout=60,
     )
     ctx.artifacts.append(("wafw00f", "text", stdout))
+    # ADR-001 Step 4 — completeness check: either a verdict line is
+    # present or the tool failed.
+    is_degraded, reason = wafw00f_is_degraded(stdout, rc)
+    if is_degraded:
+        mark_tool_degraded(ctx, "wafw00f", reason)
+    else:
+        mark_tool_ok(ctx, "wafw00f")
     if rc != 0:
         log(f"wafw00f rc={rc} — assuming no WAF for tuning purposes")
         return
@@ -1042,9 +1173,24 @@ def run_nikto(ctx: ScanContext) -> None:
 
     ctx.tools_run.append("nikto")
     ua = pick_ua()
+    # Bug D fix (2026-06-07 PM, ADR-001 Step 3):
+    # nikto uses Perl Getopt::Long with prefix matching. "-h" is ambiguous —
+    # it prefix-matches BOTH "-host" (target host, requires value) AND
+    # "-Help" (extended help, no value). nikto's behavior on ambiguous
+    # prefix is to print the short usage banner and exit immediately.
+    #
+    # Symptom (silently present from before 2026-05-30 through testfire
+    # run 59ad6a13 on 2026-06-07): nikto artifact is 1256 bytes of help
+    # text instead of real scan output. status='complete'. findings_added
+    # from nikto = 0. Bug invisible because the runner closes out cleanly.
+    # The 14 prior CMI/test.ccc medium runs all carry the same
+    # 1256-byte help-text artifact — verify post-fix that the testfire
+    # re-fire produces real scan output.
+    #
+    # Fix: use the full "-host" flag, which is unambiguous.
     cmd = [
         "nikto",
-        "-h", f"https://{ctx.hostname}",
+        "-host", f"https://{ctx.hostname}",
         "-Pause", str(NIKTO_PAUSE_S),
         "-nointeractive", "-ask", "no",
         "-Tuning", "x6",
@@ -1055,6 +1201,16 @@ def run_nikto(ctx: ScanContext) -> None:
     ]
     rc, stdout, stderr = run_cmd(cmd, timeout=NIKTO_WALL_S)
     ctx.artifacts.append(("nikto", "text", stdout))
+    # ADR-001 Step 4 — Bug D detector. If nikto bailed to its help banner
+    # (which is exactly what happened across 14+ prior medium runs because
+    # of the '-h' ambiguity), mark degraded. Otherwise: stdout is real
+    # scan output. The detector is narrow — only flags the literal help
+    # banner phrases, never a legitimate empty/short scan output.
+    is_degraded, reason = nikto_is_degraded(stdout, rc)
+    if is_degraded:
+        mark_tool_degraded(ctx, "nikto", reason)
+    else:
+        mark_tool_ok(ctx, "nikto")
     if rc not in (0, 124):
         log(f"  nikto rc={rc}: {stderr.strip()[:200]}")
 
@@ -1159,6 +1315,10 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str]) -> int:
         out_blob = Path(out_path).read_text()
     except Exception as e:
         log(f"  ffuf output unreadable: {e}")
+        # ADR-001 Step 4 — output file missing. Across multiple chunks
+        # this would flap; the LAST chunk's status wins (the closed scan
+        # records the worst-recently-seen state). Sufficient signal for now.
+        mark_tool_degraded(ctx, "ffuf", "output_unreadable")
         return 0
 
     ctx.artifacts.append(("ffuf", "json", out_blob))
@@ -1167,7 +1327,17 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str]) -> int:
         data = json.loads(out_blob)
     except Exception as e:
         log(f"  ffuf output parse failed: {e}")
+        mark_tool_degraded(ctx, "ffuf", "parse_failed")
         return 0
+
+    # ADR-001 Step 4 — structure check. results==[] is healthy ("no
+    # matched paths in this chunk"); only the absence of the key entirely
+    # signals a real failure.
+    is_degraded, reason = ffuf_is_degraded(out_blob, data)
+    if is_degraded:
+        mark_tool_degraded(ctx, "ffuf", reason)
+    else:
+        mark_tool_ok(ctx, "ffuf")
 
     results = data.get("results", [])
     ctx.total_requests += len(words)
@@ -1264,15 +1434,26 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
 
 
 # ─── SQL helpers (DUPED from run_light — TODO: refactor) ───────────────
+#
+# 2026-06-07 ADR-001: writes validation_status + scanner_version +
+# validated_at on every emission. UPSERT heal logic is upgrade-only —
+# once a finding is 'validated' it stays validated; an 'unvalidated'
+# re-emission cannot demote it. scanner_version always records the
+# latest emission's SHA (informational). validated_at is set the FIRST
+# time validation_status transitions to 'validated' and stays put.
+#
 UPSERT_FINDING_SQL = """
 INSERT INTO public.findings (
     finding_id, asset_id, title, severity, category, description,
     cwe, "references", current_status, first_detected_at,
-    last_observed_at, source, tags
+    last_observed_at, source, tags,
+    validation_status, scanner_version, validated_at
 )
 VALUES (%(finding_id)s, %(asset_id)s, %(title)s, %(severity)s, %(category)s,
         %(description)s, %(cwe)s, %(references)s, 'detected',
-        now(), now(), %(source)s, %(tags)s)
+        now(), now(), %(source)s, %(tags)s,
+        %(validation_status)s, %(scanner_version)s,
+        CASE WHEN %(validation_status)s = 'validated' THEN now() ELSE NULL END)
 ON CONFLICT (finding_id) DO UPDATE SET
     title             = EXCLUDED.title,
     category          = EXCLUDED.category,
@@ -1299,7 +1480,23 @@ ON CONFLICT (finding_id) DO UPDATE SET
     END,
     first_detected_at = LEAST(findings.first_detected_at, EXCLUDED.first_detected_at),
     last_observed_at  = EXCLUDED.last_observed_at,
-    tags              = EXCLUDED.tags
+    tags              = EXCLUDED.tags,
+    -- ADR-001 upgrade-only heal: never downgrade from 'validated'.
+    validation_status = CASE
+      WHEN EXCLUDED.validation_status = 'validated'
+        THEN 'validated'
+      ELSE findings.validation_status
+    END,
+    -- Always record the latest emitter SHA for forensic context.
+    scanner_version   = EXCLUDED.scanner_version,
+    -- Stamp validated_at the FIRST time the status transitions to
+    -- 'validated'; never touch it again afterward.
+    validated_at = CASE
+      WHEN EXCLUDED.validation_status = 'validated'
+       AND findings.validation_status <> 'validated'
+        THEN now()
+      ELSE findings.validated_at
+    END
 RETURNING (xmax = 0) as inserted;
 """
 
@@ -1317,7 +1514,10 @@ SET status            = 'complete',
     duration_seconds  = EXTRACT(EPOCH FROM (now() - started_at))::int,
     tools_run         = %(tools_run)s,
     findings_added    = %(findings_added)s,
-    findings_updated  = %(findings_updated)s
+    findings_updated  = %(findings_updated)s,
+    -- ADR-001 Step 4 — per-tool completeness map.
+    -- {tool_name: {"ok": True} | {"degraded": "reason"}}
+    tool_status       = %(tool_status)s
 WHERE scan_run_id     = %(scan_run_id)s;
 """
 
@@ -1352,6 +1552,14 @@ WHERE queue_id       = %(queue_id)s;
 def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int]:
     inserted = 0
     updated = 0
+    # ADR-001: stamp every emission with the runner's SHA + validation
+    # status. validation_status defaults to 'unvalidated' until the SHA
+    # is in VALIDATED_VERSIONS[ctx.intensity] (empty until ADR-001
+    # Step 5 promotes the first proving SHA).
+    scanner_version = get_scanner_version()
+    validation_status = derive_validation_status(ctx.intensity, scanner_version)
+    log(f"  ADR-001: scanner_version={scanner_version[:12]} "
+        f"validation_status={validation_status}")
     with conn.cursor() as cur:
         for f in ctx.findings:
             finding_id = f"{ctx.asset_id}:medium:{f.check_name}"
@@ -1366,6 +1574,8 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 "references": f.references,
                 "source": f"commandsentry_{ctx.intensity}",
                 "tags": f.tags,
+                "validation_status": validation_status,
+                "scanner_version": scanner_version,
             }
             cur.execute(UPSERT_FINDING_SQL, params)
             row = cur.fetchone()
@@ -1414,6 +1624,8 @@ def write_scan_metadata_artifact(conn, ctx: ScanContext, Json,
         # Threshold probe results (empty list if not in probe mode).
         "threshold_probe_mode": THRESHOLD_PROBE_MODE,
         "threshold_probe_results": ctx.threshold_probe_results,
+        # ADR-001 Step 4 — per-tool completeness map (Bug D + class).
+        "tool_status": ctx.tool_status,
     }
     with conn.cursor() as cur:
         cur.execute(INSERT_ARTIFACT_SQL, {
@@ -1425,7 +1637,7 @@ def write_scan_metadata_artifact(conn, ctx: ScanContext, Json,
         })
 
 
-def close_out(conn, ctx: ScanContext, inserted: int, updated: int) -> None:
+def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None:
     with conn.cursor() as cur:
         params = {
             "tools_run": ctx.tools_run,
@@ -1434,6 +1646,8 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int) -> None:
             "findings_count": inserted + updated,
             "scan_run_id": ctx.scan_run_id,
             "queue_id": ctx.queue_id,
+            # ADR-001 Step 4 — wrap with Json so psycopg writes proper jsonb.
+            "tool_status": Json(ctx.tool_status or {}),
         }
         cur.execute(CLOSE_SCAN_RUN_SQL, params)
         cur.execute(CLOSE_SCAN_QUEUE_SQL, params)
@@ -1557,7 +1771,7 @@ def run(descriptor_path: str, dsn: str) -> int:
                 conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
                 inserted, updated = write_findings_and_artifacts(conn, ctx, Json)
                 write_scan_metadata_artifact(conn, ctx, Json, start_egress, end_egress)
-                close_out(conn, ctx, inserted, updated)
+                close_out(conn, ctx, inserted, updated, Json)
                 conn.commit()
                 log(f"upserted findings: {inserted} new, {updated} existing")
                 log("scan_run + scan_queue closed out successfully")

@@ -123,6 +123,49 @@ DANGEROUS_METHODS = {
 DEFAULT_SUPABASE_URL = "https://hdygktppfvuspnumpfuq.supabase.co"
 
 
+# ─── ADR-001 — Validated-SHA key ────────────────────────────────────────
+#
+# Per-tier allowlist of scanner SHAs whose findings can be stamped as
+# 'validated' instead of the default 'unvalidated'. Starts empty:
+# no SHA is validated until ADR-001 Step 5 promotes the first one,
+# AFTER Bug D (nikto in run_medium) is fixed and the silent-tool-failure
+# detector is in place, AND the proving run on demo.testfire.net
+# confirms all expected findings land with all tools producing real
+# output.
+#
+# Promotion mechanics + demotion-is-impossible-by-design — see comment
+# block in scripts/scanner/run_medium.py for the full design.
+#
+# DUPED from run_medium intentionally; refactor to a shared module when
+# the rest of the "DUPED" inventory (UPSERT_FINDING_SQL etc.) does.
+#
+# Migration: scripts/db/migrations/20260607a_findings_validation_key.sql
+# Project log: [[75 - Session Log 2026-06-07]]
+
+VALIDATED_VERSIONS: dict[str, set[str]] = {
+    "light":  set(),
+    "medium": set(),
+    "heavy":  set(),
+}
+
+
+def get_scanner_version() -> str:
+    """Return the runner's git SHA from GITHUB_SHA env (GH Actions
+    populates this on every workflow run) or 'unknown' if absent.
+    Always full 40-char SHA — never abbreviate, the allowlist match
+    is exact-string."""
+    return os.environ.get("GITHUB_SHA") or "unknown"
+
+
+def derive_validation_status(intensity: str, sha: str) -> str:
+    """Return 'validated' iff (intensity, sha) is in the allowlist;
+    'unvalidated' otherwise. Never returns 'legacy' — that's reserved
+    for rows that existed before ADR-001 (migration 20260607a)."""
+    if sha in VALIDATED_VERSIONS.get(intensity, set()):
+        return "validated"
+    return "unvalidated"
+
+
 # ─── Finding model ──────────────────────────────────────────────────────
 @dataclass
 class LightFinding:
@@ -1657,16 +1700,26 @@ def check_ftp(ctx: ScanContext, port: int) -> None:
 
 # ─── Findings upsert ────────────────────────────────────────────────────
 
+#
+# 2026-06-07 ADR-001: writes validation_status + scanner_version +
+# validated_at on every emission. Heal logic identical to run_medium —
+# upgrade-only on validation_status, always-overwrite on scanner_version
+# (informational), set-once on validated_at. See run_medium.py for the
+# design notes.
+#
 UPSERT_FINDING_SQL = """
 INSERT INTO public.findings (
     finding_id, asset_id, title, severity, category, description,
     cwe, cve, normalized_key, "references", current_status, first_detected_at,
-    last_observed_at, source, tags
+    last_observed_at, source, tags,
+    validation_status, scanner_version, validated_at
 )
 VALUES (%(finding_id)s, %(asset_id)s, %(title)s, %(severity)s, %(category)s,
         %(description)s, %(cwe)s, %(cve)s, %(normalized_key)s,
         %(references)s, 'detected',
-        now(), now(), %(source)s, %(tags)s)
+        now(), now(), %(source)s, %(tags)s,
+        %(validation_status)s, %(scanner_version)s,
+        CASE WHEN %(validation_status)s = 'validated' THEN now() ELSE NULL END)
 ON CONFLICT (finding_id) DO UPDATE SET
     title             = EXCLUDED.title,
     category          = EXCLUDED.category,
@@ -1710,7 +1763,23 @@ ON CONFLICT (finding_id) DO UPDATE SET
     END,
     first_detected_at = LEAST(findings.first_detected_at, EXCLUDED.first_detected_at),
     last_observed_at  = EXCLUDED.last_observed_at,
-    tags              = EXCLUDED.tags
+    tags              = EXCLUDED.tags,
+    -- ADR-001 upgrade-only heal: never downgrade from 'validated'.
+    validation_status = CASE
+      WHEN EXCLUDED.validation_status = 'validated'
+        THEN 'validated'
+      ELSE findings.validation_status
+    END,
+    -- Always record the latest emitter SHA for forensic context.
+    scanner_version   = EXCLUDED.scanner_version,
+    -- Stamp validated_at the FIRST time the status transitions to
+    -- 'validated'; never touch it again afterward.
+    validated_at = CASE
+      WHEN EXCLUDED.validation_status = 'validated'
+       AND findings.validation_status <> 'validated'
+        THEN now()
+      ELSE findings.validated_at
+    END
 RETURNING (xmax = 0) as inserted;
 """
 
@@ -1771,6 +1840,13 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
     """Upsert findings + insert artifacts. Returns (inserted, updated)."""
     inserted = 0
     updated  = 0
+    # ADR-001: stamp every emission with the runner's SHA + validation
+    # status. validation_status defaults to 'unvalidated' until the SHA
+    # is in VALIDATED_VERSIONS[ctx.intensity] (empty until Step 5).
+    scanner_version = get_scanner_version()
+    validation_status = derive_validation_status(ctx.intensity, scanner_version)
+    log(f"  ADR-001: scanner_version={scanner_version[:12]} "
+        f"validation_status={validation_status}")
 
     with conn.cursor() as cur:
         for f in ctx.findings:
@@ -1805,6 +1881,9 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 # finding_source_t in migration 20260528b.
                 "source":      f"commandsentry_{ctx.intensity}",
                 "tags":        f.tags,
+                # ADR-001 validated-SHA key — see top-of-file VALIDATED_VERSIONS.
+                "validation_status": validation_status,
+                "scanner_version":   scanner_version,
             }
             cur.execute(UPSERT_FINDING_SQL, params)
             row = cur.fetchone()
