@@ -1104,7 +1104,33 @@ def run_nikto(ctx: ScanContext) -> None:
 # ─── ffuf (chunked) ─────────────────────────────────────────────────────
 def run_ffuf_chunk(ctx: ScanContext, words: list[str]) -> int:
     """Run one ffuf chunk against a wordlist subset. Returns count of
-    interesting (200/204) findings emitted.
+    findings emitted (any -mc-matched status: 200/204/301/302/307/401/403).
+
+    Pre-2026-06-07 PM: this function hard-filtered to 200/204 only, silently
+    discarding 30x/401/403. The 2026-06-07 demo.testfire.net validation
+    (scan_run 59ad6a13) surfaced the bug — ffuf discovered /admin, /swagger,
+    /static, /images (all 302→/login.jsp on a Java/Tomcat target), the
+    parser correctly populated `results`, but the 200/204 filter dropped
+    all 4 findings and findings_added=0. End-to-end runner proof failed
+    on a real positive-control target.
+
+    Un-filtered now — ffuf's `-mc` allowlist is the trusted source of
+    truth, the Python side trusts it. All -mc-matched statuses produce
+    findings, titles vary per status class so the human triage signal
+    isn't homogenized.
+
+    NOT YET FLOOD-SAFE FOR WAF-FRONTED ASSETS. The un-filter is correct
+    on no-WAF targets like testfire (4 hits → 4 findings). On Cloudflare/
+    FortiGate-fronted assets (cc/cmi/unimac/ccc) where 403/302 is the
+    norm, this could emit dozens of low-signal findings per scan and
+    re-flood the dashboard we just spent today de-phantoming. Land the
+    per-scan cap + WAF-rollup logic (see Tasks #3 + #4) BEFORE medium
+    runs against any owned WAF-fronted asset.
+
+    Also pending — severity tuning (Task #5): blanket-INFO buries
+    high-signal hits (401 on /admin, 200 on /.env or /.git) in the
+    noise floor. Sensitive-path detection + status-aware severity
+    should be the next layer once the flood guard is in.
     """
     ctx.tools_run.append(f"ffuf[{len(words)}w]")
     ua = pick_ua()
@@ -1151,22 +1177,60 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str]) -> int:
         status = r.get("status", 0)
         url = r.get("url", "")
         word = r.get("input", {}).get("FUZZ", "")
+        redirect_to = r.get("redirectlocation", "") or ""
         ctx.response_codes[str(status)] += 1
-        if status not in (200, 204):
-            continue
+
+        # Title + description per status class. Trust ffuf -mc as the
+        # promotion gate; don't second-guess on the Python side.
+        if status in (200, 204):
+            title_kind = "Accessible path"
+            desc_action = (
+                "Review whether this endpoint is intentionally public "
+                "or should be moved behind auth."
+            )
+        elif status in (301, 302, 307):
+            title_kind = (f"Path exists (redirect → {redirect_to})"
+                          if redirect_to else "Path exists (redirect)")
+            desc_action = (
+                f"Path /{word} responded with redirect "
+                f"({redirect_to or 'unspecified location'}) — endpoint is "
+                "reachable. Review whether the redirect chain leaks "
+                "information about internal structure or auth flow."
+            )
+        elif status == 401:
+            title_kind = "Auth-required endpoint"
+            desc_action = (
+                "Endpoint exists and requires authentication. Inventory "
+                "which path is gated by which mechanism — important "
+                "context for AuthN/AuthZ posture review."
+            )
+        elif status == 403:
+            title_kind = "Forbidden endpoint"
+            desc_action = (
+                "Endpoint exists but is denied. Often signals "
+                "misconfigured access controls or a real endpoint locked "
+                "at the WAF/server layer rather than removed."
+            )
+        else:
+            title_kind = "Path responded"
+            desc_action = "Review the response."
+
+        raw = f"GET {url} -> HTTP {status}"
+        if redirect_to:
+            raw += f" (Location: {redirect_to})"
+
         interesting += 1
         ctx.findings.append(MediumFinding(
             check_name=f"ffuf-found-{word}",
-            title=f"Accessible path discovered: /{word} (HTTP {status})",
+            title=f"{title_kind}: /{word} (HTTP {status})",
             severity="INFO",
             category="info_disclosure",
             description=(
                 f"Directory fuzzing discovered /{word} on {ctx.hostname} "
-                f"returning HTTP {status}. Review whether this endpoint "
-                f"is intentionally public or should be moved behind auth."
+                f"returning HTTP {status}. {desc_action}"
             ),
-            tags=["ffuf", "directory", "discovery"],
-            raw_excerpt=f"GET {url} -> HTTP {status}",
+            tags=["ffuf", "directory", "discovery", f"status_{status}"],
+            raw_excerpt=raw,
         ))
 
     return interesting
