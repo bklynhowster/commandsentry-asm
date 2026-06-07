@@ -1199,7 +1199,10 @@ def run_nikto(ctx: ScanContext) -> None:
         "-maxtime", str(NIKTO_WALL_S - 30),
         "-Format", "txt",
     ]
-    rc, stdout, stderr = run_cmd(cmd, timeout=NIKTO_WALL_S)
+    # input_str="" — pre-empt any future prompt from hanging the runner
+    # (defensive; not the cause of the current arg-rejection bug, but cheap
+    # insurance for the "tool waits on stdin" class of silent failures).
+    rc, stdout, stderr = run_cmd(cmd, timeout=NIKTO_WALL_S, input_str="")
     ctx.artifacts.append(("nikto", "text", stdout))
     # ADR-001 Step 4 — Bug D detector. If nikto bailed to its help banner
     # (which is exactly what happened across 14+ prior medium runs because
@@ -1211,8 +1214,18 @@ def run_nikto(ctx: ScanContext) -> None:
         mark_tool_degraded(ctx, "nikto", reason)
     else:
         mark_tool_ok(ctx, "nikto")
+    # UNCONDITIONAL stderr log. nikto's short-help bail is often rc=0
+    # (the gated `if rc not in (0,124)` block below swallowed it on the
+    # 2026-06-07 PM testfire re-fire after the -host fix). Perl
+    # Getopt::Long prints "Unknown option: X" or "Option X is ambiguous"
+    # on stderr just before the usage banner — that line names the
+    # exact rejected flag, which is the only thing we need to identify
+    # the next bug in the cmd. Logging unconditionally closes this
+    # blind spot for every future nikto failure too.
+    if stderr.strip():
+        log(f"  nikto stderr ({len(stderr)}B): {stderr.strip()[:400]}")
     if rc not in (0, 124):
-        log(f"  nikto rc={rc}: {stderr.strip()[:200]}")
+        log(f"  nikto rc={rc}")
 
     matches = 0
     for line in stdout.splitlines():
