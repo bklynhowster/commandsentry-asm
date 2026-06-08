@@ -10,13 +10,17 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-08T05:09:24Z_f7e89ec4",
-    "started_at": "2026-06-08T05:09:24Z",
-    "completed_at": "2026-06-08T05:09:30Z",
-    "duration_seconds": 6,
+    "id": "scan_2026-06-08T11:38:13Z_58e834a6",
+    "started_at": "2026-06-08T11:38:13Z",
+    "completed_at": "2026-06-08T11:39:48Z",
+    "duration_seconds": 95,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
+      "httpx",
+      "naabu",
+      "testssl",
+      "wafw00f",
       "whois"
     ]
   },
@@ -25,7 +29,7 @@
     "subdomain_count": 1,
     "live_subdomain_count": 1,
     "host_count": 1,
-    "service_count": 0,
+    "service_count": 2,
     "newest_cert_expiry_days": null,
     "top_hosting_org": "Natural Wireless, LLC",
     "platforms": []
@@ -36,13 +40,13 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-06-08T05:09:30Z",
-      "last_seen": "2026-06-08T05:09:30Z",
+      "first_discovered": "2026-06-08T11:39:48Z",
+      "last_seen": "2026-06-08T11:39:48Z",
       "tags": [],
       "reachability": {
-        "live": false,
-        "http_status": null,
-        "title": null
+        "live": true,
+        "http_status": 500,
+        "title": "The URL you requested has been blocked"
       },
       "hosts": [
         {
@@ -56,7 +60,34 @@
           "is_private": false
         }
       ],
-      "services": [],
+      "services": [
+        {
+          "ip": "52.119.65.6",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.119.65.6",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "san": [
+              "No",
+              "SAN,",
+              "browsers",
+              "are",
+              "complaining"
+            ],
+            "self_signed": false
+          }
+        }
+      ],
       "dns": {
         "a": [],
         "aaaa": [],
@@ -73,21 +104,16 @@
         "tech": []
       },
       "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
+        "detected": true,
+        "vendor": "FortiWeb",
+        "confidence": "high"
       }
     }
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-06-07T20:08:28Z_c91913aa",
+    "since_scan": "scan_2026-06-08T05:09:24Z_f7e89ec4",
     "added": {
-      "subdomains": [],
-      "services": [],
-      "hosts": []
-    },
-    "removed": {
       "subdomains": [],
       "services": [
         {
@@ -105,40 +131,25 @@
       ],
       "hosts": []
     },
+    "removed": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
     "changed": {
       "fingerprint": [],
       "cert": [],
       "reachability": [
         {
           "subdomain": "52.119.65.6",
-          "from": true,
-          "to": false,
+          "from": false,
+          "to": true,
           "is_root": true
         }
       ]
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-05-12T09:15:57Z_21695d9d",
-      "started_at": "2026-05-12T09:15:57Z",
-      "completed_at": "2026-05-12T09:17:56Z",
-      "subdomain_count": 1,
-      "live_subdomain_count": 1,
-      "host_count": 1,
-      "service_count": 2,
-      "subdomain_names": [
-        "52.119.65.6"
-      ],
-      "ports_by_sub": {
-        "52.119.65.6": {
-          "52.119.65.6": [
-            80,
-            443
-          ]
-        }
-      }
-    },
     {
       "scan_id": "scan_2026-05-12T12:12:08Z_4c7446c8",
       "started_at": "2026-05-12T12:12:08Z",
@@ -2611,6 +2622,27 @@
       ],
       "ports_by_sub": {
         "52.119.65.6": {}
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-06-08T11:38:13Z_58e834a6",
+      "started_at": "2026-06-08T11:38:13Z",
+      "completed_at": "2026-06-08T11:39:48Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_names": [
+        "52.119.65.6"
+      ],
+      "ports_by_sub": {
+        "52.119.65.6": {
+          "52.119.65.6": [
+            80,
+            443
+          ]
+        }
       },
       "tech_versions": {}
     }

@@ -10,13 +10,17 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-08T05:06:53Z_024d53fb",
-    "started_at": "2026-06-08T05:06:53Z",
-    "completed_at": "2026-06-08T05:06:59Z",
-    "duration_seconds": 6,
+    "id": "scan_2026-06-08T11:30:23Z_d5c05d7e",
+    "started_at": "2026-06-08T11:30:23Z",
+    "completed_at": "2026-06-08T11:31:26Z",
+    "duration_seconds": 63,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
+      "httpx",
+      "naabu",
+      "testssl",
+      "wafw00f",
       "whois"
     ]
   },
@@ -25,8 +29,8 @@
     "subdomain_count": 1,
     "live_subdomain_count": 1,
     "host_count": 1,
-    "service_count": 0,
-    "newest_cert_expiry_days": null,
+    "service_count": 2,
+    "newest_cert_expiry_days": 240,
     "top_hosting_org": "Cablevision Systems Corp.",
     "platforms": []
   },
@@ -36,13 +40,13 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-06-08T05:06:59Z",
-      "last_seen": "2026-06-08T05:06:59Z",
+      "first_discovered": "2026-06-08T11:31:26Z",
+      "last_seen": "2026-06-08T11:31:26Z",
       "tags": [],
       "reachability": {
-        "live": false,
-        "http_status": null,
-        "title": null
+        "live": true,
+        "http_status": 302,
+        "title": "Object moved"
       },
       "hosts": [
         {
@@ -56,7 +60,36 @@
           "is_private": false
         }
       ],
-      "services": [],
+      "services": [
+        {
+          "ip": "24.157.51.70",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "24.157.51.70",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=*.sciimage.com, O=Strategic Content Imaging, L=Secaucus, ST=New Jersey, C=US",
+            "issuer": "CN=Go Daddy Secure Certificate Authority - G2, OU=http://certs.godaddy.com/repository/, O=GoDaddy.com\\, Inc., L=Scottsdale, ST=Arizona, C=US",
+            "san": [
+              "*.sciimage.com",
+              "sciimage.com"
+            ],
+            "not_before": "2026-01-02T18:09:45Z",
+            "not_after": "2027-02-03T18:09:45Z",
+            "self_signed": false,
+            "days_to_expiry": 240
+          }
+        }
+      ],
       "dns": {
         "a": [],
         "aaaa": [],
@@ -70,24 +103,25 @@
       "fingerprint": {
         "server": null,
         "platform_label": null,
-        "tech": []
+        "tech": [
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          }
+        ]
       },
       "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
+        "detected": true,
+        "vendor": "None",
+        "confidence": "high"
       }
     }
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-06-07T20:01:30Z_700596aa",
+    "since_scan": "scan_2026-06-08T05:06:53Z_024d53fb",
     "added": {
-      "subdomains": [],
-      "services": [],
-      "hosts": []
-    },
-    "removed": {
       "subdomains": [],
       "services": [
         {
@@ -105,40 +139,25 @@
       ],
       "hosts": []
     },
+    "removed": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
     "changed": {
       "fingerprint": [],
       "cert": [],
       "reachability": [
         {
           "subdomain": "24.157.51.70",
-          "from": true,
-          "to": false,
+          "from": false,
+          "to": true,
           "is_root": true
         }
       ]
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-05-12T09:06:33Z_a64ebe16",
-      "started_at": "2026-05-12T09:06:33Z",
-      "completed_at": "2026-05-12T09:07:47Z",
-      "subdomain_count": 1,
-      "live_subdomain_count": 1,
-      "host_count": 1,
-      "service_count": 2,
-      "subdomain_names": [
-        "24.157.51.70"
-      ],
-      "ports_by_sub": {
-        "24.157.51.70": {
-          "24.157.51.70": [
-            80,
-            443
-          ]
-        }
-      }
-    },
     {
       "scan_id": "scan_2026-05-12T12:04:57Z_860b221f",
       "started_at": "2026-05-12T12:04:57Z",
@@ -2611,6 +2630,27 @@
       ],
       "ports_by_sub": {
         "24.157.51.70": {}
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-06-08T11:30:23Z_d5c05d7e",
+      "started_at": "2026-06-08T11:30:23Z",
+      "completed_at": "2026-06-08T11:31:26Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_names": [
+        "24.157.51.70"
+      ],
+      "ports_by_sub": {
+        "24.157.51.70": {
+          "24.157.51.70": [
+            80,
+            443
+          ]
+        }
       },
       "tech_versions": {}
     }

@@ -10,13 +10,17 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-08T05:08:55Z_166a0907",
-    "started_at": "2026-06-08T05:08:55Z",
-    "completed_at": "2026-06-08T05:09:01Z",
-    "duration_seconds": 6,
+    "id": "scan_2026-06-08T11:33:04Z_aae4fb3a",
+    "started_at": "2026-06-08T11:33:04Z",
+    "completed_at": "2026-06-08T11:34:48Z",
+    "duration_seconds": 104,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
+      "httpx",
+      "naabu",
+      "testssl",
+      "wafw00f",
       "whois"
     ]
   },
@@ -25,8 +29,8 @@
     "subdomain_count": 1,
     "live_subdomain_count": 1,
     "host_count": 1,
-    "service_count": 0,
-    "newest_cert_expiry_days": null,
+    "service_count": 2,
+    "newest_cert_expiry_days": 240,
     "top_hosting_org": "Cablevision Systems Corp.",
     "platforms": []
   },
@@ -36,13 +40,13 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-06-08T05:09:01Z",
-      "last_seen": "2026-06-08T05:09:01Z",
+      "first_discovered": "2026-06-08T11:34:48Z",
+      "last_seen": "2026-06-08T11:34:48Z",
       "tags": [],
       "reachability": {
-        "live": false,
-        "http_status": null,
-        "title": null
+        "live": true,
+        "http_status": 500,
+        "title": "The URL you requested has been blocked"
       },
       "hosts": [
         {
@@ -56,7 +60,36 @@
           "is_private": false
         }
       ],
-      "services": [],
+      "services": [
+        {
+          "ip": "24.157.51.86",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "24.157.51.86",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=*.commandcommcentral.com, O=Strategic Content Imaging, L=Secaucus, ST=New Jersey, C=US",
+            "issuer": "CN=Go Daddy Secure Certificate Authority - G2, OU=http://certs.godaddy.com/repository/, O=GoDaddy.com\\, Inc., L=Scottsdale, ST=Arizona, C=US",
+            "san": [
+              "*.commandcommcentral.com",
+              "commandcommcentral.com"
+            ],
+            "not_before": "2026-01-02T18:09:44Z",
+            "not_after": "2027-02-03T18:09:44Z",
+            "self_signed": false,
+            "days_to_expiry": 240
+          }
+        }
+      ],
       "dns": {
         "a": [],
         "aaaa": [],
@@ -73,21 +106,16 @@
         "tech": []
       },
       "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
+        "detected": true,
+        "vendor": "FortiWeb",
+        "confidence": "high"
       }
     }
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-06-07T20:03:52Z_d0a5f9ee",
+    "since_scan": "scan_2026-06-08T05:08:55Z_166a0907",
     "added": {
-      "subdomains": [],
-      "services": [],
-      "hosts": []
-    },
-    "removed": {
       "subdomains": [],
       "services": [
         {
@@ -105,40 +133,25 @@
       ],
       "hosts": []
     },
+    "removed": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
     "changed": {
       "fingerprint": [],
       "cert": [],
       "reachability": [
         {
           "subdomain": "24.157.51.86",
-          "from": true,
-          "to": false,
+          "from": false,
+          "to": true,
           "is_root": true
         }
       ]
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-05-12T09:09:45Z_f64d4483",
-      "started_at": "2026-05-12T09:09:45Z",
-      "completed_at": "2026-05-12T09:11:49Z",
-      "subdomain_count": 1,
-      "live_subdomain_count": 1,
-      "host_count": 1,
-      "service_count": 2,
-      "subdomain_names": [
-        "24.157.51.86"
-      ],
-      "ports_by_sub": {
-        "24.157.51.86": {
-          "24.157.51.86": [
-            80,
-            443
-          ]
-        }
-      }
-    },
     {
       "scan_id": "scan_2026-05-12T12:07:19Z_d0b7446a",
       "started_at": "2026-05-12T12:07:19Z",
@@ -2611,6 +2624,27 @@
       ],
       "ports_by_sub": {
         "24.157.51.86": {}
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-06-08T11:33:04Z_aae4fb3a",
+      "started_at": "2026-06-08T11:33:04Z",
+      "completed_at": "2026-06-08T11:34:48Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_names": [
+        "24.157.51.86"
+      ],
+      "ports_by_sub": {
+        "24.157.51.86": {
+          "24.157.51.86": [
+            80,
+            443
+          ]
+        }
       },
       "tech_versions": {}
     }
