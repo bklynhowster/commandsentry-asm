@@ -407,14 +407,61 @@ def mark_tool_degraded(ctx: ScanContext, tool_name: str, reason: str) -> None:
     ctx.tool_status[tool_name] = {"degraded": reason}
 
 
-def nikto_is_degraded(stdout: str, rc: int) -> tuple[bool, str]:
-    """Bug D detector. nikto prints its short usage banner on ambiguous
-    arg or unknown flag. Look for the exact phrases nikto's help text
-    emits — narrow enough that real scan output never matches."""
-    if "Note: This is the short help output" in stdout:
+def nikto_is_degraded(stdout: str, stderr: str, rc: int) -> tuple[bool, str]:
+    """Bug D + Bug E detector. Reads BOTH stdout AND stderr.
+
+    Catches two recognized failure shapes:
+
+    1. **help_text_returned** (original Bug D, 2026-06-07 AM): nikto
+       prints its short usage banner on Getopt::Long flag rejection
+       or ambiguity. Keys on the EXACT phrases in nikto's short help.
+       Banner can land on either stream depending on nikto version.
+
+    2. **runtime_error** (Bug E, added 2026-06-07 PM after scan_run
+       c14e2fe2 exposed the blind spot): nikto can scan the target,
+       print a valid header, and THEN crash in a plugin (e.g. report
+       plugin failing to open the -output file). The header-presence
+       check would falsely read healthy. Keys instead on any
+       `+ ERROR:` line — nikto's own error-line convention.
+
+       IMPORTANT — nikto routes `+ ERROR:` lines to STDERR (verified
+       on scan_run c14e2fe2: stderr was 221B starting with
+       "+ ERROR: Unable to open '' for write:" while stdout was only
+       136B and contained no error). The detector MUST inspect both
+       streams; reading stdout alone false-negatived c14e2fe2 the
+       first time this detector was written.
+
+       Explicitly excludes `+ ERROR: Host maximum execution time` —
+       that's routine time-boxing (the `-maxtime` cap doing its job)
+       and would cry-wolf on every capped run, repeating the
+       nuclei-empty mistake. Per Howie's rule: a degraded flag must
+       mean tool FAILED, never "tool worked within its budget."
+
+       Does NOT key on `rc` alone. `-maxtime` can set rc != 0 even
+       when the scan was healthy.
+
+    Verified post-fix against stored fixtures (all in scan_run history):
+      - 7f8b18e8 / 1256B help banner (pre-Bug-D-fix) → help_text_returned
+      - c14e2fe2 / rc=2 write-crash (stderr 221B)   → runtime_error
+      - 7bd3bbf9 / healthy 1595B scan output         → ok
+      - synthesized maxtime-only run (header + items + Host max exec
+        ERROR + clean End Time) → ok (cry-wolf guard)
+    """
+    combined = stdout + "\n" + stderr
+    if "Note: This is the short help output" in combined:
         return True, "help_text_returned"
-    if "Use -H for full help text" in stdout:
+    if "Use -H for full help text" in combined:
         return True, "help_text_returned"
+    for line in combined.splitlines():
+        s = line.strip()
+        if s.startswith("+ ERROR:"):
+            # Skip the benign maxtime-cap line. Match generously on
+            # the literal "Host maximum execution time" phrase so
+            # cosmetic phrasing changes (different numbers, etc.) all
+            # match.
+            if "Host maximum execution time" in s:
+                continue
+            return True, "runtime_error"
     return False, ""
 
 
@@ -1223,12 +1270,12 @@ def run_nikto(ctx: ScanContext) -> None:
     # insurance for the "tool waits on stdin" class of silent failures).
     rc, stdout, stderr = run_cmd(cmd, timeout=NIKTO_WALL_S, input_str="")
     ctx.artifacts.append(("nikto", "text", stdout))
-    # ADR-001 Step 4 — Bug D detector. If nikto bailed to its help banner
-    # (which is exactly what happened across 14+ prior medium runs because
-    # of the '-h' ambiguity), mark degraded. Otherwise: stdout is real
-    # scan output. The detector is narrow — only flags the literal help
-    # banner phrases, never a legitimate empty/short scan output.
-    is_degraded, reason = nikto_is_degraded(stdout, rc)
+    # ADR-001 Step 4 — Bug D + Bug E detector. Now reads BOTH stdout AND
+    # stderr because nikto routes its `+ ERROR:` lines to stderr (verified
+    # via scan_run c14e2fe2). The narrow detector only flags the literal
+    # help banner phrases (Bug D) or non-maxtime "+ ERROR:" lines (Bug E),
+    # never a legitimate empty/short scan output.
+    is_degraded, reason = nikto_is_degraded(stdout, stderr, rc)
     if is_degraded:
         mark_tool_degraded(ctx, "nikto", reason)
     else:
@@ -1252,11 +1299,30 @@ def run_nikto(ctx: ScanContext) -> None:
         if not line.startswith("+ "):
             continue
         body = line[2:].strip()
+        # Filter list — these `+ ` prefixed lines are nikto's HEADERS or
+        # FOOTERS, not scan items. Anything not on this list is a real
+        # check finding.
+        #
+        # 2026-06-07 PM addition (post scan_run 7bd3bbf9): the parser
+        # was silently promoting "+ Scan terminated:  0 error(s) and
+        # 7 item(s) reported on remote host" as a MediumFinding,
+        # yielding findings_added=9 when only 7 real items were
+        # reported (one of which the existing filter already drops).
+        # If we promoted scan_run 7bd3bbf9 to 'validated' as-is, the
+        # validated baseline would be born polluted with parser noise —
+        # exactly the failure mode ADR-001 was built to prevent.
+        # Footer-family lines added: "Scan terminated:", "item(s)
+        # reported", "host(s) tested", "error(s) and". The "Nikto v"
+        # prefix line starts with "-" not "+ " so it never reaches
+        # this branch.
         if any(prefix in body for prefix in (
             "Target IP:", "Target Hostname:", "Target Port:",
             "Start Time:", "End Time:", "Server:", "items checked:",
             "Site link", "Allowed HTTP", "SSL Info:",
             "Subject:", "Ciphers:", "Issuer:",
+            # Footer family — non-findings status output
+            "Scan terminated:", "item(s) reported", "host(s) tested",
+            "error(s) and",
         )):
             continue
         matches += 1
