@@ -123,47 +123,41 @@ DANGEROUS_METHODS = {
 DEFAULT_SUPABASE_URL = "https://hdygktppfvuspnumpfuq.supabase.co"
 
 
-# ─── ADR-001 — Validated-SHA key ────────────────────────────────────────
+# ─── ADR-001 — Validated-SHA key (convergent edition) ───────────────────
 #
-# Per-tier allowlist of scanner SHAs whose findings can be stamped as
-# 'validated' instead of the default 'unvalidated'. Starts empty:
-# no SHA is validated until ADR-001 Step 5 promotes the first one,
-# AFTER Bug D (nikto in run_medium) is fixed and the silent-tool-failure
-# detector is in place, AND the proving run on demo.testfire.net
-# confirms all expected findings land with all tools producing real
-# output.
+# Allowlist of (intensity, scanner_version) pairs whose emissions get
+# stamped validation_status='validated'. Stored in the Postgres table
+# public.scanner_validations, NOT in this runner code.
 #
-# Promotion mechanics + demotion-is-impossible-by-design — see comment
-# block in scripts/scanner/run_medium.py for the full design.
+# WHY THE TABLE — full rationale in scripts/scanner/run_medium.py's
+# block. Short version: an in-code allowlist can't self-reference (the
+# commit recording a validation can't BE the validated commit). Moving
+# to a table means promotion = INSERT, not a code change, so the regime
+# converges. Bad code is still auto-invalidated because new SHAs aren't
+# in the table until a human INSERTs them.
 #
-# DUPED from run_medium intentionally; refactor to a shared module when
-# the rest of the "DUPED" inventory (UPSERT_FINDING_SQL etc.) does.
-#
-# Migration: scripts/db/migrations/20260607a_findings_validation_key.sql
-# Project log: [[75 - Session Log 2026-06-07]]
-
-VALIDATED_VERSIONS: dict[str, set[str]] = {
-    "light":  set(),
-    "medium": set(),
-    "heavy":  set(),
-}
-
+# Schema: scripts/db/migrations/20260608a_scanner_validations.sql
 
 def get_scanner_version() -> str:
     """Return the runner's git SHA from GITHUB_SHA env (GH Actions
     populates this on every workflow run) or 'unknown' if absent.
-    Always full 40-char SHA — never abbreviate, the allowlist match
+    Always full 40-char SHA — never abbreviate, the table-match
     is exact-string."""
     return os.environ.get("GITHUB_SHA") or "unknown"
 
 
-def derive_validation_status(intensity: str, sha: str) -> str:
-    """Return 'validated' iff (intensity, sha) is in the allowlist;
-    'unvalidated' otherwise. Never returns 'legacy' — that's reserved
-    for rows that existed before ADR-001 (migration 20260607a)."""
-    if sha in VALIDATED_VERSIONS.get(intensity, set()):
-        return "validated"
-    return "unvalidated"
+def derive_validation_status(conn, intensity: str, sha: str) -> str:
+    """Query public.scanner_validations. Returns 'validated' iff a row
+    exists for (intensity, sha); else 'unvalidated'. Fails loud if the
+    table is missing — better than silently stamping 'unvalidated' on a
+    misconfigured deploy."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM public.scanner_validations "
+            "WHERE intensity = %s AND scanner_version = %s",
+            (intensity, sha),
+        )
+        return "validated" if cur.fetchone() else "unvalidated"
 
 
 # ─── Finding model ──────────────────────────────────────────────────────
@@ -1841,10 +1835,11 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
     inserted = 0
     updated  = 0
     # ADR-001: stamp every emission with the runner's SHA + validation
-    # status. validation_status defaults to 'unvalidated' until the SHA
-    # is in VALIDATED_VERSIONS[ctx.intensity] (empty until Step 5).
+    # status. validation_status is computed by querying the
+    # scanner_validations table (NOT an in-code allowlist — see
+    # derive_validation_status() docstring for the convergence rationale).
     scanner_version = get_scanner_version()
-    validation_status = derive_validation_status(ctx.intensity, scanner_version)
+    validation_status = derive_validation_status(conn, ctx.intensity, scanner_version)
     log(f"  ADR-001: scanner_version={scanner_version[:12]} "
         f"validation_status={validation_status}")
 
@@ -1881,7 +1876,7 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 # finding_source_t in migration 20260528b.
                 "source":      f"commandsentry_{ctx.intensity}",
                 "tags":        f.tags,
-                # ADR-001 validated-SHA key — see top-of-file VALIDATED_VERSIONS.
+                # ADR-001 validated-SHA key — see top-of-file derive_validation_status.
                 "validation_status": validation_status,
                 "scanner_version":   scanner_version,
             }

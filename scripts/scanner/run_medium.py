@@ -127,55 +127,54 @@ MAX_REQUESTS_TOTAL = 8000        # hard ceiling across all tools
 BAN_HTTP_CODES = {403, 429, 503, 521, 522, 523}  # WAF/CDN ban signals
 
 
-# ─── ADR-001 — Validated-SHA key ────────────────────────────────────────
+# ─── ADR-001 — Validated-SHA key (convergent edition) ───────────────────
 #
-# Per-tier allowlist of scanner SHAs whose findings can be stamped as
-# 'validated' instead of the default 'unvalidated'. Starts empty:
-# no SHA is validated until ADR-001 Step 5 promotes the first one,
-# AFTER Bug D (nikto invocation) is fixed and the silent-tool-failure
-# detector is in place, AND the proving run on demo.testfire.net
-# confirms all expected findings land with all tools producing real
-# output (not help-text, not empty stdout from a WAF ban).
+# Allowlist of (intensity, scanner_version) pairs whose emissions get
+# stamped validation_status='validated'. Stored in the Postgres table
+# public.scanner_validations, NOT here in the runner code.
 #
-# Promotion mechanics:
-#   - Add the full 40-char GITHUB_SHA of the proving commit to the
-#     appropriate tier's set below.
-#   - Re-fire that commit's runner once; subsequent inserts get
-#     validation_status='validated' automatically.
-#   - Older legacy/unvalidated rows that get re-emitted by a validated
-#     SHA are upgraded by the UPSERT heal logic.
+# WHY THE TABLE INSTEAD OF AN IN-CODE DICT:
+# Earlier draft (commit eebc45a, reverted before push 2026-06-08)
+# tried VALIDATED_VERSIONS as an in-code set. That never converges:
+# the commit that ADDS a SHA to the in-code list is itself a new commit
+# with a new SHA. When that new commit runs, GITHUB_SHA = its_own_sha,
+# which is NOT in the allowlist (only the old proven SHA is). So every
+# future run writes 'unvalidated' — backfill stamps one run, then
+# nothing validates again. Silent no-op.
 #
-# Demotion is impossible by design. Once a SHA is in the allowlist
-# its findings stay validated forever — if a SHA is later found to
-# produce bad output, REMOVE it from the allowlist but do NOT
-# retroactively flip rows; that's the role of remediated/false_positive
-# on current_status, not the validation regime.
+# Moving the allowlist out of hashed code breaks the self-reference:
+# validating a SHA is an INSERT, not a commit. HEAD doesn't move. The
+# running SHA can validate itself. Real code changes still produce new
+# SHAs that run 'unvalidated' until proven AND explicitly INSERTed —
+# auto-invalidation is preserved.
 #
-# See migration scripts/db/migrations/20260607a_findings_validation_key.sql
-# and the project log [[75 - Session Log 2026-06-07]] for the rationale.
-
-VALIDATED_VERSIONS: dict[str, set[str]] = {
-    "light":  set(),
-    "medium": set(),
-    "heavy":  set(),
-}
-
+# Schema: scripts/db/migrations/20260608a_scanner_validations.sql
 
 def get_scanner_version() -> str:
     """Return the runner's git SHA from GITHUB_SHA env (GH Actions
     populates this on every workflow run) or 'unknown' if absent.
-    Always full 40-char SHA — never abbreviate, the allowlist match
+    Always full 40-char SHA — never abbreviate, the table-match
     is exact-string."""
     return os.environ.get("GITHUB_SHA") or "unknown"
 
 
-def derive_validation_status(intensity: str, sha: str) -> str:
-    """Return 'validated' iff (intensity, sha) is in the allowlist;
-    'unvalidated' otherwise. Never returns 'legacy' — that's reserved
-    for rows that existed before ADR-001 (migration 20260607a)."""
-    if sha in VALIDATED_VERSIONS.get(intensity, set()):
-        return "validated"
-    return "unvalidated"
+def derive_validation_status(conn, intensity: str, sha: str) -> str:
+    """Query public.scanner_validations. Returns 'validated' iff a row
+    exists for (intensity, sha); else 'unvalidated'.
+
+    NEVER returns 'legacy' — that's reserved for rows that existed
+    before migration 20260607a backfilled them.
+
+    Fails loud if the table is missing (migration 20260608a not
+    applied). Better to error than silently stamp everything
+    'unvalidated' on a misconfigured deploy."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM public.scanner_validations "
+            "WHERE intensity = %s AND scanner_version = %s",
+            (intensity, sha),
+        )
+        return "validated" if cur.fetchone() else "unvalidated"
 
 # Rotation regions are now loaded DYNAMICALLY from /etc/wireguard/*.conf
 # at script startup. Pool size went from 12 → 205 after Howie's "All
@@ -1651,11 +1650,11 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
     inserted = 0
     updated = 0
     # ADR-001: stamp every emission with the runner's SHA + validation
-    # status. validation_status defaults to 'unvalidated' until the SHA
-    # is in VALIDATED_VERSIONS[ctx.intensity] (empty until ADR-001
-    # Step 5 promotes the first proving SHA).
+    # status. validation_status is computed by querying the
+    # scanner_validations table (NOT an in-code allowlist — see
+    # derive_validation_status() docstring for the convergence rationale).
     scanner_version = get_scanner_version()
-    validation_status = derive_validation_status(ctx.intensity, scanner_version)
+    validation_status = derive_validation_status(conn, ctx.intensity, scanner_version)
     log(f"  ADR-001: scanner_version={scanner_version[:12]} "
         f"validation_status={validation_status}")
     with conn.cursor() as cur:
