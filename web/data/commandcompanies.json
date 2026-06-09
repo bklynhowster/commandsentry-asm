@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-08T20:27:43Z_e1488805",
-    "started_at": "2026-06-08T20:27:43Z",
-    "completed_at": "2026-06-08T20:30:46Z",
-    "duration_seconds": 183,
+    "id": "scan_2026-06-09T04:12:13Z_39621d82",
+    "started_at": "2026-06-09T04:12:13Z",
+    "completed_at": "2026-06-09T04:15:11Z",
+    "duration_seconds": 178,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -32,7 +32,7 @@
     "live_subdomain_count": 2,
     "host_count": 2,
     "service_count": 8,
-    "newest_cert_expiry_days": 72,
+    "newest_cert_expiry_days": 71,
     "top_hosting_org": "Automattic, Inc",
     "platforms": [
       "WordPress on wp.cloud (Pressable)"
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-08T20:30:46Z",
-      "last_seen": "2026-06-08T20:30:46Z",
+      "first_discovered": "2026-06-09T04:15:11Z",
+      "last_seen": "2026-06-09T04:15:11Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -126,7 +126,7 @@
             "not_before": "2026-05-22T01:44:05Z",
             "not_after": "2026-08-20T01:44:04Z",
             "self_signed": false,
-            "days_to_expiry": 72
+            "days_to_expiry": 71
           }
         },
         {
@@ -180,7 +180,7 @@
             "not_before": "2026-05-22T01:44:05Z",
             "not_after": "2026-08-20T01:44:04Z",
             "self_signed": false,
-            "days_to_expiry": 72
+            "days_to_expiry": 71
           }
         }
       ],
@@ -191,6 +191,264 @@
         ],
         "aaaa": [],
         "cname": null,
+        "mx": [],
+        "ns": [
+          "ns73.domaincontrol.com",
+          "ns74.domaincontrol.com"
+        ],
+        "txt": [
+          "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
+          "MS=ms93622757"
+        ],
+        "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": "nginx",
+        "platform_label": "WordPress on wp.cloud (Pressable)",
+        "tech": [
+          {
+            "name": "Bootstrap",
+            "version": "5.1.3",
+            "category": "frontend"
+          },
+          {
+            "name": "Font Awesome",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          },
+          {
+            "name": "Jetpack",
+            "version": null,
+            "category": null
+          },
+          {
+            "name": "MySQL",
+            "version": null,
+            "category": "database"
+          },
+          {
+            "name": "Nginx",
+            "version": null,
+            "category": "webserver"
+          },
+          {
+            "name": "PHP",
+            "version": null,
+            "category": "language"
+          },
+          {
+            "name": "SVG Support",
+            "version": null,
+            "category": null
+          },
+          {
+            "name": "Slider Revolution",
+            "version": "6.7.57",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "WordPress",
+            "version": null,
+            "category": "cms"
+          },
+          {
+            "name": "Yoast SEO",
+            "version": "27.7",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "jQuery",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery Migrate",
+            "version": "3.4.1",
+            "category": "frontend"
+          },
+          {
+            "name": "jsDelivr",
+            "version": null,
+            "category": "cdn"
+          },
+          {
+            "name": "wp.cloud",
+            "version": null,
+            "category": "hosting"
+          },
+          {
+            "name": "wpBakery",
+            "version": null,
+            "category": "wp-plugin"
+          }
+        ]
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "Generic",
+        "confidence": "high"
+      }
+    },
+    {
+      "name": "www.commandcompanies.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-06-09T04:15:11Z",
+      "last_seen": "2026-06-09T04:15:11Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 200,
+        "title": "Home - Command Companies"
+      },
+      "hosts": [
+        {
+          "ip": "199.16.172.42",
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc",
+          "country": "US",
+          "region": "California",
+          "city": "San Francisco",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "199.16.173.153",
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc",
+          "country": "US",
+          "region": "California",
+          "city": "San Francisco",
+          "reverse_dns": null,
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "199.16.172.42",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "199.16.172.42",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=tls.automattic.com",
+            "issuer": "CN=WR1, O=Google Trust Services, C=US",
+            "san": [
+              "tls.automattic.com",
+              "affordizon.com",
+              "americascrackerbarrel.blog",
+              "babjipneumaticvalves.com",
+              "commandcompanies.com",
+              "idplanet.blog",
+              "ispeakbooknerd.com",
+              "jaredboonedraws.com",
+              "jasminnessa.uk",
+              "johnmatthew.com",
+              "kalestel.com",
+              "kathrinfernerwenzl.com",
+              "kjs-hk.com",
+              "livingeconomics.in",
+              "pebblesstonesandboulders.blog",
+              "www.affordizon.com",
+              "www.anaorgazcorreccion.com",
+              "www.babjipneumaticvalves.com",
+              "www.idplanet.blog",
+              "www.ispeakbooknerd.com",
+              "www.jaredboonedraws.com",
+              "www.jasminnessa.uk",
+              "www.kalestel.com",
+              "www.kanikacompute.com",
+              "www.kathrinfernerwenzl.com",
+              "www.kjs-hk.com",
+              "www.livingeconomics.in",
+              "www.pebblesstonesandboulders.blog"
+            ],
+            "not_before": "2026-05-22T01:44:05Z",
+            "not_after": "2026-08-20T01:44:04Z",
+            "self_signed": false,
+            "days_to_expiry": 71
+          }
+        },
+        {
+          "ip": "199.16.173.153",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "199.16.173.153",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=tls.automattic.com",
+            "issuer": "CN=WR1, O=Google Trust Services, C=US",
+            "san": [
+              "tls.automattic.com",
+              "affordizon.com",
+              "americascrackerbarrel.blog",
+              "babjipneumaticvalves.com",
+              "commandcompanies.com",
+              "idplanet.blog",
+              "ispeakbooknerd.com",
+              "jaredboonedraws.com",
+              "jasminnessa.uk",
+              "johnmatthew.com",
+              "kalestel.com",
+              "kathrinfernerwenzl.com",
+              "kjs-hk.com",
+              "livingeconomics.in",
+              "pebblesstonesandboulders.blog",
+              "www.affordizon.com",
+              "www.anaorgazcorreccion.com",
+              "www.babjipneumaticvalves.com",
+              "www.idplanet.blog",
+              "www.ispeakbooknerd.com",
+              "www.jaredboonedraws.com",
+              "www.jasminnessa.uk",
+              "www.kalestel.com",
+              "www.kanikacompute.com",
+              "www.kathrinfernerwenzl.com",
+              "www.kjs-hk.com",
+              "www.livingeconomics.in",
+              "www.pebblesstonesandboulders.blog"
+            ],
+            "not_before": "2026-05-22T01:44:05Z",
+            "not_after": "2026-08-20T01:44:04Z",
+            "self_signed": false,
+            "days_to_expiry": 71
+          }
+        }
+      ],
+      "dns": {
+        "a": [
+          "199.16.173.153",
+          "199.16.172.42"
+        ],
+        "aaaa": [],
+        "cname": "commandcompanies.com",
         "mx": [],
         "ns": [
           "ns73.domaincontrol.com",
@@ -296,269 +554,11 @@
         "vendor": "Generic",
         "confidence": "high"
       }
-    },
-    {
-      "name": "www.commandcompanies.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-06-08T20:30:47Z",
-      "last_seen": "2026-06-08T20:30:47Z",
-      "tags": [],
-      "reachability": {
-        "live": true,
-        "http_status": 200,
-        "title": "Home - Command Companies"
-      },
-      "hosts": [
-        {
-          "ip": "199.16.172.42",
-          "asn": "AS2635",
-          "asn_org": "Automattic, Inc",
-          "country": "US",
-          "region": "California",
-          "city": "San Francisco",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "199.16.173.153",
-          "asn": "AS2635",
-          "asn_org": "Automattic, Inc",
-          "country": "US",
-          "region": "California",
-          "city": "San Francisco",
-          "reverse_dns": null,
-          "is_private": false
-        }
-      ],
-      "services": [
-        {
-          "ip": "199.16.172.42",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "199.16.172.42",
-          "port": 443,
-          "protocol": "tcp",
-          "service": "https",
-          "banner": null,
-          "tls": true,
-          "cert": {
-            "subject": "CN=tls.automattic.com",
-            "issuer": "CN=WR1, O=Google Trust Services, C=US",
-            "san": [
-              "tls.automattic.com",
-              "affordizon.com",
-              "americascrackerbarrel.blog",
-              "babjipneumaticvalves.com",
-              "commandcompanies.com",
-              "idplanet.blog",
-              "ispeakbooknerd.com",
-              "jaredboonedraws.com",
-              "jasminnessa.uk",
-              "johnmatthew.com",
-              "kalestel.com",
-              "kathrinfernerwenzl.com",
-              "kjs-hk.com",
-              "livingeconomics.in",
-              "pebblesstonesandboulders.blog",
-              "www.affordizon.com",
-              "www.anaorgazcorreccion.com",
-              "www.babjipneumaticvalves.com",
-              "www.idplanet.blog",
-              "www.ispeakbooknerd.com",
-              "www.jaredboonedraws.com",
-              "www.jasminnessa.uk",
-              "www.kalestel.com",
-              "www.kanikacompute.com",
-              "www.kathrinfernerwenzl.com",
-              "www.kjs-hk.com",
-              "www.livingeconomics.in",
-              "www.pebblesstonesandboulders.blog"
-            ],
-            "not_before": "2026-05-22T01:44:05Z",
-            "not_after": "2026-08-20T01:44:04Z",
-            "self_signed": false,
-            "days_to_expiry": 72
-          }
-        },
-        {
-          "ip": "199.16.173.153",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "199.16.173.153",
-          "port": 443,
-          "protocol": "tcp",
-          "service": "https",
-          "banner": null,
-          "tls": true,
-          "cert": {
-            "subject": "CN=tls.automattic.com",
-            "issuer": "CN=WR1, O=Google Trust Services, C=US",
-            "san": [
-              "tls.automattic.com",
-              "affordizon.com",
-              "americascrackerbarrel.blog",
-              "babjipneumaticvalves.com",
-              "commandcompanies.com",
-              "idplanet.blog",
-              "ispeakbooknerd.com",
-              "jaredboonedraws.com",
-              "jasminnessa.uk",
-              "johnmatthew.com",
-              "kalestel.com",
-              "kathrinfernerwenzl.com",
-              "kjs-hk.com",
-              "livingeconomics.in",
-              "pebblesstonesandboulders.blog",
-              "www.affordizon.com",
-              "www.anaorgazcorreccion.com",
-              "www.babjipneumaticvalves.com",
-              "www.idplanet.blog",
-              "www.ispeakbooknerd.com",
-              "www.jaredboonedraws.com",
-              "www.jasminnessa.uk",
-              "www.kalestel.com",
-              "www.kanikacompute.com",
-              "www.kathrinfernerwenzl.com",
-              "www.kjs-hk.com",
-              "www.livingeconomics.in",
-              "www.pebblesstonesandboulders.blog"
-            ],
-            "not_before": "2026-05-22T01:44:05Z",
-            "not_after": "2026-08-20T01:44:04Z",
-            "self_signed": false,
-            "days_to_expiry": 72
-          }
-        }
-      ],
-      "dns": {
-        "a": [
-          "199.16.173.153",
-          "199.16.172.42"
-        ],
-        "aaaa": [],
-        "cname": "commandcompanies.com",
-        "mx": [],
-        "ns": [
-          "ns73.domaincontrol.com",
-          "ns74.domaincontrol.com"
-        ],
-        "txt": [
-          "MS=ms93622757",
-          "apple-domain-verification=cWkfjNKuM61a3EZ6",
-          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
-        ],
-        "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": "nginx",
-        "platform_label": "WordPress on wp.cloud (Pressable)",
-        "tech": [
-          {
-            "name": "Bootstrap",
-            "version": "5.1.3",
-            "category": "frontend"
-          },
-          {
-            "name": "Font Awesome",
-            "version": null,
-            "category": "frontend"
-          },
-          {
-            "name": "HSTS",
-            "version": null,
-            "category": "security"
-          },
-          {
-            "name": "Jetpack",
-            "version": null,
-            "category": null
-          },
-          {
-            "name": "MySQL",
-            "version": null,
-            "category": "database"
-          },
-          {
-            "name": "Nginx",
-            "version": null,
-            "category": "webserver"
-          },
-          {
-            "name": "PHP",
-            "version": null,
-            "category": "language"
-          },
-          {
-            "name": "SVG Support",
-            "version": null,
-            "category": null
-          },
-          {
-            "name": "Slider Revolution",
-            "version": "6.7.57",
-            "category": "wp-plugin"
-          },
-          {
-            "name": "WordPress",
-            "version": null,
-            "category": "cms"
-          },
-          {
-            "name": "Yoast SEO",
-            "version": "27.7",
-            "category": "wp-plugin"
-          },
-          {
-            "name": "jQuery",
-            "version": null,
-            "category": "frontend"
-          },
-          {
-            "name": "jQuery Migrate",
-            "version": "3.4.1",
-            "category": "frontend"
-          },
-          {
-            "name": "jsDelivr",
-            "version": null,
-            "category": "cdn"
-          },
-          {
-            "name": "wp.cloud",
-            "version": null,
-            "category": "hosting"
-          },
-          {
-            "name": "wpBakery",
-            "version": null,
-            "category": "wp-plugin"
-          }
-        ]
-      },
-      "waf": {
-        "detected": true,
-        "vendor": "Generic",
-        "confidence": "high"
-      }
     }
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-06-08T16:09:24Z_76ec661c",
+    "since_scan": "scan_2026-06-08T20:27:43Z_e1488805",
     "added": {
       "subdomains": [],
       "services": [],
@@ -576,33 +576,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-05-12T20:04:08Z_9bd451af",
-      "started_at": "2026-05-12T20:04:08Z",
-      "completed_at": "2026-05-12T20:05:36Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 1,
-      "service_count": 4,
-      "subdomain_names": [
-        "commandcompanies.com",
-        "www.commandcompanies.com"
-      ],
-      "ports_by_sub": {
-        "commandcompanies.com": {
-          "199.16.172.54": [
-            80,
-            443
-          ]
-        },
-        "www.commandcompanies.com": {
-          "199.16.172.54": [
-            80,
-            443
-          ]
-        }
-      }
-    },
     {
       "scan_id": "scan_2026-05-12T21:52:55Z_84fff6a0",
       "started_at": "2026-05-12T21:52:55Z",
@@ -4804,6 +4777,47 @@
       "scan_id": "scan_2026-06-08T20:27:43Z_e1488805",
       "started_at": "2026-06-08T20:27:43Z",
       "completed_at": "2026-06-08T20:30:46Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.42": [
+            80,
+            443
+          ],
+          "199.16.173.153": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.42": [
+            80,
+            443
+          ],
+          "199.16.173.153": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.3",
+        "Slider Revolution": "6.7.57",
+        "Yoast SEO": "27.7",
+        "jQuery Migrate": "3.4.1"
+      }
+    },
+    {
+      "scan_id": "scan_2026-06-09T04:12:13Z_39621d82",
+      "started_at": "2026-06-09T04:12:13Z",
+      "completed_at": "2026-06-09T04:15:11Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 2,
