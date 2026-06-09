@@ -207,6 +207,16 @@ class ScanContext:
     open_ports:    set[int] = field(default_factory=set)
     asset_kind:    str | None = None
 
+    # S1 2026-06-09: per-tool completeness map written to
+    # scan_run.tool_status at close-out. Keys match tool_run entries;
+    # values are {"ok": True} or {"degraded": "<reason>"}.
+    # The "degraded" reason is a stable machine-readable slug so
+    # downstream reports group on it. Same framework that surfaced
+    # nikto Bug E in run_medium.py — "tool failed silently" was
+    # invisible until tool_status; same risk class in light's many
+    # log()-only failure paths.
+    tool_status:   dict[str, dict] = field(default_factory=dict)
+
 
 # ─── Subprocess helper ──────────────────────────────────────────────────
 def run_cmd(cmd: list[str], timeout: int = 30, input_str: str | None = None) -> tuple[int, str, str]:
@@ -234,6 +244,147 @@ def log(msg: str) -> None:
     print(f"[run_light] {msg}", file=sys.stderr)
 
 
+# ─── S1 (2026-06-09) — per-tool degraded-status framework ──────────────
+# Mirrors run_medium.py's nikto/ffuf/wafw00f detectors. The unifying
+# rule from S0 medium work (Howie 2026-06-07): "degraded" means tool
+# FAILED in a recognized way, NEVER "tool worked within its budget."
+# Detectors that cry-wolf on empty-but-healthy runs are the exact
+# nuclei-empty trap we don't want to repeat.
+
+def mark_tool_ok(ctx: ScanContext, tool_name: str) -> None:
+    """Record that a tool produced real output."""
+    ctx.tool_status[tool_name] = {"ok": True}
+
+
+def mark_tool_degraded(ctx: ScanContext, tool_name: str, reason: str) -> None:
+    """Record that a tool failed in a recognized way. `reason` is a stable
+    machine-readable slug (snake_case) — downstream groups on it."""
+    ctx.tool_status[tool_name] = {"degraded": reason}
+
+
+def tls_check_is_degraded(exception: BaseException) -> tuple[bool, str]:
+    """Python ssl/socket exceptions during TLS handshake.
+    Distinguishes "connection refused" (target down — degraded) from
+    "TLS handshake error" (got a verdict — healthy)."""
+    msg = str(exception).lower()
+    # Network-layer failures: degraded
+    if isinstance(exception, (ConnectionRefusedError, ConnectionResetError, TimeoutError)):
+        return True, "network_unreachable"
+    if "timed out" in msg or "timeout" in msg:
+        return True, "network_timeout"
+    if "no route to host" in msg or "name or service not known" in msg or "getaddrinfo failed" in msg:
+        return True, "dns_resolution_failed"
+    if "connection refused" in msg:
+        return True, "network_unreachable"
+    # TLS-layer failures: ALSO degraded for our purposes — we can't
+    # inspect a cert if we can't complete the handshake at all.
+    # Distinguishes from "got cert but it's bad" which produces findings.
+    if "ssl" in msg or "handshake" in msg:
+        return True, "tls_handshake_failed"
+    return True, "unknown_exception"
+
+
+def headers_check_is_degraded(rc: int, stdout: str, stderr: str) -> tuple[bool, str]:
+    """curl -sI failure modes. rc != 0 with empty stdout = couldn't fetch
+    headers. rc == 0 but empty stdout = curl thinks it worked but got
+    nothing parseable (uncommon but seen)."""
+    if rc != 0 and len(stdout.strip()) == 0:
+        # curl's own exit code mapping for the network-level failures
+        if rc in (6, 7):  # 6=resolve failed, 7=connect failed
+            return True, "network_unreachable"
+        if rc == 28:  # operation timed out
+            return True, "network_timeout"
+        if rc == 35:  # SSL handshake fail
+            return True, "tls_handshake_failed"
+        return True, "curl_failed"
+    if rc == 0 and len(stdout.strip()) == 0:
+        return True, "empty_response_body"
+    return False, ""
+
+
+def httpx_tech_is_degraded(rc: int, stdout: str) -> tuple[bool, str]:
+    """httpx -td output is JSON. Healthy: rc=0 and at least one JSON line.
+    Degraded: rc != 0, or stdout doesn't contain a parseable JSON object.
+    Empty findings (no tech detected) IS healthy — httpx still emits the
+    `url` line even when it didn't fingerprint anything."""
+    if rc != 0:
+        return True, f"rc_{rc}"
+    if not stdout.strip():
+        return True, "empty_output"
+    # Try to parse at least one line as JSON to confirm structure
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            json.loads(line)
+            return False, ""
+        except json.JSONDecodeError:
+            continue
+    return True, "no_parseable_json"
+
+
+def dns_posture_is_degraded(spf_rc: int, dmarc_rc: int) -> tuple[bool, str]:
+    """dig should always succeed even on NXDOMAIN (returns empty + rc=0).
+    rc != 0 means the resolver itself failed (no network, no DNS service,
+    dig binary missing). NXDOMAIN-without-record findings ARE healthy
+    output (we emit "dns-missing-spf" finding) — that's not degraded."""
+    if spf_rc != 0 and dmarc_rc != 0:
+        return True, "resolver_unreachable"
+    if spf_rc != 0:
+        return True, "spf_query_failed"
+    if dmarc_rc != 0:
+        return True, "dmarc_query_failed"
+    return False, ""
+
+
+def httpx_methods_is_degraded(rc: int, stdout: str) -> tuple[bool, str]:
+    """methods_check uses curl OPTIONS. Same failure-mode mapping as
+    headers_check — rc != 0 with empty stdout means we couldn't ask the
+    server about its methods at all."""
+    if rc != 0 and len(stdout.strip()) == 0:
+        if rc in (6, 7):
+            return True, "network_unreachable"
+        if rc == 28:
+            return True, "network_timeout"
+        return True, "curl_failed"
+    return False, ""
+
+
+def wpvuln_lookup_is_degraded(reason: str | None) -> tuple[bool, str]:
+    """wpvulnerability has 4 distinct early-exit reasons (3 healthy +
+    1 degraded). Caller passes the reason slug; we just classify.
+        - 'client_import_failed' → degraded (env bug)
+        - 'homepage_fetch_failed' → degraded (network)
+        - 'not_wordpress' → HEALTHY (target isn't WP, skip is correct)
+        - 'no_versions_detected' → HEALTHY (WP but no version leak, skip is correct)
+    """
+    if reason in ("client_import_failed", "homepage_fetch_failed"):
+        return True, reason
+    return False, ""
+
+
+def common_paths_is_degraded(probe_count: int, total_paths: int) -> tuple[bool, str]:
+    """common_paths probes a fixed list. If we couldn't probe ANY of
+    them (all curl calls failed), the target is unreachable. If we
+    probed at least some, even if no path was exposed, the check did
+    its job — that's healthy."""
+    if probe_count == 0 and total_paths > 0:
+        return True, "all_probes_failed"
+    return False, ""
+
+
+def naabu_is_degraded(rc: int, stdout: str) -> tuple[bool, str]:
+    """naabu port scan. rc != 0 with no output = scanner failed.
+    rc == 0 with empty stdout = legitimately no open ports (healthy).
+    The difference is the rc."""
+    if rc != 0 and not stdout.strip():
+        if rc == 127:
+            return True, "naabu_not_installed"
+        return True, f"naabu_rc_{rc}"
+    return False, ""
+
+
 # ─── Check implementations ──────────────────────────────────────────────
 
 def check_tls(ctx: ScanContext) -> None:
@@ -250,6 +401,8 @@ def check_tls(ctx: ScanContext) -> None:
                 version = ssock.version()
     except Exception as e:
         log(f"tls_check: connect/handshake failed: {e}")
+        _, reason = tls_check_is_degraded(e)
+        mark_tool_degraded(ctx, "tls_check", reason)
         return
 
     not_after_str = cert.get("notAfter", "")
@@ -309,6 +462,8 @@ def check_tls(ctx: ScanContext) -> None:
             raw_excerpt=f"TLS protocol: {version}",
         ))
 
+    mark_tool_ok(ctx, "tls_check")
+
 
 def check_headers(ctx: ScanContext) -> None:
     """Fetch '/' and check for the standard security header set."""
@@ -319,8 +474,10 @@ def check_headers(ctx: ScanContext) -> None:
          f"https://{ctx.hostname}/"],
         timeout=20,
     )
-    if rc != 0:
+    degraded, reason = headers_check_is_degraded(rc, stdout, stderr)
+    if degraded:
         log(f"headers_check: curl rc={rc}: {stderr.strip()[:200]}")
+        mark_tool_degraded(ctx, "headers_check", reason)
         return
 
     ctx.artifacts.append(("headers_check", "txt", stdout))
@@ -346,11 +503,14 @@ def check_headers(ctx: ScanContext) -> None:
                 raw_excerpt=stdout[:1500],
             ))
 
+    mark_tool_ok(ctx, "headers_check")
+
 
 def check_common_paths(ctx: ScanContext) -> None:
     """HEAD-probe a list of common leak paths. 200/204/206 = exposed."""
     ctx.tools_run.append("common_paths")
     results = []
+    successful_probes = 0
     for path, severity, why in COMMON_PATHS:
         rc, stdout, stderr = run_cmd(
             ["curl", "-s", "-o", "/dev/null",
@@ -361,6 +521,8 @@ def check_common_paths(ctx: ScanContext) -> None:
             timeout=15,
         )
         code = stdout.strip() if rc == 0 else "err"
+        if rc == 0:
+            successful_probes += 1
         results.append({"path": path, "status": code})
         if code in ("200", "204", "206"):
             slug = path.lstrip("/").replace("/", "-").replace(".", "")
@@ -377,6 +539,15 @@ def check_common_paths(ctx: ScanContext) -> None:
 
     ctx.artifacts.append(("common_paths", "json", json.dumps({"probes": results})))
 
+    # If every single probe failed (rc != 0 for all paths), the target
+    # is unreachable — mark degraded. If at least one succeeded, the
+    # check did its job, regardless of whether any path was exposed.
+    degraded, reason = common_paths_is_degraded(successful_probes, len(COMMON_PATHS))
+    if degraded:
+        mark_tool_degraded(ctx, "common_paths", reason)
+    else:
+        mark_tool_ok(ctx, "common_paths")
+
 
 def check_dns_posture(ctx: ScanContext) -> None:
     """Use dig to check DMARC, SPF, DKIM presence."""
@@ -384,7 +555,7 @@ def check_dns_posture(ctx: ScanContext) -> None:
     results: dict[str, Any] = {}
 
     # SPF — TXT record on the hostname
-    rc, stdout, _ = run_cmd(["dig", "+short", "TXT", ctx.hostname], timeout=10)
+    spf_rc, stdout, _ = run_cmd(["dig", "+short", "TXT", ctx.hostname], timeout=10)
     txt_lines = [l.strip().strip('"') for l in stdout.splitlines() if l.strip()]
     spf_lines = [l for l in txt_lines if l.lower().startswith("v=spf1")]
     results["spf"] = spf_lines
@@ -403,7 +574,7 @@ def check_dns_posture(ctx: ScanContext) -> None:
         ))
 
     # DMARC — TXT on _dmarc.<hostname>
-    rc, stdout, _ = run_cmd(["dig", "+short", "TXT", f"_dmarc.{ctx.hostname}"], timeout=10)
+    dmarc_rc, stdout, _ = run_cmd(["dig", "+short", "TXT", f"_dmarc.{ctx.hostname}"], timeout=10)
     dmarc_lines = [l.strip().strip('"') for l in stdout.splitlines() if l.strip()]
     dmarc_records = [l for l in dmarc_lines if l.lower().startswith("v=dmarc1")]
     results["dmarc"] = dmarc_records
@@ -439,6 +610,14 @@ def check_dns_posture(ctx: ScanContext) -> None:
 
     ctx.artifacts.append(("dns_posture", "json", json.dumps(results)))
 
+    # Degraded only when the RESOLVER fails (dig non-zero). NXDOMAIN /
+    # missing-record cases produce findings, not degradation.
+    degraded, reason = dns_posture_is_degraded(spf_rc, dmarc_rc)
+    if degraded:
+        mark_tool_degraded(ctx, "dns_posture", reason)
+    else:
+        mark_tool_ok(ctx, "dns_posture")
+
 
 def check_httpx_tech(ctx: ScanContext) -> None:
     """Tech detection via httpx -td. Informational only."""
@@ -447,14 +626,17 @@ def check_httpx_tech(ctx: ScanContext) -> None:
         ["httpx", "-u", f"https://{ctx.hostname}", "-td", "-silent", "-json", "-timeout", "15"],
         timeout=25,
     )
-    if rc != 0 or not stdout.strip():
+    degraded, reason = httpx_tech_is_degraded(rc, stdout)
+    if degraded:
         log(f"httpx_tech: rc={rc}, no output: {stderr.strip()[:200]}")
+        mark_tool_degraded(ctx, "httpx_tech", reason)
         return
 
     try:
         data = json.loads(stdout.splitlines()[0])
     except Exception as e:
         log(f"httpx_tech: JSON parse failed: {e}")
+        mark_tool_degraded(ctx, "httpx_tech", "json_parse_failed")
         return
 
     ctx.artifacts.append(("httpx_tech", "json", json.dumps(data)))
@@ -472,6 +654,8 @@ def check_httpx_tech(ctx: ScanContext) -> None:
             tags=["tech", "fingerprint"] + [t.lower().replace(" ", "-") for t in tech[:6]],
             raw_excerpt=json.dumps(data, indent=2)[:2000],
         ))
+
+    mark_tool_ok(ctx, "httpx_tech")
 
 
 # ─── WordPress version-CVE lookup via wpvulnerability.net (Plan C day 1) ──
@@ -582,6 +766,10 @@ def check_wpvulnerability(ctx: ScanContext) -> None:
         import wpvulnerability_client as wpc
     except Exception as e:
         log(f"wpvulnerability: client import failed: {e!r}")
+        # Degraded: the runner can't query the API at all → silent
+        # WordPress CVE blind-spot. Same risk class as nikto's Bug E.
+        degraded, reason = wpvuln_lookup_is_degraded("client_import_failed")
+        mark_tool_degraded(ctx, "wpvulnerability", reason)
         return
 
     BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -595,11 +783,17 @@ def check_wpvulnerability(ctx: ScanContext) -> None:
     )
     if rc != 0 or not html:
         log(f"  wpvulnerability: homepage fetch rc={rc}, skipping")
+        # Degraded: couldn't even reach the target homepage.
+        degraded, reason = wpvuln_lookup_is_degraded("homepage_fetch_failed")
+        mark_tool_degraded(ctx, "wpvulnerability", reason)
         return
 
     # Step 2: is this even a WordPress site?
     if "wp-content" not in html.lower():
         log(f"  wpvulnerability: no wp-content references — not a WordPress site, skipping")
+        # NOT degraded — non-WP target is the correct skip path. The
+        # check did its job (determined target isn't WP).
+        mark_tool_ok(ctx, "wpvulnerability")
         return
 
     # Step 3: detect plugin slugs + versions
@@ -610,6 +804,9 @@ def check_wpvulnerability(ctx: ScanContext) -> None:
 
     if not plugins and not core_version:
         log(f"  wpvulnerability: no detectable versions, skipping API lookups")
+        # NOT degraded — WP site exists but no version leak. The
+        # check did its job (looked, found no version-specific data).
+        mark_tool_ok(ctx, "wpvulnerability")
         return
 
     # Record the detection inventory as an artifact for audit
@@ -641,6 +838,7 @@ def check_wpvulnerability(ctx: ScanContext) -> None:
 
     log(f"  wpvulnerability: {findings_added} finding(s) added across "
         f"{len(plugins)} plugin(s){' + core' if core_version else ''}")
+    mark_tool_ok(ctx, "wpvulnerability")
 
 
 def _wpvuln_emit_finding(ctx: ScanContext, v, wpc) -> None:
@@ -717,8 +915,10 @@ def check_methods(ctx: ScanContext) -> None:
          f"https://{ctx.hostname}/"],
         timeout=15,
     )
-    if rc != 0:
+    degraded, reason = httpx_methods_is_degraded(rc, stdout)
+    if degraded:
         log(f"methods_check: curl rc={rc}: {stderr.strip()[:200]}")
+        mark_tool_degraded(ctx, "methods_check", reason)
         return
 
     ctx.artifacts.append(("methods_check", "txt", stdout))
@@ -728,6 +928,10 @@ def check_methods(ctx: ScanContext) -> None:
         "",
     )
     if not allow_line:
+        # OPTIONS responded but no Allow header — server doesn't expose
+        # methods discoverably. Not degraded (the check did its job),
+        # just no findings to emit.
+        mark_tool_ok(ctx, "methods_check")
         return
 
     allowed = [m.strip().upper() for m in allow_line.split(":", 1)[1].split(",")]
@@ -745,6 +949,8 @@ def check_methods(ctx: ScanContext) -> None:
                 cwe=[16],
                 raw_excerpt=allow_line,
             ))
+
+    mark_tool_ok(ctx, "methods_check")
 
 
 def check_csp_nonce(ctx: ScanContext) -> None:
@@ -1416,6 +1622,8 @@ def port_scan(ctx: ScanContext) -> set[int]:
             "text",
             f"naabu exited {rc}\n\nstderr:\n{stderr[:2000]}",
         ))
+        _, reason = naabu_is_degraded(rc, stdout)
+        mark_tool_degraded(ctx, "naabu", reason)
         return set()
 
     open_ports: set[int] = set()
@@ -1435,6 +1643,7 @@ def port_scan(ctx: ScanContext) -> set[int]:
         f"hostname: {ctx.hostname}\nopen ports: {sorted(open_ports)}\n\n"
         f"raw stdout:\n{stdout[:2000]}",
     ))
+    mark_tool_ok(ctx, "naabu")
     return open_ports
 
 
@@ -1797,7 +2006,10 @@ SET status            = 'complete',
     duration_seconds  = EXTRACT(EPOCH FROM (now() - started_at))::int,
     tools_run         = %(tools_run)s,
     findings_added    = %(findings_added)s,
-    findings_updated  = %(findings_updated)s
+    findings_updated  = %(findings_updated)s,
+    -- S1 2026-06-09: per-tool completeness map.
+    -- {tool_name: {"ok": True} | {"degraded": "reason"}}
+    tool_status       = %(tool_status)s
 WHERE scan_run_id     = %(scan_run_id)s;
 """
 
@@ -1903,7 +2115,10 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
     return inserted, updated
 
 
-def close_out(conn, ctx: ScanContext, inserted: int, updated: int) -> None:
+def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None:
+    """Mark scan_run + scan_queue as 'complete'. Writes per-tool
+    completeness map (S1 2026-06-09) so downstream reports can see
+    which tools genuinely worked vs. silently degraded."""
     with conn.cursor() as cur:
         params = {
             "tools_run":        ctx.tools_run,
@@ -1912,6 +2127,10 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int) -> None:
             "findings_count":   inserted + updated,
             "scan_run_id":      ctx.scan_run_id,
             "queue_id":         ctx.queue_id,
+            # S1: wrap with Json so psycopg writes proper jsonb. Use {}
+            # if no tools registered status — better than NULL for
+            # downstream queries.
+            "tool_status":      Json(ctx.tool_status or {}),
         }
         cur.execute(CLOSE_SCAN_RUN_SQL, params)
         cur.execute(CLOSE_SCAN_QUEUE_SQL, params)
@@ -2041,9 +2260,10 @@ def run(descriptor_path: str, dsn: str) -> int:
         log(f"checks complete; {len(ctx.findings)} finding(s), {len(ctx.artifacts)} artifact(s)")
 
         inserted, updated = write_findings_and_artifacts(conn, ctx, Json)
+        # Pass Json so close_out can wrap tool_status as proper jsonb.
         log(f"upserted findings: {inserted} new, {updated} existing")
 
-        close_out(conn, ctx, inserted, updated)
+        close_out(conn, ctx, inserted, updated, Json)
         conn.commit()
         log("scan_run + scan_queue closed out successfully")
         return 0
