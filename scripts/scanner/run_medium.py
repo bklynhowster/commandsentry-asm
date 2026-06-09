@@ -1218,38 +1218,35 @@ def run_nikto(ctx: ScanContext) -> None:
         return
 
     ctx.tools_run.append("nikto")
-    # Bug D — root cause is "crusty apt nikto fighting modern arg semantics":
-    #   - "-h" prefix-matched ambiguously between -host/-Help (fixed 58ca05a)
-    #   - "-useragent" rejected by Ubuntu apt's nikto with stderr
-    #     "Unknown option: useragent" (verified via scan_run e1825c68
-    #     after unconditional stderr logging shipped in 7db0978)
+    # Bug D root cause was "crusty apt nikto fighting modern arg semantics."
+    # Closed 2026-06-09 by Task #6: upstream sullo/nikto installed in the
+    # scanner image (replaces apt's nikto 2.1.5 from 2014). Upstream takes
+    # -useragent natively, no Getopt::Long prefix ambiguity.
     #
-    # TEMPORARY fix in this commit: drop -useragent so nikto can run at
-    # all. nikto's DEFAULT user-agent contains the literal "Nikto" string —
-    # an instant WAF tell. This is fine for demo.testfire.net (WAF-free)
-    # but unsafe for any owned WAF-fronted asset. UA spoofing is
-    # LOAD-BEARING for medium-on-WAF; restoring it is a REQUIRED Stage-3
-    # guardrail, not optional.
+    # UA spoofing is LOAD-BEARING for medium-on-WAF. nikto's default UA
+    # contains literal "Nikto/2.x" — instant WAF tell. Spoofing to a
+    # realistic browser UA is the minimum Stage-3 guardrail before firing
+    # against any owned WAF-fronted asset (cc/cmi/unimac/ccc/sciimage).
     #
-    # DURABLE FIX (Task #6, gates medium fleet rollout): install upstream
-    # nikto from git (sullo/nikto, pure Perl, no compile) in
-    # scanner/install-tools.sh. That fixes arg semantics (matches Mac
-    # nikto) AND restores -useragent natively in one move. Subsumes the
-    # nikto.conf USERAGENT= alternative.
-    #
-    # TRIPWIRE — if this commit's re-fire bails on -maxtime (the likely
-    # next bail since it sits after -useragent in the original cmd) or
-    # any other flag, STOP per-flag iteration and switch to upstream
-    # nikto immediately. One change kills the whole class.
+    # ⚠️ NOT A FULL WAF SOLVE. If the WAF blocks on TLS/JA3 fingerprint
+    # or behavior rather than signature/UA, the spoofed UA does nothing.
+    # That's the open Experiment-C question (note 61): signature/UA-based
+    # WAFs → this fix lands; fingerprint-based WAFs → still need
+    # Playwright/real-browser path. Watch the first fire against
+    # api.commandcommcentral.com (FortiGate-lenient): if it still eats a
+    # 403 with this clean browser UA, the WAF trigger was never UA-based.
+    # That's a finding, not a failure of Task #6.
+    BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/131.0.0.0 Safari/537.36")
     cmd = [
         "nikto",
         "-host", f"https://{ctx.hostname}",
         "-Pause", str(NIKTO_PAUSE_S),
         "-nointeractive", "-ask", "no",
         "-Tuning", "x6",
-        # NOTE: -useragent intentionally absent. Restore via upstream
-        # nikto migration (Task #6) BEFORE medium runs against any owned
-        # WAF-fronted asset (cc/cmi/unimac/ccc/sciimage).
+        # Restored by Task #6. Works on upstream nikto; apt 2.1.5 rejected this.
+        "-useragent", BROWSER_UA,
         "-timeout", "15",
         "-maxtime", str(NIKTO_WALL_S - 30),
         # Bug E (2026-06-07 PM, scan_run c14e2fe2): -Format requires

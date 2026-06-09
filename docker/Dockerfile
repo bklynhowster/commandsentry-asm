@@ -83,8 +83,16 @@ RUN apt-get update -qq \
       # `python` → `python3` symlink; scanner.yml + scripts call `python`
       # (hosted runners install this by default; container images don't)
       python-is-python3 \
-      # Active scan utilities (system pkgs)
-      whois jq dnsutils nikto perl \
+      # Active scan utilities (system pkgs).
+      # NOTE: nikto is NOT installed via apt — Ubuntu 24.04 ships nikto
+      # 2.1.5 from 2014 which (a) rejects modern flags like -useragent
+      # (verified scan_run e1825c68, 2026-06-08), making UA spoofing
+      # impossible and producing instant "Nikto/2.x" WAF bans on owned
+      # WAF-fronted assets, and (b) has Getopt::Long prefix-matching
+      # quirks. Upstream sullo/nikto is installed in a dedicated step
+      # below — pure Perl, no compile needed. Per Task #6 (REQUIRED
+      # Stage-3 guardrail). Keep `perl` because nikto IS Perl.
+      whois jq dnsutils perl libnet-ssleay-perl \
       # PostgreSQL client — scanner.yml uses psql in queue/poll/cleanup
       # steps (8 invocations total) to talk to Supabase
       postgresql-client \
@@ -122,6 +130,25 @@ RUN git clone --depth 1 --quiet \
        https://github.com/drwetter/testssl.sh.git \
        /opt/testssl.sh \
  && ln -sf /opt/testssl.sh/testssl.sh /usr/local/bin/testssl.sh
+
+# ─── nikto (UPSTREAM — sullo/nikto from GitHub) ────────────────────
+# Replaces apt's nikto 2.1.5 (frozen 2014). Per Task #6 (REQUIRED
+# Stage-3 guardrail). Upstream provides:
+#   - Modern argument semantics — no Getopt::Long prefix-matching
+#     ambiguity ('-h' resolves cleanly to '-host')
+#   - -useragent flag works (Ubuntu apt 2.1.5 rejected it with
+#     "Unknown option: useragent" — verified scan_run e1825c68)
+#   - Modern check database (apt's plugins are 10+ years stale)
+#
+# Pure Perl, no compile. nikto.pl + program/ + plugins/ + databases/.
+# Symlink + wrapper so /usr/local/bin/nikto invokes the real script.
+RUN git clone --depth 1 --quiet \
+       https://github.com/sullo/nikto.git \
+       /opt/nikto \
+ && printf '#!/bin/sh\nexec /usr/bin/perl /opt/nikto/program/nikto.pl "$@"\n' \
+       > /usr/local/bin/nikto \
+ && chmod +x /usr/local/bin/nikto \
+ && /usr/local/bin/nikto -Version 2>&1 | head -3
 
 # ─── Copy built binaries from the builder stage ────────────────────
 COPY --from=builder /usr/local/bin/wireguard-go  /usr/local/bin/
