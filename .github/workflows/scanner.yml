@@ -33,17 +33,26 @@ name: Scanner
 # Spec: Obsidian / COMMANDsentry / 48 - Phase 4a Spec and Context Handoff.md
 
 on:
-  schedule:
-    # Every 10 min at offset minutes — avoids the :00 / :05 / :10 hour-
-    # boundary windows where GH Actions queues are heaviest and most
-    # likely to drop scheduled jobs. Per GH docs the 5-min minimum
-    # interval is also the most aggressively throttled.
-    - cron: '7-57/10 * * * *'
+  # ─── INTERNAL 10-min CRON DISABLED 2026-06-10 ─────────────────────
+  # Retired in favor of conditional dispatch via commandsentry-portal
+  # /api/scan-tick — cron-job.org → portal → portal only fires this
+  # workflow when scan_queue actually has queued work. Empty cycles
+  # → zero Actions minutes (GitHub rounds every run UP to 1 billed
+  # minute regardless of duration, so empty pokes were the cost
+  # driver). Part of Force7 Initiative 2 #1.
+  #
+  # The cron-job.org Job #1 + the deeper workflow_run-after-ASM-
+  # Discover chain below still guarantee a poke within ≤10 min /
+  # ≤6h respectively.
+  #
+  # schedule:
+  #   - cron: '7-57/10 * * * *'
 
   # Chain after every successful ASM Discover run — guarantees a queue
   # drain pass at least every 6 hours (the ASM Discover cadence) even
-  # if our own scheduled cron flakes. ASM Discover has been running
-  # reliably for weeks so it's the trustworthy heartbeat.
+  # if cron-job.org / the portal go dark. ASM Discover has been running
+  # reliably for weeks so it's the trustworthy deeper backstop. 4 fires
+  # per day is acceptable cost (~4 billed min/day worst-case).
   workflow_run:
     workflows: ["ASM Discover"]
     types: [completed]

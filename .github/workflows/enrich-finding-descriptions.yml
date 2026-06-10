@@ -91,17 +91,86 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ─── Cheap gate: skip if there are no thin findings to enrich ──
+      # Part of Force7 Initiative 2 #1. Most chained runs land here on
+      # zero work — every Scanner workflow_run completion fires this,
+      # but most scans add 0 new thin findings. Skipping the python
+      # install + synthesis worker on those saves ~30-60s of runner
+      # wall time and the synthesis script invocation cost. (GitHub
+      # still bills 1 min minimum per run; this avoids the ABOVE-floor
+      # work that compounds when scans get noisy.)
+      #
+      # REST approach (vs psql): ubuntu-latest hosted runners DO ship
+      # psql but it's not free to assume across future runner image
+      # updates. PostgREST exact-count via HEAD + content-range is
+      # rock-solid + already-used credential pattern (matches the
+      # SUPABASE_SERVICE_ROLE_KEY the synthesis worker uses below).
+      - name: Skip if zero thin findings
+        id: precheck
+        # workflow_dispatch with force=true or a specific finding_id
+        # must always run — those are intentional re-syntheses.
+        if: ${{ github.event.inputs.force != 'true' && github.event.inputs.finding_id == '' }}
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Hardcoded URL matches synthesize_finding_descriptions.py's
+          # DEFAULT_SUPABASE_URL (line 109 below). Centralized constants
+          # are a separate cleanup — see [[16 Reconcile scan_queue.source]]
+          # class issue.
+          SUPABASE_URL: "https://hdygktppfvuspnumpfuq.supabase.co"
+        run: |
+          set -euo pipefail
+          # Count rows where ANY of the three narrative slots is NULL.
+          #
+          # NO current_status filter — synthesize_finding_descriptions.py
+          # itself doesn't filter on current_status (per its fetch_findings
+          # function), so the precheck MUST NOT filter either, or we'll
+          # silently skip work the script would have done. Pre-flight on
+          # 2026-06-10 caught this: 6 thin findings existed in 'detected'
+          # status only — an 'open'-status precheck would have reported 0
+          # and fail-CLOSED. Fail-OPEN discipline starts with matching the
+          # downstream selection criterion exactly.
+          QUERY='or=(description_synth.is.null,impact.is.null,remediation.is.null)'
+          # HEAD with Prefer: count=exact returns total in Content-Range.
+          # -sS = silent but show errors; -f bails on 4xx/5xx so we don't
+          # silently treat a 500 as "zero findings."
+          HDR=$(curl -sSfI \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Prefer: count=exact" \
+            -H "Range-Unit: items" \
+            -H "Range: 0-0" \
+            "$SUPABASE_URL/rest/v1/findings?$QUERY&select=finding_id" \
+            | tr -d '\r')
+          # Content-Range: 0-0/N — pull the N.
+          THIN=$(echo "$HDR" | awk -F'/' '/^[Cc]ontent-[Rr]ange:/ {print $2}' | head -1)
+          if [ -z "$THIN" ]; then
+            echo "::warning::Could not parse Content-Range from PostgREST response — running synthesis worker anyway (fail-open)."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "thin_count=$THIN"
+          if [ "$THIN" = "0" ]; then
+            echo "::notice::No thin findings — skipping synthesis worker (saved ~30-60s of work)."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$THIN thin finding(s) — running synthesis."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Python
+        if: ${{ steps.precheck.outputs.should_run != 'false' }}
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install Python dependencies
+        if: ${{ steps.precheck.outputs.should_run != 'false' }}
         run: |
           python -m pip install --upgrade pip
           pip install anthropic supabase python-dotenv
 
       - name: Run synthesis worker
+        if: ${{ steps.precheck.outputs.should_run != 'false' }}
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # SUPABASE_URL intentionally NOT set — the script's hardcoded
