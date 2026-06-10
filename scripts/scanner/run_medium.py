@@ -561,9 +561,29 @@ def rotate_vpn(ctx: ScanContext) -> bool:
 
 
 # ─── Healthcheck — IP-banned detection ─────────────────────────────────
+# Codes that warrant rotating egress: the WAF/host is refusing THIS client
+# (ban / throttle) or the path to origin is down.
+#   403       — WAF block page (FortiGate / Cloudflare deny)
+#   429       — rate-limit / throttle
+#   503       — FortiWeb's DEFAULT deny page (sciimage tier) — also covers
+#               origin-overwhelmed, where backing off is correct anyway
+#   502, 504  — upstream path down; rotation won't fix it, but the
+#               rotate→skip outcome is right (don't fire tools at a dead path)
+#
+# Anything else that speaks HTTP is proof the origin answered this IP.
+# Task #31 (2026-06-10): the old allowlist (200/3xx/401) treated 404 as
+# "unreachable", which skipped every probe against API-style hosts —
+# api.commandcommcentral.com legitimately returns 404 on '/' because an
+# API root has no page. An IP ban looks like 403/429/503/timeout — never
+# a clean origin 404. Same trap-shape as NODATA-vs-SERVFAIL: two responses
+# that look alike but mean opposite things.
+BAN_OR_PATH_DOWN_CODES = (403, 429, 502, 503, 504)
+
+
 def healthcheck(ctx: ScanContext) -> tuple[bool, int]:
     """Probe the target with a benign HTTP request. Returns (healthy, http_code).
-    'healthy' = the IP is NOT showing ban signals (4xx WAF block, captcha, etc).
+    'healthy' = origin answered this IP with a non-block response.
+    code 0 = no HTTP response at all (timeout / refused / reset).
     """
     ua = pick_ua()
     rc, stdout, _ = run_cmd(
@@ -582,7 +602,12 @@ def healthcheck(ctx: ScanContext) -> tuple[bool, int]:
     except ValueError:
         return False, 0
 
-    healthy = code in (200, 301, 302, 303, 307, 308, 401)  # 401 = auth-gated but reachable
+    # curl writes '000' when no real response arrived — without this guard
+    # int('000')=0 would fall outside the ban set and read as healthy.
+    if code < 100:
+        return False, code
+
+    healthy = code not in BAN_OR_PATH_DOWN_CODES
     return healthy, code
 
 
@@ -1137,8 +1162,11 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # whether we trigger the ban-cooldown sleep before rotating.
         post_banned = False
         if THRESHOLD_PROBE_MODE or patient_effective:
-            _, post_code = healthcheck(ctx)
-            post_banned = post_code not in (200, 301, 302, 303, 307, 308, 401)
+            # Task #31: use healthcheck()'s own verdict instead of a second
+            # inline copy of the code allowlist (which had drifted into the
+            # same 404-means-banned bug).
+            post_healthy, post_code = healthcheck(ctx)
+            post_banned = not post_healthy
             tag_lbl = "PROBE" if THRESHOLD_PROBE_MODE else "PATIENT"
             log(f"  {tag_lbl} post-chunk healthcheck on {probe_egress_ip}: HTTP {post_code} → "
                 f"{'BANNED' if post_banned else 'still reachable'}")
