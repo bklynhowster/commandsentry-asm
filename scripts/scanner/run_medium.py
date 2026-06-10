@@ -439,10 +439,31 @@ def nikto_is_degraded(stdout: str, stderr: str, rc: int) -> tuple[bool, str]:
        Does NOT key on `rc` alone. `-maxtime` can set rc != 0 even
        when the scan was healthy.
 
+    3. **module_not_found / no_scan_output** (added 2026-06-10 after
+       scan_run 47bbdbff): upstream nikto dies AT STARTUP when a
+       required Perl module is missing, printing bare
+       `ERROR: Required module not found: JSON` lines — note: NO
+       leading `+ `, so the `+ ERROR:` check (shape 2) never fires.
+       This is exactly the failure the advisor warned about when the
+       apt→upstream binary swap landed ("detector tuned against apt
+       2.1.5 — verify still fires on upstream"): it stamped ok:true
+       on runs a981526e (6/9, the 0864fd3 mint evidence) and 47bbdbff
+       (6/10) where nikto scanned NOTHING. Durations told the truth:
+       apt-nikto testfire runs ~1040-1060s; both upstream runs ~485s
+       — a real nikto pass had silently vanished from the runtime.
+
+       Two checks close the class:
+       a. exact-phrase `Required module not found` → module_not_found
+       b. positive-evidence fallback: rc != 0 AND no "Nikto v" banner
+          in stdout → nikto never even started → no_scan_output.
+          Cry-wolf safe: maxtime-capped runs print the banner before
+          rc goes non-zero; healthy runs have rc == 0.
+
     Verified post-fix against stored fixtures (all in scan_run history):
       - 7f8b18e8 / 1256B help banner (pre-Bug-D-fix) → help_text_returned
       - c14e2fe2 / rc=2 write-crash (stderr 221B)   → runtime_error
       - 7bd3bbf9 / healthy 1595B scan output         → ok
+      - 47bbdbff / rc=1 module-not-found (85B stderr) → module_not_found
       - synthesized maxtime-only run (header + items + Host max exec
         ERROR + clean End Time) → ok (cry-wolf guard)
     """
@@ -451,6 +472,8 @@ def nikto_is_degraded(stdout: str, stderr: str, rc: int) -> tuple[bool, str]:
         return True, "help_text_returned"
     if "Use -H for full help text" in combined:
         return True, "help_text_returned"
+    if "Required module not found" in combined:
+        return True, "module_not_found"
     for line in combined.splitlines():
         s = line.strip()
         if s.startswith("+ ERROR:"):
@@ -461,6 +484,12 @@ def nikto_is_degraded(stdout: str, stderr: str, rc: int) -> tuple[bool, str]:
             if "Host maximum execution time" in s:
                 continue
             return True, "runtime_error"
+    if rc != 0 and "Nikto v" not in stdout:
+        # Non-zero exit AND nikto never printed its banner → it died
+        # before scanning anything (startup crash class). The banner
+        # check keeps maxtime-capped runs (banner present, rc != 0)
+        # out of this bucket.
+        return True, "no_scan_output"
     return False, ""
 
 

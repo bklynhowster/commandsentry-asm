@@ -92,7 +92,16 @@ RUN apt-get update -qq \
       # quirks. Upstream sullo/nikto is installed in a dedicated step
       # below — pure Perl, no compile needed. Per Task #6 (REQUIRED
       # Stage-3 guardrail). Keep `perl` because nikto IS Perl.
-      whois jq dnsutils perl libnet-ssleay-perl \
+      #
+      # 2026-06-10: libjson-perl + libxml-writer-perl added after scan_run
+      # 47bbdbff proved upstream nikto dies at startup without them
+      # ("ERROR: Required module not found: JSON / XML::Writer"). apt's
+      # nikto package pulled these as dependencies automatically; the
+      # git-clone install does not. The -Version smoke check below passes
+      # WITHOUT them (it doesn't load reporting plugins), which is how
+      # image #5 shipped broken — hence the module-load smoke check now
+      # baked into the nikto install step.
+      whois jq dnsutils perl libnet-ssleay-perl libjson-perl libxml-writer-perl \
       # PostgreSQL client — scanner.yml uses psql in queue/poll/cleanup
       # steps (8 invocations total) to talk to Supabase
       postgresql-client \
@@ -148,7 +157,17 @@ RUN git clone --depth 1 --quiet \
  && printf '#!/bin/sh\nexec /usr/bin/perl /opt/nikto/program/nikto.pl "$@"\n' \
        > /usr/local/bin/nikto \
  && chmod +x /usr/local/bin/nikto \
- && /usr/local/bin/nikto -Version 2>&1 | head -3
+ && /usr/local/bin/nikto -Version 2>&1 | head -3 \
+ # Module-load smoke check (2026-06-10, scan_run 47bbdbff): -Version alone
+ # passes even when nikto's required Perl modules are missing, because it
+ # doesn't load the reporting plugins. Image #5 shipped with nikto unable
+ # to start ("Required module not found: JSON / XML::Writer") and the
+ # build was green. Fail the BUILD if the modules nikto needs at startup
+ # can't load.
+ && perl -MJSON -MXML::Writer -MNet::SSLeay -e 'print "nikto perl deps OK\n"' \
+ # Belt-and-suspenders: a real (host-less) nikto invocation must NOT emit
+ # the module-not-found startup error.
+ && ! (/usr/local/bin/nikto -list-plugins 2>&1 | grep -q "Required module not found")
 
 # ─── Copy built binaries from the builder stage ────────────────────
 COPY --from=builder /usr/local/bin/wireguard-go  /usr/local/bin/
