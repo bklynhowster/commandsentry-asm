@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-09T20:34:03Z_8e33ccfc",
-    "started_at": "2026-06-09T20:34:03Z",
-    "completed_at": "2026-06-09T20:34:59Z",
-    "duration_seconds": 56,
+    "id": "scan_2026-06-10T04:42:25Z_010c99d1",
+    "started_at": "2026-06-10T04:42:25Z",
+    "completed_at": "2026-06-10T04:43:26Z",
+    "duration_seconds": 61,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -31,7 +31,7 @@
     "host_count": 1,
     "service_count": 2,
     "newest_cert_expiry_days": 238,
-    "top_hosting_org": null,
+    "top_hosting_org": "Cablevision Systems Corp.",
     "platforms": []
   },
   "subdomains": [
@@ -40,8 +40,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-06-09T20:34:59Z",
-      "last_seen": "2026-06-09T20:34:59Z",
+      "first_discovered": "2026-06-10T04:43:26Z",
+      "last_seen": "2026-06-10T04:43:26Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -51,6 +51,12 @@
       "hosts": [
         {
           "ip": "24.157.51.70",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
+          "country": "US",
+          "region": "New Jersey",
+          "city": "Allentown",
+          "reverse_dns": "189d3346.cst.lightpath.net",
           "is_private": false
         }
       ],
@@ -114,7 +120,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-06-09T15:40:33Z_16555d70",
+    "since_scan": "scan_2026-06-09T20:34:03Z_8e33ccfc",
     "added": {
       "subdomains": [],
       "services": [],
@@ -132,26 +138,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-05-13T04:17:33Z_a0506862",
-      "started_at": "2026-05-13T04:17:33Z",
-      "completed_at": "2026-05-13T04:18:32Z",
-      "subdomain_count": 1,
-      "live_subdomain_count": 1,
-      "host_count": 1,
-      "service_count": 2,
-      "subdomain_names": [
-        "24.157.51.70"
-      ],
-      "ports_by_sub": {
-        "24.157.51.70": {
-          "24.157.51.70": [
-            80,
-            443
-          ]
-        }
-      }
-    },
     {
       "scan_id": "scan_2026-05-13T09:09:01Z_fb53952e",
       "started_at": "2026-05-13T09:09:01Z",
@@ -2617,6 +2603,27 @@
       "scan_id": "scan_2026-06-09T20:34:03Z_8e33ccfc",
       "started_at": "2026-06-09T20:34:03Z",
       "completed_at": "2026-06-09T20:34:59Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_names": [
+        "24.157.51.70"
+      ],
+      "ports_by_sub": {
+        "24.157.51.70": {
+          "24.157.51.70": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-06-10T04:42:25Z_010c99d1",
+      "started_at": "2026-06-10T04:42:25Z",
+      "completed_at": "2026-06-10T04:43:26Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 1,
