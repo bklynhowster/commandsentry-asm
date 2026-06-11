@@ -51,3 +51,13 @@ scanner/output/
 # to the vpn-tools GH release. Do not commit (large binary + license).
 expressvpn-linux-*.run
 expressvpn*.deb
+
+# ── VPN credentials — NEVER commit (advisor flag 2026-06-11) ──
+# WireGuard keys live in .conf files; account # in a .txt. Generic *.key /
+# *credentials* / *token* rules above do NOT catch those. The runner pulls
+# wg-configs from the vpn-tools GH release at runtime — these local dirs are
+# only the working stash. Source of truth = release asset.
+Mullvad/
+wg-configs/
+mullvad*
+*.ovpn
