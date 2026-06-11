@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-11T10:53:42Z_dc64fa59",
-    "started_at": "2026-06-11T10:53:42Z",
-    "completed_at": "2026-06-11T10:57:32Z",
-    "duration_seconds": 230,
+    "id": "scan_2026-06-11T16:18:56Z_a31576ef",
+    "started_at": "2026-06-11T16:18:56Z",
+    "completed_at": "2026-06-11T16:22:51Z",
+    "duration_seconds": 235,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -32,8 +32,8 @@
     "live_subdomain_count": 10,
     "host_count": 3,
     "service_count": 28,
-    "newest_cert_expiry_days": 67,
-    "top_hosting_org": "Automattic, Inc",
+    "newest_cert_expiry_days": 66,
+    "top_hosting_org": "Microsoft Corporation",
     "platforms": [
       "Microsoft .NET / IIS",
       "WordPress on wp.cloud (Pressable)"
@@ -45,8 +45,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-11T10:57:32Z",
-      "last_seen": "2026-06-11T10:57:32Z",
+      "first_discovered": "2026-06-11T16:22:51Z",
+      "last_seen": "2026-06-11T16:22:51Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -56,12 +56,6 @@
       "hosts": [
         {
           "ip": "199.16.172.68",
-          "asn": "AS2635",
-          "asn_org": "Automattic, Inc",
-          "country": "US",
-          "region": "California",
-          "city": "San Francisco",
-          "reverse_dns": null,
           "is_private": false
         },
         {
@@ -124,7 +118,7 @@
             "not_before": "2026-05-19T14:28:54Z",
             "not_after": "2026-08-17T14:28:53Z",
             "self_signed": false,
-            "days_to_expiry": 67
+            "days_to_expiry": 66
           }
         },
         {
@@ -175,7 +169,7 @@
             "not_before": "2026-05-19T14:28:54Z",
             "not_after": "2026-08-17T14:28:53Z",
             "self_signed": false,
-            "days_to_expiry": 67
+            "days_to_expiry": 66
           }
         }
       ],
@@ -192,12 +186,12 @@
           "ns36.domaincontrol.com"
         ],
         "txt": [
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "2o6gse9gno2mv04ik7f14kssfq",
-          "k15vdsovvom4v46fi4r4rivts6",
-          "sek942qd3nt1s4lqh1h2ovmmai",
           "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
-          "MS=ms33269626"
+          "MS=ms33269626",
+          "k15vdsovvom4v46fi4r4rivts6",
+          "2o6gse9gno2mv04ik7f14kssfq",
+          "sek942qd3nt1s4lqh1h2ovmmai",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -263,7 +257,7 @@
           },
           {
             "name": "Yoast SEO",
-            "version": "27.8",
+            "version": "27.7",
             "category": "wp-plugin"
           },
           {
@@ -304,8 +298,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-11T10:57:32Z",
-      "last_seen": "2026-06-11T10:57:32Z",
+      "first_discovered": "2026-06-11T16:22:51Z",
+      "last_seen": "2026-06-11T16:22:51Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -315,12 +309,6 @@
       "hosts": [
         {
           "ip": "199.16.172.68",
-          "asn": "AS2635",
-          "asn_org": "Automattic, Inc",
-          "country": "US",
-          "region": "California",
-          "city": "San Francisco",
-          "reverse_dns": null,
           "is_private": false
         },
         {
@@ -427,8 +415,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-11T10:57:32Z",
-      "last_seen": "2026-06-11T10:57:32Z",
+      "first_discovered": "2026-06-11T16:22:51Z",
+      "last_seen": "2026-06-11T16:22:51Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -525,8 +513,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-11T10:57:32Z",
-      "last_seen": "2026-06-11T10:57:32Z",
+      "first_discovered": "2026-06-11T16:22:51Z",
+      "last_seen": "2026-06-11T16:22:51Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -623,8 +611,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-11T10:57:32Z",
-      "last_seen": "2026-06-11T10:57:32Z",
+      "first_discovered": "2026-06-11T16:22:51Z",
+      "last_seen": "2026-06-11T16:22:51Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -726,8 +714,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-11T10:57:32Z",
-      "last_seen": "2026-06-11T10:57:32Z",
+      "first_discovered": "2026-06-11T16:22:51Z",
+      "last_seen": "2026-06-11T16:22:51Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -824,8 +812,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-11T10:57:32Z",
-      "last_seen": "2026-06-11T10:57:32Z",
+      "first_discovered": "2026-06-11T16:22:51Z",
+      "last_seen": "2026-06-11T16:22:51Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -937,8 +925,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-11T10:57:32Z",
-      "last_seen": "2026-06-11T10:57:32Z",
+      "first_discovered": "2026-06-11T16:22:51Z",
+      "last_seen": "2026-06-11T16:22:51Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -948,12 +936,6 @@
       "hosts": [
         {
           "ip": "199.16.172.68",
-          "asn": "AS2635",
-          "asn_org": "Automattic, Inc",
-          "country": "US",
-          "region": "California",
-          "city": "San Francisco",
-          "reverse_dns": null,
           "is_private": false
         },
         {
@@ -1016,7 +998,7 @@
             "not_before": "2026-05-19T14:28:54Z",
             "not_after": "2026-08-17T14:28:53Z",
             "self_signed": false,
-            "days_to_expiry": 67
+            "days_to_expiry": 66
           }
         },
         {
@@ -1067,7 +1049,7 @@
             "not_before": "2026-05-19T14:28:54Z",
             "not_after": "2026-08-17T14:28:53Z",
             "self_signed": false,
-            "days_to_expiry": 67
+            "days_to_expiry": 66
           }
         }
       ],
@@ -1084,12 +1066,12 @@
           "ns36.domaincontrol.com"
         ],
         "txt": [
-          "sek942qd3nt1s4lqh1h2ovmmai",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "MS=ms33269626",
           "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
           "2o6gse9gno2mv04ik7f14kssfq",
-          "k15vdsovvom4v46fi4r4rivts6"
+          "k15vdsovvom4v46fi4r4rivts6",
+          "sek942qd3nt1s4lqh1h2ovmmai",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+          "MS=ms33269626"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -1196,8 +1178,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-11T10:57:32Z",
-      "last_seen": "2026-06-11T10:57:32Z",
+      "first_discovered": "2026-06-11T16:22:51Z",
+      "last_seen": "2026-06-11T16:22:51Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1207,12 +1189,6 @@
       "hosts": [
         {
           "ip": "199.16.172.68",
-          "asn": "AS2635",
-          "asn_org": "Automattic, Inc",
-          "country": "US",
-          "region": "California",
-          "city": "San Francisco",
-          "reverse_dns": null,
           "is_private": false
         },
         {
@@ -1319,8 +1295,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-11T10:57:32Z",
-      "last_seen": "2026-06-11T10:57:32Z",
+      "first_discovered": "2026-06-11T16:22:51Z",
+      "last_seen": "2026-06-11T16:22:51Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1415,7 +1391,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-06-11T04:48:25Z_7f17ed1b",
+    "since_scan": "scan_2026-06-11T10:53:42Z_dc64fa59",
     "added": {
       "subdomains": [],
       "services": [],
@@ -1427,111 +1403,19 @@
       "hosts": []
     },
     "changed": {
-      "fingerprint": [],
+      "fingerprint": [
+        {
+          "subdomain": "unimacgraphics.com",
+          "name": "Yoast SEO",
+          "from": "27.8",
+          "to": "27.7"
+        }
+      ],
       "cert": [],
       "reachability": []
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-05-14T04:03:10Z_e83db9a6",
-      "started_at": "2026-05-14T04:03:10Z",
-      "completed_at": "2026-05-14T04:07:15Z",
-      "subdomain_count": 10,
-      "live_subdomain_count": 10,
-      "host_count": 3,
-      "service_count": 28,
-      "subdomain_names": [
-        "mail.unimacgraphics.com",
-        "myorders-test.unimacgraphics.com",
-        "myorders.unimacgraphics.com",
-        "portal-test.unimacgraphics.com",
-        "portal.unimacgraphics.com",
-        "unimacgraphics.com",
-        "uoltest.unimacgraphics.com",
-        "www.unimacgraphics.com",
-        "xen.unimacgraphics.com",
-        "zoetislabs.unimacgraphics.com"
-      ],
-      "ports_by_sub": {
-        "unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "mail.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "myorders-test.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "myorders.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "portal-test.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "portal.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "uoltest.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "www.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "xen.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "zoetislabs.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        }
-      }
-    },
     {
       "scan_id": "scan_2026-05-14T08:49:01Z_8d294d57",
       "started_at": "2026-05-14T08:49:01Z",
@@ -14020,6 +13904,114 @@
       "scan_id": "scan_2026-06-11T10:53:42Z_dc64fa59",
       "started_at": "2026-06-11T10:53:42Z",
       "completed_at": "2026-06-11T10:57:32Z",
+      "subdomain_count": 10,
+      "live_subdomain_count": 10,
+      "host_count": 3,
+      "service_count": 28,
+      "subdomain_names": [
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.3",
+        "Slider Revolution": "6.7.57",
+        "WPMU DEV Smush": "4.1.0",
+        "Yoast SEO": "27.8",
+        "jQuery Migrate": "3.4.1",
+        "IIS": "10.0",
+        "jQuery UI": "1.12.1"
+      }
+    },
+    {
+      "scan_id": "scan_2026-06-11T16:18:56Z_a31576ef",
+      "started_at": "2026-06-11T16:18:56Z",
+      "completed_at": "2026-06-11T16:22:51Z",
       "subdomain_count": 10,
       "live_subdomain_count": 10,
       "host_count": 3,
