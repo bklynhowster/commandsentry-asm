@@ -233,6 +233,30 @@ def test_allowlist_is_exactly_owned_and_test_target():
     assert ROE_OWNERSHIP_ALLOWLIST == frozenset({"owned", "test_target"})
 
 
+def test_is_routine_refusal_split_by_reason():
+    """Lock-in for the 2026-06-11 QA fix that splits exit code by reason.
+    Routine refusals (ownership_not_allowed) are SUCCESS — the scanner
+    did its job. Fail-closed cases (asset_not_found, db_error) are
+    FAILURE — the gate refused because something was broken.
+
+    If you add a new reason code, decide explicitly which side of this
+    line it belongs on and add a row here. Don't let an unrouted reason
+    silently take the False (non-routine) default and start spamming
+    Howie's failure-email channel."""
+    assert GateResult(
+        asset_id="x", intensity="medium", ownership="namesake",
+        reason="ownership_not_allowed", message="m",
+    ).is_routine_refusal() is True
+    assert GateResult(
+        asset_id="x", intensity="medium", ownership=None,
+        reason="asset_not_found", message="m",
+    ).is_routine_refusal() is False
+    assert GateResult(
+        asset_id="x", intensity="medium", ownership=None,
+        reason="db_error", message="m",
+    ).is_routine_refusal() is False
+
+
 def test_unknown_intensity_short_circuits_as_non_active():
     """KNOWN gap worth pinning: any intensity NOT in {medium, heavy}
     short-circuits as 'not active'. In production the DB enum constrains

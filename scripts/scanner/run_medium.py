@@ -1844,8 +1844,17 @@ def run(descriptor_path: str, dsn: str) -> int:
     #
     # On block: stamps scan_run + scan_queue to failed with
     # error_message='roe_block: ownership=...', best-effort SendGrid
-    # alert via portal /api/roe-block-alert, exits non-zero. The abort
-    # NEVER depends on the alert succeeding.
+    # alert via portal /api/roe-block-alert. Caller exit code splits on
+    # GateResult.is_routine_refusal():
+    #   - True (ownership_not_allowed) → exit 0. The scanner correctly
+    #     refused the request — that's success, not failure. Routine
+    #     refusals shouldn't fire "Scanner: All jobs have failed."
+    #   - False (asset_not_found, db_error, gate exception) → exit 1.
+    #     Gate failed closed because something was broken; the GH
+    #     Actions run should go RED so we notice.
+    #
+    # The DB stamp + SendGrid alert happen in BOTH cases — those are the
+    # durable audit + visibility surfaces and don't depend on exit code.
     #
     # Site rationale: descriptor parse + intensity check are local-only;
     # ScanContext construction below is in-memory; capture_egress_ip
@@ -1856,7 +1865,7 @@ def run(descriptor_path: str, dsn: str) -> int:
     try:
         from roe_gate import check_ownership_or_block
     except ImportError as e:
-        log(f"FATAL: roe_gate module not importable: {e!r} — aborting (fail-closed)")
+        log(f"FATAL: roe_gate module not importable: {e!r} — aborting (fail-closed, exit 1)")
         return 1
     # Open a transient DB connection just for the gate. We can't use the
     # main run-phase connection (it's lazy-opened at write time, post-scan).
@@ -1869,6 +1878,24 @@ def run(descriptor_path: str, dsn: str) -> int:
             if gh_url
             else None
         )
+        # Surface the actual ingress in the alert: read scan_queue.source
+        # so "Triggered via: workflow_dispatch" / "manual" is meaningful
+        # instead of the generic "Likely causes" list. Best-effort — if
+        # this lookup fails, the alert still fires with queue_source=None
+        # and the template falls back gracefully.
+        queue_source = None
+        try:
+            with gate_conn.cursor() as cur:
+                cur.execute(
+                    "SELECT source FROM public.scan_queue WHERE queue_id = %s",
+                    (descriptor["queue_id"],),
+                )
+                qrow = cur.fetchone()
+                if qrow is not None:
+                    queue_source = qrow["source"] if isinstance(qrow, dict) else qrow[0]
+        except Exception as e:
+            log(f"[gate] could not read scan_queue.source for alert enrichment: {e!r}")
+
         block = check_ownership_or_block(
             conn=gate_conn,
             asset_id=descriptor["asset_id"],
@@ -1876,9 +1903,10 @@ def run(descriptor_path: str, dsn: str) -> int:
             scan_run_id=descriptor["scan_run_id"],
             queue_id=descriptor["queue_id"],
             github_run_url=gh_run_url,
+            queue_source=queue_source,
         )
     except Exception as e:
-        log(f"FATAL: ROE gate raised: {e!r} — aborting (fail-closed)")
+        log(f"FATAL: ROE gate raised: {e!r} — aborting (fail-closed, exit 1)")
         try:
             if gate_conn is not None:
                 gate_conn.close()
@@ -1899,6 +1927,14 @@ def run(descriptor_path: str, dsn: str) -> int:
         )
         log(f"  message: {block.message}")
         log("  zero target-bound tools ran. scan_run + scan_queue stamped failed.")
+        if block.is_routine_refusal():
+            # Policy-compliant refusal — DB stamp + alert fired; workflow
+            # goes GREEN so routine blocks don't pollute the failure-email
+            # signal. Real failures (asset_not_found, db_error) still go
+            # RED via the else branch.
+            log("  routine refusal — exit 0 (workflow stays green).")
+            return 0
+        log("  gate failed closed on uncertainty — exit 1 (workflow goes red).")
         return 1
 
     # ─── Gate cleared — proceed with normal medium scan ─────────────────

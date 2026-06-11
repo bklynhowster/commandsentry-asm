@@ -16,7 +16,25 @@ no curl, no tool invocation — nothing). The scan_run row already exists
 failed + error_message='roe_block: ownership=<x>', UPDATE the scan_queue
 row to failed (so the watchdog and dashboards see consistent state),
 fire a best-effort SendGrid alert via the portal /api/roe-block-alert
-endpoint, and return a result the caller uses to exit non-zero.
+endpoint, and return a result the caller branches on.
+
+Caller exit-code policy (advisor 2026-06-11 QA — distinguish routine
+refusals from broken-gate states at the GH Actions layer):
+
+  - GateResult.reason == 'ownership_not_allowed' (the namesake / unknown /
+    not-on-allowlist case) → routine refusal. The scanner did its job.
+    DB stamp + SendGrid alert + GREEN workflow run. Caller EXITS 0.
+  - GateResult.reason in {'asset_not_found', 'db_error'} or a thrown
+    exception during gate import / execution (the fail-closed-on-
+    uncertainty paths) → something is actually broken. The gate refused
+    because it couldn't trust the input or the lookup. Caller EXITS 1
+    so the run shows RED in GH Actions history.
+
+This split is what makes "Scanner failed" a meaningful signal again.
+Without it, routine blocks and real failures look identical, and we
+train ourselves to ignore the failure email — which is how a real
+failure slips by. Use `GateResult.is_routine_refusal()` to make the
+decision in the caller.
 
 Fails CLOSED on any uncertainty: DB error / missing asset / unknown
 ownership string / NULL → BLOCK.
@@ -49,14 +67,27 @@ _ROE_ALERT_URL = "https://commandsentry-portal.netlify.app/api/roe-block-alert"
 @dataclass
 class GateResult:
     """Return shape from check_ownership_or_block(). None = proceed; an
-    instance = blocked (caller must exit non-zero). Pure data; the gate
-    handles its own DB writes + alert dispatch before returning."""
+    instance = blocked. Pure data; the gate handles its own DB writes +
+    alert dispatch before returning.
+
+    Caller branches exit code on `is_routine_refusal()`:
+      - True (ownership_not_allowed) → exit 0, scan was correctly refused.
+      - False (asset_not_found, db_error) → exit 1, gate failed closed
+        on uncertainty — something is actually broken.
+    """
 
     asset_id: str
     intensity: str
     ownership: Optional[str]
     reason: str  # 'ownership_not_allowed' | 'asset_not_found' | 'db_error'
     message: str
+
+    def is_routine_refusal(self) -> bool:
+        """True for the policy-compliant refusal case (ownership_not_allowed).
+        False for the fail-closed-on-uncertainty cases (asset_not_found,
+        db_error) which indicate a broken gate state and should bubble up
+        as a failed workflow run."""
+        return self.reason == "ownership_not_allowed"
 
 
 def check_ownership_or_block(
@@ -66,6 +97,7 @@ def check_ownership_or_block(
     scan_run_id: str,
     queue_id: str,
     github_run_url: Optional[str] = None,
+    queue_source: Optional[str] = None,
 ) -> Optional[GateResult]:
     """Insert-time light scans short-circuit immediately (no DB hit).
     For medium/heavy, fetch assets.ownership and check the allowlist.
@@ -76,8 +108,18 @@ def check_ownership_or_block(
       2. UPDATE scan_queue.status='failed', error_message='roe_block: ...'
       3. Best-effort POST to /api/roe-block-alert (NOT load-bearing —
          alert failures do NOT change the abort decision).
-    Caller must exit non-zero when result is not None. No target-bound
-    network op has happened by this point — the contract is held.
+
+    Caller exit-code policy (see module docstring):
+      - GateResult.is_routine_refusal()=True → exit 0 (correct refusal).
+      - GateResult.is_routine_refusal()=False → exit 1 (gate failed
+        closed because something was broken — DB unreachable, asset row
+        missing, etc.).
+
+    queue_source: optional pass-through of scan_queue.source so the
+    SendGrid alert can surface the actual ingress (e.g., 'manual',
+    'workflow_dispatch') instead of a generic "Likely causes" list.
+    Pass None when the caller can't read it; the alert template falls
+    back gracefully.
 
     Fails CLOSED — any uncertainty blocks.
     """
@@ -105,7 +147,7 @@ def check_ownership_or_block(
             message=f"roe_block: ownership lookup failed for {asset_id}: {e!r}",
         )
         _stamp_failed(conn, scan_run_id, queue_id, result.message)
-        _send_alert(result, scan_run_id, queue_id, github_run_url)
+        _send_alert(result, scan_run_id, queue_id, github_run_url, queue_source)
         return result
 
     if row is None:
@@ -117,7 +159,7 @@ def check_ownership_or_block(
             message=f"roe_block: asset {asset_id} not found in inventory",
         )
         _stamp_failed(conn, scan_run_id, queue_id, result.message)
-        _send_alert(result, scan_run_id, queue_id, github_run_url)
+        _send_alert(result, scan_run_id, queue_id, github_run_url, queue_source)
         return result
 
     # psycopg row shape — dict_row or tuple-style, handle both
@@ -135,7 +177,7 @@ def check_ownership_or_block(
             ),
         )
         _stamp_failed(conn, scan_run_id, queue_id, result.message)
-        _send_alert(result, scan_run_id, queue_id, github_run_url)
+        _send_alert(result, scan_run_id, queue_id, github_run_url, queue_source)
         return result
 
     # Allowlisted — proceed. Light short-circuit happened above.
@@ -190,9 +232,12 @@ def _send_alert(
     scan_run_id: str,
     queue_id: str,
     github_run_url: Optional[str],
+    queue_source: Optional[str] = None,
 ) -> None:
     """Best-effort POST to portal /api/roe-block-alert. Always swallows
     exceptions. The abort decision NEVER depends on this succeeding."""
+    from datetime import datetime, timezone
+
     token = os.environ.get("ROE_ALERT_TOKEN")
     if not token:
         print("[roe_gate] ROE_ALERT_TOKEN not set — skipping alert (gate still aborted)")
@@ -202,9 +247,15 @@ def _send_alert(
         "asset_id": result.asset_id,
         "intensity": result.intensity,
         "ownership": result.ownership,
+        "reason": result.reason,
         "scan_run_id": scan_run_id,
         "queue_id": queue_id,
         "github_run_id": github_run_url,
+        "queue_source": queue_source,
+        # UTC timestamp of the block — the alert template surfaces it so
+        # operators know WHEN, not just what. Coverage-watchdog already
+        # follows this pattern; ROE alerts mirror it.
+        "blocked_at": datetime.now(timezone.utc).isoformat(),
     }
 
     try:
