@@ -397,6 +397,11 @@ jobs:
         if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'medium' }}
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          # Bearer for the portal /api/roe-block-alert endpoint. Used
+          # by roe_gate.py best-effort SendGrid delivery on a blocked
+          # active scan. Gate's abort decision does NOT depend on this
+          # being set or the POST succeeding — see roe_gate.py.
+          ROE_ALERT_TOKEN: ${{ secrets.ROE_ALERT_TOKEN }}
           # When threshold_probe_mode workflow input is true, run_medium.py
           # uses a per-chunk rate ladder + post-chunk healthchecks to map
           # the rate-to-ban threshold (skips nikto/ffuf for isolation).

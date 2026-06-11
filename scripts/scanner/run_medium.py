@@ -1836,6 +1836,72 @@ def run(descriptor_path: str, dsn: str) -> int:
     if descriptor.get("intensity") not in ("medium", "standard"):
         log(f"WARNING: descriptor intensity is '{descriptor.get('intensity')}', not 'medium'")
 
+    # ─── ROE / ownership pull-time gate (S3 safety interlock) ───────────
+    # MUST run before ANY target-bound network op (no DNS, no curl, no
+    # tool — nothing). Catches direct-REST + SQL-Editor inserts that
+    # bypassed the portal-side helper. Fails closed on any uncertainty
+    # (db error / missing asset / unknown ownership / NULL → BLOCK).
+    #
+    # On block: stamps scan_run + scan_queue to failed with
+    # error_message='roe_block: ownership=...', best-effort SendGrid
+    # alert via portal /api/roe-block-alert, exits non-zero. The abort
+    # NEVER depends on the alert succeeding.
+    #
+    # Site rationale: descriptor parse + intensity check are local-only;
+    # ScanContext construction below is in-memory; capture_egress_ip
+    # hits a third-party (ifconfig.me) NOT the scan target — but to
+    # keep the gate the first thing that happens after we know what
+    # asset we're being asked to scan, we run it here, before any
+    # network op of any kind.
+    try:
+        from roe_gate import check_ownership_or_block
+    except ImportError as e:
+        log(f"FATAL: roe_gate module not importable: {e!r} — aborting (fail-closed)")
+        return 1
+    # Open a transient DB connection just for the gate. We can't use the
+    # main run-phase connection (it's lazy-opened at write time, post-scan).
+    gate_conn = None
+    try:
+        gate_conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
+        gh_url = os.environ.get("GITHUB_SERVER_URL") and os.environ.get("GITHUB_REPOSITORY") and os.environ.get("GITHUB_RUN_ID")
+        gh_run_url = (
+            f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+            if gh_url
+            else None
+        )
+        block = check_ownership_or_block(
+            conn=gate_conn,
+            asset_id=descriptor["asset_id"],
+            intensity=descriptor["intensity"],
+            scan_run_id=descriptor["scan_run_id"],
+            queue_id=descriptor["queue_id"],
+            github_run_url=gh_run_url,
+        )
+    except Exception as e:
+        log(f"FATAL: ROE gate raised: {e!r} — aborting (fail-closed)")
+        try:
+            if gate_conn is not None:
+                gate_conn.close()
+        except Exception:
+            pass
+        return 1
+    finally:
+        try:
+            if gate_conn is not None:
+                gate_conn.close()
+        except Exception:
+            pass
+
+    if block is not None:
+        log(
+            f"ROE BLOCK — asset={block.asset_id} intensity={block.intensity} "
+            f"ownership={block.ownership!r} reason={block.reason}"
+        )
+        log(f"  message: {block.message}")
+        log("  zero target-bound tools ran. scan_run + scan_queue stamped failed.")
+        return 1
+
+    # ─── Gate cleared — proceed with normal medium scan ─────────────────
     asset = descriptor["asset"]
     ctx = ScanContext(
         descriptor=descriptor,
