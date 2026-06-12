@@ -2173,27 +2173,26 @@ def run(descriptor_path: str, dsn: str) -> int:
     )
     log(f"asset_id={ctx.asset_id} hostname={ctx.hostname} scan_run_id={ctx.scan_run_id}")
 
-    # ─── Validate-mode safety interlock (batch 2 — SPEC_SCANNER_DEGRADATION_HARDENING) ─
+    # ─── Validate-mode flag read — actual assert deferred until inside `try` below ─
     # If skip_vpn=true was set on the workflow_dispatch input, the runner
     # is NOT on Mullvad and would scan from the GH Actions datacenter
     # egress. That's only safe against allowlisted public training
     # targets. Anything else → DegradedRunError, status='degraded',
     # exit 1. Fires BEFORE capture_egress_ip + any tool call.
     #
-    # Hostname-keyed (advisor must-fix-2): we compare ctx.hostname (the
-    # field the tools actually hit) NOT ctx.asset_id (which for range
-    # assets is "range:<slug>" and would silently fail or, worse,
-    # accidentally let a client through if "fixed" later).
+    # Negative-test fix 2026-06-12 (post first negative-test run):
+    # The assert call MUST run INSIDE the `try` block so DegradedRunError
+    # is caught by the `except DegradedRunError` handler and routed to
+    # degraded_out (which stamps scan_run.status='degraded' + scan_queue
+    # via trigger + scan_quality on any findings). Without that, the
+    # exception escapes, Python crashes with a traceback, and the
+    # always() cleanup stamps the row as generic 'failed' — which loses
+    # the validate-mode signal AND undermines the launder-block lock.
+    # First negative test exposed exactly this bookkeeping bug.
     skip_vpn = os.environ.get("SKIP_VPN", "").lower() in ("true", "1", "yes")
     if skip_vpn:
         log(f"validate_mode active — skip_vpn={skip_vpn}; "
             f"VALIDATION_TARGETS={sorted(VALIDATION_TARGETS)}")
-    # ALWAYS call the assert — when skip_vpn=False it short-circuits
-    # without checking the allowlist. Single safety primitive, single
-    # source of truth, no caller-side conditionals to silently drift.
-    assert_validate_mode_target_allowed(ctx.hostname, skip_vpn)
-    if skip_vpn:
-        log(f"validate_mode pre-flight OK — {ctx.hostname!r} in allowlist")
 
     start_egress = capture_egress_ip()
     if start_egress:
@@ -2217,6 +2216,20 @@ def run(descriptor_path: str, dsn: str) -> int:
 
     end_egress = None
     try:
+        # ─── Phase 0: validate-mode safety interlock (batch 2 step a) ──
+        # Runs INSIDE the try block so DegradedRunError lands in the
+        # `except DegradedRunError` handler below and routes cleanly to
+        # degraded_out (which stamps scan_run.status='degraded' +
+        # propagates to scan_queue via the 20260612b trigger). Placed
+        # BEFORE detect_waf — the first target-bound op.
+        #
+        # ALWAYS call the assert — when skip_vpn=False it short-circuits
+        # without checking the allowlist. Single safety primitive,
+        # single source of truth, no caller-side conditionals to drift.
+        assert_validate_mode_target_allowed(ctx.hostname, skip_vpn)
+        if skip_vpn:
+            log(f"validate_mode pre-flight OK — {ctx.hostname!r} in allowlist")
+
         # ─── Phase 1: WAF detection ─────────────────────────────────
         log("→ detect_waf")
         detect_waf(ctx)
