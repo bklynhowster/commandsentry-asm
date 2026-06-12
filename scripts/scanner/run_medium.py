@@ -69,6 +69,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Scanner degradation primitives — fail-closed on "we didn't actually scan."
+# See SPEC_SCANNER_DEGRADATION_HARDENING.md. 2026-06-12.
+from degradation import (
+    DegradedRunError,
+    MAX_BAN_EVENTS,
+    MAX_HEALTHCHECK_FAILURES,
+    assert_tool_status_invariant,
+    cap_aware_append_ban,
+    cap_aware_append_healthcheck_failure,
+    is_tool_output_degraded,
+)
+
 
 # ─── Lazy import psycopg ────────────────────────────────────────────────
 def _import_deps() -> Any:
@@ -378,6 +390,16 @@ class ScanContext:
     # output. {tool_name: {"ok": True} | {"degraded": "<reason_slug>"}}.
     # Written to scan_run.tool_status at close-out.
     tool_status: dict[str, dict] = field(default_factory=dict)
+    # Scanner-degradation forensics (SPEC_SCANNER_DEGRADATION_HARDENING.md
+    # 2026-06-12 — Bug C). Populated by run_medium.py and written to
+    # scan_run.{egress_ip, vpn_config_used, rotation_log} at close-out
+    # OR degraded_out. Survives forensics queries instead of forcing
+    # every "why didn't this find X" to re-read the GH Actions log.
+    egress_ip_initial: str | None = None     # first egress observed post-bringup
+    vpn_config_used: str | None = None       # initial WireGuard region/config
+    healthcheck_failures: list[dict] = field(default_factory=list)
+    rotation_storm: bool = False             # tripped when ban_events or
+                                             # healthcheck_failures hits 500 cap
 
 
 # ─── Tool-status helpers (ADR-001 Step 4) ───────────────────────────────
@@ -558,6 +580,59 @@ def capture_egress_ip() -> str | None:
             if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", ip):
                 return ip
     return None
+
+
+def capture_vpn_config_used() -> str | None:
+    """Return the active WireGuard interface name (e.g. 'us-atl-wg-001') by
+    asking the wg tool. Used by run() to populate ctx.vpn_config_used so
+    scan_run.vpn_config_used isn't NULL when VPN is up (Bug C).
+
+    Returns None on any error — caller falls back gracefully.
+    """
+    rc, stdout, _ = run_cmd(["wg", "show", "interfaces"], timeout=5)
+    if rc != 0:
+        return None
+    iface = stdout.strip().split()[0] if stdout.strip() else ""
+    return iface or None
+
+
+def note_ban_event(ctx: ScanContext, event: dict) -> None:
+    """Append a ban event with the 500-entry cap (advisor ruling Q2).
+
+    When the cap is hit, flips ctx.rotation_storm=True and stops
+    appending. rotation_storm is independent evidence of severe
+    degradation and is surfaced in rotation_log."""
+    hit = cap_aware_append_ban(ctx.ban_events, ctx.rotation_storm, event)
+    if hit:
+        ctx.rotation_storm = True
+        log(f"  rotation storm: ban_events cap hit "
+            f"({MAX_BAN_EVENTS}) — further events dropped")
+
+
+def note_healthcheck_failure(ctx: ScanContext, event: dict) -> None:
+    """Same shape as note_ban_event but for healthcheck failures."""
+    hit = cap_aware_append_healthcheck_failure(
+        ctx.healthcheck_failures, ctx.rotation_storm, event
+    )
+    if hit:
+        ctx.rotation_storm = True
+        log(f"  rotation storm: healthcheck_failures cap hit "
+            f"({MAX_HEALTHCHECK_FAILURES}) — further events dropped")
+
+
+def build_rotation_log(ctx: ScanContext) -> dict:
+    """Build the scan_run.rotation_log jsonb payload from ctx state.
+
+    Schema: {count, distinct_egress_ips, ban_events, healthcheck_failures,
+             rotation_storm}. See migration 20260612a column COMMENT.
+    """
+    return {
+        "count": ctx.rotation_count,
+        "distinct_egress_ips": list(ctx.egress_ips_seen),
+        "ban_events": list(ctx.ban_events),
+        "healthcheck_failures": list(ctx.healthcheck_failures),
+        "rotation_storm": ctx.rotation_storm,
+    }
 
 
 def rotate_vpn(ctx: ScanContext) -> bool:
@@ -1153,8 +1228,15 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
             log(f"chunk {i+1}/{len(chunks)}: {desc}")
 
         if not ensure_healthy_egress(ctx, max_rotations=2):
-            log("  ✗ target unreachable from any rotated IP — skipping chunk")
-            ctx.ban_events.append({
+            # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug A: first chunk-skip
+            # aborts. Per advisor ruling Q1 (2026-06-12) — strict v1; a
+            # future S2 partial-degraded mode might collect remaining
+            # chunks, but for now we treat any rotation-exhausted skip
+            # as fatal. Stamp the chunk into tool_status so the
+            # set-equality invariant in close-out doesn't double-fire.
+            chunk_name = f"nuclei[{sev}:{tag or '<all>'}]"
+            log(f"  ✗ target unreachable from any rotated IP — ABORT ({chunk_name})")
+            note_ban_event(ctx, {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "type": "chunk_skipped_unreachable",
                 "chunk": f"{sev}:{tag or '<all>'}",
@@ -1167,7 +1249,18 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
                     "matches": 0, "rc": None, "banned": True,
                     "note": "skipped — already unreachable before chunk",
                 })
-            continue
+            # Unify on the canonical {"degraded": reason} shape used by
+            # mark_tool_degraded (run_medium.py:425) + run_light.py. Inline
+            # `{"ok": False, "reason": ...}` would carry the same meaning
+            # but defeat the documented `"degraded" in entry` readers.
+            mark_tool_degraded(ctx, chunk_name, "skipped_target_unreachable")
+            # TODO (S2): partial-degraded mode would `continue` here and
+            # collect remaining chunks before raising at end-of-scan. For
+            # v1 (advisor ruling Q1 2026-06-12) we abort on first skip.
+            raise DegradedRunError(
+                "rotation_exhausted",
+                f"{chunk_name} after {ctx.rotation_count} rotations",
+            )
 
         # PROBE/PATIENT: capture the egress IP we're about to scan from +
         # a baseline health code RIGHT BEFORE the chunk runs.
@@ -1271,8 +1364,23 @@ def run_nikto(ctx: ScanContext) -> None:
     log("→ nikto (single pass)")
 
     if not ensure_healthy_egress(ctx, max_rotations=2):
-        log("  ✗ target unreachable — skipping nikto entirely")
-        return
+        # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug A — first chunk-skip
+        # aborts. Stamp the tool so the set-equality invariant doesn't
+        # surface "missing" later (it's actually "ran, was unreachable").
+        log("  ✗ target unreachable — ABORT (nikto)")
+        note_ban_event(ctx, {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": "chunk_skipped_unreachable",
+            "chunk": "nikto",
+        })
+        if "nikto" not in ctx.tools_run:
+            ctx.tools_run.append("nikto")
+        # Canonical {"degraded": reason} shape (see mark_tool_degraded).
+        mark_tool_degraded(ctx, "nikto", "skipped_target_unreachable")
+        raise DegradedRunError(
+            "rotation_exhausted",
+            f"nikto after {ctx.rotation_count} rotations",
+        )
 
     ctx.tools_run.append("nikto")
     # Bug D root cause was "crusty apt nikto fighting modern arg semantics."
@@ -1570,8 +1678,23 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
     for i, words in enumerate(chunks):
         log(f"chunk {i+1}/{len(chunks)}: {len(words)} words")
         if not ensure_healthy_egress(ctx, max_rotations=2):
-            log("  ✗ target unreachable — skipping ffuf chunk")
-            continue
+            # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug A — first
+            # chunk-skip aborts (advisor ruling Q1, strict v1).
+            chunk_name = f"ffuf[{len(words)}w]#{i+1}"
+            log(f"  ✗ target unreachable — ABORT ({chunk_name})")
+            note_ban_event(ctx, {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "type": "chunk_skipped_unreachable",
+                "chunk": chunk_name,
+            })
+            if chunk_name not in ctx.tools_run:
+                ctx.tools_run.append(chunk_name)
+            # Canonical {"degraded": reason} shape (see mark_tool_degraded).
+            mark_tool_degraded(ctx, chunk_name, "skipped_target_unreachable")
+            raise DegradedRunError(
+                "rotation_exhausted",
+                f"{chunk_name} after {ctx.rotation_count} rotations",
+            )
 
         interesting = run_ffuf_chunk(ctx, words)
         log(f"  chunk {i+1} done: {interesting} 200/204 finding(s)")
@@ -1668,7 +1791,14 @@ SET status            = 'complete',
     findings_updated  = %(findings_updated)s,
     -- ADR-001 Step 4 — per-tool completeness map.
     -- {tool_name: {"ok": True} | {"degraded": "reason"}}
-    tool_status       = %(tool_status)s
+    tool_status       = %(tool_status)s,
+    -- SPEC_SCANNER_DEGRADATION_HARDENING.md (Bug C, 2026-06-12) — VPN
+    -- forensics columns. Populated for clean AND degraded scans so
+    -- every "why didn't this find X" investigation reads here instead
+    -- of the GH Actions log.
+    egress_ip         = %(egress_ip)s,
+    vpn_config_used   = %(vpn_config_used)s,
+    rotation_log      = %(rotation_log)s
 WHERE scan_run_id     = %(scan_run_id)s;
 """
 
@@ -1697,6 +1827,48 @@ SET status           = 'failed',
     duration_seconds = EXTRACT(EPOCH FROM (now() - started_at))::int,
     error_message    = %(error)s
 WHERE queue_id       = %(queue_id)s;
+"""
+
+# SPEC_SCANNER_DEGRADATION_HARDENING.md Bug A + Bug C — degraded close-out.
+# Distinct from FAIL (which is operational/code error). Reads as
+# "ran but didn't really scan the target."
+# Migration 20260612a added 'degraded' to scan_run_status_t + scan_status_t
+# and extended trg_scan_queue_sync_on_scan_run_terminal to fire on it.
+DEGRADED_SCAN_RUN_SQL = """
+UPDATE public.scan_run
+SET status            = 'degraded',
+    completed_at      = now(),
+    duration_seconds  = EXTRACT(EPOCH FROM (now() - started_at))::int,
+    tools_run         = %(tools_run)s,
+    findings_added    = %(findings_added)s,
+    findings_updated  = %(findings_updated)s,
+    tool_status       = %(tool_status)s,
+    error_message     = %(error)s,
+    egress_ip         = %(egress_ip)s,
+    vpn_config_used   = %(vpn_config_used)s,
+    rotation_log      = %(rotation_log)s
+WHERE scan_run_id     = %(scan_run_id)s;
+"""
+
+DEGRADED_SCAN_QUEUE_SQL = """
+UPDATE public.scan_queue
+SET status            = 'degraded',
+    completed_at      = now(),
+    duration_seconds  = EXTRACT(EPOCH FROM (now() - started_at))::int,
+    findings_count    = %(findings_count)s,
+    error_message     = %(error)s
+WHERE queue_id        = %(queue_id)s;
+"""
+
+# Flip scan_quality on any findings already written by this scan_run.
+# Idempotent. Belt + suspenders even though the trigger sync alone is
+# sufficient at the scan_run level — finding-level scan_quality is what
+# the re-validation UPSERT actually reads to refuse laundering.
+STAMP_FINDINGS_DEGRADED_SQL = """
+UPDATE public.findings
+SET scan_quality = 'degraded'
+WHERE first_detected_scan = %(scan_run_id)s
+  AND scan_quality = 'clean';
 """
 
 
@@ -1789,6 +1961,13 @@ def write_scan_metadata_artifact(conn, ctx: ScanContext, Json,
 
 
 def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None:
+    # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug B2 (ruling ⑦): set-equality
+    # invariant. Every tool in tools_run must have a tool_status entry.
+    # This raises DegradedRunError("tool_status_invariant", ...) if it
+    # fails, which the top-level run() catches and routes to degraded_out
+    # — silent-skipped tools never make it past this gate.
+    assert_tool_status_invariant(ctx.tools_run, ctx.tool_status)
+
     with conn.cursor() as cur:
         params = {
             "tools_run": ctx.tools_run,
@@ -1799,6 +1978,10 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
             "queue_id": ctx.queue_id,
             # ADR-001 Step 4 — wrap with Json so psycopg writes proper jsonb.
             "tool_status": Json(ctx.tool_status or {}),
+            # Bug C — VPN forensics (SPEC_SCANNER_DEGRADATION_HARDENING.md).
+            "egress_ip": ctx.egress_ip_initial,
+            "vpn_config_used": ctx.vpn_config_used,
+            "rotation_log": Json(build_rotation_log(ctx)),
         }
         cur.execute(CLOSE_SCAN_RUN_SQL, params)
         cur.execute(CLOSE_SCAN_QUEUE_SQL, params)
@@ -1813,6 +1996,45 @@ def fail_out(conn, ctx: ScanContext, error: str) -> None:
         }
         cur.execute(FAIL_SCAN_RUN_SQL, params)
         cur.execute(FAIL_SCAN_QUEUE_SQL, params)
+
+
+def degraded_out(conn, ctx: ScanContext, error: str,
+                 inserted: int, updated: int, Json) -> None:
+    """Stamp scan_run.status='degraded', scan_queue.status='degraded',
+    AND flip findings.scan_quality='degraded' for any findings already
+    written by this scan_run.
+
+    Spec: SPEC_SCANNER_DEGRADATION_HARDENING.md. Distinct from fail_out
+    (which is operational error). Reads as "ran but didn't really scan."
+
+    Caller (run() top-level) catches DegradedRunError, then either:
+      (a) finishes the write phase up to this point (any partial
+          findings get written THEN flipped to scan_quality=degraded), OR
+      (b) skips the write phase entirely and calls this directly.
+
+    Either way, the re-validation UPSERT in scanner_validations land
+    will refuse to flip these findings to validated because the
+    `WHERE scan_quality='clean'` filter excludes them.
+    """
+    with conn.cursor() as cur:
+        params = {
+            "error": error,
+            "tools_run": ctx.tools_run,
+            "findings_added": inserted,
+            "findings_updated": updated,
+            "findings_count": inserted + updated,
+            "scan_run_id": ctx.scan_run_id,
+            "queue_id": ctx.queue_id,
+            "tool_status": Json(ctx.tool_status or {}),
+            "egress_ip": ctx.egress_ip_initial,
+            "vpn_config_used": ctx.vpn_config_used,
+            "rotation_log": Json(build_rotation_log(ctx)),
+        }
+        cur.execute(DEGRADED_SCAN_RUN_SQL, params)
+        cur.execute(DEGRADED_SCAN_QUEUE_SQL, params)
+        # Belt + suspenders: flip scan_quality on any partial findings.
+        cur.execute(STAMP_FINDINGS_DEGRADED_SQL,
+                    {"scan_run_id": ctx.scan_run_id})
 
 
 # ─── Main ───────────────────────────────────────────────────────────────
@@ -1953,6 +2175,15 @@ def run(descriptor_path: str, dsn: str) -> int:
     if start_egress:
         ctx.egress_ips_seen.append(start_egress)
         log(f"pre-scan egress IP: {start_egress}")
+        # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug C — persist the
+        # initial egress + VPN config so scan_run.egress_ip and
+        # vpn_config_used aren't NULL when VPN is up. Previously
+        # captured locally only; now stored on ctx for close_out /
+        # degraded_out to write.
+        ctx.egress_ip_initial = start_egress
+    ctx.vpn_config_used = capture_vpn_config_used()
+    if ctx.vpn_config_used:
+        log(f"vpn config in use: {ctx.vpn_config_used}")
 
     # DB connection deferred until write phase. Scan #35 (2026-05-30)
     # showed Supabase closes idle connections after 7+ min, and we
@@ -2045,6 +2276,53 @@ def run(descriptor_path: str, dsn: str) -> int:
                 log(f"retrying after {backoff}s...")
                 time.sleep(backoff)
 
+    except DegradedRunError as e:
+        # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug A / B / C.
+        # Distinct from the generic FATAL path: degradation means the
+        # runner correctly detected "we're not actually scanning the
+        # target." Stamp scan_run.status='degraded' (NOT 'failed'),
+        # flip findings.scan_quality='degraded' on any partial writes,
+        # exit 1 so the GH Actions run goes RED. Workflow exit 1 is
+        # the right signal: degradation IS a failure of the scan even
+        # though the runner didn't crash.
+        log(f"DEGRADED: {e.reason} — {e.context}")
+        log(f"  tools_run at abort: {ctx.tools_run}")
+        log(f"  tool_status keys:    {sorted(ctx.tool_status.keys())}")
+        log(f"  rotation_count:      {ctx.rotation_count}")
+        log(f"  ban_events:          {len(ctx.ban_events)}"
+            f"{' (capped — rotation storm)' if ctx.rotation_storm else ''}")
+        if conn is None:
+            try:
+                conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
+            except Exception as e2:
+                log(f"could not open DB to mark scan degraded: {e2!r}")
+                return 1
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        try:
+            # No partial-write commit here — degraded scans don't produce
+            # trusted findings. inserted=0 / updated=0 reflects what is
+            # PERSISTED to the DB after the txn rollback above (line 2301
+            # `conn.rollback()` discards any uncommitted findings from
+            # write_findings_and_artifacts when the close-out invariant
+            # raised mid-write). Three of the four raise sites (the
+            # chunk-skip aborts at 1244/1370/1684) happen pre-write, so
+            # there's nothing to roll back for those. The fourth — the
+            # assert_tool_status_invariant call inside close_out (line
+            # 1991) — fires AFTER write_findings_and_artifacts BUT the
+            # rollback above is what discards those rows; do NOT remove
+            # that rollback in a future cleanup or junk findings start
+            # committing on invariant failures.
+            degraded_out(conn, ctx, f"degraded: {e.reason}: {e.context}",
+                         inserted=0, updated=0, Json=Json)
+            conn.commit()
+            log(f"scan_run + scan_queue stamped degraded; "
+                f"findings.scan_quality flipped if any.")
+        except Exception as e2:
+            log(f"degraded_out also failed: {e2!r}")
+        return 1
     except Exception as e:
         log(f"FATAL: {e!r}")
         # Try to mark the run failed even if the FATAL happened mid-scan.
