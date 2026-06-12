@@ -103,6 +103,11 @@ on:
         required: false
         default: '1800'
         type: string
+      skip_vpn:
+        description: 'VALIDATE-MODE — skip Mullvad bring-up entirely. The runner scans from the GH Actions datacenter egress. Only safe against allowlisted public training targets (scripts/scanner/degradation.py::VALIDATION_TARGETS — currently {demo.testfire.net}). The scanner aborts BEFORE any target-bound op on any other target — DegradedRunError(validate_mode_target_not_allowlisted). Used for the validate-the-scanner-SHA path when Mullvad is banned by the control. NEVER pair with a client/owned asset.'
+        required: false
+        default: false
+        type: boolean
       stealth_ua:
         description: 'STEP 1 of the two-step diagnostic (post-advisor-brief audit 2026-05-31 PM). Pins User-Agent to a single Chrome/131 string (matches Mac stringent script line 95) + drops nuclei rate to 2 req/s. Tests: does cloud nuclei broad templates survive on FortiGate when it presents as a browser at the same gentle rate the Mac uses?'
         required: false
@@ -327,7 +332,7 @@ jobs:
           fi
 
       - name: Make VPN scripts executable
-        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
+        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' }}
         run: |
           chmod +x scripts/scanner/vpn_bringup.sh
           chmod +x scripts/scanner/vpn_rotate.sh
@@ -335,7 +340,7 @@ jobs:
           chmod +x scripts/scanner/wg_up_userspace.sh
 
       - name: Fetch + extract WireGuard configs
-        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
+        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -372,7 +377,7 @@ jobs:
 
       - name: Bring up VPN (WireGuard via wireguard-go userspace)
         id: vpn
-        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' }}
+        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' }}
         env:
           # Leave VPN_REGION empty by default — vpn_bringup.sh picks the
           # first available .conf alphabetically when unset. With the
@@ -402,6 +407,15 @@ jobs:
           # active scan. Gate's abort decision does NOT depend on this
           # being set or the POST succeeding — see roe_gate.py.
           ROE_ALERT_TOKEN: ${{ secrets.ROE_ALERT_TOKEN }}
+          # SPEC_SCANNER_DEGRADATION_HARDENING.md batch 2 — validate-mode.
+          # When the workflow_dispatch input skip_vpn=true is set, no
+          # Mullvad bring-up happens (the three VPN steps above gate on
+          # this). run_medium.py reads SKIP_VPN at startup and calls
+          # assert_validate_mode_target_allowed(ctx.hostname, skip_vpn)
+          # BEFORE any target-bound op. Non-allowlisted target →
+          # DegradedRunError, scan_run.status='degraded', exit 1.
+          # NEVER manually fire skip_vpn=true on a client/owned asset.
+          SKIP_VPN: ${{ github.event.inputs.skip_vpn || 'false' }}
           # When threshold_probe_mode workflow input is true, run_medium.py
           # uses a per-chunk rate ladder + post-chunk healthchecks to map
           # the rate-to-ban threshold (skips nikto/ffuf for isolation).
@@ -456,9 +470,11 @@ jobs:
 
       # ─── Tear down VPN (always, if we brought it up) ───────────────
       # Runs even when the scan failed so we never leave a connection
-      # slot consumed against Howie's ExpressVPN device cap.
+      # slot consumed against the Mullvad 5-device cap.
+      # Skipped in validate-mode (skip_vpn=true) because no tunnel was
+      # brought up to tear down — see SPEC_SCANNER_DEGRADATION_HARDENING.
       - name: Tear down VPN
-        if: ${{ always() && steps.vpn_decision.outputs.use_vpn == 'true' }}
+        if: ${{ always() && steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' }}
         run: scripts/scanner/vpn_teardown.sh
 
       # ─── Cleanup any orphaned 'running' rows from this invocation ──

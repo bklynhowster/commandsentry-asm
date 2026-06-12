@@ -75,7 +75,9 @@ from degradation import (
     DegradedRunError,
     MAX_BAN_EVENTS,
     MAX_HEALTHCHECK_FAILURES,
+    VALIDATION_TARGETS,
     assert_tool_status_invariant,
+    assert_validate_mode_target_allowed,
     cap_aware_append_ban,
     cap_aware_append_healthcheck_failure,
     is_tool_output_degraded,
@@ -2170,6 +2172,28 @@ def run(descriptor_path: str, dsn: str) -> int:
         intensity=descriptor["intensity"],
     )
     log(f"asset_id={ctx.asset_id} hostname={ctx.hostname} scan_run_id={ctx.scan_run_id}")
+
+    # ─── Validate-mode safety interlock (batch 2 — SPEC_SCANNER_DEGRADATION_HARDENING) ─
+    # If skip_vpn=true was set on the workflow_dispatch input, the runner
+    # is NOT on Mullvad and would scan from the GH Actions datacenter
+    # egress. That's only safe against allowlisted public training
+    # targets. Anything else → DegradedRunError, status='degraded',
+    # exit 1. Fires BEFORE capture_egress_ip + any tool call.
+    #
+    # Hostname-keyed (advisor must-fix-2): we compare ctx.hostname (the
+    # field the tools actually hit) NOT ctx.asset_id (which for range
+    # assets is "range:<slug>" and would silently fail or, worse,
+    # accidentally let a client through if "fixed" later).
+    skip_vpn = os.environ.get("SKIP_VPN", "").lower() in ("true", "1", "yes")
+    if skip_vpn:
+        log(f"validate_mode active — skip_vpn={skip_vpn}; "
+            f"VALIDATION_TARGETS={sorted(VALIDATION_TARGETS)}")
+    # ALWAYS call the assert — when skip_vpn=False it short-circuits
+    # without checking the allowlist. Single safety primitive, single
+    # source of truth, no caller-side conditionals to silently drift.
+    assert_validate_mode_target_allowed(ctx.hostname, skip_vpn)
+    if skip_vpn:
+        log(f"validate_mode pre-flight OK — {ctx.hostname!r} in allowlist")
 
     start_egress = capture_egress_ip()
     if start_egress:

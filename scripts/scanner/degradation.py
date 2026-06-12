@@ -18,6 +18,12 @@ This module exposes:
   - MAX_BAN_EVENTS / MAX_HEALTHCHECK_FAILURES — rotation_log retention
                                                 caps (advisor ruling Q2).
 
+  - VALIDATION_TARGETS / assert_validate_mode_target_allowed — batch 2
+                        safety interlock for the skip_vpn=true path.
+                        Hostname-keyed (NOT asset_id-keyed — that was
+                        advisor must-fix-2). Fail-closed when validate
+                        mode points at anything outside the allowlist.
+
 Design notes (per advisor rulings 2026-06-12):
 
   Q1 strict — first chunk-skip aborts. v1 only. TODO: a future S2 "partial-
@@ -53,6 +59,40 @@ from typing import Optional
 # independent evidence of severe degradation.
 MAX_BAN_EVENTS: int = 500
 MAX_HEALTHCHECK_FAILURES: int = 500
+
+
+# ─── Validate-mode allowlist — batch 2 safety interlock ──────────────────
+#
+# When `skip_vpn=true` is set on the scanner.yml workflow_dispatch input,
+# the runner does NOT bring up Mullvad and scans from the GitHub Actions
+# datacenter egress. That's only safe against public, deliberately-
+# vulnerable training targets we have explicit permission to scan AND
+# that don't ban the GH-runner egress range.
+#
+# This allowlist is the SAFETY CONTROL. assert_validate_mode_target_allowed
+# fires BEFORE any target-bound op — same fail-closed discipline as the
+# ROE pull-time gate. A skip_vpn=true scan_queue row pointing anywhere
+# outside this set is refused at the runner. The portal is NOT expected
+# to know about validate-mode; the runner is the sole enforcement layer.
+#
+# Hostname-keyed (advisor must-fix-2 2026-06-12):
+#   The comparison reads the target hostname the scanner will hit — the
+#   exact field every downstream tool uses (e.g.
+#   `f"https://{ctx.hostname}/"` in wafw00f / httpx / nuclei / nikto /
+#   ffuf). NOT the asset_id, which for range-class assets is
+#   "range:<slug>" and would either fail-closed everywhere (annoying)
+#   or — far worse — get "fixed" by a future contributor comparing the
+#   wrong field and accidentally letting a client through.
+#
+# Adding hosts to this set is ROE-equivalent: documented, reviewed,
+# narrow. Render-free-tier hosts are explicitly OUT (cold-start 503 →
+# spurious degradation → no mint). If a self-hosted control is added
+# (advisor Q3 — Hetzner WebGoat path), append its hostname here.
+VALIDATION_TARGETS: frozenset[str] = frozenset({
+    "demo.testfire.net",   # IBM AltoroMutual — public training target
+    # Add Hetzner WebGoat / DVWA hostname here ONLY if Step 1 probe
+    # shows testfire bans the GH-runner egress (advisor Q3 default).
+})
 
 
 # ─── Stderr backstop threshold (advisor trap-1 2026-06-12, pre-batch-2) ──
@@ -217,6 +257,49 @@ def is_tool_output_degraded(
 
     # Genuine output. Could be zero findings (clean scan of clean target).
     return None
+
+
+def assert_validate_mode_target_allowed(
+    target_hostname: str, skip_vpn: bool
+) -> None:
+    """Validate-mode safety interlock — must run BEFORE any target-bound op.
+
+    Contract: if `skip_vpn=True` is set (no Mullvad tunnel; runner is
+    scanning from the GH Actions datacenter egress), the target hostname
+    MUST be in VALIDATION_TARGETS. Anything else → DegradedRunError with
+    reason='validate_mode_target_not_allowlisted'; caller stamps
+    scan_run.status='degraded' and exits 1 (workflow goes RED).
+
+    When `skip_vpn=False`, this is a no-op — normal medium runs are
+    gated by the ROE pull-time check, not this one.
+
+    Comparison key (advisor must-fix-2 2026-06-12):
+      `target_hostname` is what every downstream tool actually hits —
+      e.g. `f"https://{ctx.hostname}/"` in wafw00f / httpx / nuclei /
+      nikto / ffuf. Caller MUST pass ctx.hostname here, NOT
+      ctx.asset_id (which for range-class assets is "range:<slug>"
+      and would silently fail or, worse, accidentally allow a client
+      through if "fixed" by future copy-paste).
+
+    Args:
+      target_hostname: the hostname the scanner will hit (ctx.hostname).
+      skip_vpn: True if the workflow_dispatch input `skip_vpn=true` was
+                set (i.e., we're in validate mode with no Mullvad).
+
+    Raises:
+      DegradedRunError("validate_mode_target_not_allowlisted", ...)
+      iff skip_vpn AND target_hostname not in VALIDATION_TARGETS.
+    """
+    if not skip_vpn:
+        return  # normal run; ROE gate is the relevant control, not this
+
+    if target_hostname not in VALIDATION_TARGETS:
+        raise DegradedRunError(
+            "validate_mode_target_not_allowlisted",
+            f"target_hostname={target_hostname!r} not in "
+            f"VALIDATION_TARGETS={sorted(VALIDATION_TARGETS)}; "
+            f"skip_vpn=true is forbidden against non-allowlisted targets"
+        )
 
 
 def assert_tool_status_invariant(

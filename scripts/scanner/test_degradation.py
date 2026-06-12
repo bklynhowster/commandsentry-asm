@@ -30,8 +30,10 @@ from degradation import (  # noqa: E402
     MAX_BAN_EVENTS,
     MAX_HEALTHCHECK_FAILURES,
     STDERR_DEGRADED_MATCH_THRESHOLD,
+    VALIDATION_TARGETS,
     DegradedRunError,
     assert_tool_status_invariant,
+    assert_validate_mode_target_allowed,
     cap_aware_append_ban,
     cap_aware_append_healthcheck_failure,
     is_tool_output_degraded,
@@ -373,3 +375,103 @@ def test_degraded_run_error_context_optional():
     assert e.reason == "tool_status_invariant"
     assert e.context == ""
     assert "tool_status_invariant" in str(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Validate-mode safety interlock (batch 2)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# These are unit tests; per advisor 2026-06-12 the GATE for the interlock
+# is the live NEGATIVE TEST via workflow_dispatch — fire skip_vpn=true at
+# a non-allowlisted target and watch it abort RED before any packet
+# leaves. Unit tests prove the logic; the live refusal proves reality.
+# Both layers exist; do not conflate them.
+
+
+def test_validate_mode_skip_vpn_false_is_noop():
+    """When skip_vpn=False, the interlock short-circuits without
+    checking the allowlist. Normal medium runs use the ROE gate, not
+    this one."""
+    # Even with a hostname clearly NOT in VALIDATION_TARGETS, no raise.
+    assert_validate_mode_target_allowed(
+        target_hostname="commanddigital.com",  # namesake, not in allowlist
+        skip_vpn=False,
+    )
+    # And with an asset_id-style "range:*" string — still no raise
+    # because skip_vpn is False.
+    assert_validate_mode_target_allowed(
+        target_hostname="range:something",
+        skip_vpn=False,
+    )
+
+
+def test_validate_mode_skip_vpn_true_on_allowlisted_target_proceeds():
+    """When skip_vpn=True AND target is in VALIDATION_TARGETS, no raise."""
+    # demo.testfire.net is the seeded entry; locked by
+    # test_validation_targets_lock below.
+    assert_validate_mode_target_allowed(
+        target_hostname="demo.testfire.net",
+        skip_vpn=True,
+    )
+
+
+def test_validate_mode_skip_vpn_true_on_non_allowlisted_target_aborts():
+    """LOAD-BEARING. skip_vpn=True against ANY target outside the
+    allowlist MUST raise DegradedRunError. The live negative test
+    against a non-allowlisted scan_queue row will exercise this exact
+    code path end-to-end; this test just locks the logic shape."""
+    with pytest.raises(DegradedRunError) as exc:
+        assert_validate_mode_target_allowed(
+            target_hostname="commanddigital.com",  # namesake — should refuse
+            skip_vpn=True,
+        )
+    assert exc.value.reason == "validate_mode_target_not_allowlisted"
+    assert "commanddigital.com" in exc.value.context
+
+
+@pytest.mark.parametrize("hostname", [
+    "commanddigital.com",                              # namesake
+    "api-v2.commandmarketinginnovations.com",          # unknown / phantom
+    "commandcompanies.com",                            # owned
+    "api.commandcommcentral.com",                      # owned
+    "range:lightpath-dark-block",                      # range parent (asset_id shape)
+    "internal.example.invalid",                        # nonexistent
+    "",                                                # empty string
+])
+def test_validate_mode_rejects_non_allowlisted_targets(hostname):
+    """Parametrized: any plausible non-allowlist input refuses.
+    Includes the range:* asset_id shape (advisor must-fix-2 directly):
+    even if a future contributor wires the comparison to ctx.asset_id
+    by mistake, range-style strings can never match because the
+    allowlist holds hostnames only."""
+    with pytest.raises(DegradedRunError) as exc:
+        assert_validate_mode_target_allowed(hostname, skip_vpn=True)
+    assert exc.value.reason == "validate_mode_target_not_allowlisted"
+
+
+def test_validation_targets_lock():
+    """Lock-in: VALIDATION_TARGETS is exactly {demo.testfire.net}. If
+    you add a host, update this assertion (and document why in the
+    degradation.py allowlist block). Forces every allowlist change to
+    pass through CI, mirrors ROE_OWNERSHIP_ALLOWLIST discipline."""
+    assert VALIDATION_TARGETS == frozenset({"demo.testfire.net"})
+
+
+def test_validate_mode_hostname_comparison_not_asset_id():
+    """advisor must-fix-2 lock-in. The comparison field MUST be the
+    target hostname the tools hit, NOT the asset_id PK. This test
+    proves the assertion behaviorally: demo.testfire.net (hostname
+    that IS in VALIDATION_TARGETS) proceeds, while a UUID-formatted
+    string (the shape asset_id would take if it were a UUID PK)
+    refuses. Even though for hostname-class assets the two values
+    happen to coincide today, comparing the wrong field would silently
+    fail on future shape changes."""
+    # Real hostname → proceeds
+    assert_validate_mode_target_allowed("demo.testfire.net", skip_vpn=True)
+    # UUID-shaped input (what asset_id would be if the data model
+    # ever flipped to UUID PKs) → refuses
+    with pytest.raises(DegradedRunError):
+        assert_validate_mode_target_allowed(
+            "00000000-0000-0000-0000-000000000000",
+            skip_vpn=True,
+        )
