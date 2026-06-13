@@ -402,6 +402,13 @@ class ScanContext:
     healthcheck_failures: list[dict] = field(default_factory=list)
     rotation_storm: bool = False             # tripped when ban_events or
                                              # healthcheck_failures hits 500 cap
+    # Batch 2 step c (SPEC_SCANNER_DEGRADATION_HARDENING.md Part 3):
+    # set True when SKIP_VPN env was passed (validate-mode run, no
+    # Mullvad tunnel). rotate_vpn short-circuits when True (no tunnel
+    # to rotate). ensure_healthy_egress overrides max_rotations to 0
+    # so any health failure aborts immediately — the validate run is
+    # PRISTINE-or-NOTHING, never "rotated to find another path."
+    validate_mode: bool = False
 
 
 # ─── Tool-status helpers (ADR-001 Step 4) ───────────────────────────────
@@ -641,7 +648,20 @@ def rotate_vpn(ctx: ScanContext) -> bool:
     """Rotate to the next region in ROTATION_REGIONS. Best-effort —
     returns True on success, False on failure. Failures are non-fatal:
     the scan continues on the current tunnel.
+
+    Validate-mode short-circuit (batch 2 step c): when ctx.validate_mode
+    is True (SKIP_VPN env was set, runner is on direct GH Actions egress
+    with no Mullvad tunnel), there's no tunnel to rotate. Return False
+    immediately so the caller treats it as a failed rotation. Combined
+    with the max_rotations=0 cap in ensure_healthy_egress, this means
+    any health failure in validate-mode aborts on first detect — no
+    pointless rotation attempts against a tunnel-less interface, no
+    cosmetic noise in the log.
     """
+    if ctx.validate_mode:
+        log("rotate_vpn: validate_mode — rotation suppressed (no tunnel to rotate)")
+        return False
+
     ctx.region_idx = (ctx.region_idx + 1) % len(ROTATION_REGIONS)
     region = ROTATION_REGIONS[ctx.region_idx]
     log(f"→ rotating VPN to {region}")
@@ -721,7 +741,20 @@ def ensure_healthy_egress(ctx: ScanContext, max_rotations: int = 2) -> bool:
     """Healthcheck + rotate-on-fail loop. Returns True if we ended up
     with a healthy IP. Returns False if even after `max_rotations`
     rotations we're still banned everywhere.
+
+    Validate-mode override (batch 2 step c, SPEC Part 3): when
+    ctx.validate_mode is True, force `max_rotations=0`. The validate
+    run is PRISTINE-or-NOTHING — any first-check health failure aborts
+    immediately. We're on direct GH-runner egress (no Mullvad), there's
+    nothing to rotate to, and the whole point of the run is "is the
+    control reachable cleanly RIGHT NOW under this SHA?" — any retry
+    semantics would launder a transient blip into a pass.
     """
+    if ctx.validate_mode and max_rotations > 0:
+        log(f"ensure_healthy_egress: validate_mode — overriding "
+            f"max_rotations {max_rotations} → 0 (no rotation, single check)")
+        max_rotations = 0
+
     for attempt in range(max_rotations + 1):
         healthy, code = healthcheck(ctx)
         if healthy:
@@ -2190,9 +2223,19 @@ def run(descriptor_path: str, dsn: str) -> int:
     # the validate-mode signal AND undermines the launder-block lock.
     # First negative test exposed exactly this bookkeeping bug.
     skip_vpn = os.environ.get("SKIP_VPN", "").lower() in ("true", "1", "yes")
+    # Batch 2 step c — tie ctx.validate_mode to the same SKIP_VPN env so
+    # rotate_vpn + ensure_healthy_egress can't diverge from the interlock.
+    # Single source of truth: SKIP_VPN env reaches BOTH the allowlist
+    # interlock AND the rotation/retry suppression. Setting one without
+    # the other would either (a) try to rotate a non-existent tunnel
+    # during a legit validate run, or (b) skip rotation during a normal
+    # run — neither is acceptable.
+    ctx.validate_mode = skip_vpn
     if skip_vpn:
         log(f"validate_mode active — skip_vpn={skip_vpn}; "
-            f"VALIDATION_TARGETS={sorted(VALIDATION_TARGETS)}")
+            f"VALIDATION_TARGETS={sorted(VALIDATION_TARGETS)}; "
+            f"rotation SUPPRESSED, health retries = 0 "
+            f"(no rotation against tunnel-less direct egress)")
 
     start_egress = capture_egress_ip()
     if start_egress:
