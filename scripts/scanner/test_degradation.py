@@ -683,3 +683,126 @@ def test_stamp_findings_degraded_scoped_to_first_detected_scan():
     assert "first_detected_scan = %(scan_run_id)s" in STAMP_FINDINGS_DEGRADED_SQL
     # Negative: don't broaden to last-observed semantics
     assert "last_observed_scan" not in STAMP_FINDINGS_DEGRADED_SQL
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Pre-chunk abort invariant + degraded_out reconcile (2026-06-13)
+# ═══════════════════════════════════════════════════════════════════════
+# Surfaced by validate run 648313cd-d734-4b7f-b639-1f272dfdb48e:
+# tools_run had 3 entries, tool_status had 4 keys (nuclei[medium:cve]
+# auto-stamped via pre-chunk abort path that fired DegradedRunError
+# BEFORE the per-chunk tools_run.append). assert_tool_status_invariant
+# only runs in close_out (the clean path), so the gap persisted
+# silently in the persisted scan_run row.
+#
+# Two fixes (both advisor-approved):
+#   Fix A — nuclei pre-chunk abort path now appends chunk_name to
+#           tools_run BEFORE mark_tool_degraded + raise. Matches the
+#           ffuf abort site (run_medium.py:1864).
+#   Fix B — degraded_out runs reconcile_tool_status_invariant BEFORE
+#           the persist write. Reconciles instead of raising. Safety
+#           net behind Fix A; protects against any future abort path
+#           that re-introduces the gap.
+
+
+from run_medium import reconcile_tool_status_invariant  # noqa: E402
+
+
+class _MinimalCtx:
+    """Stand-in for ScanContext with just the two fields the reconcile
+    function touches. Avoids pulling in psycopg / dataclass machinery."""
+
+    def __init__(self, tools_run=None, tool_status=None):
+        self.tools_run = list(tools_run or [])
+        self.tool_status = dict(tool_status or {})
+
+
+def test_reconcile_no_op_when_already_consistent():
+    """Reconcile is idempotent — when tools_run and tool_status are
+    already set-equal, nothing changes. Guards against a future
+    'helpful' edit that adds spurious entries on every call."""
+    ctx = _MinimalCtx(
+        tools_run=["wafw00f", "nuclei[critical,high]"],
+        tool_status={
+            "wafw00f": {"ok": True},
+            "nuclei[critical,high]": {"ok": True},
+        },
+    )
+    reconcile_tool_status_invariant(ctx)
+    assert ctx.tools_run == ["wafw00f", "nuclei[critical,high]"]
+    assert set(ctx.tool_status.keys()) == {"wafw00f", "nuclei[critical,high]"}
+
+
+def test_reconcile_case_1_stamped_but_not_in_tools_run():
+    """The exact scan_run 648313cd shape: nuclei[medium:cve] is stamped
+    degraded in tool_status but missing from tools_run. After reconcile,
+    tools_run catches up (the stamp is the source of truth — it knows
+    the chunk attempted and how it failed)."""
+    ctx = _MinimalCtx(
+        tools_run=["wafw00f", "httpx[-td]", "nuclei[critical,high]"],
+        tool_status={
+            "wafw00f": {"ok": True},
+            "httpx[-td]": {"ok": True},
+            "nuclei[critical,high]": {"ok": True},
+            "nuclei[medium:cve]": {"degraded": "skipped_target_unreachable"},
+        },
+    )
+    reconcile_tool_status_invariant(ctx)
+    assert set(ctx.tools_run) == set(ctx.tool_status.keys())
+    assert "nuclei[medium:cve]" in ctx.tools_run
+    # The stamp is preserved — reconcile MUST NOT clobber the
+    # existing degraded reason with no_status_recorded.
+    assert ctx.tool_status["nuclei[medium:cve]"] == {
+        "degraded": "skipped_target_unreachable"
+    }
+
+
+def test_reconcile_case_2_in_tools_run_but_not_stamped():
+    """Inverse case: a tool ran (in tools_run) but neither mark_tool_ok
+    nor mark_tool_degraded landed (e.g. interrupted between append and
+    stamp). Reconcile stamps degraded:no_status_recorded so the persisted
+    row is consistent and the launder-block lock stays correct."""
+    ctx = _MinimalCtx(
+        tools_run=["wafw00f", "ghost_tool"],
+        tool_status={"wafw00f": {"ok": True}},
+    )
+    reconcile_tool_status_invariant(ctx)
+    assert set(ctx.tools_run) == set(ctx.tool_status.keys())
+    assert ctx.tool_status["ghost_tool"] == {"degraded": "no_status_recorded"}
+
+
+def test_reconcile_does_not_clobber_existing_ok_stamp():
+    """Cross-class guard: if a tool is in tool_status with ok:true AND
+    in tools_run, reconcile must leave both alone. A naive impl that
+    stamps no_status_recorded based on tools_run membership alone
+    would corrupt healthy entries."""
+    ctx = _MinimalCtx(
+        tools_run=["wafw00f"],
+        tool_status={"wafw00f": {"ok": True}},
+    )
+    reconcile_tool_status_invariant(ctx)
+    assert ctx.tool_status["wafw00f"] == {"ok": True}
+    assert ctx.tools_run == ["wafw00f"]
+
+
+def test_reconcile_does_not_raise():
+    """Reconcile must NEVER raise — we're already in degraded_out;
+    raising would lose the original DegradedRunError context and
+    likely fail the entire degrade-stamping path. assert_tool_status_
+    invariant raises (close_out path); reconcile_tool_status_invariant
+    DOES NOT (degraded path)."""
+    # Maximally inconsistent input — both cases at once
+    ctx = _MinimalCtx(
+        tools_run=["a", "b", "c"],
+        tool_status={"b": {"ok": True}, "d": {"degraded": "x"}},
+    )
+    # Should not raise
+    reconcile_tool_status_invariant(ctx)
+    assert set(ctx.tools_run) == set(ctx.tool_status.keys())
+    # a, c got stamped degraded:no_status_recorded; d got appended to tools_run
+    assert ctx.tool_status["a"] == {"degraded": "no_status_recorded"}
+    assert ctx.tool_status["c"] == {"degraded": "no_status_recorded"}
+    assert "d" in ctx.tools_run
+    # b and d unchanged
+    assert ctx.tool_status["b"] == {"ok": True}
+    assert ctx.tool_status["d"] == {"degraded": "x"}

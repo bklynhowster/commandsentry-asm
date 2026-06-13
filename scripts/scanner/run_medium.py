@@ -1344,6 +1344,17 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
                     "matches": 0, "rc": None, "banned": True,
                     "note": "skipped — already unreachable before chunk",
                 })
+            # 2026-06-13: append chunk_name to tools_run BEFORE the
+            # tool_status stamp + raise — matches the ffuf abort site
+            # (run_medium.py:1864) and Bug surfaced by validate run
+            # 648313cd-d734-4b7f-b639-1f272dfdb48e where tool_status
+            # got ahead of tools_run on the pre-chunk health gate.
+            # The post-chunk append below (line 1374) only fires for
+            # chunks that survive the gate; the abort path needs its
+            # own append to keep set(tools_run) == set(tool_status).
+            # Idempotent (defensive) — same guard ffuf uses.
+            if chunk_name not in ctx.tools_run:
+                ctx.tools_run.append(chunk_name)
             # Unify on the canonical {"degraded": reason} shape used by
             # mark_tool_degraded (run_medium.py:425) + run_light.py. Inline
             # `{"ok": False, "reason": ...}` would carry the same meaning
@@ -2256,6 +2267,50 @@ def fail_out(conn, ctx: ScanContext, error: str) -> None:
         cur.execute(FAIL_SCAN_QUEUE_SQL, params)
 
 
+def reconcile_tool_status_invariant(ctx: ScanContext) -> None:
+    """Force set(tools_run) == set(tool_status.keys()) on ctx, in place.
+
+    Called from degraded_out BEFORE the persist write so the persisted
+    scan_run row is always invariant-clean regardless of which abort
+    path fired. assert_tool_status_invariant only runs in close_out (the
+    clean path); the degraded path used to skip it entirely, which let
+    set-equality gaps persist silently (see scan_run
+    648313cd-d734-4b7f-b639-1f272dfdb48e, 2026-06-13: tools_run had 3
+    entries, tool_status had 4 keys, no error surfaced).
+
+    Reconciles, does NOT raise (we're already degrading; raising a
+    second time wouldn't add signal). Two directions:
+
+      1. tool_status-only keys → append to tools_run. The stamp is
+         already there (probably from a pre-chunk gate that aborted
+         BEFORE the per-chunk tools_run.append); we trust the stamp
+         and let tools_run catch up.
+
+      2. tools_run-only entries → stamp `degraded:no_status_recorded`.
+         These are tools that ran but the post-run mark_tool_ok /
+         mark_tool_degraded never landed (interrupted between append
+         and stamp — rare, but possible). Marking degraded preserves
+         the launder-block lock: any finding from this scan_run is
+         already scan_quality=degraded via STAMP_FINDINGS_DEGRADED_SQL,
+         and the tool_status reflects that we don't fully trust its
+         output.
+
+    Fix A (line ~1351, nuclei pre-chunk abort) makes case 1 not happen
+    in steady state, so this reconcile is the safety net not the
+    workhorse. Belt + suspenders, advisor-approved 2026-06-13.
+    """
+    tools_set  = set(ctx.tools_run)
+    status_set = set(ctx.tool_status.keys())
+
+    # Case 1: stamped but not in tools_run → append to tools_run.
+    for missing_in_tools in (status_set - tools_set):
+        ctx.tools_run.append(missing_in_tools)
+
+    # Case 2: in tools_run but not stamped → stamp degraded:no_status_recorded.
+    for missing_in_status in (tools_set - status_set):
+        mark_tool_degraded(ctx, missing_in_status, "no_status_recorded")
+
+
 def degraded_out(conn, ctx: ScanContext, error: str,
                  inserted: int, updated: int, Json) -> None:
     """Stamp scan_run.status='degraded', scan_queue.status='degraded',
@@ -2273,7 +2328,18 @@ def degraded_out(conn, ctx: ScanContext, error: str,
     Either way, the re-validation UPSERT in scanner_validations land
     will refuse to flip these findings to validated because the
     `WHERE scan_quality='clean'` filter excludes them.
+
+    2026-06-13: pre-persist invariant reconcile. Forces
+    set(tools_run) == set(tool_status.keys()) before the row hits the
+    DB so the degraded scan_run row is always set-consistent regardless
+    of which abort path fired. Cheap safety net behind Fix A. See
+    reconcile_tool_status_invariant docstring for the full rationale.
     """
+    # Pre-persist reconcile — forces the invariant on ctx BEFORE the
+    # row is persisted. Reconciles instead of raising (we're already
+    # degrading) so the abort path can't leave inconsistent state.
+    reconcile_tool_status_invariant(ctx)
+
     with conn.cursor() as cur:
         params = {
             "error": error,
