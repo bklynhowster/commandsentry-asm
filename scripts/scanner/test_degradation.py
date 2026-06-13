@@ -532,3 +532,154 @@ def test_validate_mode_hostname_comparison_not_asset_id():
             "00000000-0000-0000-0000-000000000000",
             skip_vpn=True,
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Trust-layer fix — Parts 2, 3, 4 + Bug D (2026-06-13)
+# ═══════════════════════════════════════════════════════════════════════
+# Spec: this PR's SPEC_TRUST_LAYER_FIX (see migration 20260613a header).
+# These tests pin the invariant: validation_status='validated' ⟺
+#   scanner_version ∈ scanner_validations WHERE retracted_at IS NULL
+#   AND scan_quality='clean'. The mechanism splits across four enforcement
+# points (derive_validation_status filter, UPSERT derive-on-write,
+# degraded_out flip, re-derive sweep) — these tests cover three of the
+# four that live in the runner. The sweep migration is verified via the
+# acceptance gate queries on apply (file: 20260613b_findings_validation_resweep.sql).
+
+
+from run_medium import (  # noqa: E402
+    STAMP_FINDINGS_DEGRADED_SQL,
+    UPSERT_FINDING_SQL,
+    derive_validation_status,
+)
+
+
+class _FakeCursor:
+    """Records executed SQL + params, returns canned fetchone result."""
+
+    def __init__(self, fetchone_result):
+        self._fetchone_result = fetchone_result
+        self.executed_sql: str | None = None
+        self.executed_params: tuple | None = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def execute(self, sql, params):
+        self.executed_sql = sql
+        self.executed_params = params
+
+    def fetchone(self):
+        return self._fetchone_result
+
+
+class _FakeConn:
+    def __init__(self, fetchone_result):
+        self.cursor_obj = _FakeCursor(fetchone_result)
+
+    def cursor(self):
+        return self.cursor_obj
+
+
+def test_derive_validation_status_filters_retracted():
+    """Part 2 lock-in. derive_validation_status MUST include
+    `retracted_at IS NULL` in its WHERE clause — otherwise a SHA that
+    was retracted via the 20260613a column would still come back
+    'validated' and re-stamp findings under it.
+
+    Shape test: inspect the SQL the cursor saw. The behavioral test
+    (active row found → 'validated', no row → 'unvalidated') runs
+    against a fake cursor with canned results."""
+    # Active row exists → 'validated'
+    conn = _FakeConn(fetchone_result=(1,))
+    result = derive_validation_status(conn, "medium", "abc123")
+    assert result == "validated"
+    assert "retracted_at IS NULL" in conn.cursor_obj.executed_sql
+    assert conn.cursor_obj.executed_params == ("medium", "abc123")
+
+    # No active row → 'unvalidated' (covers both "SHA never minted" and
+    # "SHA minted but retracted" — the filter collapses them into the
+    # same outcome at this layer)
+    conn = _FakeConn(fetchone_result=None)
+    result = derive_validation_status(conn, "medium", "0864fd3")
+    assert result == "unvalidated"
+    assert "retracted_at IS NULL" in conn.cursor_obj.executed_sql
+
+
+def test_upsert_finding_sql_writes_first_detected_scan():
+    """Bug D fix lock-in. The INSERT column list MUST include
+    `first_detected_scan` and the VALUES MUST reference %(scan_run_id)s.
+    Before this fix the column was never populated by the runner,
+    which made Part 4's degraded_out update a no-op (it keys on
+    `first_detected_scan = scan_run_id`)."""
+    assert "first_detected_scan" in UPSERT_FINDING_SQL
+    assert "%(scan_run_id)s" in UPSERT_FINDING_SQL
+
+
+def test_upsert_finding_sql_preserves_first_detected_scan_on_update():
+    """Bug D paired guarantee. On re-detect by a different scan_run,
+    the original first_detected_scan must be preserved (mirrors
+    first_detected_at LEAST semantics). COALESCE(findings.x,
+    EXCLUDED.x) is the canonical pattern; a future refactor that
+    drops the COALESCE would silently clobber the lineage."""
+    assert "COALESCE(findings.first_detected_scan" in UPSERT_FINDING_SQL
+
+
+def test_upsert_finding_sql_is_derive_on_write_not_upgrade_only():
+    """Part 3 lock-in. The validation_status UPDATE must be a pure
+    derive (validation_status = EXCLUDED.validation_status), NOT the
+    old upgrade-only CASE that preserved 'validated' across re-emits.
+
+    Negative test: the old CASE phrasing must NOT be in the SQL —
+    if it sneaks back in via a refactor, junk re-validates on the
+    next re-emit at a stale SHA."""
+    # Positive: derive-on-write
+    assert "validation_status = EXCLUDED.validation_status" in UPSERT_FINDING_SQL
+    # Negative: old upgrade-only CASE phrasing
+    assert "ELSE findings.validation_status" not in UPSERT_FINDING_SQL
+
+
+def test_upsert_finding_sql_nulls_validated_at_on_demote():
+    """Part 3 paired guarantee (advisor lean 2). When the derive flips
+    a row from 'validated' → 'unvalidated', validated_at MUST be
+    NULL'd. A non-null validated_at on an unvalidated row is the same
+    contradiction class as validated+degraded. The CASE in the UPSERT
+    handles three states: promote (stamp now()), demote (NULL),
+    no-transition (preserve)."""
+    # The demote branch must produce NULL
+    assert "THEN NULL" in UPSERT_FINDING_SQL
+    # And the promote branch must stamp now()
+    assert "THEN now()" in UPSERT_FINDING_SQL
+
+
+def test_stamp_findings_degraded_flips_validation_status():
+    """Part 4 lock-in. degraded_out's findings flip must update
+    validation_status='unvalidated' and validated_at=NULL alongside
+    scan_quality='degraded'. The two columns move together because the
+    invariant treats them as one assertion. Without this, a degraded
+    run that detected new findings under a validated SHA would leave
+    them stamped (validated AND degraded) — the exact contradiction
+    class the acceptance gate is supposed to catch."""
+    assert "scan_quality" in STAMP_FINDINGS_DEGRADED_SQL
+    assert "'degraded'" in STAMP_FINDINGS_DEGRADED_SQL
+    assert "validation_status" in STAMP_FINDINGS_DEGRADED_SQL
+    assert "'unvalidated'" in STAMP_FINDINGS_DEGRADED_SQL
+    assert "validated_at" in STAMP_FINDINGS_DEGRADED_SQL
+    assert "NULL" in STAMP_FINDINGS_DEGRADED_SQL
+
+
+def test_stamp_findings_degraded_scoped_to_first_detected_scan():
+    """Part 4 scope guarantee (advisor scope note on #4). The flip
+    must be keyed on `first_detected_scan = %(scan_run_id)s` — touching
+    ONLY the findings this scan_run first detected. Existing findings
+    re-detected by this degraded run keep their prior status; a
+    degraded re-detect should not retroactively degrade a prior clean
+    detection. This test guards against a future broadening of scope
+    (e.g. `WHERE last_observed_scan = scan_run_id`) that would violate
+    that invariant."""
+    assert "first_detected_scan = %(scan_run_id)s" in STAMP_FINDINGS_DEGRADED_SQL
+    # Negative: don't broaden to last-observed semantics
+    assert "last_observed_scan" not in STAMP_FINDINGS_DEGRADED_SQL

@@ -174,10 +174,19 @@ def get_scanner_version() -> str:
 
 def derive_validation_status(conn, intensity: str, sha: str) -> str:
     """Query public.scanner_validations. Returns 'validated' iff a row
-    exists for (intensity, sha); else 'unvalidated'.
+    exists for (intensity, sha) AND that row is NOT retracted; else
+    'unvalidated'.
 
     NEVER returns 'legacy' — that's reserved for rows that existed
     before migration 20260607a backfilled them.
+
+    Trust-layer fix Part 2 (2026-06-13): added `retracted_at IS NULL`
+    filter. Before this column existed (migration 20260613a), retraction
+    was a notes-edit; this query would still return 'validated' for
+    findings stamped with a retracted SHA. After the migration +
+    this filter, the invariant is enforced AT WRITE TIME — no validated
+    row can be stamped under a retracted SHA, and any subsequent
+    re-emit demotes via UPSERT_FINDING_SQL's derive-on-write semantics.
 
     Fails loud if the table is missing (migration 20260608a not
     applied). Better to error than silently stamp everything
@@ -185,7 +194,9 @@ def derive_validation_status(conn, intensity: str, sha: str) -> str:
     with conn.cursor() as cur:
         cur.execute(
             "SELECT 1 FROM public.scanner_validations "
-            "WHERE intensity = %s AND scanner_version = %s",
+            "WHERE intensity = %s "
+            "  AND scanner_version = %s "
+            "  AND retracted_at IS NULL",
             (intensity, sha),
         )
         return "validated" if cur.fetchone() else "unvalidated"
@@ -1898,24 +1909,45 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
 # ─── SQL helpers (DUPED from run_light — TODO: refactor) ───────────────
 #
 # 2026-06-07 ADR-001: writes validation_status + scanner_version +
-# validated_at on every emission. UPSERT heal logic is upgrade-only —
-# once a finding is 'validated' it stays validated; an 'unvalidated'
-# re-emission cannot demote it. scanner_version always records the
-# latest emission's SHA (informational). validated_at is set the FIRST
-# time validation_status transitions to 'validated' and stays put.
+# validated_at on every emission.
+#
+# 2026-06-13 trust-layer fix (Parts 3 + 4 + Bug D):
+#   • Part 3 — DERIVE-ON-WRITE semantics. The old upgrade-only CASE
+#     ("once validated, stays validated") let a finding remain
+#     'validated' even after the SHA it pointed at was retracted, or
+#     after an unvalidated re-emit. The invariant we want everywhere is
+#     simpler: validation_status follows the CURRENT scanner_version's
+#     active-set membership. Re-emit at retracted/unvalidated SHA →
+#     demote to 'unvalidated' + NULL validated_at. Re-emit at validated
+#     SHA → promote to 'validated' + stamp validated_at=now(). This
+#     keeps the implication chain airtight: derive_validation_status
+#     (Part 2) filters retracted SHAs out at read-time; this UPSERT
+#     re-derives at write-time; degraded_out (Part 4) demotes on
+#     scan-quality flip; the re-sweep (Part 5) heals any historical
+#     drift. Advisor leans 1+2 approved 2026-06-13.
+#   • Bug D — populate first_detected_scan on INSERT, PRESERVE on
+#     UPDATE. Before this fix the column was NEVER written by the
+#     runner (only by manual backfills), which made the ce47fc27
+#     scan-keyed backfill match 0 rows and turned Part 4's degraded_out
+#     update keyed on `first_detected_scan = scan_run_id` into a no-op.
+#     The COALESCE protects existing rows: a re-detect by a newer
+#     scan_run never clobbers the original first-detection scan_run_id
+#     (paired with first_detected_at LEAST semantics).
 #
 UPSERT_FINDING_SQL = """
 INSERT INTO public.findings (
     finding_id, asset_id, title, severity, category, description,
     cwe, "references", current_status, first_detected_at,
     last_observed_at, source, tags,
-    validation_status, scanner_version, validated_at
+    validation_status, scanner_version, validated_at,
+    first_detected_scan
 )
 VALUES (%(finding_id)s, %(asset_id)s, %(title)s, %(severity)s, %(category)s,
         %(description)s, %(cwe)s, %(references)s, 'detected',
         now(), now(), %(source)s, %(tags)s,
         %(validation_status)s, %(scanner_version)s,
-        CASE WHEN %(validation_status)s = 'validated' THEN now() ELSE NULL END)
+        CASE WHEN %(validation_status)s = 'validated' THEN now() ELSE NULL END,
+        %(scan_run_id)s)
 ON CONFLICT (finding_id) DO UPDATE SET
     title             = EXCLUDED.title,
     category          = EXCLUDED.category,
@@ -1943,22 +1975,31 @@ ON CONFLICT (finding_id) DO UPDATE SET
     first_detected_at = LEAST(findings.first_detected_at, EXCLUDED.first_detected_at),
     last_observed_at  = EXCLUDED.last_observed_at,
     tags              = EXCLUDED.tags,
-    -- ADR-001 upgrade-only heal: never downgrade from 'validated'.
-    validation_status = CASE
-      WHEN EXCLUDED.validation_status = 'validated'
-        THEN 'validated'
-      ELSE findings.validation_status
-    END,
+    -- Trust-layer Part 3 — derive-on-write (replaces upgrade-only CASE).
+    -- validation_status follows the CURRENT scanner_version's active-set
+    -- membership. Promote AND demote. Re-validation on a different
+    -- emit happens naturally on the next re-detect by a validated SHA.
+    validation_status = EXCLUDED.validation_status,
     -- Always record the latest emitter SHA for forensic context.
     scanner_version   = EXCLUDED.scanner_version,
-    -- Stamp validated_at the FIRST time the status transitions to
-    -- 'validated'; never touch it again afterward.
+    -- Trust-layer Part 3 — validated_at follows validation_status.
+    -- Promote (any→validated): stamp now().
+    -- Demote (validated→unvalidated): NULL the field (advisor lean 2).
+    -- No transition: preserve existing value.
     validated_at = CASE
       WHEN EXCLUDED.validation_status = 'validated'
        AND findings.validation_status <> 'validated'
         THEN now()
+      WHEN EXCLUDED.validation_status <> 'validated'
+       AND findings.validation_status =  'validated'
+        THEN NULL
       ELSE findings.validated_at
-    END
+    END,
+    -- Bug D — preserve original first_detected_scan. COALESCE protects
+    -- against re-detect by a different scan_run clobbering the lineage.
+    -- Same one-way semantics as first_detected_at (LEAST). New INSERTs
+    -- get %(scan_run_id)s; subsequent UPDATEs keep the original.
+    first_detected_scan = COALESCE(findings.first_detected_scan, EXCLUDED.first_detected_scan)
 RETURNING (xmax = 0) as inserted;
 """
 
@@ -2052,11 +2093,33 @@ WHERE queue_id        = %(queue_id)s;
 # Idempotent. Belt + suspenders even though the trigger sync alone is
 # sufficient at the scan_run level — finding-level scan_quality is what
 # the re-validation UPSERT actually reads to refuse laundering.
+#
+# Trust-layer fix Part 4 (2026-06-13): also demote validation_status →
+# 'unvalidated' and NULL validated_at. The two columns move together
+# because the invariant treats them as one assertion: "this finding
+# was emitted by a clean scan_run under a validated SHA." If the run
+# turned degraded, that assertion no longer holds — validation_status
+# must follow scan_quality. Without this, a degraded run that detected
+# new findings under a validated SHA would leave those rows
+# (validation_status='validated' AND scan_quality='degraded') — the
+# exact contradiction class the acceptance gate is supposed to catch.
+#
+# Scope note: keyed on first_detected_scan = %(scan_run_id)s — touches
+# ONLY the findings this scan_run first detected. Existing findings
+# re-detected by this degraded run keep their prior status (a degraded
+# re-detect should not retroactively degrade a prior clean detection;
+# advisor scope note on #4). Pairs with Bug D fix above — before Bug D
+# the column was always NULL and this query matched zero rows.
 STAMP_FINDINGS_DEGRADED_SQL = """
 UPDATE public.findings
-SET scan_quality = 'degraded'
-WHERE first_detected_scan = %(scan_run_id)s
-  AND scan_quality = 'clean';
+   SET scan_quality      = 'degraded',
+       validation_status = 'unvalidated',
+       validated_at      = NULL
+ WHERE first_detected_scan = %(scan_run_id)s
+   AND (
+         scan_quality      = 'clean'
+      OR validation_status = 'validated'
+       );
 """
 
 
@@ -2087,6 +2150,13 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 "tags": f.tags,
                 "validation_status": validation_status,
                 "scanner_version": scanner_version,
+                # Bug D fix (paired with trust-layer Part 4) — populate
+                # first_detected_scan so degraded_out's update keyed on
+                # `first_detected_scan = scan_run_id` actually matches
+                # rows, and so forensics queries can join findings to
+                # the scan_run that first detected them. COALESCE in
+                # the UPSERT preserves the original on re-detects.
+                "scan_run_id": ctx.scan_run_id,
             }
             cur.execute(UPSERT_FINDING_SQL, params)
             row = cur.fetchone()
