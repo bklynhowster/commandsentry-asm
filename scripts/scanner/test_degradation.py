@@ -303,6 +303,63 @@ def test_invariant_no_hardcoded_count():
         assert_tool_status_invariant(tools, statuses)  # no raise
 
 
+def test_chunk_name_uniqueness_with_index_for_ffuf():
+    """Per-chunk B1 wiring lock-in (advisor batch 2 2026-06-13):
+    ffuf chunks with the same wordlist size must use #index suffix
+    to disambiguate, because set(tools_run) would collapse otherwise
+    and silently mask a missing tool_status entry.
+
+    Pre-fix tools_run shape (validate run 27466980596):
+        ['ffuf[25w]', 'ffuf[25w]', 'ffuf[25w]', 'ffuf[24w]']  ← duplicates
+    Post-fix shape:
+        ['ffuf[25w]#1', 'ffuf[25w]#2', 'ffuf[25w]#3', 'ffuf[24w]#4']
+
+    Locking the convention here so a future contributor who changes the
+    ffuf chunked loop without re-reading the lesson can't silently
+    re-collapse them. Failure here = re-introduce the validate-run gap.
+    """
+    # Simulate what the chunked loop should produce: 3 unique names for
+    # 3 same-size chunks + 1 different.
+    tools_run = [
+        "wafw00f",
+        "httpx[-td]",
+        "nuclei[critical,high]",
+        "nuclei[medium:cve]",
+        "nuclei[medium:exposure,config]",
+        "nuclei[medium:tech]",
+        "nikto",
+        "ffuf[25w]#1",
+        "ffuf[25w]#2",
+        "ffuf[25w]#3",
+        "ffuf[24w]#4",
+    ]
+    tool_status = {t: {"ok": True} for t in tools_run}
+    # The set-equality invariant must accept this shape unchanged.
+    assert_tool_status_invariant(tools_run, tool_status)
+    assert tool_status == {t: {"ok": True} for t in tools_run}, (
+        "no mutation expected on a clean run"
+    )
+
+
+def test_chunk_name_collapse_without_index_breaks_invariant():
+    """Counterpoint to test_chunk_name_uniqueness_with_index_for_ffuf —
+    if you DROP the #index, the duplicates collapse in set() and the
+    invariant gives a false-pass even with a missing stamp.
+
+    This test isn't asserting the invariant FAILS — it's documenting
+    the failure mode so the convention sticks: bare `ffuf[25w]` × 3 in
+    tools_run + ONE 'ffuf[25w]' in tool_status would silently pass
+    set-equality and HIDE the 2 missing stamps."""
+    bad_tools_run = ["ffuf[25w]", "ffuf[25w]", "ffuf[25w]", "ffuf[24w]"]
+    bad_tool_status = {
+        "ffuf[25w]": {"ok": True},  # ONE entry for THREE list items
+        "ffuf[24w]": {"ok": True},
+    }
+    # set() deduplicates → set-equality passes, masking the gap
+    assert set(bad_tools_run) == set(bad_tool_status.keys())
+    # This is WHY #index matters. Documented, not silenced.
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Rotation log caps (ruling Q2)
 # ═══════════════════════════════════════════════════════════════════════

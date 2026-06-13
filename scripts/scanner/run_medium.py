@@ -845,6 +845,21 @@ def detect_tech_stack(ctx: ScanContext) -> None:
         ],
         timeout=30,
     )
+    # Per-chunk B1 wiring lockstep (2026-06-13, advisor note 2): every tool
+    # appended to tools_run gets a detector-driven stamp. httpx is
+    # single-shot; pre/post health assumed True (detect_waf just ran
+    # successfully, so the target was reachable a moment ago — extra
+    # healthcheck here is bandwidth without added signal).
+    b1_reason = is_tool_output_degraded(
+        tool="httpx[-td]",
+        stdout=stdout, stderr=stderr, rc=rc,
+        pre_health=True, post_health=True,
+    )
+    if b1_reason:
+        mark_tool_degraded(ctx, "httpx[-td]", b1_reason)
+        raise DegradedRunError(b1_reason, "httpx[-td]")
+    mark_tool_ok(ctx, "httpx[-td]")
+
     if rc != 0:
         log(f"httpx tech-detect rc={rc} — skipping (chunk plan stays default)")
         log(f"  stderr: {stderr[:200]}")
@@ -1061,6 +1076,21 @@ def run_katana_crawl(ctx: ScanContext, base_url: str) -> str | None:
         cmd += ["-rate-limit", "10"]
     log(f"crawl-first: katana crawling {base_url} (depth={CRAWL_DEPTH}, wall={CRAWL_WALL_S}s)")
     rc, stdout, stderr = run_cmd(cmd, timeout=CRAWL_WALL_S)
+
+    # Per-chunk B1 wiring lockstep (2026-06-13, advisor note 2): every tool
+    # appended to tools_run gets a detector-driven stamp. katana is
+    # single-shot. Only fires in CRAWL_FIRST_MODE today but the lockstep
+    # invariant means it MUST stamp tool_status either way.
+    b1_reason = is_tool_output_degraded(
+        tool="katana",
+        stdout=stdout, stderr=stderr, rc=rc,
+        pre_health=True, post_health=True,
+    )
+    if b1_reason:
+        mark_tool_degraded(ctx, "katana", b1_reason)
+        raise DegradedRunError(b1_reason, "katana")
+    mark_tool_ok(ctx, "katana")
+
     if rc != 0:
         log(f"  katana rc={rc} — crawl failed, falling back to template-driven mode")
         log(f"  stderr: {stderr[:300]}")
@@ -1084,11 +1114,17 @@ def run_katana_crawl(ctx: ScanContext, base_url: str) -> str | None:
 def run_nuclei_chunk(ctx: ScanContext, target_url: str,
                      severity_filter: str, tag_filter: str | None,
                      rate_override: int | None = None,
-                     url_list_file: str | None = None) -> tuple[int, int, list[int]]:
-    """Run one nuclei chunk. Returns (rc, match_count, response_codes_observed).
+                     url_list_file: str | None = None
+                     ) -> tuple[int, int, list[int], str, str]:
+    """Run one nuclei chunk. Returns (rc, match_count, response_codes_observed,
+    stdout, stderr).
 
     response_codes_observed is populated from nuclei's stats output if
     we can parse it; otherwise it's empty.
+
+    stdout/stderr returned 2026-06-13 (batch 2 per-chunk B1 wiring) so
+    the caller can pass them to is_tool_output_degraded for the
+    Layer 2 unreachable-pattern backstop.
 
     rate_override: if set, used instead of NUCLEI_RATE_LIMIT. Threshold
     probe mode passes a per-chunk rate from the ladder.
@@ -1096,8 +1132,12 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
     url_list_file: if set, nuclei runs with -list <file> against the
     crawled URLs instead of -u target_url. CRAWL_FIRST_MODE uses this
     to avoid template-driven path enumeration on WAF-sensitive targets.
+
+    NOTE: tools_run.append moved to the chunked caller 2026-06-13 so
+    every chunk-name in tools_run has a matching tool_status entry
+    stamped at the same call site. Required for the close_out set-
+    equality invariant (B2).
     """
-    ctx.tools_run.append(f"nuclei[{severity_filter}{':'+tag_filter if tag_filter else ''}]")
     ua = pick_ua()
     if rate_override is not None:
         effective_rate = rate_override
@@ -1173,7 +1213,7 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
             raw_excerpt=json.dumps(m, indent=2)[:2500],
         ))
 
-    return rc, matches, []
+    return rc, matches, [], stdout, stderr
 
 
 def run_nuclei_chunked(ctx: ScanContext) -> None:
@@ -1262,6 +1302,16 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         else:
             log(f"chunk {i+1}/{len(chunks)}: {desc}")
 
+        # Chunk name — must match the success-path format below
+        # (`nuclei[<sev>]` or `nuclei[<sev>:<tag>]`). Naming consistency
+        # fix 2026-06-13 (advisor batch 2 per-chunk B1 wiring): the
+        # abort-path previously used `nuclei[<sev>:<all>]` for null-tag
+        # chunks, but the success-path tools_run.append used `nuclei[<sev>]`
+        # (no `:<all>` suffix). With per-chunk stamping in tool_status now
+        # required to set-equality-match tools_run, the two paths must
+        # produce IDENTICAL chunk names.
+        chunk_name = f"nuclei[{sev}{':'+tag if tag else ''}]"
+
         if not ensure_healthy_egress(ctx, max_rotations=2):
             # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug A: first chunk-skip
             # aborts. Per advisor ruling Q1 (2026-06-12) — strict v1; a
@@ -1269,7 +1319,6 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
             # chunks, but for now we treat any rotation-exhausted skip
             # as fatal. Stamp the chunk into tool_status so the
             # set-equality invariant in close-out doesn't double-fire.
-            chunk_name = f"nuclei[{sev}:{tag or '<all>'}]"
             log(f"  ✗ target unreachable from any rotated IP — ABORT ({chunk_name})")
             note_ban_event(ctx, {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1306,13 +1355,42 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
             tag_lbl = "PROBE" if THRESHOLD_PROBE_MODE else "PATIENT"
             log(f"  {tag_lbl} pre-chunk healthcheck on {probe_egress_ip}: HTTP {pre_code}")
 
-        # Layer 2: run the chunk
-        rc, matches, _ = run_nuclei_chunk(
+        # Layer 2: run the chunk.
+        # tools_run.append moved out of run_nuclei_chunk (2026-06-13 per-chunk
+        # B1 wiring): append BEFORE the run so the abort-path's tool_status
+        # stamp lines up with what's already in tools_run; pre_health is True
+        # by induction (we just passed ensure_healthy_egress above).
+        ctx.tools_run.append(chunk_name)
+        pre_healthy = True
+        rc, matches, _, chunk_stdout, chunk_stderr = run_nuclei_chunk(
             ctx, base_url, sev, tag,
             rate_override=rate_for_chunk if (THRESHOLD_PROBE_MODE or patient_effective or STEALTH_UA or needs_softened_rate(ctx)) else None,
             url_list_file=url_list_file,
         )
         log(f"  chunk {i+1} done: {matches} match(es), rc={rc}")
+
+        # Per-chunk B1 detector (batch 2, advisor approved 2026-06-13).
+        # Unconditional post-chunk healthcheck — NEW behavior in NORMAL mode
+        # (previously only ran in PROBE/PATIENT). First time the post-check
+        # path is exercised in NORMAL mode is on testfire; a flaky check
+        # there would surface as a healthcheck-unreachable degradation.
+        post_chunk_healthy, _ = healthcheck(ctx)
+        b1_reason = is_tool_output_degraded(
+            tool=chunk_name,
+            stdout=chunk_stdout,
+            stderr=chunk_stderr,
+            rc=rc,
+            pre_health=pre_healthy,
+            post_health=post_chunk_healthy,
+        )
+        # Priority per advisor 2026-06-13 Q3:
+        #   Layer 2 health authority > Layer 1 tool-specific > Layer 2 stderr backstop.
+        # nuclei has no Layer 1 detector today (separate item), so priority
+        # collapses to "any non-None b1_reason aborts; else mark ok."
+        if b1_reason:
+            mark_tool_degraded(ctx, chunk_name, b1_reason)
+            raise DegradedRunError(b1_reason, chunk_name)
+        mark_tool_ok(ctx, chunk_name)
 
         # PROBE/PATIENT: healthcheck on the SAME tunnel BEFORE rotating.
         # In PROBE mode this is data-gathering. In PATIENT mode it gates
@@ -1471,11 +1549,34 @@ def run_nikto(ctx: ScanContext) -> None:
     # via scan_run c14e2fe2). The narrow detector only flags the literal
     # help banner phrases (Bug D) or non-maxtime "+ ERROR:" lines (Bug E),
     # never a legitimate empty/short scan output.
+    # Two-layer detector (advisor 2026-06-13). Layer 1 (nikto-specific) catches
+    # startup/help-banner failures unique to nikto. Layer 2 (B1 unified) catches
+    # connect-refused stderr patterns that Layer 1 doesn't model.
+    #
+    # Priority per advisor Q3: Layer 2 health authority > Layer 1 tool-specific
+    # > Layer 2 stderr backstop. nikto is single-shot (no chunk loop), so the
+    # health authority signal isn't captured here — pre/post = True (assumed
+    # reachable; nikto follows wafw00f + httpx + 4 nuclei chunks already
+    # confirmed reachable). The stderr backstop is what matters here.
     is_degraded, reason = nikto_is_degraded(stdout, stderr, rc)
     if is_degraded:
+        # Layer 1 wins — explicit tool-specific failure detected.
         mark_tool_degraded(ctx, "nikto", reason)
-    else:
-        mark_tool_ok(ctx, "nikto")
+        raise DegradedRunError("nikto_specific_degradation",
+                               f"nikto: {reason}")
+
+    # Layer 2 backstop — catches connect-refused noise in stderr that
+    # Layer 1 didn't pattern-match. With health = True, only the stderr
+    # backstop cell of is_tool_output_degraded can fire here.
+    b1_reason = is_tool_output_degraded(
+        tool="nikto", stdout=stdout, stderr=stderr, rc=rc,
+        pre_health=True, post_health=True,
+    )
+    if b1_reason:
+        mark_tool_degraded(ctx, "nikto", b1_reason)
+        raise DegradedRunError(b1_reason, "nikto")
+
+    mark_tool_ok(ctx, "nikto")
     # UNCONDITIONAL stderr log. nikto's short-help bail is often rc=0
     # (the gated `if rc not in (0,124)` block below swallowed it on the
     # 2026-06-07 PM testfire re-fire after the -host fix). Perl
@@ -1552,7 +1653,8 @@ def run_nikto(ctx: ScanContext) -> None:
 
 
 # ─── ffuf (chunked) ─────────────────────────────────────────────────────
-def run_ffuf_chunk(ctx: ScanContext, words: list[str]) -> int:
+def run_ffuf_chunk(ctx: ScanContext, words: list[str],
+                   chunk_name: str) -> tuple[int, str | None, dict | None, str]:
     """Run one ffuf chunk against a wordlist subset. Returns count of
     findings emitted (any -mc-matched status: 200/204/301/302/307/401/403).
 
@@ -1581,8 +1683,18 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str]) -> int:
     high-signal hits (401 on /admin, 200 on /.env or /.git) in the
     noise floor. Sensitive-path detection + status-aware severity
     should be the next layer once the flood guard is in.
+
+    2026-06-13 (batch 2 per-chunk B1 wiring):
+      - tools_run.append moved to caller (run_ffuf_chunked) so the
+        chunk_name with #index uniqueness lands consistently.
+      - chunk_name parameter threads through: existing Layer 1
+        mark_tool_degraded calls now stamp chunk_name (not "ffuf") AND
+        raise DegradedRunError so Bug A's first-skip-aborts discipline
+        holds for tool-specific failures too.
+      - Return shape extended to (interesting, out_blob, parsed, stderr)
+        so the caller can run Layer 2 is_tool_output_degraded with
+        proper post-tool signals.
     """
-    ctx.tools_run.append(f"ffuf[{len(words)}w]")
     ua = pick_ua()
 
     wl_path = f"/tmp/commandsentry-ffuf-wl-{random.randint(1000,9999)}.txt"
@@ -1609,11 +1721,14 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str]) -> int:
         out_blob = Path(out_path).read_text()
     except Exception as e:
         log(f"  ffuf output unreadable: {e}")
-        # ADR-001 Step 4 — output file missing. Across multiple chunks
-        # this would flap; the LAST chunk's status wins (the closed scan
-        # records the worst-recently-seen state). Sufficient signal for now.
-        mark_tool_degraded(ctx, "ffuf", "output_unreadable")
-        return 0
+        # Layer 1 (tool-specific). 2026-06-13: stamp the chunk_name (not
+        # generic "ffuf") so the set-equality invariant in close_out is
+        # satisfied AND raise per Bug A's first-skip-aborts discipline.
+        # Previously stamped "ffuf" and returned 0 — was both the wrong
+        # tool_status key AND a silent continuation that violated Bug A.
+        mark_tool_degraded(ctx, chunk_name, "output_unreadable")
+        raise DegradedRunError("ffuf_specific_degradation",
+                               f"{chunk_name}: output_unreadable: {e!r}")
 
     ctx.artifacts.append(("ffuf", "json", out_blob))
 
@@ -1621,17 +1736,20 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str]) -> int:
         data = json.loads(out_blob)
     except Exception as e:
         log(f"  ffuf output parse failed: {e}")
-        mark_tool_degraded(ctx, "ffuf", "parse_failed")
-        return 0
+        mark_tool_degraded(ctx, chunk_name, "parse_failed")
+        raise DegradedRunError("ffuf_specific_degradation",
+                               f"{chunk_name}: parse_failed: {e!r}")
 
     # ADR-001 Step 4 — structure check. results==[] is healthy ("no
     # matched paths in this chunk"); only the absence of the key entirely
-    # signals a real failure.
+    # signals a real failure. NOTE: mark_tool_ok deferred to the caller —
+    # it runs the Layer 2 B1 check BEFORE deciding ok-vs-degraded, so we
+    # only stamp ok at the end of the whole per-chunk pipeline.
     is_degraded, reason = ffuf_is_degraded(out_blob, data)
     if is_degraded:
-        mark_tool_degraded(ctx, "ffuf", reason)
-    else:
-        mark_tool_ok(ctx, "ffuf")
+        mark_tool_degraded(ctx, chunk_name, reason)
+        raise DegradedRunError("ffuf_specific_degradation",
+                               f"{chunk_name}: {reason}")
 
     results = data.get("results", [])
     ctx.total_requests += len(words)
@@ -1697,7 +1815,11 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str]) -> int:
             raw_excerpt=raw,
         ))
 
-    return interesting
+    # Per-chunk B1 wiring (2026-06-13) — return shape extended from
+    # bare `interesting` to (interesting, out_blob, data, stderr) so the
+    # caller can run Layer 2 is_tool_output_degraded. data is the parsed
+    # JSON (None if parse failed — but that path raised above).
+    return interesting, out_blob, data, stderr
 
 
 def run_ffuf_chunked(ctx: ScanContext) -> None:
@@ -1711,11 +1833,17 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
               for i in range(0, len(FFUF_WORDS), FFUF_WORDS_PER_CHUNK)]
 
     for i, words in enumerate(chunks):
-        log(f"chunk {i+1}/{len(chunks)}: {len(words)} words")
+        # 2026-06-13: chunk_name uses #index to disambiguate ffuf[25w]#1
+        # vs ffuf[25w]#2 vs ffuf[25w]#3 — duplicate-word-count chunks
+        # would collapse in set(tools_run) otherwise and break the
+        # close_out invariant. Naming matches the abort-path convention
+        # from batch 1.
+        chunk_name = f"ffuf[{len(words)}w]#{i+1}"
+        log(f"chunk {i+1}/{len(chunks)}: {len(words)} words ({chunk_name})")
+
         if not ensure_healthy_egress(ctx, max_rotations=2):
             # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug A — first
             # chunk-skip aborts (advisor ruling Q1, strict v1).
-            chunk_name = f"ffuf[{len(words)}w]#{i+1}"
             log(f"  ✗ target unreachable — ABORT ({chunk_name})")
             note_ban_event(ctx, {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1731,8 +1859,33 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
                 f"{chunk_name} after {ctx.rotation_count} rotations",
             )
 
-        interesting = run_ffuf_chunk(ctx, words)
+        # Per-chunk B1 wiring (2026-06-13). tools_run.append moved out
+        # of run_ffuf_chunk; happens here BEFORE the run so the abort
+        # path inside run_ffuf_chunk (output_unreadable / parse_failed /
+        # ffuf_is_degraded) has the chunk_name already in tools_run.
+        ctx.tools_run.append(chunk_name)
+        pre_healthy = True  # we just passed ensure_healthy_egress
+        interesting, out_blob, parsed, chunk_stderr = run_ffuf_chunk(
+            ctx, words, chunk_name
+        )
         log(f"  chunk {i+1} done: {interesting} 200/204 finding(s)")
+
+        # Layer 2: unconditional post-chunk healthcheck + B1 detector.
+        # Layer 1 (ffuf_is_degraded) ran inside run_ffuf_chunk and
+        # raised on failure — if we reach here, Layer 1 cleared.
+        post_chunk_healthy, _ = healthcheck(ctx)
+        b1_reason = is_tool_output_degraded(
+            tool=chunk_name,
+            stdout=out_blob or "",
+            stderr=chunk_stderr,
+            rc=0,  # we'd have raised if rc had triggered Layer 1
+            pre_health=pre_healthy,
+            post_health=post_chunk_healthy,
+        )
+        if b1_reason:
+            mark_tool_degraded(ctx, chunk_name, b1_reason)
+            raise DegradedRunError(b1_reason, chunk_name)
+        mark_tool_ok(ctx, chunk_name)
 
         if i < len(chunks) - 1:
             rotate_vpn(ctx)
