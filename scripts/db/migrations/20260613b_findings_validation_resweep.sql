@@ -26,12 +26,12 @@
 -- it enforces is the same on every run:
 --
 --   "validation_status='validated' iff scanner_version is in the active
---    set AND scan_quality='clean' AND source LIKE 'commandsentry_%'."
+--    set AND scan_quality='clean' AND source IN ('commandsentry_light','commandsentry_medium','commandsentry_heavy')."
 --
 -- ----------------------------------------------------------------------------
 -- BLAST RADIUS (advisor lean 3 — NARROW)
 -- ----------------------------------------------------------------------------
--- Filter: `source LIKE 'commandsentry_%'`. The scanner_version invariant
+-- Filter: `source IN ('commandsentry_light','commandsentry_medium','commandsentry_heavy')`. The scanner_version invariant
 -- is defined only for findings produced by THIS runner. Imports (~35%
 -- of findings — wpscan, nuclei pre-runner, etc.) and manual (~21%)
 -- validate by different, non-scanner-provenance rules. A broad sweep
@@ -85,7 +85,7 @@ select f.finding_id,
        f.validated_at      as old_validated_at,
        now()               as snapshotted_at
   from public.findings f
- where f.source LIKE 'commandsentry_%'
+ where f.source IN ('commandsentry_light','commandsentry_medium','commandsentry_heavy')
    and f.validation_status = 'validated'
    and (
          -- Class A: not in active set (NULL SHA, unknown SHA, retracted SHA)
@@ -110,7 +110,7 @@ comment on table public.findings_validation_resweep_20260613b is
 update public.findings f
    set validation_status = 'unvalidated',
        validated_at      = NULL
- where f.source LIKE 'commandsentry_%'
+ where f.source IN ('commandsentry_light','commandsentry_medium','commandsentry_heavy')
    and f.validation_status = 'validated'
    and (
          NOT EXISTS (
@@ -132,7 +132,7 @@ select 'invariant check A — validated rows with no active scanner_validations 
          as info,
        count(*) as violations
   from public.findings f
- where f.source LIKE 'commandsentry_%'
+ where f.source IN ('commandsentry_light','commandsentry_medium','commandsentry_heavy')
    and f.validation_status = 'validated'
    and NOT EXISTS (
          SELECT 1 FROM public.scanner_validations sv
@@ -144,7 +144,7 @@ select 'invariant check B — validated AND degraded (contradiction class)'
          as info,
        count(*) as violations
   from public.findings
- where source LIKE 'commandsentry_%'
+ where source IN ('commandsentry_light','commandsentry_medium','commandsentry_heavy')
    and validation_status = 'validated'
    and scan_quality      = 'degraded';
 
