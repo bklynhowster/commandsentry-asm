@@ -442,10 +442,66 @@ def mark_tool_ok(ctx: ScanContext, tool_name: str) -> None:
     ctx.tool_status[tool_name] = {"ok": True}
 
 
-def mark_tool_degraded(ctx: ScanContext, tool_name: str, reason: str) -> None:
+# Cap on stderr captured into ctx.artifacts (per Howie A′ design 2026-06-15)
+# 64KB is generous for tool-specific error output (nikto's longest
+# observed stderr is ~250B; the cap mostly protects against a runaway
+# tool that floods stderr with thousands of error lines). The GH-log
+# tail (the "belt-and-suspenders" half) caps lower (4KB) — log lines
+# stay readable. If a real failure ever exceeds 64KB, that's diagnostic
+# in itself (rotation storm of errors → revisit the cap then).
+MARK_DEGRADED_STDERR_ARTIFACT_CAP_BYTES = 64 * 1024  # 64KB
+MARK_DEGRADED_STDERR_LOG_CAP_BYTES = 4 * 1024        # 4KB
+
+
+def mark_tool_degraded(
+    ctx: ScanContext,
+    tool_name: str,
+    reason: str,
+    *,
+    stderr: str | None = None,
+) -> None:
     """Record that a tool failed in a recognized way. reason is a stable
-    machine-readable slug (snake_case) — downstream reports group on it."""
+    machine-readable slug (snake_case) — downstream reports group on it.
+
+    2026-06-15 (Howie A′ design): optional `stderr=` kwarg captures the
+    failed tool's stderr to two surfaces:
+      1. ctx.artifacts as ('<tool>_stderr', 'text', stderr[:cap]) — flushed
+         to scan_run_artifacts via the existing flush loops (clean path
+         at write_findings_and_artifacts and degraded path at degraded_out
+         via flush_artifacts_to_db). No 3-tuple → 4-tuple refactor needed.
+      2. log(stderr[:cap]) — lands in GH Actions log too, so forensics
+         survive even if the DB write fails.
+
+    Capped at MARK_DEGRADED_STDERR_ARTIFACT_CAP_BYTES (artifact) and
+    MARK_DEGRADED_STDERR_LOG_CAP_BYTES (log) to prevent a chatty tool
+    from bloating scan_run_artifacts or the GH log tail.
+
+    Keyword-only + Optional → backward-compatible. Existing ~25 call
+    sites across run_light + run_medium continue to work unchanged;
+    sites with stderr in scope can opt in one line at a time.
+
+    Surfaced by myordersauth prod (d0cbe39e) + test (bd2cef8f) 2026-06-14:
+    both degraded as nikto runtime_error but the actual `+ ERROR:` line
+    that triggered the detector lives in nikto stderr, which was
+    captured in no surface anywhere — not GH logs (line 1602's
+    'unconditional' log is gated behind the success branch), not the DB
+    (ctx.artifacts only carries stdout, and degraded path discards it
+    via rollback even when present). [1] diagnosis was dead-end without
+    this capture path.
+    """
     ctx.tool_status[tool_name] = {"degraded": reason}
+    if stderr:
+        # Truncate at cap; full stderr is preserved upstream in run_cmd's
+        # return value if anything else wants the full bytes.
+        capped_artifact = stderr[:MARK_DEGRADED_STDERR_ARTIFACT_CAP_BYTES]
+        ctx.artifacts.append(
+            (f"{tool_name}_stderr", "text", capped_artifact)
+        )
+        # Smaller cap for the log — GH log lines stay readable. The
+        # full bytes are in the artifact; this is the eyeball-in-CI view.
+        capped_log = stderr[:MARK_DEGRADED_STDERR_LOG_CAP_BYTES]
+        log(f"{tool_name} stderr ({len(stderr)}B, "
+            f"showing first {len(capped_log)}B): {capped_log}")
 
 
 def nikto_is_degraded(stdout: str, stderr: str, rc: int) -> tuple[bool, str]:
@@ -801,7 +857,9 @@ def detect_waf(ctx: ScanContext) -> None:
     0 findings against a site we knew had real findings.
     """
     ctx.tools_run.append("wafw00f")
-    rc, stdout, _ = run_cmd(
+    # 2026-06-15: capture stderr instead of `_` so the A′ stderr-into-
+    # mark_tool_degraded path (run_medium.py:445) has it available.
+    rc, stdout, stderr = run_cmd(
         ["wafw00f", f"https://{ctx.hostname}/", "-a"],
         timeout=60,
     )
@@ -810,7 +868,7 @@ def detect_waf(ctx: ScanContext) -> None:
     # present or the tool failed.
     is_degraded, reason = wafw00f_is_degraded(stdout, rc)
     if is_degraded:
-        mark_tool_degraded(ctx, "wafw00f", reason)
+        mark_tool_degraded(ctx, "wafw00f", reason, stderr=stderr)
     else:
         mark_tool_ok(ctx, "wafw00f")
     if rc != 0:
@@ -867,7 +925,7 @@ def detect_tech_stack(ctx: ScanContext) -> None:
         pre_health=True, post_health=True,
     )
     if b1_reason:
-        mark_tool_degraded(ctx, "httpx[-td]", b1_reason)
+        mark_tool_degraded(ctx, "httpx[-td]", b1_reason, stderr=stderr)
         raise DegradedRunError(b1_reason, "httpx[-td]")
     mark_tool_ok(ctx, "httpx[-td]")
 
@@ -1098,7 +1156,7 @@ def run_katana_crawl(ctx: ScanContext, base_url: str) -> str | None:
         pre_health=True, post_health=True,
     )
     if b1_reason:
-        mark_tool_degraded(ctx, "katana", b1_reason)
+        mark_tool_degraded(ctx, "katana", b1_reason, stderr=stderr)
         raise DegradedRunError(b1_reason, "katana")
     mark_tool_ok(ctx, "katana")
 
@@ -1410,7 +1468,7 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # nuclei has no Layer 1 detector today (separate item), so priority
         # collapses to "any non-None b1_reason aborts; else mark ok."
         if b1_reason:
-            mark_tool_degraded(ctx, chunk_name, b1_reason)
+            mark_tool_degraded(ctx, chunk_name, b1_reason, stderr=chunk_stderr)
             raise DegradedRunError(b1_reason, chunk_name)
         mark_tool_ok(ctx, chunk_name)
 
@@ -1583,7 +1641,12 @@ def run_nikto(ctx: ScanContext) -> None:
     is_degraded, reason = nikto_is_degraded(stdout, stderr, rc)
     if is_degraded:
         # Layer 1 wins — explicit tool-specific failure detected.
-        mark_tool_degraded(ctx, "nikto", reason)
+        # A′ (2026-06-15): pass stderr so mark_tool_degraded captures it
+        # to scan_run_artifacts + GH log. This closes the [1] diagnostic
+        # gap — runtime_error keys on `+ ERROR:` lines that live in
+        # stderr (per Bug E comment at line 1620-1623), which was
+        # captured in NO surface before A′.
+        mark_tool_degraded(ctx, "nikto", reason, stderr=stderr)
         raise DegradedRunError("nikto_specific_degradation",
                                f"nikto: {reason}")
 
@@ -1595,7 +1658,7 @@ def run_nikto(ctx: ScanContext) -> None:
         pre_health=True, post_health=True,
     )
     if b1_reason:
-        mark_tool_degraded(ctx, "nikto", b1_reason)
+        mark_tool_degraded(ctx, "nikto", b1_reason, stderr=stderr)
         raise DegradedRunError(b1_reason, "nikto")
 
     mark_tool_ok(ctx, "nikto")
@@ -1748,7 +1811,7 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str],
         # satisfied AND raise per Bug A's first-skip-aborts discipline.
         # Previously stamped "ffuf" and returned 0 — was both the wrong
         # tool_status key AND a silent continuation that violated Bug A.
-        mark_tool_degraded(ctx, chunk_name, "output_unreadable")
+        mark_tool_degraded(ctx, chunk_name, "output_unreadable", stderr=stderr)
         raise DegradedRunError("ffuf_specific_degradation",
                                f"{chunk_name}: output_unreadable: {e!r}")
 
@@ -1758,7 +1821,7 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str],
         data = json.loads(out_blob)
     except Exception as e:
         log(f"  ffuf output parse failed: {e}")
-        mark_tool_degraded(ctx, chunk_name, "parse_failed")
+        mark_tool_degraded(ctx, chunk_name, "parse_failed", stderr=stderr)
         raise DegradedRunError("ffuf_specific_degradation",
                                f"{chunk_name}: parse_failed: {e!r}")
 
@@ -1769,7 +1832,7 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str],
     # only stamp ok at the end of the whole per-chunk pipeline.
     is_degraded, reason = ffuf_is_degraded(out_blob, data)
     if is_degraded:
-        mark_tool_degraded(ctx, chunk_name, reason)
+        mark_tool_degraded(ctx, chunk_name, reason, stderr=stderr)
         raise DegradedRunError("ffuf_specific_degradation",
                                f"{chunk_name}: {reason}")
 
@@ -1905,7 +1968,7 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
             post_health=post_chunk_healthy,
         )
         if b1_reason:
-            mark_tool_degraded(ctx, chunk_name, b1_reason)
+            mark_tool_degraded(ctx, chunk_name, b1_reason, stderr=chunk_stderr)
             raise DegradedRunError(b1_reason, chunk_name)
         mark_tool_ok(ctx, chunk_name)
 
@@ -2267,6 +2330,59 @@ def fail_out(conn, ctx: ScanContext, error: str) -> None:
         cur.execute(FAIL_SCAN_QUEUE_SQL, params)
 
 
+def flush_artifacts_to_db(conn, ctx: ScanContext, Json) -> int:
+    """Write any artifacts collected in ctx.artifacts to scan_run_artifacts.
+
+    Used by degraded_out (and safe to call from any path that needs to
+    flush partial artifacts after an abort). Returns the number of
+    artifacts successfully written.
+
+    Per-artifact try/except — a single bad blob does NOT kill the whole
+    flush. This is critical in degraded_out where the caller is already
+    in error-handling mode: a raise mid-flush would lose the entire
+    scan_run / scan_queue degraded-stamping path and leave the queue
+    row stuck at 'running'.
+
+    2026-06-15 (Task #21 [1b]): added to plug the forensics gap surfaced
+    by myordersauth prod (d0cbe39e) + test (bd2cef8f) 2026-06-14. Before
+    this, raise DegradedRunError → conn.rollback() discarded every
+    ctx.artifacts row written pre-abort, and degraded_out never re-wrote
+    them. Result: scan_run_artifacts had 0 rows for every degraded
+    scan_run despite wafw00f / httpx / nuclei chunks / etc. having
+    appended their outputs to ctx.artifacts. The runs we most need to
+    debug had zero stored forensics.
+
+    NOT called from write_findings_and_artifacts — the clean path uses
+    its own inline loop because all-or-nothing semantics there are
+    correct (if an artifact insert fails clean-path, we WANT close_out
+    to fail-and-degrade, which routes us here, which then per-artifact
+    retries). Don't unify the two — different correctness models.
+    """
+    written = 0
+    with conn.cursor() as cur:
+        for tool_name, output_format, content_str in ctx.artifacts:
+            try:
+                try:
+                    content_obj = json.loads(content_str)
+                except Exception:
+                    content_obj = {"raw": content_str}
+                cur.execute(INSERT_ARTIFACT_SQL, {
+                    "scan_run_id": ctx.scan_run_id,
+                    "tool_name": tool_name,
+                    "output_format": output_format,
+                    "size_bytes": len(content_str.encode("utf-8")),
+                    "content_jsonb": Json(content_obj),
+                })
+                written += 1
+            except Exception as e:
+                # Per-artifact insulation. log + continue. degraded_out
+                # CANNOT raise mid-flush or we lose the scan_run /
+                # scan_queue stamping (queue row sticks at 'running',
+                # partial unique index blocks future scans on the asset).
+                log(f"flush_artifacts: skipped {tool_name!r} due to {e!r}")
+    return written
+
+
 def reconcile_tool_status_invariant(ctx: ScanContext) -> None:
     """Force set(tools_run) == set(tool_status.keys()) on ctx, in place.
 
@@ -2339,6 +2455,18 @@ def degraded_out(conn, ctx: ScanContext, error: str,
     # row is persisted. Reconciles instead of raising (we're already
     # degrading) so the abort path can't leave inconsistent state.
     reconcile_tool_status_invariant(ctx)
+
+    # Task #21 [1b] — flush forensic artifacts collected pre-abort.
+    # Before this, raise DegradedRunError → conn.rollback() discarded
+    # every ctx.artifacts row, and degraded scan_runs had 0 rows in
+    # scan_run_artifacts. nikto stdout, wafw00f, httpx, nuclei chunk
+    # output — all lost. Now we re-flush from ctx (in-memory list, not
+    # affected by rollback) before stamping the degraded state. Best-
+    # effort: per-artifact try/except in flush_artifacts_to_db means
+    # one bad blob doesn't crash the stamping that follows.
+    artifacts_written = flush_artifacts_to_db(conn, ctx, Json)
+    log(f"degraded_out: flushed {artifacts_written}/{len(ctx.artifacts)} "
+        f"forensic artifact(s) before stamping")
 
     with conn.cursor() as cur:
         params = {

@@ -785,6 +785,288 @@ def test_reconcile_does_not_clobber_existing_ok_stamp():
     assert ctx.tools_run == ["wafw00f"]
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Task #21 [1b] — flush_artifacts_to_db: degraded forensics gap fix
+# ═══════════════════════════════════════════════════════════════════════
+# Surfaced by myordersauth prod (d0cbe39e) + test (bd2cef8f) 2026-06-14:
+# scan_run_artifacts had 0 rows for both degraded runs despite wafw00f /
+# httpx / nuclei chunks / nikto all having appended to ctx.artifacts.
+# Cause: raise DegradedRunError → conn.rollback() discarded the pending
+# artifact INSERTs. Fix: flush_artifacts_to_db called from degraded_out
+# BEFORE the stamping queries. Per-artifact try/except so a bad blob
+# doesn't crash the stamping that follows.
+
+
+from run_medium import flush_artifacts_to_db  # noqa: E402
+
+
+class _RecordingCursor:
+    """Cursor that records every (sql, params) call. Optionally raises
+    on the Nth call to simulate a bad-artifact INSERT failure."""
+
+    def __init__(self, raise_on_call: int | None = None):
+        self.calls: list[tuple[str, dict]] = []
+        self._raise_on_call = raise_on_call
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def execute(self, sql, params):
+        self.calls.append((sql, params))
+        if (
+            self._raise_on_call is not None
+            and len(self.calls) == self._raise_on_call
+        ):
+            raise RuntimeError("simulated bad artifact insert")
+
+
+class _RecordingConn:
+    def __init__(self, raise_on_call: int | None = None):
+        self.cursor_obj = _RecordingCursor(raise_on_call=raise_on_call)
+
+    def cursor(self):
+        return self.cursor_obj
+
+
+def _fake_json(obj):
+    """Stand-in for psycopg.types.json.Json — flush_artifacts_to_db
+    wraps content in this. Identity wrapper is enough; the test never
+    sends to a real DB."""
+    return obj
+
+
+class _ArtifactCtx:
+    """Stand-in for ScanContext with just scan_run_id + artifacts."""
+
+    def __init__(self, scan_run_id="test-run", artifacts=None):
+        self.scan_run_id = scan_run_id
+        self.artifacts = list(artifacts or [])
+
+
+def test_flush_artifacts_empty_is_noop():
+    """No artifacts in ctx → flush returns 0 written, makes 0 cursor calls."""
+    ctx = _ArtifactCtx(artifacts=[])
+    conn = _RecordingConn()
+    written = flush_artifacts_to_db(conn, ctx, _fake_json)
+    assert written == 0
+    assert conn.cursor_obj.calls == []
+
+
+def test_flush_artifacts_writes_each_appended_artifact():
+    """Each artifact tuple (tool_name, output_format, content_str) becomes
+    one INSERT_ARTIFACT_SQL execution with the right params."""
+    ctx = _ArtifactCtx(
+        scan_run_id="run-123",
+        artifacts=[
+            ("wafw00f", "text", "no WAF detected"),
+            ("nikto", "text", "+ ERROR: stub stderr"),
+        ],
+    )
+    conn = _RecordingConn()
+    written = flush_artifacts_to_db(conn, ctx, _fake_json)
+    assert written == 2
+    assert len(conn.cursor_obj.calls) == 2
+    # Verify the first call's shape
+    first_sql, first_params = conn.cursor_obj.calls[0]
+    assert "INSERT INTO public.scan_run_artifacts" in first_sql
+    assert first_params["scan_run_id"] == "run-123"
+    assert first_params["tool_name"] == "wafw00f"
+    assert first_params["output_format"] == "text"
+    assert first_params["size_bytes"] == len("no WAF detected".encode("utf-8"))
+
+
+def test_flush_artifacts_per_artifact_isolation_one_bad_blob_does_not_crash():
+    """LOAD-BEARING: if one artifact's INSERT raises (malformed JSON,
+    oversize, transient lock, whatever), the flush MUST continue with
+    the remaining artifacts. A raise mid-flush from degraded_out would
+    lose the entire scan_run / scan_queue stamping path → queue row
+    stuck at 'running' → partial unique index blocks future scans on
+    the asset. This is the worst-case outcome we're guarding against."""
+    ctx = _ArtifactCtx(
+        artifacts=[
+            ("wafw00f", "text", "ok"),
+            ("bad_tool", "text", "this insert will raise"),
+            ("nikto", "text", "should still get written"),
+        ],
+    )
+    # Raise on the 2nd execute (the "bad_tool" insert)
+    conn = _RecordingConn(raise_on_call=2)
+    # The flush itself MUST NOT raise
+    written = flush_artifacts_to_db(conn, ctx, _fake_json)
+    # 1st succeeded, 2nd raised (not counted), 3rd succeeded
+    assert written == 2
+    # All 3 were attempted (cursor.execute was called for each)
+    assert len(conn.cursor_obj.calls) == 3
+    # The third call's tool_name confirms we continued past the failure
+    third_sql, third_params = conn.cursor_obj.calls[2]
+    assert third_params["tool_name"] == "nikto"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# A′ design — mark_tool_degraded stderr capture (2026-06-15)
+# ═══════════════════════════════════════════════════════════════════════
+# Captures the failed tool's stderr to ctx.artifacts (and GH log) at the
+# universal chokepoint so EVERY tool's degraded path gets diagnostic
+# preservation without per-tool plumbing. Supersedes the per-tool A
+# variant. See run_medium.py:445 docstring for full rationale.
+
+
+from run_medium import (  # noqa: E402
+    MARK_DEGRADED_STDERR_ARTIFACT_CAP_BYTES,
+    mark_tool_degraded,
+)
+
+
+class _StderrCtx:
+    """Stand-in for ScanContext with the two fields mark_tool_degraded
+    touches when stderr is provided: tool_status (stamp) + artifacts
+    (append). Avoids dataclass + psycopg machinery."""
+
+    def __init__(self):
+        self.tool_status: dict[str, dict] = {}
+        self.artifacts: list[tuple[str, str, str]] = []
+
+
+def test_mark_tool_degraded_backward_compat_no_stderr_kwarg():
+    """Existing ~25 call sites that don't pass stderr= must continue to
+    work exactly as before — only tool_status gets stamped, no artifact
+    appended. Guards against an over-eager refactor that would force
+    every site to provide stderr."""
+    ctx = _StderrCtx()
+    mark_tool_degraded(ctx, "nikto", "runtime_error")
+    assert ctx.tool_status == {"nikto": {"degraded": "runtime_error"}}
+    assert ctx.artifacts == []
+
+
+def test_mark_tool_degraded_with_stderr_appends_artifact():
+    """When stderr= is passed, append a (<tool>_stderr, text, stderr)
+    artifact to ctx.artifacts so the flush loops (clean-path inline at
+    write_findings_and_artifacts and degraded-path via
+    flush_artifacts_to_db in degraded_out) carry it to scan_run_artifacts
+    automatically. No 3-tuple → 4-tuple refactor needed."""
+    ctx = _StderrCtx()
+    mark_tool_degraded(
+        ctx, "nikto", "runtime_error",
+        stderr="+ ERROR: Unable to open '' for write:",
+    )
+    # tool_status still stamped
+    assert ctx.tool_status == {"nikto": {"degraded": "runtime_error"}}
+    # Artifact appended with the canonical name shape
+    assert len(ctx.artifacts) == 1
+    name, fmt, content = ctx.artifacts[0]
+    assert name == "nikto_stderr"
+    assert fmt == "text"
+    assert content == "+ ERROR: Unable to open '' for write:"
+
+
+def test_mark_tool_degraded_with_empty_stderr_does_not_append():
+    """Empty / None stderr should NOT pollute ctx.artifacts with empty
+    blobs — both are falsy, neither should produce an artifact. The
+    `if stderr:` guard in mark_tool_degraded handles both cases. This
+    matters because some pre-chunk abort paths have NO stderr to
+    capture (the chunk hasn't run yet)."""
+    # Empty string — falsy
+    ctx = _StderrCtx()
+    mark_tool_degraded(ctx, "nikto", "skipped_target_unreachable", stderr="")
+    assert ctx.artifacts == []
+    # None — explicit
+    ctx = _StderrCtx()
+    mark_tool_degraded(ctx, "nikto", "skipped_target_unreachable", stderr=None)
+    assert ctx.artifacts == []
+
+
+def test_mark_tool_degraded_caps_stderr_at_64kb():
+    """A chatty tool that floods stderr with thousands of error lines
+    must NOT bloat scan_run_artifacts. The cap is 64KB
+    (MARK_DEGRADED_STDERR_ARTIFACT_CAP_BYTES); a 1MB stderr should be
+    truncated to exactly the cap."""
+    cap = MARK_DEGRADED_STDERR_ARTIFACT_CAP_BYTES
+    assert cap == 64 * 1024
+    huge_stderr = "x" * (10 * cap)  # 640KB
+    ctx = _StderrCtx()
+    mark_tool_degraded(
+        ctx, "rotation_storm_tool", "stderr_flood",
+        stderr=huge_stderr,
+    )
+    _, _, content = ctx.artifacts[0]
+    assert len(content) == cap
+
+
+def test_mark_tool_degraded_stderr_under_cap_not_truncated():
+    """Sanity — small stderr (the common case, nikto's typical output is
+    ~250 bytes) is passed through unchanged. Cap only kicks in when
+    stderr exceeds the threshold."""
+    small_stderr = "+ ERROR: Required module not found: JSON"  # ~40 bytes
+    ctx = _StderrCtx()
+    mark_tool_degraded(ctx, "nikto", "module_not_found", stderr=small_stderr)
+    _, _, content = ctx.artifacts[0]
+    assert content == small_stderr  # exact passthrough
+
+
+def test_mark_tool_degraded_stderr_artifact_pairs_with_existing_tool_artifact():
+    """The flush_artifacts_to_db loop iterates ctx.artifacts in append
+    order. If the tool's primary stdout artifact was appended first
+    (e.g. ('nikto', 'text', stdout) at run_medium.py:1568) and stderr
+    gets appended via mark_tool_degraded, both should be present and
+    distinguishable via the `_stderr` suffix. This test pins the naming
+    convention so future tooling (dashboard, forensics queries) can
+    rely on `<tool>` + `<tool>_stderr` pair semantics."""
+    ctx = _StderrCtx()
+    # Simulate the order in run_nikto: stdout appended first, then
+    # mark_tool_degraded with stderr.
+    ctx.artifacts.append(("nikto", "text", "Nikto v2.5 starting..."))
+    mark_tool_degraded(ctx, "nikto", "runtime_error", stderr="+ ERROR: blah")
+    assert len(ctx.artifacts) == 2
+    names = [a[0] for a in ctx.artifacts]
+    assert names == ["nikto", "nikto_stderr"]
+
+
+@pytest.mark.skip(reason=(
+    "Needs a real-DB integration harness — current pytest setup can't exercise "
+    "the clean→degraded fallback transaction sequence at unit level. The "
+    "guarantee that there are NO duplicate artifact rows when clean-path "
+    "writes partial → close_out raises invariant → rollback → degraded_out "
+    "re-flushes is TRANSACTIONAL ONLY: autocommit=False at psycopg.connect + "
+    "atomic conn.rollback() before degraded_out runs means the clean-path "
+    "partial inserts are discarded before flush_artifacts_to_db touches the "
+    "DB. Cannot be DB-enforced via UNIQUE (scan_run_id, tool_name) because "
+    "tools legitimately emit multiple artifacts under the same tool_name "
+    "(e.g. httpx_tech writes one per line in some configs). Records the gap; "
+    "when an integration harness exists, write the test that: (1) opens a "
+    "transaction, (2) inserts N artifact rows via the clean-path loop, (3) "
+    "triggers a close_out invariant failure, (4) catches it, rolls back, "
+    "calls degraded_out which re-flushes via flush_artifacts_to_db, (5) "
+    "commits, (6) asserts scan_run_artifacts has exactly N rows (not 2N)."
+))
+def test_no_duplicate_artifacts_on_clean_to_degraded_fallback():
+    """PLACEHOLDER for the clean→degraded fallback duplicate-prevention
+    test. See @skip reason for the full rationale and the integration-
+    harness blueprint. Logged here so the gap doesn't disappear into
+    backlog."""
+    pass
+
+
+def test_flush_artifacts_handles_non_json_string_content():
+    """run_medium.py wraps non-JSON content as {'raw': <str>} before
+    passing to Json(). Stub that path: a content_str that's not valid
+    JSON should still produce one INSERT (with the raw fallback), not
+    a raise."""
+    ctx = _ArtifactCtx(
+        artifacts=[
+            ("nikto", "text", "+ ERROR: not even close to JSON"),
+        ],
+    )
+    conn = _RecordingConn()
+    written = flush_artifacts_to_db(conn, ctx, _fake_json)
+    assert written == 1
+    _, params = conn.cursor_obj.calls[0]
+    # The wrapped content should be the raw fallback dict
+    assert params["content_jsonb"] == {"raw": "+ ERROR: not even close to JSON"}
+
+
 def test_reconcile_does_not_raise():
     """Reconcile must NEVER raise — we're already in degraded_out;
     raising would lose the original DegradedRunError context and
