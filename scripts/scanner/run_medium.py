@@ -420,6 +420,19 @@ class ScanContext:
     # so any health failure aborts immediately — the validate run is
     # PRISTINE-or-NOTHING, never "rotated to find another path."
     validate_mode: bool = False
+    # #24 Phase 2 (2026-06-15): read from asset_surface.auth_gated at
+    # scan start. True if the asset is fronted by an identity provider
+    # login (Entra / Okta / Auth0 / Cognito / B2C / etc) — derived by
+    # import_asm_to_surface.py's compute_auth_gated() via title +
+    # cert-SAN AND-gate. When True, skip nikto + ffuf entirely + skip
+    # non-tech nuclei chunks (the unauth attack surface doesn't exist
+    # — only the IdP login page does). Keep wafw00f + httpx +
+    # nuclei[tech] (fingerprint the IdP infra cleanly). A skipped tool
+    # is recorded via mark_tool_skipped — NOT degraded, NOT ok. Run
+    # stays scan_quality='clean' (skipped is a third state). Fail-safe
+    # default: False (run everything) when the asset_surface read fails
+    # or no row exists.
+    auth_gated: bool = False
 
 
 # ─── Tool-status helpers (ADR-001 Step 4) ───────────────────────────────
@@ -1462,6 +1475,23 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # produce IDENTICAL chunk names.
         chunk_name = f"nuclei[{sev}{':'+tag if tag else ''}]"
 
+        # #24 Phase 2 — auth-gated per-chunk skip. Only the medium:tech
+        # chunk is value-additive on auth-gated targets (fingerprints
+        # the IdP infra cleanly — Microsoft IIS / Azure App Service /
+        # etc). Everything else (critical+high attack templates,
+        # medium:cve, medium:exposure,config, medium:wordpress,cms,
+        # medium:iis,asp,..., medium:php, medium:drupal,cms,
+        # medium:joomla,cms) fires templates that 401/redirect to the
+        # IdP login uniformly — zero signal. Stamp the chunk as skipped
+        # to preserve set-equality + the forensic "we considered this
+        # and intentionally skipped" record, then continue to the next
+        # chunk WITHOUT running this one.
+        if ctx.auth_gated and tag != "tech":
+            log(f"  ⊘ skip chunk {chunk_name} — auth_gated + non-tech (no unauth attack surface)")
+            ctx.tools_run.append(chunk_name)
+            mark_tool_skipped(ctx, chunk_name, "auth_gated")
+            continue
+
         if not ensure_healthy_egress(ctx, max_rotations=2):
             # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug A: first chunk-skip
             # aborts. Per advisor ruling Q1 (2026-06-12) — strict v1; a
@@ -1636,6 +1666,18 @@ def run_nikto(ctx: ScanContext) -> None:
     it gets banned mid-run, we accept the loss for this pass.
     """
     log("→ nikto (single pass)")
+
+    # #24 Phase 2 — auth-gated skip. nikto crawls attack paths against
+    # the root, all of which 401/redirect to the IdP login on auth-gated
+    # targets. Wastes ~7 min producing zero signal + hits target's own
+    # error budget (target_error_limit). Skip explicitly: tools_run +
+    # tool_status get the skipped stamp (set-equality holds), no
+    # execution, no degradation. Run stays scan_quality='clean'.
+    if ctx.auth_gated:
+        log("  ⊘ skip nikto — asset is auth_gated (no unauth attack surface)")
+        ctx.tools_run.append("nikto")
+        mark_tool_skipped(ctx, "nikto", "auth_gated")
+        return
 
     if not ensure_healthy_egress(ctx, max_rotations=2):
         # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug A — first chunk-skip
@@ -1997,6 +2039,18 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
     # Slice the wordlist
     chunks = [FFUF_WORDS[i:i+FFUF_WORDS_PER_CHUNK]
               for i in range(0, len(FFUF_WORDS), FFUF_WORDS_PER_CHUNK)]
+
+    # #24 Phase 2 — auth-gated skip. ffuf wordlist (/api, /admin, /v1,
+    # /login, etc.) would 401/redirect uniformly on auth-gated targets
+    # — zero discrimination signal. Skip ALL chunks (not just some), but
+    # stamp each one as skipped to preserve set-equality + forensic record.
+    if ctx.auth_gated:
+        log("  ⊘ skip ffuf (all chunks) — asset is auth_gated (no unauth path surface)")
+        for i, words in enumerate(chunks):
+            chunk_name = f"ffuf[{len(words)}w]#{i+1}"
+            ctx.tools_run.append(chunk_name)
+            mark_tool_skipped(ctx, chunk_name, "auth_gated")
+        return
 
     for i, words in enumerate(chunks):
         # 2026-06-13: chunk_name uses #index to disambiguate ffuf[25w]#1
@@ -2703,6 +2757,34 @@ def run(descriptor_path: str, dsn: str) -> int:
         intensity=descriptor["intensity"],
     )
     log(f"asset_id={ctx.asset_id} hostname={ctx.hostname} scan_run_id={ctx.scan_run_id}")
+
+    # ─── #24 Phase 2 — read auth_gated from asset_surface ────────────────
+    # Local-only DB query (no target-bound op) — fine to run before the
+    # validate-mode pre-flight. Transient connection, mirrors ROE gate
+    # pattern. Fail-safe: any failure or missing row → False (run all
+    # tools). NEVER silently skip when uncertain — defaulting to "skip
+    # everything" on a read error would erase scan coverage.
+    try:
+        auth_conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=True)
+        try:
+            with auth_conn.cursor() as cur:
+                cur.execute(
+                    "SELECT auth_gated FROM public.asset_surface WHERE asset_id = %s",
+                    (ctx.asset_id,),
+                )
+                row = cur.fetchone()
+                if row is not None:
+                    ctx.auth_gated = bool(
+                        row["auth_gated"] if isinstance(row, dict) else row[0]
+                    )
+        finally:
+            auth_conn.close()
+    except Exception as e:
+        log(f"auth_gated read failed (defaulting to False — fail-safe): {e!r}")
+    if ctx.auth_gated:
+        log(f"asset is auth_gated — will SKIP nikto + ffuf + nuclei attack/cve/"
+            f"exposure/wordpress/iis/php/drupal/joomla chunks. Keep wafw00f + "
+            f"httpx + nuclei[medium:tech]. Recommend authenticated DAST.")
 
     # ─── Validate-mode flag read — actual assert deferred until inside `try` below ─
     # If skip_vpn=true was set on the workflow_dispatch input, the runner

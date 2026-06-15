@@ -137,6 +137,138 @@ def derive_organization(asm_doc: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# #24 — auth-gated target detection (2026-06-15)
+# ---------------------------------------------------------------------------
+# Asset is auth_gated if the primary subdomain's root reachability shows
+# BOTH (a) a login-like title AND (b) a TLS cert SAN that matches a known
+# identity provider domain. The AND-gate is the safety: a real app with
+# a "Sign In" link in its title doesn't false-flag because its cert is
+# its own domain, not an IdP's.
+#
+# Verified discriminator on real data (Howie 2026-06-15):
+#   myordersauth-test.unimacgraphics.com  → title "Sign in to your account"
+#                                           + cert SAN login.microsoftonline.com
+#                                           → auth_gated=true ✓
+#   test.commandcommcentral.com           → title "CommandCommCentral"
+#                                           + cert SAN *.commandcommcentral.com
+#                                           → auth_gated=false ✓ (FortiWeb-fronted
+#                                              real app, NOT a login page)
+#
+# KNOWN LIMITATION (accepted Phase 2): custom-domain IdP — Entra/Okta/
+# Auth0 behind a vanity login domain like `login.company.com` — presents
+# the customer's OWN cert, not an *.idp SAN, so the cert match fails
+# and the asset is NOT flagged as auth_gated. Medium scans waste time on
+# it. Future enhancement: detect IdP redirect chain or login-form
+# structure, not cert-suffix alone.
+
+IDP_CERT_SAN_SUFFIXES: tuple[str, ...] = (
+    # Microsoft Entra / Azure AD
+    "login.microsoftonline.com",
+    "login.windows.net",
+    "sts.windows.net",
+    "login.microsoftonline.us",  # Azure Government
+    ".b2clogin.com",             # Azure AD B2C
+    # Google identity
+    "accounts.google.com",
+    # Common third-party identity providers
+    ".okta.com",          # Okta (matches *.okta.com)
+    ".auth0.com",         # Auth0 (matches *.auth0.com including *.<region>.auth0.com)
+    ".onelogin.com",      # OneLogin
+    ".pingidentity.com",  # Ping Identity
+    ".pingone.com",       # Ping Identity (cloud)
+    ".amazoncognito.com", # AWS Cognito hosted UI
+)
+
+# Case-insensitive substring match. AND-gated with cert match — loose
+# title substrings (e.g. "sign in") can't false-positive without an IdP
+# cert also present, so the conservative title list is safe.
+LOGIN_TITLE_PATTERNS: tuple[str, ...] = (
+    "sign in to your account",
+    "sign in",
+    "log in",
+    "login",
+)
+
+
+def _title_matches_login(title: str | None) -> bool:
+    """Case-insensitive substring match of `title` against the login
+    patterns. None or empty → False."""
+    if not title:
+        return False
+    title_lc = title.lower()
+    return any(pat in title_lc for pat in LOGIN_TITLE_PATTERNS)
+
+
+def _cert_san_matches_idp(san_entries: list[str] | None) -> bool:
+    """True if any SAN entry endswith one of the IdP suffixes. Handles
+    None / empty defensively (False, not raise)."""
+    if not san_entries:
+        return False
+    for san in san_entries:
+        if not isinstance(san, str):
+            continue
+        san_lc = san.lower().strip().lstrip("*.")  # normalize wildcard SANs
+        for suffix in IDP_CERT_SAN_SUFFIXES:
+            # Both exact match (login.microsoftonline.com) and suffix
+            # match (.okta.com) handled by endswith. The suffix entries
+            # already include the leading "." so .okta.com matches
+            # foo.okta.com but NOT myokta.com.
+            if san_lc.endswith(suffix) or san_lc == suffix.lstrip("."):
+                return True
+    return False
+
+
+def compute_auth_gated(asm_doc: dict) -> bool:
+    """AND-gate: primary subdomain has a login-like title AND a TLS cert
+    SAN matching a known identity provider domain.
+
+    "Primary subdomain" = subdomains[0] (consistent with the existing
+    `primary_host = hosts[0]` pattern in derive_convenience). For
+    single-host assets there's one subdomain entry; for apex assets the
+    apex root usually isn't reachable, so reachability.title is None and
+    the AND-gate fails harmlessly to False.
+
+    Returns False for any unparseable / missing-data case — fail SAFE
+    (don't skip tools when we're not sure if the asset is auth-gated).
+    """
+    subs = asm_doc.get("subdomains") or []
+    if not subs:
+        return False
+
+    primary = subs[0]
+    if not isinstance(primary, dict):
+        return False
+
+    # (a) Title check
+    reach = primary.get("reachability") or {}
+    title = reach.get("title")
+    if not _title_matches_login(title):
+        return False
+
+    # (b) Cert SAN check — walk services[] for the 443 service's cert.
+    # Pattern matches normalize.py: services[N].cert.san is the canonical
+    # location. Some legacy paths put cert under .tls.* — defensive walk.
+    services = primary.get("services") or []
+    if not isinstance(services, list):
+        return False
+
+    for svc in services:
+        if not isinstance(svc, dict):
+            continue
+        # Only check HTTPS-facing services (port 443 typically; some
+        # alternate ports use TLS too)
+        port = svc.get("port")
+        if port not in (443, 8443):
+            continue
+        cert = svc.get("cert") or {}
+        san = cert.get("san")
+        if _cert_san_matches_idp(san):
+            return True  # AND-gate satisfied — both signals present
+
+    return False
+
+
 def derive_convenience(asm_doc: dict) -> dict[str, Any]:
     summary = asm_doc.get("summary") or {}
     subs = asm_doc.get("subdomains") or []
@@ -172,6 +304,10 @@ def derive_convenience(asm_doc: dict) -> dict[str, Any]:
         "service_count": int(summary.get("service_count") or 0),
         "newest_cert_expiry_days": summary.get("newest_cert_expiry_days"),
         "alive": alive,
+        # #24 Phase 2 — derived every asm-discover refresh (never latched
+        # per Q2 advisor 2026-06-15). Drives run_medium's skip wiring on
+        # auth-gated targets where unauth attack tools can't produce signal.
+        "auth_gated": compute_auth_gated(asm_doc),
     }
 
 
@@ -1047,6 +1183,7 @@ INSERT INTO public.asset_surface (
   subdomain_count, live_subdomain_count, host_count, service_count,
   newest_cert_expiry_days,
   discovered_via, first_discovered, last_seen,
+  auth_gated,
   surface_data, updated_at, updated_by
 )
 VALUES (
@@ -1055,6 +1192,7 @@ VALUES (
   %(subdomain_count)s, %(live_subdomain_count)s, %(host_count)s, %(service_count)s,
   %(newest_cert_expiry_days)s,
   %(discovered_via)s, %(first_discovered)s, %(last_seen)s,
+  %(auth_gated)s,
   %(surface_data)s, NOW(), %(updated_by)s
 )
 ON CONFLICT (asset_id) DO UPDATE SET
@@ -1072,6 +1210,10 @@ ON CONFLICT (asset_id) DO UPDATE SET
   discovered_via          = EXCLUDED.discovered_via,
   first_discovered        = COALESCE(public.asset_surface.first_discovered, EXCLUDED.first_discovered),
   last_seen               = GREATEST(public.asset_surface.last_seen, EXCLUDED.last_seen),
+  -- #24 Phase 2 — derived every asm-discover refresh, never latched
+  -- (per Q2 advisor 2026-06-15). Plain EXCLUDED SET so an asset that
+  -- goes public flips auth_gated false on the next 6h cron.
+  auth_gated              = EXCLUDED.auth_gated,
   surface_data            = EXCLUDED.surface_data,
   updated_at              = NOW(),
   updated_by              = EXCLUDED.updated_by;
