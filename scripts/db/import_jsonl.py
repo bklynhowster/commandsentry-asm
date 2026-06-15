@@ -27,10 +27,16 @@ combos in this import as `remediated` if they weren't re-observed in any of
 the incoming scans. Use this when ingesting an incremental re-scan; do NOT
 use with --truncate (pointless — the tables were just emptied).
 
-The importer ALWAYS calls refresh_all_asset_last_observed() and
-refresh_all_asset_posture() at the end so assets.last_observed and
-assets.current_risk reflect reality. Apply scripts/db/maintenance.sql at
+The importer ALWAYS calls refresh_all_asset_posture() at the end so
+assets.current_risk reflects reality. Apply scripts/db/maintenance.sql at
 least once before running this script.
+
+2026-06-15: refresh_all_asset_last_observed() was DROPPED (migration
+20260615a). It implemented B semantic (MAX(scans.completed_at)) which
+contradicts the A semantic for assets.last_observed (DISCOVERY clock —
+owned by import_asm_to_surface, monotonic via GREATEST, NOT bumped by
+light/medium scans or finding ingestion). import_jsonl no longer writes
+to assets.last_observed at all — full eject, see _asset_row docstring.
 """
 
 from __future__ import annotations
@@ -93,7 +99,16 @@ def coerce_int(v: Any) -> int | None:
 
 def _asset_row(asset_id: str, name: str | None = None, org: str = "unknown",
                asset_type: str = "single_host", stub: bool = False) -> tuple:
-    """Build a parameter tuple matching the assets INSERT column order."""
+    """Build a parameter tuple matching the assets INSERT column order.
+
+    NOTE: last_observed is intentionally NOT in this tuple (2026-06-15
+    full-eject). assets.last_observed is the DISCOVERY clock — owned by
+    import_asm_to_surface (asm-discover path), monotonic via GREATEST.
+    import_jsonl is the scan-results-ingest path and MUST NOT write to
+    the discovery clock. Stub-created rows get last_observed=NULL until
+    asm-discover sees them; the alerter correctly reads NULL as
+    'not yet discovered.'
+    """
     return (
         asset_id,
         name or asset_id,
@@ -101,7 +116,6 @@ def _asset_row(asset_id: str, name: str | None = None, org: str = "unknown",
         org,
         ["stub"] if stub else [],
         None,           # first_observed
-        None,           # last_observed
         "UNKNOWN",      # current_risk
         "stub asset auto-created during import for FK integrity" if stub else None,
         Json({}),
@@ -111,6 +125,12 @@ def _asset_row(asset_id: str, name: str | None = None, org: str = "unknown",
 def load_assets(cur, path: Path) -> int:
     rows = []
     for rec in read_jsonl(path):
+        # 2026-06-15 full-eject: last_observed deliberately excluded.
+        # See _asset_row docstring for rationale (discovery clock is
+        # owned by import_asm_to_surface, NOT by import_jsonl). Any
+        # `last_observed` value in the JSONL is intentionally ignored
+        # here — the asm-discover GREATEST writer is the only one that
+        # bumps assets.last_observed.
         rows.append((
             rec["asset_id"],
             rec.get("name") or rec["asset_id"],
@@ -118,7 +138,6 @@ def load_assets(cur, path: Path) -> int:
             rec.get("organization") or "command_companies",
             rec.get("tags") or [],
             get(rec, "first_observed"),
-            get(rec, "last_observed"),
             rec.get("current_risk") or "UNKNOWN",
             rec.get("current_risk_reason"),
             Json(rec.get("metadata") or {}),
@@ -129,16 +148,15 @@ def load_assets(cur, path: Path) -> int:
         """
         INSERT INTO assets (
             asset_id, name, type, organization, tags,
-            first_observed, last_observed, current_risk, current_risk_reason, metadata
+            first_observed, current_risk, current_risk_reason, metadata
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (asset_id) DO UPDATE SET
             name                = EXCLUDED.name,
             type                = EXCLUDED.type,
             organization        = EXCLUDED.organization,
             tags                = EXCLUDED.tags,
             first_observed      = COALESCE(assets.first_observed, EXCLUDED.first_observed),
-            last_observed       = EXCLUDED.last_observed,
             current_risk        = EXCLUDED.current_risk,
             current_risk_reason = EXCLUDED.current_risk_reason,
             metadata            = EXCLUDED.metadata
@@ -404,13 +422,16 @@ def main() -> None:
             if orphans:
                 print(f">> Auto-stubbing {len(orphans)} orphan asset(s): {orphans}")
                 stub_rows = [_asset_row(o, stub=True) for o in orphans]
+                # 2026-06-15 full-eject: last_observed deliberately excluded.
+                # Stub rows get last_observed=NULL until asm-discover sees
+                # them. Alerter reads NULL as "not yet discovered."
                 cur.executemany(
                     """
                     INSERT INTO assets (
                         asset_id, name, type, organization, tags,
-                        first_observed, last_observed, current_risk, current_risk_reason, metadata
+                        first_observed, current_risk, current_risk_reason, metadata
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (asset_id) DO NOTHING
                     """,
                     stub_rows,
@@ -500,12 +521,16 @@ def main() -> None:
                           f"as remediated across {len(scan_ids_in_batch)} scan(s)")
 
             if not args.no_refresh:
-                cur.execute("SELECT refresh_all_asset_last_observed()")
-                n_obs = cur.fetchone()[0] or 0
+                # 2026-06-15: refresh_all_asset_last_observed() was DROPPED
+                # (migration 20260615a). It implemented B semantic
+                # (MAX(scans.completed_at)) which contradicts the A semantic
+                # (assets.last_observed = DISCOVERY clock, owned by
+                # import_asm_to_surface, monotonic via GREATEST). Only
+                # refresh_all_asset_posture() remains — independent of
+                # last_observed, recomputes current_risk + reason only.
                 cur.execute("SELECT refresh_all_asset_posture()")
                 n_pos = cur.fetchone()[0] or 0
-                print(f">> Refresh: last_observed on {n_obs} asset(s), "
-                      f"posture recomputed for {n_pos} asset(s)")
+                print(f">> Refresh: posture recomputed for {n_pos} asset(s)")
 
         conn.commit()
 

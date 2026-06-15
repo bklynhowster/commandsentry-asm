@@ -12,7 +12,7 @@
     "organization": { "type": "string", "enum": ["command_companies", "command_digital", "command_financial", "command_missouri", "command_marketing", "unimac", "sci"] },
     "tags":         { "type": "array", "items": { "type": "string" } },
     "first_observed":  { "type": "string", "format": "date-time", "description": "Earliest scan date that observed this asset." },
-    "last_observed":   { "type": "string", "format": "date-time", "description": "Most recent scan date that observed this asset." },
+    "last_observed":   { "type": "string", "format": "date-time", "description": "Most recent DISCOVERY observation (asm-discover/surface, monotonic). NOT bumped by light/medium scans or finding ingestion. NULL until asm-discover has seen the asset at least once." },
     "current_risk":    { "type": "string", "enum": ["CRITICAL", "HIGH", "MODERATE-HIGH", "MODERATE", "LOW", "INFO", "UNKNOWN"] },
     "subdomains":      { "type": "array", "items": { "$ref": "subdomain.schema.json" } },
     "metadata":        { "type": "object", "description": "Free-form: hosting, registrar, WAF, etc.", "additionalProperties": true }

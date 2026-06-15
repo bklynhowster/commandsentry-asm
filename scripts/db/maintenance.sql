@@ -40,32 +40,28 @@ $$;
 
 
 -- ---------------------------------------------------------------------------
--- refresh_all_asset_last_observed()
---   Bulk version. Walks the assets table and recomputes from scans.
---   Uses COALESCE(completed_at, started_at) for the same reason as
---   refresh_asset_last_observed.
+-- refresh_all_asset_last_observed() — DROPPED 2026-06-15 (migration 20260615a)
+--
+-- This function implemented B semantic for assets.last_observed:
+-- MAX(scans.completed_at) over the scans table. It conflicted with the
+-- A semantic — assets.last_observed is the DISCOVERY clock, owned by
+-- scripts/db/import_asm_to_surface.py (asm-discover path), monotonic
+-- via GREATEST, NOT bumped by light/medium scans or finding ingestion.
+--
+-- The B-semantic function was actively called by import_jsonl.py on
+-- every JSONL import, clobbering the discovery clock with scan-time
+-- whenever new findings were ingested. The 2026-06-15 [2] fix:
+--   (a) schema.json doc updated to reflect A semantic explicitly
+--   (b) import_jsonl.py full-ejected last_observed from its asset UPSERT
+--   (c) this function dropped + import_jsonl.py call removed
+--
+-- The only other caller was backfills/20260518_close_revalidated_findings.sql
+-- (one-time backfill, completed 2026-05-18, tombstoned on 2026-06-15).
+--
+-- DO NOT re-add this function. If you need to recompute the discovery
+-- clock from history, write a NEW function that aggregates over the
+-- discovery-source equivalent — never over the general scans table.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION refresh_all_asset_last_observed()
-RETURNS integer
-LANGUAGE plpgsql AS $$
-DECLARE
-  v_n integer;
-BEGIN
-  WITH s AS (
-    SELECT asset_id,
-           MIN(COALESCE(started_at, completed_at)) AS first_seen,
-           MAX(COALESCE(completed_at, started_at)) AS last_seen
-      FROM scans
-     GROUP BY asset_id
-  )
-  UPDATE assets a
-     SET last_observed  = COALESCE(s.last_seen, a.last_observed),
-         first_observed = COALESCE(a.first_observed, s.first_seen)
-    FROM s
-   WHERE a.asset_id = s.asset_id;
-  GET DIAGNOSTICS v_n = ROW_COUNT;
-  RETURN v_n;
-END $$;
 
 
 -- ---------------------------------------------------------------------------

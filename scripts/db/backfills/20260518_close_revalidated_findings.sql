@@ -1,4 +1,24 @@
 -- ============================================================================
+-- ⚠️  OBSOLETE — DO NOT RE-RUN (tombstoned 2026-06-15)
+--
+-- This backfill calls `refresh_all_asset_last_observed()` at line 114,
+-- which was DROPPED in migration 20260615a as part of the [2]
+-- last_observed semantics fix (B → A). If re-run after that migration
+-- applies, this script will fail with "function does not exist" at the
+-- line 114 SELECT — that error is the correct signal that the backfill
+-- has been superseded.
+--
+-- Preserved as historical record of the 2026-05-18 close. The closure
+-- work itself (sections 1-3 of this file) is complete and durable in
+-- the DB. The refresh calls in section 4 were one-time recomputes for
+-- that backfill; the new A-semantic regime makes them moot.
+--
+-- DO NOT REVIVE without re-doing the [2] fix design — re-introducing
+-- the B semantic re-introduces the discovery-clock clobber that fix
+-- closed.
+-- ============================================================================
+
+-- ============================================================================
 -- BACKFILL — 2026-05-18 — Close 5/13-5/14 re-validated findings
 --
 -- Howie's CCC Scan 11 (5/13 PROD) + Scan 12 (5/14 TEST + Dave memos) +
