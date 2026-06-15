@@ -917,6 +917,7 @@ def test_flush_artifacts_per_artifact_isolation_one_bad_blob_does_not_crash():
 from run_medium import (  # noqa: E402
     MARK_DEGRADED_STDERR_ARTIFACT_CAP_BYTES,
     mark_tool_degraded,
+    nikto_is_degraded,
 )
 
 
@@ -1022,6 +1023,170 @@ def test_mark_tool_degraded_stderr_artifact_pairs_with_existing_tool_artifact():
     assert len(ctx.artifacts) == 2
     names = [a[0] for a in ctx.artifacts]
     assert names == ["nikto", "nikto_stderr"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# nikto_is_degraded — target_error_limit split (2026-06-15)
+# ═══════════════════════════════════════════════════════════════════════
+# Surfaced by scan_run 78a94f11 (myordersauth-test 2026-06-15): nikto ran
+# 444s, reached ~5% coverage, hit its internal 20-consecutive-errors
+# budget, and emitted:
+#   + ERROR: *** Error limit (20) reached for host, giving up. ***
+#   + ERROR: *** Consider using mitmproxy to avoid TLS fingerprinting. ***
+# Before this split, the generic `+ ERROR:` catchall fired runtime_error —
+# correct that the run is degraded, wrong that it's the same class as a
+# Bug E crash. Advisor design (Howie 2026-06-15):
+#   Three states: ok | runtime_error (crash) | target_error_limit (blocked partial)
+# Do NOT mirror the maxtime exclusion — error-limit is NOT "worked within
+# OUR budget," it's "target blocked us at 5% coverage." Treating it as
+# 'ok' would re-create the success-shaped-lie class the detector exists
+# to prevent.
+
+
+# Real fixture from scan_run 78a94f11 (truncated for test clarity)
+NIKTO_TARGET_ERROR_LIMIT_STDERR = (
+    "+ ERROR: *** Error limit (20) reached for host, giving up. "
+    "Last error: . ***\n"
+    "+ ERROR: *** Consider using mitmproxy to avoid TLS fingerprinting. ***\n"
+)
+
+# Real fixture from scan_run c14e2fe2 (Bug E class, write-crash)
+NIKTO_RUNTIME_CRASH_STDERR = (
+    "+ ERROR: Unable to open '' for write: No such file or directory at "
+    "/var/lib/nikto/plugins/nikto_report_text.plugin line 41.\n"
+)
+
+# Synthesized — maxtime cry-wolf guard fixture
+NIKTO_MAXTIME_ONLY_STDOUT = (
+    "- Nikto v2.6.0\n"
+    "+ Target Hostname: demo.testfire.net\n"
+    "+ Start Time: 2026-06-15 10:00:00 (GMT0)\n"
+    "+ [013587] /: Some finding\n"
+    "+ ERROR: Host maximum execution time of 540 seconds reached\n"
+    "+ End Time: 2026-06-15 10:09:00 (GMT0)\n"
+)
+
+
+def test_nikto_is_degraded_target_error_limit_primary_pattern():
+    """The "Error limit (N) reached for host" line is the load-bearing
+    primary signal. Match alone (without the mitmproxy hint) is
+    sufficient — nikto could remove the secondary hint in a future
+    version, primary line is the contract."""
+    is_deg, reason = nikto_is_degraded(
+        stdout="",
+        stderr="+ ERROR: *** Error limit (20) reached for host, giving up. ***",
+        rc=0,
+    )
+    assert is_deg is True
+    assert reason == "target_error_limit"
+
+
+def test_nikto_is_degraded_target_error_limit_secondary_pattern_alone():
+    """The mitmproxy hint alone is also sufficient — defensive against a
+    nikto version that uses different primary phrasing. Either signal
+    independently triggers."""
+    is_deg, reason = nikto_is_degraded(
+        stdout="",
+        stderr="+ ERROR: *** Consider using mitmproxy to avoid TLS fingerprinting. ***",
+        rc=0,
+    )
+    assert is_deg is True
+    assert reason == "target_error_limit"
+
+
+def test_nikto_is_degraded_target_error_limit_full_78a94f11_fixture():
+    """Full fixture from the surfacing scan_run. Confirms the real-world
+    shape that exposed this class lands cleanly on target_error_limit."""
+    is_deg, reason = nikto_is_degraded(
+        stdout="",
+        stderr=NIKTO_TARGET_ERROR_LIMIT_STDERR,
+        rc=0,
+    )
+    assert is_deg is True
+    assert reason == "target_error_limit"
+
+
+def test_nikto_is_degraded_runtime_error_still_fires_for_bug_e_class():
+    """Regression guard: the runtime_error reason must STILL fire for
+    Bug E class crashes (rc=2 + write-to-null report). The target_error_
+    limit split must not have swallowed the original detector."""
+    is_deg, reason = nikto_is_degraded(
+        stdout="- Nikto v2.6.0\n+ Target: demo.testfire.net\n",
+        stderr=NIKTO_RUNTIME_CRASH_STDERR,
+        rc=2,
+    )
+    assert is_deg is True
+    assert reason == "runtime_error"
+
+
+def test_nikto_is_degraded_maxtime_still_clean():
+    """Regression guard: maxtime exclusion must still hold. A run that
+    hit -maxtime is 'worked within OUR budget' — clean is honest."""
+    is_deg, reason = nikto_is_degraded(
+        stdout=NIKTO_MAXTIME_ONLY_STDOUT,
+        stderr="",
+        rc=0,
+    )
+    assert is_deg is False
+    assert reason == ""
+
+
+def test_nikto_is_degraded_error_limit_takes_precedence_over_runtime_error():
+    """Priority order matters. If BOTH error-limit AND a generic crash-
+    class `+ ERROR:` appear in the same run (unlikely but possible),
+    target_error_limit should win — it's the more specific reason and
+    the more accurate diagnostic. A crash mid-target-blocking is still
+    a target-blocking event from the operator's perspective."""
+    is_deg, reason = nikto_is_degraded(
+        stdout="",
+        stderr=(
+            "+ ERROR: *** Error limit (20) reached for host, giving up. ***\n"
+            "+ ERROR: Some other crash text that would normally fire runtime_error\n"
+        ),
+        rc=0,
+    )
+    assert is_deg is True
+    assert reason == "target_error_limit"
+
+
+def test_nikto_is_degraded_clean_run_with_no_errors_stays_clean():
+    """Baseline: a healthy run with banner + findings + clean End Time
+    returns (False, '')."""
+    is_deg, reason = nikto_is_degraded(
+        stdout=(
+            "- Nikto v2.6.0\n"
+            "+ Target: demo.testfire.net\n"
+            "+ Start Time: 2026-06-15 10:00:00 (GMT0)\n"
+            "+ [013587] /: Some finding\n"
+            "+ End Time: 2026-06-15 10:30:00 (GMT0)\n"
+        ),
+        stderr="",
+        rc=0,
+    )
+    assert is_deg is False
+    assert reason == ""
+
+
+def test_nikto_is_degraded_help_banner_still_fires():
+    """Regression guard on help_text_returned class."""
+    is_deg, reason = nikto_is_degraded(
+        stdout="",
+        stderr="Note: This is the short help output. Use -H for full help text.",
+        rc=0,
+    )
+    assert is_deg is True
+    assert reason == "help_text_returned"
+
+
+def test_nikto_is_degraded_module_not_found_still_fires():
+    """Regression guard on module_not_found class (no leading `+ `)."""
+    is_deg, reason = nikto_is_degraded(
+        stdout="",
+        stderr="ERROR: Required module not found: JSON\n",
+        rc=1,
+    )
+    assert is_deg is True
+    assert reason == "module_not_found"
 
 
 @pytest.mark.skip(reason=(

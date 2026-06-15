@@ -557,6 +557,37 @@ def nikto_is_degraded(stdout: str, stderr: str, rc: int) -> tuple[bool, str]:
           Cry-wolf safe: maxtime-capped runs print the banner before
           rc goes non-zero; healthy runs have rc == 0.
 
+    4. **target_error_limit** (added 2026-06-15 after scan_run
+       78a94f11): nikto has its own internal 20-consecutive-errors
+       budget. When the TARGET (not nikto's own machinery) rejects 20
+       requests in a row, nikto emits TWO specific stderr lines and
+       quits gracefully with partial coverage:
+         + ERROR: *** Error limit (20) reached for host, giving up. ***
+         + ERROR: *** Consider using mitmproxy to avoid TLS fingerprinting. ***
+       Surfaced on myordersauth-test (Azure App Service + Entra) — nikto
+       ran 444s, reached ~5% coverage, hit the error limit, terminated
+       with partial findings ("3 errors and 4 items reported").
+
+       DESIGN NOTE (advisor 2026-06-15, important): this is its OWN
+       degraded reason — NOT runtime_error, NOT 'ok'. Three states:
+         - 'ok'                 → tool worked within OUR budget
+         - 'runtime_error'      → tool CRASHED (Bug E class)
+         - 'target_error_limit' → TARGET blocked us partway through
+       Tempting trap: route error-limit to the maxtime-style exclude
+       list and mark clean. WRONG. maxtime = "worked within OUR -maxtime
+       budget" (clean is honest). error-limit = "target blocked us at
+       5% coverage" (incomplete is honest). Per this detector's docstring
+       rule: 'a degraded flag must mean tool FAILED, never tool worked
+       within its budget.' A target-blocked partial-coverage run with
+       5% reach is NOT "worked within budget" — it's incomplete because
+       of an external denial. Treating it as 'ok' would re-create the
+       success-shaped-lie class.
+
+       Implementation: priority order matters. Check error-limit FIRST
+       (more specific), then fall through to the generic `+ ERROR:`
+       runtime_error catch. The error-limit pattern is two distinct
+       lines that appear together; matching either marks the run.
+
     Verified post-fix against stored fixtures (all in scan_run history):
       - 7f8b18e8 / 1256B help banner (pre-Bug-D-fix) → help_text_returned
       - c14e2fe2 / rc=2 write-crash (stderr 221B)   → runtime_error
@@ -564,6 +595,7 @@ def nikto_is_degraded(stdout: str, stderr: str, rc: int) -> tuple[bool, str]:
       - 47bbdbff / rc=1 module-not-found (85B stderr) → module_not_found
       - synthesized maxtime-only run (header + items + Host max exec
         ERROR + clean End Time) → ok (cry-wolf guard)
+      - 78a94f11 / 148B "Error limit (20) reached" stderr → target_error_limit
     """
     combined = stdout + "\n" + stderr
     if "Note: This is the short help output" in combined:
@@ -572,6 +604,16 @@ def nikto_is_degraded(stdout: str, stderr: str, rc: int) -> tuple[bool, str]:
         return True, "help_text_returned"
     if "Required module not found" in combined:
         return True, "module_not_found"
+    # target_error_limit takes precedence over runtime_error — more
+    # specific reason. Two stderr lines that appear together when
+    # nikto's 20-consecutive-error budget is exhausted by the target.
+    # Either line alone is sufficient evidence (defensive — nikto could
+    # add/remove the secondary mitmproxy hint in a future version, the
+    # primary "Error limit" is the load-bearing signal).
+    if "Error limit (" in combined and "reached for host" in combined:
+        return True, "target_error_limit"
+    if "Consider using mitmproxy to avoid TLS fingerprinting" in combined:
+        return True, "target_error_limit"
     for line in combined.splitlines():
         s = line.strip()
         if s.startswith("+ ERROR:"):
@@ -581,6 +623,9 @@ def nikto_is_degraded(stdout: str, stderr: str, rc: int) -> tuple[bool, str]:
             # match.
             if "Host maximum execution time" in s:
                 continue
+            # target_error_limit is handled above as its own reason —
+            # don't double-fire here. The earlier checks already
+            # returned if either pattern matched.
             return True, "runtime_error"
     if rc != 0 and "Nikto v" not in stdout:
         # Non-zero exit AND nikto never printed its banner → it died
