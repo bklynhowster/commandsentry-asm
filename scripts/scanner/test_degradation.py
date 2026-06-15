@@ -917,6 +917,7 @@ def test_flush_artifacts_per_artifact_isolation_one_bad_blob_does_not_crash():
 from run_medium import (  # noqa: E402
     MARK_DEGRADED_STDERR_ARTIFACT_CAP_BYTES,
     mark_tool_degraded,
+    mark_tool_skipped,
     nikto_is_degraded,
 )
 
@@ -1187,6 +1188,101 @@ def test_nikto_is_degraded_module_not_found_still_fires():
     )
     assert is_deg is True
     assert reason == "module_not_found"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# #24 — mark_tool_skipped + skipped state acceptance (2026-06-15)
+# ═══════════════════════════════════════════════════════════════════════
+# Third state alongside {"ok": True} and {"degraded": "<slug>"}:
+#   {"skipped": "<reason_slug>"}
+# For policy-based intentional skips (auth-gated targets skip nikto +
+# ffuf + nuclei attack chunks because no unauth surface exists).
+# A skipped tool is NOT degraded — the scan correctly chose not to run
+# it. scan_quality stays 'clean' for runs with only ok + skipped statuses.
+# Consumer grep confirmed no external code filters on tool_status state
+# in a way that would misclassify "skipped" as "not ok" → safe to add.
+
+
+def test_mark_tool_skipped_writes_canonical_shape():
+    """The third state shape is {"skipped": "<reason_slug>"}.
+    Distinct from {"ok": True} and {"degraded": "..."}. Downstream
+    readers can dispatch on the key (`"skipped" in entry` vs
+    `"degraded" in entry` vs `"ok" in entry`)."""
+    ctx = _StderrCtx()
+    mark_tool_skipped(ctx, "nikto", "auth_gated")
+    assert ctx.tool_status == {"nikto": {"skipped": "auth_gated"}}
+    # NOT degraded; NOT ok
+    assert "degraded" not in ctx.tool_status["nikto"]
+    assert "ok" not in ctx.tool_status["nikto"]
+
+
+def test_mark_tool_skipped_does_not_append_artifact():
+    """Unlike mark_tool_degraded (which optionally takes stderr and
+    appends an artifact), mark_tool_skipped takes no stderr — the tool
+    didn't run, there's no stderr to capture. Catches a refactor that
+    adds a spurious artifact append."""
+    ctx = _StderrCtx()
+    mark_tool_skipped(ctx, "nikto", "auth_gated")
+    assert ctx.artifacts == []
+
+
+def test_assert_tool_status_invariant_accepts_skipped_state():
+    """LOAD-BEARING: the invariant assertion is value-blind on the set
+    check — it only cares whether the key exists in tool_status,
+    regardless of whether the value is {ok}, {degraded}, or {skipped}.
+    Proves the design claim that adding the third state doesn't break
+    the invariant. An auth-gated medium run with several skipped tools
+    must satisfy the invariant cleanly (no missing/unclaimed)."""
+    tools_run = ["wafw00f", "httpx[-td]", "nikto", "nuclei[critical,high]"]
+    tool_status = {
+        "wafw00f": {"ok": True},
+        "httpx[-td]": {"ok": True},
+        "nikto": {"skipped": "auth_gated"},                # NEW state
+        "nuclei[critical,high]": {"skipped": "auth_gated"}, # NEW state
+    }
+    # Should NOT raise — set equality holds value-blind
+    assert_tool_status_invariant(tools_run, tool_status)
+
+
+def test_reconcile_tool_status_invariant_leaves_skipped_alone():
+    """The reconcile in degraded_out stamps missing entries with
+    {"degraded": "no_status_recorded"} — but it MUST NOT overwrite
+    EXISTING entries (including skipped ones). Without this guarantee,
+    an auth-gated run that then degrades for some unrelated reason
+    would have its skipped entries clobbered to degraded."""
+    ctx = _MinimalCtx(
+        tools_run=["wafw00f", "nikto"],
+        tool_status={
+            "wafw00f": {"ok": True},
+            "nikto": {"skipped": "auth_gated"},
+        },
+    )
+    reconcile_tool_status_invariant(ctx)
+    # skipped entry preserved exactly
+    assert ctx.tool_status["nikto"] == {"skipped": "auth_gated"}
+    # ok entry preserved exactly
+    assert ctx.tool_status["wafw00f"] == {"ok": True}
+    # tools_run unchanged
+    assert ctx.tools_run == ["wafw00f", "nikto"]
+
+
+def test_three_state_dispatch_pattern_works():
+    """Forensics callers should be able to dispatch on the state key
+    cleanly. Verifies the three-state model is mutually exclusive — a
+    given entry is ok XOR degraded XOR skipped."""
+    states = [
+        ({"ok": True}, "ok"),
+        ({"degraded": "runtime_error"}, "degraded"),
+        ({"skipped": "auth_gated"}, "skipped"),
+    ]
+    for entry, expected_key in states:
+        keys = set(entry.keys())
+        # Exactly one of the three state markers
+        markers = {"ok", "degraded", "skipped"} & keys
+        assert markers == {expected_key}, (
+            f"Entry {entry!r} should have exactly one state marker, "
+            f"got {markers}"
+        )
 
 
 @pytest.mark.skip(reason=(

@@ -453,6 +453,42 @@ MARK_DEGRADED_STDERR_ARTIFACT_CAP_BYTES = 64 * 1024  # 64KB
 MARK_DEGRADED_STDERR_LOG_CAP_BYTES = 4 * 1024        # 4KB
 
 
+def mark_tool_skipped(ctx: ScanContext, tool_name: str, reason: str) -> None:
+    """Record that a tool was INTENTIONALLY SKIPPED (not run, not degraded).
+
+    Third state alongside {"ok": True} and {"degraded": "<slug>"}:
+        {"skipped": "<reason_slug>"}
+
+    Examples of reasons:
+        "auth_gated"  — target is an IdP login page, no unauth attack surface
+        (future)      — other policy-based skip classes
+
+    LOAD-BEARING distinction: a SKIPPED tool is NOT degraded. The scan
+    correctly chose not to run it because it cannot produce useful output
+    against this target class. Routing skipped to degraded would re-create
+    the "degraded flag means tool worked within its budget" anti-pattern
+    (see nikto_is_degraded docstring on the target_error_limit split).
+    The 2026-06-15 [1] fix established three states for accurate
+    forensics; this 2026-06-15 #24 fix extends that to the skip case.
+
+    Set-equality invariant: callers MUST append to tools_run BEFORE
+    calling this (same lockstep as mark_tool_degraded). assert_tool_
+    status_invariant is value-blind on the set check, so "skipped"
+    entries satisfy it as long as the key is present.
+
+    scan_quality semantics: a run with only ok + skipped statuses stays
+    scan_quality='clean'. degraded_out is only triggered by raise
+    DegradedRunError, which mark_tool_skipped DOES NOT raise. Therefore
+    findings from auth-gated runs (wafw00f + httpx + nuclei[tech])
+    remain validatable, which is correct — those tools' output IS clean,
+    we just chose not to run the others.
+
+    NO stderr kwarg (unlike mark_tool_degraded) — skipped tools didn't
+    execute, there's no stderr to capture.
+    """
+    ctx.tool_status[tool_name] = {"skipped": reason}
+
+
 def mark_tool_degraded(
     ctx: ScanContext,
     tool_name: str,

@@ -262,6 +262,20 @@ def mark_tool_degraded(ctx: ScanContext, tool_name: str, reason: str) -> None:
     ctx.tool_status[tool_name] = {"degraded": reason}
 
 
+def mark_tool_skipped(ctx: ScanContext, tool_name: str, reason: str) -> None:
+    """Record that a tool was INTENTIONALLY SKIPPED (third state — see
+    run_medium.py mark_tool_skipped docstring for full design rationale).
+
+    Shape: {"skipped": "<reason_slug>"}. A skipped tool is NOT degraded;
+    a run with only ok + skipped statuses stays scan_quality='clean'.
+    Light tier currently has no skip cases wired but the helper is
+    mirrored here for parity with run_medium so future light-tier
+    policy skips (e.g. dns_posture on internal-only assets) have the
+    helper ready.
+    """
+    ctx.tool_status[tool_name] = {"skipped": reason}
+
+
 def tls_check_is_degraded(exception: BaseException) -> tuple[bool, str]:
     """Python ssl/socket exceptions during TLS handshake.
     Distinguishes "connection refused" (target down — degraded) from
