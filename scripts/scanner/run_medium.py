@@ -426,6 +426,21 @@ class ScanContext:
     # so any health failure aborts immediately — the validate run is
     # PRISTINE-or-NOTHING, never "rotated to find another path."
     validate_mode: bool = False
+    # #33 (2026-06-16) — ffuf catch-all redirect calibration. Set at the
+    # start of run_ffuf_chunked by detect_ffuf_catchall_redirect(): if the
+    # target redirects a known-random path with 301/302/307, the redirect
+    # Location is the catch-all baseline. Per-path ffuf findings whose
+    # redirect_to == this baseline get suppressed at emit time (they all
+    # mean the same fact: "this host redirects everything here") and
+    # collapsed into one summary INFO finding. EXACT-equality match —
+    # distinct redirects and 200/204/401/403 matches still emit
+    # individually as before. None = no catch-all detected → suppression
+    # is a no-op, per-path emission unchanged.
+    ffuf_catchall_redirect: str | None = None
+    # Count of per-path ffuf findings suppressed because they matched the
+    # catch-all baseline. Drives the collapsed summary finding at end of
+    # run_ffuf_chunked.
+    ffuf_catchall_count: int = 0
     # #32 (2026-06-16) — set True the FIRST time any tool successfully
     # gets a real HTTP response from the target (wafw00f verdict
     # parsed / httpx tech-detect parsed / nuclei chunk completed with
@@ -923,6 +938,123 @@ def healthcheck(ctx: ScanContext) -> tuple[bool, int]:
     code = int(m.group(1))
     healthy = code not in BAN_OR_PATH_DOWN_CODES
     return healthy, code
+
+
+def should_suppress_ffuf_redirect(
+    redirect_to: str, baseline: str | None
+) -> bool:
+    """#33 (2026-06-16) suppression predicate. True iff the ffuf result's
+    redirect Location matches the calibrated catch-all baseline EXACTLY.
+
+    Empty redirect or no baseline → False (no suppression). EXACT-equality
+    only — this is the load-bearing safety vs. the 59ad6a13 regression
+    that hid real /admin findings under a blanket -fc/-fs filter.
+    Distinct redirects (≠ baseline) and any non-redirect status
+    (200/204/401/403) → no suppression → emit per-path as today.
+
+    Pure function — testable without subprocess. Pins the EXACT-equality
+    semantic so a future "helpful" refactor to startswith / substring /
+    URL-normalized match trips a test immediately.
+    """
+    return bool(redirect_to and baseline and redirect_to == baseline)
+
+
+def emit_ffuf_catchall_summary(ctx: ScanContext) -> None:
+    """#33 collapsed summary emit. If the calibration probe detected a
+    host-wide redirect AND ffuf saw N per-path matches collapsed into
+    it, emit ONE INFO finding summarizing the count. Idempotent: no-op
+    if no catchall detected or count is 0.
+
+    Called once at end of run_ffuf_chunked AFTER all chunks complete.
+    The per-path findings are NOT in ctx.findings (suppressed at emit
+    time inside the loop); this is the single replacement finding.
+    """
+    if ctx.ffuf_catchall_count <= 0 or not ctx.ffuf_catchall_redirect:
+        return
+    # Slug derived from the redirect URL for stable finding_id semantics
+    # — same finding re-emerges across re-scans with the same redirect,
+    # so the row matches on re-detect rather than fragmenting into new
+    # finding_ids.
+    slug = re.sub(r"[^a-z0-9]+", "-",
+                  ctx.ffuf_catchall_redirect.lower())[:60].strip("-") \
+           or "catchall-redirect"
+    ctx.findings.append(MediumFinding(
+        check_name=f"ffuf-catchall-redirect-{slug}",
+        title=(
+            f"Catch-all redirect → {ctx.ffuf_catchall_redirect} "
+            f"({ctx.ffuf_catchall_count} paths)"
+        ),
+        severity="INFO",
+        category="info_disclosure",
+        description=(
+            f"{ctx.ffuf_catchall_count} wordlist paths on "
+            f"{ctx.hostname} uniformly redirect to "
+            f"{ctx.ffuf_catchall_redirect} regardless of existence — "
+            f"directory discovery is not meaningful on this host "
+            f"(likely a self-hosted login/auth gate). Per-path "
+            f"results suppressed as non-discriminating. Distinct "
+            f"redirects and 200/204/401/403 responses still emit "
+            f"individually."
+        ),
+        tags=["ffuf", "directory", "discovery", "catchall_redirect"],
+        raw_excerpt=(
+            f"Calibration probe: random path → "
+            f"{ctx.ffuf_catchall_redirect}\n"
+            f"Suppressed per-path matches: {ctx.ffuf_catchall_count}"
+        ),
+    ))
+
+
+def detect_ffuf_catchall_redirect(ctx: ScanContext) -> str | None:
+    """#33 (2026-06-16) ffuf catch-all calibration. Probe a known-random
+    path; if the host returns 301/302/307 with a redirect Location, that
+    Location is the catch-all baseline. Per-path ffuf findings later
+    matching this Location get suppressed (one fact, not N phantoms).
+
+    Returns:
+        Location string (absolute URL) if catch-all detected, else None.
+
+    Uses httpx — same Go stack ffuf runs, so Location semantics agree
+    (no chance of probe-vs-tool divergence like the #32 curl/httpx
+    fingerprint issue). Best-effort: any failure → None (no suppression,
+    per-path emission unchanged from pre-#33 behavior).
+
+    NOT a tool registration. Does NOT touch ctx.tools_run, ctx.tool_status,
+    or the trust-layer invariant. The calibration probe is auxiliary
+    state used at emit time inside ffuf — its success/failure has no
+    bearing on the run's scan_quality.
+    """
+    import uuid as _uuid
+    random_path = f"cs-calib-{_uuid.uuid4().hex[:12]}"
+    rc, stdout, _ = run_cmd(
+        ["httpx",
+         "-silent", "-status-code", "-location", "-json", "-no-color",
+         "-timeout", "10",
+         "-H", f"User-Agent: {pick_ua()}",
+         "-u", f"https://{ctx.hostname}/{random_path}"],
+        timeout=15,
+    )
+    if rc != 0:
+        return None
+    line = stdout.strip().splitlines()[0] if stdout.strip() else ""
+    if not line:
+        return None
+    try:
+        data = json.loads(line)
+    except Exception:
+        return None
+    status_code = data.get("status_code", 0)
+    if status_code not in (301, 302, 307):
+        return None
+    # httpx field names for redirect Location vary slightly across
+    # versions. Try the most likely candidates in preference order.
+    # "location" is the canonical Location header value (relative or
+    # absolute). "final_url" is set when -follow-redirects is used (we
+    # don't, but defensive). Anything truthy wins.
+    location = data.get("location") or data.get("final_url")
+    if not location:
+        return None
+    return str(location).strip() or None
 
 
 def ensure_healthy_egress(
@@ -2167,6 +2299,17 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str],
         redirect_to = r.get("redirectlocation", "") or ""
         ctx.response_codes[str(status)] += 1
 
+        # #33 (2026-06-16) — catch-all redirect suppression. If the
+        # baseline calibration at run_ffuf_chunked start detected a
+        # host-wide redirect (every random path → same Location), each
+        # per-path 302→same-L is non-discriminating noise. Count it
+        # but don't emit a per-path finding; the collapsed summary at
+        # end-of-chunked-loop emits ONE INFO covering all of them.
+        # EXACT-equality semantic is locked in should_suppress_ffuf_redirect.
+        if should_suppress_ffuf_redirect(redirect_to, ctx.ffuf_catchall_redirect):
+            ctx.ffuf_catchall_count += 1
+            continue
+
         # Title + description per status class. Trust ffuf -mc as the
         # promotion gate; don't second-guess on the Python side.
         if status in (200, 204):
@@ -2249,6 +2392,25 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
             mark_tool_skipped(ctx, chunk_name, "auth_gated")
         return
 
+    # #33 (2026-06-16) — ffuf catch-all redirect calibration. Probe a
+    # known-random path BEFORE the chunk loop. If the host returns
+    # 301/302/307 with a redirect Location, every per-path 302→same-L
+    # finding ffuf produces is the same fact mint'd N times. The
+    # calibration is chunk-agnostic — single baseline applied across
+    # all chunks via ctx.ffuf_catchall_redirect. Suppression logic in
+    # run_ffuf_chunk emit loop; collapsed summary finding at end of
+    # this function. See detect_ffuf_catchall_redirect docstring for
+    # safety analysis vs. the 59ad6a13 regression (blanket -fc/-fs
+    # filter that hid real /admin/swagger).
+    ctx.ffuf_catchall_redirect = detect_ffuf_catchall_redirect(ctx)
+    if ctx.ffuf_catchall_redirect:
+        log(f"  ffuf catch-all calibration: host redirects random paths "
+            f"→ {ctx.ffuf_catchall_redirect} (per-path matches will be "
+            f"suppressed + collapsed into one summary INFO)")
+    else:
+        log("  ffuf catch-all calibration: no host-wide redirect detected "
+            "(per-path emission unchanged)")
+
     for i, words in enumerate(chunks):
         # 2026-06-13: chunk_name uses #index to disambiguate ffuf[25w]#1
         # vs ffuf[25w]#2 vs ffuf[25w]#3 — duplicate-word-count chunks
@@ -2313,6 +2475,13 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
         if ctx.total_requests >= MAX_REQUESTS_TOTAL:
             log(f"hit hard request ceiling — stopping ffuf")
             break
+
+    # #33 (2026-06-16) — collapsed catch-all summary. Helper does the
+    # emit + idempotency check. See emit_ffuf_catchall_summary docstring.
+    if ctx.ffuf_catchall_count > 0 and ctx.ffuf_catchall_redirect:
+        log(f"  ffuf catch-all summary: {ctx.ffuf_catchall_count} per-path "
+            f"matches collapsed into 1 INFO (all → {ctx.ffuf_catchall_redirect})")
+    emit_ffuf_catchall_summary(ctx)
 
 
 # ─── SQL helpers (DUPED from run_light — TODO: refactor) ───────────────

@@ -1797,6 +1797,152 @@ def test_prior_tool_success_short_circuit_field_default_is_false():
     )
 
 
+# ─── #33 — ffuf catch-all redirect calibration (2026-06-16) ──────────
+# Surfaced by scan_run c30bd212: ftp.sciimage.com 302-redirects every
+# path to /Web/Account/Login.htm — ffuf emitted 99 phantom INFOs, one
+# per wordlist entry. Fix: baseline calibration probes a random path
+# at start of run_ffuf_chunked; per-path matches to the same Location
+# are suppressed at emit + collapsed into one summary finding.
+
+
+def test_should_suppress_ffuf_redirect_exact_match_returns_true():
+    """LOAD-BEARING — the EXACT-equality safety vs. the 59ad6a13
+    regression (blanket -fc/-fs filter that hid real /admin findings).
+    A per-path redirect that EXACTLY matches the baseline gets
+    suppressed."""
+    from run_medium import should_suppress_ffuf_redirect
+    baseline = "https://ftp.sciimage.com/Web/Account/Login.htm"
+    assert should_suppress_ffuf_redirect(baseline, baseline) is True
+
+
+def test_should_suppress_ffuf_redirect_distinct_redirect_emits():
+    """Distinct redirect (≠ baseline) MUST NOT be suppressed — that's
+    real signal (a /<word> path with a different Location is genuinely
+    different from the catch-all)."""
+    from run_medium import should_suppress_ffuf_redirect
+    baseline = "https://ftp.sciimage.com/Web/Account/Login.htm"
+    distinct = "https://ftp.sciimage.com/Some/Other/Page.htm"
+    assert should_suppress_ffuf_redirect(distinct, baseline) is False
+
+
+def test_should_suppress_ffuf_redirect_no_baseline_emits_everything():
+    """No baseline calibrated (None) → no suppression → per-path
+    emission unchanged from pre-#33 behavior. Targets without a
+    host-wide redirect (most apps) work exactly as before."""
+    from run_medium import should_suppress_ffuf_redirect
+    assert should_suppress_ffuf_redirect("https://anywhere/x", None) is False
+    assert should_suppress_ffuf_redirect("", None) is False
+
+
+def test_should_suppress_ffuf_redirect_empty_redirect_emits():
+    """Empty redirect (200/204/401/403 result with no Location header)
+    → no suppression. Non-redirect ffuf results are unaffected."""
+    from run_medium import should_suppress_ffuf_redirect
+    baseline = "https://ftp.sciimage.com/Web/Account/Login.htm"
+    assert should_suppress_ffuf_redirect("", baseline) is False
+    assert should_suppress_ffuf_redirect(None, baseline) is False  # type: ignore[arg-type]
+
+
+def test_should_suppress_ffuf_redirect_no_substring_match():
+    """Regression guard against a future 'helpful' refactor to
+    startswith / substring match. Suppression is EXACT-equality only.
+    A path that redirects to a URL SHARING A PREFIX with the baseline
+    is genuinely different and must emit."""
+    from run_medium import should_suppress_ffuf_redirect
+    baseline = "https://ftp.sciimage.com/Web/Account/Login.htm"
+    # Same prefix, different actual path — must NOT be suppressed
+    similar = "https://ftp.sciimage.com/Web/Account/Login.htm/extra"
+    assert should_suppress_ffuf_redirect(similar, baseline) is False
+    # Same suffix, different host — must NOT be suppressed
+    different_host = "https://other.example.com/Web/Account/Login.htm"
+    assert should_suppress_ffuf_redirect(different_host, baseline) is False
+
+
+def test_emit_ffuf_catchall_summary_no_op_when_count_zero():
+    """If no per-path findings were suppressed (no catchall detected or
+    no wordlist words matched it), don't emit a summary. ctx.findings
+    must not grow."""
+    from run_medium import ScanContext, emit_ffuf_catchall_summary
+    ctx = ScanContext(
+        descriptor={}, hostname="example.com", asset_id="example.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+    )
+    ctx.ffuf_catchall_redirect = "https://example.com/login"
+    ctx.ffuf_catchall_count = 0  # no per-path matches collapsed
+    pre_findings_count = len(ctx.findings)
+    emit_ffuf_catchall_summary(ctx)
+    assert len(ctx.findings) == pre_findings_count, (
+        "no-op required when ffuf_catchall_count is 0"
+    )
+
+
+def test_emit_ffuf_catchall_summary_no_op_when_no_baseline():
+    """If no baseline was calibrated (None), don't emit. The count
+    SHOULDN'T be > 0 in that case (the suppression predicate requires
+    a baseline), but defensive."""
+    from run_medium import ScanContext, emit_ffuf_catchall_summary
+    ctx = ScanContext(
+        descriptor={}, hostname="example.com", asset_id="example.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+    )
+    ctx.ffuf_catchall_redirect = None
+    ctx.ffuf_catchall_count = 5  # defensive — shouldn't happen
+    pre_findings_count = len(ctx.findings)
+    emit_ffuf_catchall_summary(ctx)
+    assert len(ctx.findings) == pre_findings_count
+
+
+def test_emit_ffuf_catchall_summary_emits_exactly_one_finding():
+    """The headline behavior — 99 phantom per-path findings become 1
+    summary INFO. The summary carries the count + the redirect URL
+    + INFO severity (never higher — nikto/ffuf can't self-assign
+    MODERATE+ per #28 discipline)."""
+    from run_medium import ScanContext, emit_ffuf_catchall_summary
+    ctx = ScanContext(
+        descriptor={}, hostname="ftp.sciimage.com",
+        asset_id="ftp.sciimage.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+    )
+    ctx.ffuf_catchall_redirect = (
+        "https://ftp.sciimage.com/Web/Account/Login.htm"
+    )
+    ctx.ffuf_catchall_count = 99
+    emit_ffuf_catchall_summary(ctx)
+    assert len(ctx.findings) == 1
+    finding = ctx.findings[0]
+    assert finding.severity == "INFO"
+    assert "Catch-all redirect" in finding.title
+    assert "99" in finding.title
+    assert "Web/Account/Login.htm" in finding.title
+    # Tagged for filterability
+    assert "catchall_redirect" in finding.tags
+    assert "ffuf" in finding.tags
+    # Stable slug shape — same redirect → same finding_id on re-scan
+    assert finding.check_name.startswith("ffuf-catchall-redirect-")
+
+
+def test_ffuf_catchall_field_defaults():
+    """Lock-in: new ScanContext fields default to safe non-suppressing
+    values. ffuf_catchall_redirect=None means suppression is a no-op
+    by default; ffuf_catchall_count=0 means no summary emission by
+    default. Catches a refactor that defaults to suppress-all."""
+    from run_medium import ScanContext
+    ctx = ScanContext(
+        descriptor={}, hostname="example.com", asset_id="example.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+    )
+    assert ctx.ffuf_catchall_redirect is None
+    assert ctx.ffuf_catchall_count == 0
+
+
 def test_target_proven_reachable_field_settable():
     """Sanity: the field is writable. Sites that get a real HTTP
     response from the target (detect_waf parse, detect_tech_stack
