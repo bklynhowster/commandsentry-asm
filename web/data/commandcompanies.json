@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-16T17:11:03Z_c9ff5e54",
-    "started_at": "2026-06-16T17:11:03Z",
-    "completed_at": "2026-06-16T17:13:48Z",
-    "duration_seconds": 165,
+    "id": "scan_2026-06-16T21:12:57Z_06bd23cf",
+    "started_at": "2026-06-16T21:12:57Z",
+    "completed_at": "2026-06-16T21:15:26Z",
+    "duration_seconds": 149,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-16T17:13:48Z",
-      "last_seen": "2026-06-16T17:13:48Z",
+      "first_discovered": "2026-06-16T21:15:26Z",
+      "last_seen": "2026-06-16T21:15:26Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -197,10 +197,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "MS=ms93622757",
           "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
-          "apple-domain-verification=cWkfjNKuM61a3EZ6"
+          "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+          "MS=ms93622757"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -307,8 +307,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-16T17:13:48Z",
-      "last_seen": "2026-06-16T17:13:48Z",
+      "first_discovered": "2026-06-16T21:15:27Z",
+      "last_seen": "2026-06-16T21:15:27Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -449,8 +449,8 @@
       ],
       "dns": {
         "a": [
-          "199.16.172.42",
-          "199.16.173.153"
+          "199.16.173.153",
+          "199.16.172.42"
         ],
         "aaaa": [],
         "cname": "commandcompanies.com",
@@ -460,10 +460,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
-          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
-          "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
           "MS=ms93622757",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
+          "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -568,7 +568,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-06-16T11:26:16Z_7b8fc5c1",
+    "since_scan": "scan_2026-06-16T17:11:03Z_c9ff5e54",
     "added": {
       "subdomains": [],
       "services": [],
@@ -586,42 +586,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-05-18T22:35:47Z_a12e0c56",
-      "started_at": "2026-05-18T22:35:47Z",
-      "completed_at": "2026-05-18T22:37:08Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 1,
-      "service_count": 4,
-      "subdomain_names": [
-        "commandcompanies.com",
-        "www.commandcompanies.com"
-      ],
-      "ports_by_sub": {
-        "commandcompanies.com": {
-          "199.16.172.54": [
-            80,
-            443
-          ]
-        },
-        "www.commandcompanies.com": {
-          "199.16.172.54": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Contact Form 7": "6.1.6",
-        "Slider Revolution": "6.7.55",
-        "WP Google Map Plugin": "4.9.4",
-        "WPMU DEV Smush": "4.0.3",
-        "Yoast SEO": "27.6",
-        "imagesLoaded": "5.0.0",
-        "jQuery Migrate": "3.4.1"
-      }
-    },
     {
       "scan_id": "scan_2026-05-19T04:14:29Z_c66b9cac",
       "started_at": "2026-05-19T04:14:29Z",
@@ -5118,6 +5082,47 @@
       "scan_id": "scan_2026-06-16T17:11:03Z_c9ff5e54",
       "started_at": "2026-06-16T17:11:03Z",
       "completed_at": "2026-06-16T17:13:48Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.42": [
+            80,
+            443
+          ],
+          "199.16.173.153": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.42": [
+            80,
+            443
+          ],
+          "199.16.173.153": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.3",
+        "Slider Revolution": "6.7.57",
+        "Yoast SEO": "27.8",
+        "jQuery Migrate": "3.4.1"
+      }
+    },
+    {
+      "scan_id": "scan_2026-06-16T21:12:57Z_06bd23cf",
+      "started_at": "2026-06-16T21:12:57Z",
+      "completed_at": "2026-06-16T21:15:26Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 2,
