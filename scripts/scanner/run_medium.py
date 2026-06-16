@@ -1684,12 +1684,21 @@ NIKTO_FINDING_RE = re.compile(r"^\[(\d+)\]\s+(\S+?):\s+(.+)$")
 # issues, not header checks already done in light.
 NIKTO_HEADER_DEDUP_PATTERN = "Suggested security header missing"
 
-# #28 footer guard — parse nikto's "N item(s) reported" summary line.
+# #28 footer guard — parse nikto's "N items reported" summary line.
 # Log warning if shape-matched count diverges from footer count
 # (indicates parser drift — nikto changed its finding-line format or
 # we missed an [ID] range edge case). Doesn't fail the scan; just
 # surfaces a clear maintenance signal.
-NIKTO_FOOTER_COUNT_RE = re.compile(r"(\d+)\s+item\(s\)\s+reported")
+#
+# 2026-06-15 #28 follow-up: original regex required literal "item(s)"
+# but real nikto v2.6.0 emits "items" (bare plural). Advisor verified
+# against scan_run 14714f2f's stored stdout — synthesized fixture
+# diverged from real output on exactly this string, which hid the
+# dead guard. Broadened to match three forms: bare "item", plural
+# "items", and the parenthesized "item(s)" some nikto versions use.
+# Real data is the test surface — the regression fixture is now the
+# verbatim stored stdout, not a from-memory synthesis.
+NIKTO_FOOTER_COUNT_RE = re.compile(r"(\d+)\s+item(?:s|\(s\))?\s+reported")
 
 
 def _nikto_severity_for_id(nikto_id: str) -> str:

@@ -1305,30 +1305,51 @@ def test_three_state_dispatch_pattern_works():
 #   - Footer-guard for parser-drift detection.
 
 
-# Fixture mirroring the 13 lines from the FortiWeb run (scan_run 14714f2f).
-# 9 scaffolding/meta lines (no [ID]) → DROP at shape gate
-# 2 header-missing lines ([013587]) → DROP at Q1 dedup
-# 2 informational lines ([999992] + [999962]) → KEEP as INFO
-NIKTO_FORTIWEB_FIXTURE = """- Nikto v2.6.0
+# Fixture is the VERBATIM raw nikto stdout from scan_run
+# 14714f2f-0446-4686-a593-49da179a508f (test.commandcommcentral.com,
+# 2026-06-15 17:27-17:36 UTC). Pulled from scan_run_artifacts on
+# 2026-06-15 — real data is the test surface.
+#
+# Note (2026-06-15 follow-up): the earlier synthesized fixture had
+# "4 item(s) reported on remote host" but real nikto v2.6.0 emits
+# "4 items reported on the remote host" — bare "items", no parens.
+# That divergence let the original NIKTO_FOOTER_COUNT_RE silently
+# fail against real output for the entire #28 PR window. Lesson
+# pinned: synthesize-from-memory is unsafe for regex-target text;
+# real verbatim or nothing.
+#
+# Shape:
+#   1 nikto banner ("- Nikto v2.6.0") starts with "-" → bypass
+#   Scaffolding/meta (Target IP/Hostname/Port, SSL Info + continuation
+#     lines, Platform, Start Time, Server, No CGI, Scan terminated,
+#     End Time, host(s) tested) — no [ID] → DROP at shape gate
+#   2 header-missing lines ([013587]) → DROP at Q1 dedup
+#   2 informational lines ([999992] wildcard cert + [999962] banner
+#     changed) → KEEP as INFO
+#   Footer reports 4 items (matches the 4 [<id>] lines).
+NIKTO_FORTIWEB_FIXTURE = """-***** Pausing 1 second(s) per request
+- Nikto v2.6.0
 ---------------------------------------------------------------------------
-+ Target IP:          203.0.113.42
++ Target IP:          24.38.70.8
 + Target Hostname:    test.commandcommcentral.com
 + Target Port:        443
 ---------------------------------------------------------------------------
-+ SSL Info:           Subject:  /CN=*.commandcommcentral.com
-                      Ciphers:  TLS_AES_256_GCM_SHA384
-                      Issuer:   /C=US/O=DigiCert Inc/CN=GeoTrust TLS RSA CA G1
++ SSL Info:           Subject:  /C=US/ST=New Jersey/L=Secaucus/O=Strategic Content Imaging/CN=*.commandcommcentral.com
+                      CN:       *.commandcommcentral.com
+                      SAN:      *.commandcommcentral.com, commandcommcentral.com
+                      Ciphers:  ECDHE-RSA-AES256-GCM-SHA384
+                      Issuer:   /C=US/ST=Arizona/L=Scottsdale/O=GoDaddy.com, Inc./OU=http:\\/\\/certs.godaddy.com\\/repository\\//CN=Go Daddy Secure Certificate Authority - G2
 + Platform:           Linux/Unix
-+ Start Time:         2026-06-15 12:00:00 (GMT0)
++ Start Time:         2026-06-15 17:27:18 (GMT0)
 ---------------------------------------------------------------------------
 + Server: No banner retrieved
 + No CGI Directories found (use '-C all' to force check all possible dirs). CGI tests skipped.
++ [999992] /: Server is using a wildcard certificate: *.commandcommcentral.com. See: https://en.wikipedia.org/wiki/Wildcard_certificate
++ [999962] /: Server banner changed from 'Microsoft-HTTPAPI/2.0' to ''.
 + [013587] /: Suggested security header missing: referrer-policy. See: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Referrer-Policy
 + [013587] /: Suggested security header missing: permissions-policy. See: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Permissions-Policy
-+ [999992] /: Server is using a wildcard certificate. This may not be desirable.
-+ [999962] /: Server banner changed from '' to ''. See: http://cwe.mitre.org/data/definitions/200.html
-+ Scan terminated: 0 error(s) and 4 item(s) reported on remote host
-+ End Time:           2026-06-15 12:08:00 (GMT0) (480 seconds)
++ Scan terminated: 0 errors and 4 items reported on the remote host
++ End Time:           2026-06-15 17:36:50 (GMT0) (572 seconds)
 ---------------------------------------------------------------------------
 + 1 host(s) tested
 """
@@ -1445,6 +1466,45 @@ def test_nikto_footer_count_returns_none_when_absent():
     a footer line."""
     stdout_no_footer = "- Nikto v2.6.0\n+ Target IP: 1.2.3.4\n"
     assert extract_nikto_footer_count(stdout_no_footer) is None
+
+
+def test_nikto_footer_count_handles_all_three_text_forms():
+    """LOAD-BEARING follow-up (2026-06-15): the original regex required
+    literal 'item(s)' (parenthesized), but real nikto v2.6.0 emits
+    'items' (bare plural). The synthesized fixture coincidentally had
+    'item(s)' which masked the bug for an entire PR window — the
+    footer guard was silently dead against real output.
+
+    Lock in all three forms the regex MUST match:
+      'N item reported'    — singular (some older nikto)
+      'N items reported'   — bare plural (nikto v2.6.0, real output)
+      'N item(s) reported' — parenthesized (some other versions)
+
+    Any future regex change that re-narrows on this string trips this
+    test immediately."""
+    cases = [
+        ("4 items reported on the remote host", 4),       # nikto v2.6.0 real
+        ("12 item(s) reported on remote host", 12),       # parenthesized
+        ("1 item reported", 1),                            # singular
+        ("0 items reported on the remote host", 0),       # zero plural
+    ]
+    for footer_text, expected in cases:
+        # Build a minimal stdout snippet around each footer text
+        stdout = f"- Nikto v2.6.0\n+ Scan terminated: 0 errors and {footer_text}\n"
+        got = extract_nikto_footer_count(stdout)
+        assert got == expected, (
+            f"footer text {footer_text!r} should yield {expected}, got {got!r}. "
+            f"Regex change re-narrowed the footer matcher?"
+        )
+
+
+def test_nikto_footer_count_against_real_fortiweb_stdout():
+    """Verbatim-real-data regression. The FORTIWEB fixture is the actual
+    raw nikto stdout from scan_run 14714f2f. Footer says
+    '4 items reported on the remote host' — bare 'items', no parens.
+    The pre-follow-up regex (item\\(s\\)) returned None on this. The
+    post-follow-up regex returns 4."""
+    assert extract_nikto_footer_count(NIKTO_FORTIWEB_FIXTURE) == 4
 
 
 def test_nikto_parser_drift_detection_via_footer_mismatch():
