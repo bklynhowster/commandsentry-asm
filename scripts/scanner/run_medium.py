@@ -426,6 +426,18 @@ class ScanContext:
     # so any health failure aborts immediately — the validate run is
     # PRISTINE-or-NOTHING, never "rotated to find another path."
     validate_mode: bool = False
+    # #32 (2026-06-16) — set True the FIRST time any tool successfully
+    # gets a real HTTP response from the target (wafw00f verdict
+    # parsed / httpx tech-detect parsed / nuclei chunk completed with
+    # rc=0). Used by ensure_healthy_egress as a prior-tool-success
+    # short-circuit: if a later pre-chunk gate fails its retries +
+    # rotations, and we already PROVED target reachability earlier in
+    # this run, the gate bypasses to healthy instead of skipping the
+    # chunk. Per advisor 2026-06-16: 'uses same-run ground truth.'
+    # Downside: assumes reachability persisted — won't catch a real
+    # mid-scan block; that's what the httpx-based probe re-test in
+    # ensure_healthy_egress is for. Layered defense, not either-or.
+    target_proven_reachable: bool = False
     # #24 Phase 2 (2026-06-15): read from asset_surface.auth_gated at
     # scan start. True if the asset is fronted by an identity provider
     # login (Entra / Okta / Auth0 / Cognito / B2C / etc) — derived by
@@ -874,32 +886,41 @@ BAN_OR_PATH_DOWN_CODES = (403, 429, 502, 503, 504)
 
 
 def healthcheck(ctx: ScanContext) -> tuple[bool, int]:
-    """Probe the target with a benign HTTP request. Returns (healthy, http_code).
-    'healthy' = origin answered this IP with a non-block response.
+    """Probe the target via the Go httpx client. Returns (healthy, http_code).
+    'healthy' = origin answered with a non-block response.
     code 0 = no HTTP response at all (timeout / refused / reset).
+
+    #32 (2026-06-16): switched from curl to httpx. nuclei + httpx share
+    the Go ProjectDiscovery retryablehttp + Go TLS stack; curl uses
+    libcurl + system OpenSSL/BoringSSL. Targets that fingerprint TLS
+    or specific header shapes can reject curl while accepting the Go
+    stack — that's exactly what scan_run 1dd0891f hit on
+    ftp.sciimage.com (wafw00f + httpx ok on egress 45.134.140.132,
+    curl healthcheck got 0 on the same IP, scan declared
+    egress_unstable across 3 Mullvad rotations even though the actual
+    scan-tool stack could reach).
+
+    httpx output (with -silent -status-code -no-color):
+        https://<host>/ [200]
+    Parsing keys on the bracketed integer to handle stdin/proto noise.
     """
     ua = pick_ua()
     rc, stdout, _ = run_cmd(
-        ["curl", "-s", "-o", "/dev/null",
-         "-w", "%{http_code}",
-         "--max-time", "10",
+        ["httpx",
+         "-silent", "-status-code", "-no-color",
+         "-timeout", "10",
          "-H", f"User-Agent: {ua}",
-         f"https://{ctx.hostname}/"],
+         "-u", f"https://{ctx.hostname}/"],
         timeout=15,
     )
     if rc != 0:
         return False, 0
 
-    try:
-        code = int(stdout.strip())
-    except ValueError:
+    # Parse "https://<host>/ [200]" → 200. Tolerate extra lines / noise.
+    m = re.search(r"\[(\d{3})\]", stdout)
+    if not m:
         return False, 0
-
-    # curl writes '000' when no real response arrived — without this guard
-    # int('000')=0 would fall outside the ban set and read as healthy.
-    if code < 100:
-        return False, code
-
+    code = int(m.group(1))
     healthy = code not in BAN_OR_PATH_DOWN_CODES
     return healthy, code
 
@@ -995,6 +1016,25 @@ def ensure_healthy_egress(
         log(f"healthcheck: still unhealthy after rotation {rot_idx + 1} "
             f"(last HTTP {code})")
 
+    # #32 (2026-06-16) — prior-tool-success short-circuit. If any earlier
+    # tool in this run already got a real HTTP response from the target
+    # (wafw00f / httpx / nuclei chunk), we have same-run ground truth
+    # that the path WAS reachable. Probe failure here is more likely a
+    # transient blip OR a probe-vs-tool mismatch (different request
+    # shape) than a real egress problem. Log loudly + bypass to healthy
+    # rather than rotate/skip — let the chunk's own tool encounter any
+    # real failure with its own per-tool detector + stderr.
+    #
+    # Won't catch a real mid-scan block (the prior success was earlier
+    # in time), but the httpx-based healthcheck change (also #32) is
+    # the primary fix for the request-shape false-negative. This is
+    # the layered safety net.
+    if ctx.target_proven_reachable:
+        log(f"  ⚑ prior-tool-success bypass — target already proved "
+            f"reachable this run (probes: {probe_codes}); proceeding "
+            f"despite gate failure")
+        return True, ""
+
     # All paths exhausted. Classification logic in egress_failure_reason()
     # (degradation.py) — unit-tested independently of this loop.
     return False, egress_failure_reason(probe_codes)
@@ -1032,6 +1072,10 @@ def detect_waf(ctx: ScanContext) -> None:
         mark_tool_degraded(ctx, "wafw00f", reason, stderr=stderr)
     else:
         mark_tool_ok(ctx, "wafw00f")
+        # #32 — wafw00f successfully verdict-parsed → target answered at
+        # least one of its probes. Establishes target reachability for
+        # the prior-tool-success short-circuit in ensure_healthy_egress.
+        ctx.target_proven_reachable = True
     if rc != 0:
         log(f"wafw00f rc={rc} — assuming no WAF for tuning purposes")
         return
@@ -1105,6 +1149,12 @@ def detect_tech_stack(ctx: ScanContext) -> None:
         ctx.tech_stack = {t.lower() for t in techs if isinstance(t, str)}
         ctx.artifacts.append(("httpx_tech", "json", line))
         log(f"tech detected: {sorted(ctx.tech_stack) if ctx.tech_stack else '<none>'}")
+        # #32 — httpx tech-detect produced parseable JSON → got a real
+        # HTTP response from target. Strong evidence the target is
+        # reachable via the Go stack nuclei shares. Establishes
+        # target_proven_reachable for the prior-tool-success
+        # short-circuit in ensure_healthy_egress.
+        ctx.target_proven_reachable = True
     except Exception as e:
         log(f"httpx tech-detect parse failed: {e!r}")
 
@@ -1634,6 +1684,9 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
             mark_tool_degraded(ctx, chunk_name, b1_reason, stderr=chunk_stderr)
             raise DegradedRunError(b1_reason, chunk_name)
         mark_tool_ok(ctx, chunk_name)
+        # #32 — chunk completed cleanly → tool reached target. Establishes
+        # target_proven_reachable for the prior-tool-success short-circuit.
+        ctx.target_proven_reachable = True
 
         # PROBE/PATIENT: healthcheck on the SAME tunnel BEFORE rotating.
         # In PROBE mode this is data-gathering. In PATIENT mode it gates
@@ -2250,6 +2303,9 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
             mark_tool_degraded(ctx, chunk_name, b1_reason, stderr=chunk_stderr)
             raise DegradedRunError(b1_reason, chunk_name)
         mark_tool_ok(ctx, chunk_name)
+        # #32 — chunk completed cleanly → tool reached target. Establishes
+        # target_proven_reachable for the prior-tool-success short-circuit.
+        ctx.target_proven_reachable = True
 
         if i < len(chunks) - 1:
             rotate_vpn(ctx)

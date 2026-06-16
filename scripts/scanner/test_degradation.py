@@ -1752,6 +1752,70 @@ def test_egress_failure_reason_mixed_with_real_http_classifies_as_target():
     assert egress_failure_reason([0, 301]) == "skipped_target_unreachable"
 
 
+# ─── #32 — healthcheck probe + prior-tool-success short-circuit (2026-06-16)
+# Surfaced by scan_run 1dd0891f (ftp.sciimage.com post-#30): wafw00f +
+# httpx ok against ftp:443, curl healthcheck got 0 across 3 Mullvad
+# IPs, scan declared egress_unstable. nuclei + httpx share the Go
+# stack; curl is a different client. Fix: probe via httpx (primary) +
+# prior-tool-success short-circuit when same-run ground truth shows
+# target reachable (layered defense).
+#
+# The httpx probe change is integration-tested via the live re-fire
+# (requires subprocess + network). The prior-tool-success short-
+# circuit IS unit-testable via a minimal ctx stand-in.
+
+
+class _ShortCircuitCtx:
+    """Minimal ScanContext stand-in for #32 prior-tool-success tests.
+    Only exposes the fields ensure_healthy_egress's short-circuit
+    reads: target_proven_reachable + the surfaces needed by its log
+    line. Avoids importing the full ScanContext dataclass + its psycopg
+    dependency chain."""
+
+    def __init__(self, target_proven_reachable: bool):
+        self.target_proven_reachable = target_proven_reachable
+
+
+def test_prior_tool_success_short_circuit_field_default_is_false():
+    """Lock-in: new ScanContext field defaults to False. Catches a
+    refactor that silently defaults to True (which would bypass every
+    gate failure and re-create the rotation-spiral's silent-data
+    pollution risk)."""
+    from run_medium import ScanContext
+    # Build a minimal ScanContext — only the required fields.
+    ctx = ScanContext(
+        descriptor={},
+        hostname="example.com",
+        asset_id="example.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+    )
+    assert ctx.target_proven_reachable is False, (
+        "target_proven_reachable must default to False — gate decisions "
+        "should be evidence-based, not optimistic-default"
+    )
+
+
+def test_target_proven_reachable_field_settable():
+    """Sanity: the field is writable. Sites that get a real HTTP
+    response from the target (detect_waf parse, detect_tech_stack
+    parse, nuclei chunk success) set it True. Tests that the field
+    behaves like a normal bool — catches a future refactor that
+    accidentally makes it a property/frozen field."""
+    from run_medium import ScanContext
+    ctx = ScanContext(
+        descriptor={},
+        hostname="example.com",
+        asset_id="example.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+    )
+    ctx.target_proven_reachable = True
+    assert ctx.target_proven_reachable is True
+
+
 @pytest.mark.skip(reason=(
     "Needs a real-DB integration harness — current pytest setup can't exercise "
     "the clean→degraded fallback transaction sequence at unit level. The "
