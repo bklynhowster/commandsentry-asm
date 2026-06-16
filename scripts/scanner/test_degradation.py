@@ -916,9 +916,11 @@ def test_flush_artifacts_per_artifact_isolation_one_bad_blob_does_not_crash():
 
 from run_medium import (  # noqa: E402
     MARK_DEGRADED_STDERR_ARTIFACT_CAP_BYTES,
+    extract_nikto_footer_count,
     mark_tool_degraded,
     mark_tool_skipped,
     nikto_is_degraded,
+    parse_nikto_findings,
 )
 
 
@@ -1283,6 +1285,218 @@ def test_three_state_dispatch_pattern_works():
             f"Entry {entry!r} should have exactly one state marker, "
             f"got {markers}"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# #28 — nikto parser noise cleanup (2026-06-15)
+# ═══════════════════════════════════════════════════════════════════════
+# Surfaced by FortiWeb run on test.commandcommcentral (scan_run 14714f2f
+# 2026-06-15): parser stored 6 findings while nikto's own footer reported
+# 4 items. The 2 extras were no-[ID] meta lines (Platform:, No CGI
+# Directories found) the prior denylist-of-prefixes missed. Plus 2 of
+# the 4 "real" findings were "Suggested security header missing:" lines
+# duplicating headers_check (light tier, canonical for headers).
+#
+# Fix per Howie 2026-06-15 advisor pass:
+#   - Promote ONLY canonical shape: + [<digits>] /path: description
+#   - Q1: drop nikto's "Suggested security header missing:" lines
+#   - Q2: severity off ID range (999xxx=INFO, else LOW). nikto never
+#     self-assigns MODERATE+ (low-fidelity source).
+#   - Footer-guard for parser-drift detection.
+
+
+# Fixture mirroring the 13 lines from the FortiWeb run (scan_run 14714f2f).
+# 9 scaffolding/meta lines (no [ID]) → DROP at shape gate
+# 2 header-missing lines ([013587]) → DROP at Q1 dedup
+# 2 informational lines ([999992] + [999962]) → KEEP as INFO
+NIKTO_FORTIWEB_FIXTURE = """- Nikto v2.6.0
+---------------------------------------------------------------------------
++ Target IP:          203.0.113.42
++ Target Hostname:    test.commandcommcentral.com
++ Target Port:        443
+---------------------------------------------------------------------------
++ SSL Info:           Subject:  /CN=*.commandcommcentral.com
+                      Ciphers:  TLS_AES_256_GCM_SHA384
+                      Issuer:   /C=US/O=DigiCert Inc/CN=GeoTrust TLS RSA CA G1
++ Platform:           Linux/Unix
++ Start Time:         2026-06-15 12:00:00 (GMT0)
+---------------------------------------------------------------------------
++ Server: No banner retrieved
++ No CGI Directories found (use '-C all' to force check all possible dirs). CGI tests skipped.
++ [013587] /: Suggested security header missing: referrer-policy. See: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Referrer-Policy
++ [013587] /: Suggested security header missing: permissions-policy. See: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Permissions-Policy
++ [999992] /: Server is using a wildcard certificate. This may not be desirable.
++ [999962] /: Server banner changed from '' to ''. See: http://cwe.mitre.org/data/definitions/200.html
++ Scan terminated: 0 error(s) and 4 item(s) reported on remote host
++ End Time:           2026-06-15 12:08:00 (GMT0) (480 seconds)
+---------------------------------------------------------------------------
++ 1 host(s) tested
+"""
+
+
+def test_nikto_parser_drops_no_id_scaffolding_and_meta_lines():
+    """LOAD-BEARING: lines like 'Platform: Linux/Unix' and 'No CGI
+    Directories found' must NEVER promote as findings. These have no
+    [<digits>] ID and the canonical shape gate drops them.
+
+    Pre-#28 bug: the denylist-of-prefixes missed these, the keyword
+    severity map then mis-fired ('No CGI Directories FOUND' triggered
+    the naive 'found' → LOW match), producing 2 noise findings per run.
+    """
+    findings, nikto_emitted, we_promoted = parse_nikto_findings(
+        NIKTO_FORTIWEB_FIXTURE, "test.commandcommcentral.com"
+    )
+    # No promoted finding should have "Platform" or "No CGI" in its title
+    for f in findings:
+        assert "Platform" not in f.title, (
+            f"Platform: line promoted as finding (pre-#28 bug): {f.title}"
+        )
+        assert "No CGI" not in f.title, (
+            f"No CGI Directories line promoted as finding (pre-#28 bug, "
+            f"naive 'found' keyword mis-fired on negative): {f.title}"
+        )
+
+
+def test_nikto_parser_drops_suggested_header_missing_dupes():
+    """Q1 advisor lock-in. nikto's '[013587] /: Suggested security
+    header missing:' lines duplicate headers_check (light tier,
+    canonical for HTTP security headers). Drop them at the parser —
+    cleaner than downstream normalized_key dedup.
+
+    Both 013587 lines in the FortiWeb fixture (referrer-policy +
+    permissions-policy) must NOT appear in promoted findings."""
+    findings, _, _ = parse_nikto_findings(
+        NIKTO_FORTIWEB_FIXTURE, "test.commandcommcentral.com"
+    )
+    for f in findings:
+        assert "Suggested security header missing" not in f.title, (
+            f"Header-missing dupe of headers_check promoted: {f.title}"
+        )
+
+
+def test_nikto_parser_keeps_999_range_as_info():
+    """Q2 advisor lock-in. 999xxx is nikto's documented informational
+    range. [999992] wildcard certificate + [999962] banner changed
+    are real (low-fidelity) observations — keep as INFO, never higher.
+    """
+    findings, _, _ = parse_nikto_findings(
+        NIKTO_FORTIWEB_FIXTURE, "test.commandcommcentral.com"
+    )
+    info_999 = [f for f in findings if "999" in f.title or "wildcard certificate" in f.title or "banner changed" in f.title]
+    assert len(info_999) == 2, (
+        f"Expected exactly 2 999xxx findings (wildcard cert + banner), "
+        f"got {len(info_999)}: {[f.title for f in info_999]}"
+    )
+    for f in info_999:
+        assert f.severity == "INFO", (
+            f"999xxx finding got severity {f.severity!r}; must be INFO. "
+            f"Title: {f.title}"
+        )
+
+
+def test_nikto_parser_never_assigns_moderate_or_higher():
+    """Q2 advisor principle lock-in. nikto is a low-fidelity DAST source;
+    real severity comes from nuclei / CVE / manual triage. nikto's
+    output must NEVER carry MODERATE / MODERATE-HIGH / HIGH / CRITICAL
+    on its own — under-call beats over-call here (this gates #27 by
+    not crying wolf in the change-visibility view).
+
+    Test against the fixture; assert no finding has severity >= MODERATE."""
+    findings, _, _ = parse_nikto_findings(
+        NIKTO_FORTIWEB_FIXTURE, "test.commandcommcentral.com"
+    )
+    forbidden = {"MODERATE", "MODERATE-HIGH", "HIGH", "CRITICAL"}
+    for f in findings:
+        assert f.severity not in forbidden, (
+            f"nikto self-assigned {f.severity!r} on {f.title!r}. nikto must "
+            f"only ever assign INFO or LOW; real severity is downstream."
+        )
+
+
+def test_nikto_parser_fortiweb_fixture_end_to_end_count():
+    """Headline regression test — the exact FortiWeb scenario that
+    surfaced #28. Pre-#28 stored 6 findings; post-#28 stores 2 (the
+    999xxx INFOs). nikto_emitted=4 (matches nikto's own footer);
+    we_promoted=2 (4 minus 2 Q1 header dupes)."""
+    findings, nikto_emitted, we_promoted = parse_nikto_findings(
+        NIKTO_FORTIWEB_FIXTURE, "test.commandcommcentral.com"
+    )
+    assert len(findings) == 2, (
+        f"Expected exactly 2 findings post-#28 (the 2 999xxx INFOs), "
+        f"got {len(findings)}: {[f.title for f in findings]}"
+    )
+    assert nikto_emitted == 4, (
+        f"shape-gate should have matched 4 [<id>] lines, got {nikto_emitted}"
+    )
+    assert we_promoted == 2, (
+        f"after Q1 header-dedup, should have promoted 2, got {we_promoted}"
+    )
+
+
+def test_nikto_footer_count_extraction_from_fortiweb_fixture():
+    """The footer guard parses 'N item(s) reported' from nikto's
+    summary. For the FortiWeb fixture, count = 4."""
+    assert extract_nikto_footer_count(NIKTO_FORTIWEB_FIXTURE) == 4
+
+
+def test_nikto_footer_count_returns_none_when_absent():
+    """Defensive: missing footer → None (don't crash, don't fake a count).
+    Older nikto / truncated output / mid-scan-killed runs may not have
+    a footer line."""
+    stdout_no_footer = "- Nikto v2.6.0\n+ Target IP: 1.2.3.4\n"
+    assert extract_nikto_footer_count(stdout_no_footer) is None
+
+
+def test_nikto_parser_drift_detection_via_footer_mismatch():
+    """The footer guard's contract: shape-matched count should equal
+    footer count. If they diverge, parser drift has happened. The
+    PRE-Q1 promote (nikto_emitted) should match the footer; the
+    POST-Q1 promote (we_promoted) does NOT, by design — that's the
+    policy-drop, not parser drift."""
+    nikto_emitted = 4
+    we_promoted = 2
+    footer_count = extract_nikto_footer_count(NIKTO_FORTIWEB_FIXTURE)
+    # The shape-matched count IS the parser-drift signal — it should
+    # match the footer.
+    assert footer_count == nikto_emitted, (
+        f"shape-matched {nikto_emitted} != footer {footer_count}; "
+        f"would have logged a parser-drift warning"
+    )
+    # The post-Q1 promote diverges from the footer — that's a POLICY
+    # drop (header dedup), NOT parser drift. Log message reflects this.
+    assert footer_count != we_promoted, (
+        "test sanity: footer should diverge from we_promoted because Q1 "
+        "drops 2 header lines"
+    )
+
+
+def test_nikto_parser_empty_stdout_yields_no_findings():
+    """Defensive: empty/whitespace stdout → no findings, zero counts."""
+    findings, nikto_emitted, we_promoted = parse_nikto_findings(
+        "", "demo.testfire.net"
+    )
+    assert findings == []
+    assert nikto_emitted == 0
+    assert we_promoted == 0
+
+
+def test_nikto_parser_stable_check_name_slug_for_finding_id_continuity():
+    """The finding_id derives from check_name. Across the #28 refactor
+    the slug logic was preserved (re.sub on the full body lowercased) so
+    existing findings in the DB match on re-detect rather than fragmenting
+    into new finding_ids. Existing findings can be marked false_positive
+    by deterministic slug.
+
+    Lock-in: a wildcard-certificate line produces the expected slug
+    prefix so the side-question UPDATE can target it precisely."""
+    findings, _, _ = parse_nikto_findings(
+        NIKTO_FORTIWEB_FIXTURE, "test.commandcommcentral.com"
+    )
+    cert_findings = [f for f in findings if "wildcard certificate" in f.title]
+    assert len(cert_findings) == 1
+    # Slug should start with "nikto-" and include "999992" (the ID)
+    assert cert_findings[0].check_name.startswith("nikto-")
+    assert "999992" in cert_findings[0].check_name
 
 
 @pytest.mark.skip(reason=(

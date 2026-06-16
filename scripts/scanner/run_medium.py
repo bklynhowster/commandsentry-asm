@@ -1661,6 +1661,126 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
 
 
 # ─── nikto (single pass) ────────────────────────────────────────────────
+# ─── nikto parser (#28 — 2026-06-15) ───────────────────────────────────
+#
+# Promote ONLY canonical nikto finding shape:
+#   + [<digits>] /path: description
+#
+# Drops scaffolding (Target IP:, Platform:, Server:, etc.) AND footer
+# (Scan terminated, item(s) reported, host(s) tested) at the shape gate.
+# Replaces the prior denylist-of-prefixes + natural-language-keyword
+# severity map that produced 4-of-6 noise findings on the FortiWeb run
+# (scan_run 14714f2f). Sharpens by FILTER rather than blacklist: shape
+# match is unambiguous; non-matches are policy-dropped without enumerating
+# every nikto meta-line variant.
+
+NIKTO_FINDING_RE = re.compile(r"^\[(\d+)\]\s+(\S+?):\s+(.+)$")
+
+# #28 Q1 — drop nikto's "Suggested security header missing:" lines.
+# headers_check (light tier) is canonical for HTTP security headers and
+# runs on every asset. nikto's medium-tier rehash adds zero value and
+# pollutes the dashboard with duplicate findings. Clean ownership
+# boundary: each tool owns its slice; medium nikto = OS/CGI/server-config
+# issues, not header checks already done in light.
+NIKTO_HEADER_DEDUP_PATTERN = "Suggested security header missing"
+
+# #28 footer guard — parse nikto's "N item(s) reported" summary line.
+# Log warning if shape-matched count diverges from footer count
+# (indicates parser drift — nikto changed its finding-line format or
+# we missed an [ID] range edge case). Doesn't fail the scan; just
+# surfaces a clear maintenance signal.
+NIKTO_FOOTER_COUNT_RE = re.compile(r"(\d+)\s+item\(s\)\s+reported")
+
+
+def _nikto_severity_for_id(nikto_id: str) -> str:
+    """#28 Q2 — severity off nikto's ID range, NOT natural-language
+    keywords (which mis-fired on negatives like 'No CGI Directories FOUND'
+    → LOW). nikto NEVER self-assigns MODERATE+ — it's a low-fidelity
+    source; real severity comes from nuclei/CVE/manual. Conservative
+    LOW default for real findings; INFO for nikto's documented
+    informational range (999xxx).
+
+    Per advisor 2026-06-15 (Q2 correction): do NOT generalize OSVDB IDs
+    (013xxx etc.) to severity buckets — OSVDB IDs do not encode severity
+    semantically. 999xxx is documented as nikto's informational range;
+    treat everything else as LOW with a conservative default.
+    """
+    return "INFO" if nikto_id.startswith("999") else "LOW"
+
+
+def parse_nikto_findings(
+    stdout: str, hostname: str
+) -> tuple[list[MediumFinding], int, int]:
+    """#28 parser — canonical-shape + Q1 dedup + Q2 ID-bucket severity.
+
+    Returns (findings, nikto_emitted, we_promoted):
+      nikto_emitted = items that pass the canonical shape gate
+                      (+ [<digits>] /path: description)
+      we_promoted   = items we kept (passed Q1 header-dedup drop)
+
+    Caller compares `nikto_emitted` to the footer count via
+    extract_nikto_footer_count(); divergence logs a parser-drift warning.
+    """
+    findings: list[MediumFinding] = []
+    nikto_emitted = 0
+    we_promoted = 0
+
+    for line in stdout.splitlines():
+        line = line.rstrip()
+        if not line.startswith("+ "):
+            continue
+        body = line[2:].strip()
+
+        # Canonical shape gate — drops every line without a [<digits>] ID.
+        # Catches Platform:, No CGI Directories, Target/Server scaffolding,
+        # Scan terminated/End Time/host(s) tested footers, etc. — all without
+        # an explicit denylist (denylist was lossy; shape gate is total).
+        m = NIKTO_FINDING_RE.match(body)
+        if not m:
+            continue
+        nikto_id, _path, description = m.group(1), m.group(2), m.group(3)
+        nikto_emitted += 1
+
+        # Q1 — drop header-missing rehash. headers_check owns this slice.
+        if NIKTO_HEADER_DEDUP_PATTERN in description:
+            continue
+
+        severity = _nikto_severity_for_id(nikto_id)
+        we_promoted += 1
+
+        # Slug derived from the full body for stable finding_id semantics.
+        # Preserves existing finding identity across the parser refactor —
+        # rows already in the DB (whether marked detected, remediated, or
+        # the post-#28 false_positive flips) match on re-detect rather
+        # than fragmenting into new finding_ids.
+        body_lc = body.lower()
+        slug = re.sub(r"[^a-z0-9]+", "-", body_lc)[:60].strip("-") or \
+               f"finding-{we_promoted}"
+        findings.append(MediumFinding(
+            check_name=f"nikto-{slug}",
+            title=f"nikto: {body[:120]}",
+            severity=severity,
+            category="dast",
+            description=(
+                f"Nikto reported on {hostname}: {body}. Review the raw "
+                f"nikto output artifact for full context including OSVDB ref "
+                f"and the exact URL probed."
+            ),
+            tags=["nikto"],
+            raw_excerpt=body[:1500],
+        ))
+
+    return findings, nikto_emitted, we_promoted
+
+
+def extract_nikto_footer_count(stdout: str) -> int | None:
+    """Extract 'N item(s) reported' from nikto's footer.
+    Returns None if absent (older nikto versions, truncated output, etc.).
+    """
+    m = NIKTO_FOOTER_COUNT_RE.search(stdout)
+    return int(m.group(1)) if m else None
+
+
 def run_nikto(ctx: ScanContext) -> None:
     """Single nikto pass on a fresh IP. nikto doesn't chunk well; if
     it gets banned mid-run, we accept the loss for this pass.
@@ -1798,66 +1918,30 @@ def run_nikto(ctx: ScanContext) -> None:
     if rc not in (0, 124):
         log(f"  nikto rc={rc}")
 
-    matches = 0
-    for line in stdout.splitlines():
-        line = line.rstrip()
-        if not line.startswith("+ "):
-            continue
-        body = line[2:].strip()
-        # Filter list — these `+ ` prefixed lines are nikto's HEADERS or
-        # FOOTERS, not scan items. Anything not on this list is a real
-        # check finding.
-        #
-        # 2026-06-07 PM addition (post scan_run 7bd3bbf9): the parser
-        # was silently promoting "+ Scan terminated:  0 error(s) and
-        # 7 item(s) reported on remote host" as a MediumFinding,
-        # yielding findings_added=9 when only 7 real items were
-        # reported (one of which the existing filter already drops).
-        # If we promoted scan_run 7bd3bbf9 to 'validated' as-is, the
-        # validated baseline would be born polluted with parser noise —
-        # exactly the failure mode ADR-001 was built to prevent.
-        # Footer-family lines added: "Scan terminated:", "item(s)
-        # reported", "host(s) tested", "error(s) and". The "Nikto v"
-        # prefix line starts with "-" not "+ " so it never reaches
-        # this branch.
-        if any(prefix in body for prefix in (
-            "Target IP:", "Target Hostname:", "Target Port:",
-            "Start Time:", "End Time:", "Server:", "items checked:",
-            "Site link", "Allowed HTTP", "SSL Info:",
-            "Subject:", "Ciphers:", "Issuer:",
-            # Footer family — non-findings status output
-            "Scan terminated:", "item(s) reported", "host(s) tested",
-            "error(s) and",
-        )):
-            continue
-        matches += 1
-        ctx.total_requests += 1
+    # #28 — parser extracted to parse_nikto_findings helper (see module-
+    # level docstring near line 1497 for the design). Pre-#28 the
+    # promotion loop was a denylist-of-prefixes + natural-language-keyword
+    # severity map; that produced 4-of-6 noise findings on FortiWeb run
+    # 14714f2f (Platform: + No-CGI-found promoted as findings; nikto's own
+    # footer reported 4 items, parser stored 6). The shape-gate rewrite +
+    # Q1 header dedup + Q2 ID-bucket severity collapses noise without
+    # losing real signal.
+    findings, nikto_emitted, we_promoted = parse_nikto_findings(
+        stdout, ctx.hostname
+    )
+    ctx.findings.extend(findings)
+    ctx.total_requests += we_promoted
 
-        body_lc = body.lower()
-        if any(k in body_lc for k in ("exposed", "leak", "dangerous",
-                                       "vulnerable", "uploadable", "writable")):
-            severity = "MODERATE"
-        elif any(k in body_lc for k in ("found", "directory", "listing")):
-            severity = "LOW"
-        else:
-            severity = "INFO"
+    # Footer guard — log warning if shape-matched count diverges from
+    # nikto's own footer "N item(s) reported." Catches future parser
+    # drift without failing the scan (the run already produced output).
+    footer_count = extract_nikto_footer_count(stdout)
+    if footer_count is not None and footer_count != nikto_emitted:
+        log(f"  ⚠ nikto parser drift: footer says {footer_count} item(s), "
+            f"shape-matched {nikto_emitted}. Investigate parse_nikto_findings.")
 
-        slug = re.sub(r"[^a-z0-9]+", "-", body_lc)[:60].strip("-") or f"finding-{matches}"
-        ctx.findings.append(MediumFinding(
-            check_name=f"nikto-{slug}",
-            title=f"nikto: {body[:120]}",
-            severity=severity,
-            category="dast",
-            description=(
-                f"Nikto reported on {ctx.hostname}: {body}. Review the raw "
-                f"nikto output artifact for full context including OSVDB ref "
-                f"and the exact URL probed."
-            ),
-            tags=["nikto"],
-            raw_excerpt=body[:1500],
-        ))
-
-    log(f"  nikto: {matches} reported item(s)")
+    log(f"  nikto: {nikto_emitted} reported, {we_promoted} promoted "
+        f"({nikto_emitted - we_promoted} dropped by policy)")
 
 
 # ─── ffuf (chunked) ─────────────────────────────────────────────────────
