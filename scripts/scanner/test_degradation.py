@@ -29,6 +29,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 from degradation import (  # noqa: E402
     MAX_BAN_EVENTS,
     MAX_HEALTHCHECK_FAILURES,
+    POST_ROTATE_SETTLE_ATTEMPTS,
+    POST_ROTATE_SETTLE_DELAY_S,
+    PRE_ROTATE_RETRY_ATTEMPTS,
+    PRE_ROTATE_RETRY_DELAY_S,
     STDERR_DEGRADED_MATCH_THRESHOLD,
     VALIDATION_TARGETS,
     DegradedRunError,
@@ -36,6 +40,8 @@ from degradation import (  # noqa: E402
     assert_validate_mode_target_allowed,
     cap_aware_append_ban,
     cap_aware_append_healthcheck_failure,
+    egress_failure_reason,
+    healthcheck_with_retry,
     is_tool_output_degraded,
 )
 
@@ -1557,6 +1563,193 @@ def test_nikto_parser_stable_check_name_slug_for_finding_id_continuity():
     # Slug should start with "nikto-" and include "999992" (the ID)
     assert cert_findings[0].check_name.startswith("nikto-")
     assert "999992" in cert_findings[0].check_name
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# #30 — healthcheck_with_retry: rotation-spiral guard (2026-06-16)
+# ═══════════════════════════════════════════════════════════════════════
+# Surfaced by scan_run 57a79615 (ftp.sciimage.com 2026-06-16): medium
+# rotated twice in 10 seconds and gave up as skipped_target_unreachable
+# while wafw00f + httpx had just been OK against the same egress.
+# Pre-rotate: no retry, blip = rotation. Post-rotate: bare sleep 2,
+# probe TARGET immediately on a tunnel that hadn't negotiated yet → 0
+# → rotate → spiral. The retry helper is the unit-testable piece;
+# vpn_rotate.sh's WG handshake poll is integration-only.
+
+
+def _seq_healthcheck(results):
+    """Return a healthcheck_fn that yields canned results in order.
+    Each call pops the next (healthy, code) tuple. RuntimeError on
+    overrun — tests should explicitly size results to match the
+    expected attempts."""
+    iter_results = iter(results)
+    def fn():
+        try:
+            return next(iter_results)
+        except StopIteration:
+            raise RuntimeError(
+                "healthcheck called more times than the test provided "
+                "canned results — adjust the test's results list"
+            )
+    return fn
+
+
+class _CountingSleep:
+    """No-op sleep that records each call's delay. Tests assert on
+    .calls (list of delay_s) to verify backoff timing without actually
+    sleeping."""
+    def __init__(self):
+        self.calls: list[float] = []
+    def __call__(self, delay_s: float) -> None:
+        self.calls.append(delay_s)
+
+
+def test_healthcheck_with_retry_first_attempt_healthy_returns_immediately():
+    """LOAD-BEARING — the original bug. A single healthy probe must
+    return (True, code) with ZERO sleeps. Tests the pre-rotate retry
+    helper doesn't waste time when the first probe succeeds."""
+    sleeper = _CountingSleep()
+    healthy, code = healthcheck_with_retry(
+        _seq_healthcheck([(True, 200)]),
+        attempts=3,
+        delay_s=2,
+        sleep_fn=sleeper,
+    )
+    assert (healthy, code) == (True, 200)
+    assert sleeper.calls == []  # no sleeps on first-attempt success
+
+
+def test_healthcheck_with_retry_recovers_from_transient_blip():
+    """The exact failure mode that broke scan_run 57a79615: first
+    probe is a transient blip (code 0), second probe healthy. Without
+    retry the scanner would have rotated; with retry it recovers
+    cleanly. Asserts: (True, 200) returned, ONE sleep between probes."""
+    sleeper = _CountingSleep()
+    healthy, code = healthcheck_with_retry(
+        _seq_healthcheck([(False, 0), (True, 200)]),
+        attempts=3,
+        delay_s=2,
+        sleep_fn=sleeper,
+    )
+    assert (healthy, code) == (True, 200)
+    assert sleeper.calls == [2]  # one sleep between attempt 1 and 2
+
+
+def test_healthcheck_with_retry_all_attempts_unhealthy_returns_last():
+    """When every probe fails, return the LAST (False, code) result
+    and (attempts - 1) sleeps. Tests the exhaustion path that
+    legitimately triggers rotation (no false positives on rotation
+    pressure either — three consecutive failures IS a real signal)."""
+    sleeper = _CountingSleep()
+    healthy, code = healthcheck_with_retry(
+        _seq_healthcheck([(False, 0), (False, 0), (False, 503)]),
+        attempts=3,
+        delay_s=2,
+        sleep_fn=sleeper,
+    )
+    assert (healthy, code) == (False, 503)
+    # 3 attempts → 2 sleeps between them
+    assert sleeper.calls == [2, 2]
+
+
+def test_healthcheck_with_retry_attempts_1_means_no_retry():
+    """Single-attempt mode (used for validate-mode 'pristine-or-nothing'
+    semantics) → equivalent to one direct healthcheck. ZERO sleeps."""
+    sleeper = _CountingSleep()
+    healthy, code = healthcheck_with_retry(
+        _seq_healthcheck([(False, 0)]),
+        attempts=1,
+        delay_s=2,
+        sleep_fn=sleeper,
+    )
+    assert (healthy, code) == (False, 0)
+    assert sleeper.calls == []
+
+
+def test_healthcheck_with_retry_recovers_on_last_attempt():
+    """Edge case — final attempt is the healthy one. Asserts the loop
+    catches recovery at the boundary (no off-by-one that would skip
+    the last probe)."""
+    sleeper = _CountingSleep()
+    healthy, code = healthcheck_with_retry(
+        _seq_healthcheck([(False, 0), (False, 0), (True, 200)]),
+        attempts=3,
+        delay_s=2,
+        sleep_fn=sleeper,
+    )
+    assert (healthy, code) == (True, 200)
+    # 2 sleeps before attempts 2 + 3; recovery on attempt 3 returns
+    # before a 3rd sleep would happen
+    assert sleeper.calls == [2, 2]
+
+
+def test_pre_rotate_constants_match_advisor_spec():
+    """Lock-in for the constants Howie specified 2026-06-16:
+    'suggest 3, ~2s apart' for pre-rotate retry."""
+    assert PRE_ROTATE_RETRY_ATTEMPTS == 3
+    assert PRE_ROTATE_RETRY_DELAY_S == 2
+
+
+def test_post_rotate_settle_constants_match_advisor_spec():
+    """Lock-in for the post-rotate settle constants: 'suggest up to
+    ~15s / 3 tries'. 3 tries × 5s delay = ~15s total wait."""
+    assert POST_ROTATE_SETTLE_ATTEMPTS == 3
+    assert POST_ROTATE_SETTLE_DELAY_S == 5
+
+
+# ─── #30 follow-up — egress_failure_reason classification ────────────
+# The reason-taxonomy branch is the diagnostic surface for every future
+# failed run. Pin both classes explicitly so a future "helpful" edit
+# doesn't silently flip the semantics.
+
+
+def test_egress_failure_reason_all_zero_codes_is_egress_unstable():
+    """All probes returned 0 = no HTTP response anywhere = tunnel never
+    settled. egress_unstable is the honest read — rotation didn't help,
+    target reachability was never observed at the application layer."""
+    assert egress_failure_reason([0]) == "egress_unstable"
+    assert egress_failure_reason([0, 0]) == "egress_unstable"
+    assert egress_failure_reason([0, 0, 0]) == "egress_unstable"
+
+
+def test_egress_failure_reason_contains_403_is_skipped_target_unreachable():
+    """A 403 anywhere in the probe cycle = egress reached target,
+    target responded (with a ban code). The tunnel works; the target
+    is the problem. skipped_target_unreachable preserves the meaning
+    'target won't speak useful HTTP to us' even when intermixed with
+    transient 0s from other rotations."""
+    assert egress_failure_reason([403]) == "skipped_target_unreachable"
+    assert egress_failure_reason([0, 403]) == "skipped_target_unreachable"
+    assert egress_failure_reason([0, 0, 403]) == "skipped_target_unreachable"
+
+
+def test_egress_failure_reason_other_ban_codes_also_classify_as_target():
+    """Any ban-or-error code from the BAN_OR_PATH_DOWN_CODES set
+    (429/503/502/504/etc) is still proof egress reached target.
+    Generalize beyond 403."""
+    for code in (403, 429, 502, 503, 504):
+        assert egress_failure_reason([0, code]) == "skipped_target_unreachable", (
+            f"code {code} should classify as skipped_target_unreachable "
+            f"(egress reached target, target responded with ban-class code)"
+        )
+
+
+def test_egress_failure_reason_empty_list_is_egress_unstable_defensive():
+    """Defensive: empty input → 'egress_unstable'. Caller shouldn't
+    pass an empty list (the loop always probes at least once before
+    classifying) but if it does, 'no evidence the egress works' is
+    the honest fallback."""
+    assert egress_failure_reason([]) == "egress_unstable"
+
+
+def test_egress_failure_reason_mixed_with_real_http_classifies_as_target():
+    """Edge case: even a 'healthy' code like 200 in the probe list
+    means egress worked. (Shouldn't happen in practice — if a 200
+    landed, the caller would have returned (True, "") before
+    classifying — but the classifier itself is value-blind on the
+    'code > 0' rule.)"""
+    assert egress_failure_reason([0, 200]) == "skipped_target_unreachable"
+    assert egress_failure_reason([0, 301]) == "skipped_target_unreachable"
 
 
 @pytest.mark.skip(reason=(

@@ -75,11 +75,17 @@ from degradation import (
     DegradedRunError,
     MAX_BAN_EVENTS,
     MAX_HEALTHCHECK_FAILURES,
+    POST_ROTATE_SETTLE_ATTEMPTS,
+    POST_ROTATE_SETTLE_DELAY_S,
+    PRE_ROTATE_RETRY_ATTEMPTS,
+    PRE_ROTATE_RETRY_DELAY_S,
     VALIDATION_TARGETS,
     assert_tool_status_invariant,
     assert_validate_mode_target_allowed,
     cap_aware_append_ban,
     cap_aware_append_healthcheck_failure,
+    egress_failure_reason,
+    healthcheck_with_retry,
     is_tool_output_degraded,
 )
 
@@ -898,39 +904,100 @@ def healthcheck(ctx: ScanContext) -> tuple[bool, int]:
     return healthy, code
 
 
-def ensure_healthy_egress(ctx: ScanContext, max_rotations: int = 2) -> bool:
-    """Healthcheck + rotate-on-fail loop. Returns True if we ended up
-    with a healthy IP. Returns False if even after `max_rotations`
-    rotations we're still banned everywhere.
+def ensure_healthy_egress(
+    ctx: ScanContext, max_rotations: int = 2
+) -> tuple[bool, str]:
+    """Healthcheck + rotate-on-fail loop with #30 (2026-06-16) hardening.
+
+    Returns (healthy, reason). On success → (True, ""). On failure →
+    (False, "<reason_slug>") distinguishing:
+      - "egress_unstable"           — rotated but no tunnel ever settled
+                                      enough to make target reachable.
+                                      A tunnel-side problem; rotation
+                                      ran but didn't help.
+      - "skipped_target_unreachable" — target itself not answering after
+                                      a confirmed-healthy egress (or no
+                                      rotation happened and target won't
+                                      answer). The original reason.
+
+    #30 hardening over the original first-fail-rotates loop:
+      1. PRE-ROTATE RETRY — before rotating on an unhealthy check, do
+         PRE_ROTATE_RETRY_ATTEMPTS probes with PRE_ROTATE_RETRY_DELAY_S
+         between. Only rotate if ALL fail. Filters transient curl
+         timeouts that tore down working tunnels on scan_run 57a79615.
+      2. POST-ROTATE SETTLE — after rotate_vpn returns, do
+         POST_ROTATE_SETTLE_ATTEMPTS probes with POST_ROTATE_SETTLE_
+         DELAY_S between (~15s total). wireguard-go's first handshake-
+         to-target often isn't routing for several seconds after
+         bringup; single immediate probe would false-negative.
 
     Validate-mode override (batch 2 step c, SPEC Part 3): when
     ctx.validate_mode is True, force `max_rotations=0`. The validate
-    run is PRISTINE-or-NOTHING — any first-check health failure aborts
-    immediately. We're on direct GH-runner egress (no Mullvad), there's
-    nothing to rotate to, and the whole point of the run is "is the
-    control reachable cleanly RIGHT NOW under this SHA?" — any retry
-    semantics would launder a transient blip into a pass.
+    run is PRISTINE-or-NOTHING for ROTATION — no rotation, no
+    pool-swapping. RETRIES still apply (per #30 2026-06-16 follow-up):
+    pre-rotate retry filters transient curl blips; that's NOT
+    laundering a real degradation event, that's filtering network
+    noise. The "no laundering" discipline is about not letting a
+    DEGRADED scan look CLEAN — a transient timeout that gets retried
+    successfully isn't degradation, it's a healthy run with a noisy
+    network. Validate mode = retry-but-don't-rotate.
     """
     if ctx.validate_mode and max_rotations > 0:
         log(f"ensure_healthy_egress: validate_mode — overriding "
-            f"max_rotations {max_rotations} → 0 (no rotation, single check)")
+            f"max_rotations {max_rotations} → 0 (retry-but-don't-rotate)")
         max_rotations = 0
 
-    for attempt in range(max_rotations + 1):
-        healthy, code = healthcheck(ctx)
+    bind_healthcheck = lambda: healthcheck(ctx)
+    # Collect every probe's HTTP code across pre-rotate + post-rotate
+    # cycles. Fed to egress_failure_reason() at end of loop to decide
+    # egress_unstable vs skipped_target_unreachable. Any code > 0
+    # anywhere = egress worked (even if response was a ban code); all
+    # zeroes = tunnel never settled.
+    probe_codes: list[int] = []
+
+    # First pass — pre-rotate retry to filter transient blips.
+    healthy, code = healthcheck_with_retry(
+        bind_healthcheck,
+        attempts=PRE_ROTATE_RETRY_ATTEMPTS,
+        delay_s=PRE_ROTATE_RETRY_DELAY_S,
+    )
+    probe_codes.append(code)
+    if healthy:
+        return True, ""
+    log(f"healthcheck: unhealthy after {PRE_ROTATE_RETRY_ATTEMPTS} probes "
+        f"(last HTTP {code}) — initiating rotation if allowed")
+
+    # Rotation loop with post-rotate settle.
+    for rot_idx in range(max_rotations):
+        ctx.ban_events.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": "pre_chunk_unhealthy",
+            "http_code": code,
+        })
+        rotate_ok = rotate_vpn(ctx)
+        if not rotate_ok:
+            # Couldn't rotate (vpn_rotate.sh failed, validate_mode short-
+            # circuit, etc). No point probing again — break out.
+            break
+
+        # Post-rotate settle — give the new tunnel time to start
+        # passing target traffic before declaring it unhealthy.
+        healthy, code = healthcheck_with_retry(
+            bind_healthcheck,
+            attempts=POST_ROTATE_SETTLE_ATTEMPTS,
+            delay_s=POST_ROTATE_SETTLE_DELAY_S,
+        )
+        probe_codes.append(code)
         if healthy:
-            if attempt > 0:
-                log(f"healthcheck: recovered on attempt {attempt + 1} (HTTP {code})")
-            return True
-        log(f"healthcheck: unhealthy (HTTP {code}) on attempt {attempt + 1}")
-        if attempt < max_rotations:
-            ctx.ban_events.append({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "type": "pre_chunk_unhealthy",
-                "http_code": code,
-            })
-            rotate_vpn(ctx)
-    return False
+            log(f"healthcheck: recovered after rotation {rot_idx + 1} "
+                f"(HTTP {code})")
+            return True, ""
+        log(f"healthcheck: still unhealthy after rotation {rot_idx + 1} "
+            f"(last HTTP {code})")
+
+    # All paths exhausted. Classification logic in egress_failure_reason()
+    # (degradation.py) — unit-tested independently of this loop.
+    return False, egress_failure_reason(probe_codes)
 
 
 # ─── WAF pre-check ──────────────────────────────────────────────────────
@@ -1492,18 +1559,19 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
             mark_tool_skipped(ctx, chunk_name, "auth_gated")
             continue
 
-        if not ensure_healthy_egress(ctx, max_rotations=2):
-            # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug A: first chunk-skip
-            # aborts. Per advisor ruling Q1 (2026-06-12) — strict v1; a
-            # future S2 partial-degraded mode might collect remaining
-            # chunks, but for now we treat any rotation-exhausted skip
-            # as fatal. Stamp the chunk into tool_status so the
-            # set-equality invariant in close-out doesn't double-fire.
-            log(f"  ✗ target unreachable from any rotated IP — ABORT ({chunk_name})")
+        healthy, egress_reason = ensure_healthy_egress(ctx, max_rotations=2)
+        if not healthy:
+            # #30 (2026-06-16) — reason from ensure_healthy_egress now
+            # distinguishes egress_unstable (rotated, never settled)
+            # from skipped_target_unreachable (target not answering
+            # after confirmed-healthy egress). Stamp the chunk with
+            # whichever applies.
+            log(f"  ✗ pre-chunk healthy gate failed ({egress_reason}) — ABORT ({chunk_name})")
             note_ban_event(ctx, {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "type": "chunk_skipped_unreachable",
                 "chunk": f"{sev}:{tag or '<all>'}",
+                "reason": egress_reason,
             })
             if THRESHOLD_PROBE_MODE:
                 ctx.threshold_probe_results.append({
@@ -1511,29 +1579,13 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
                     "egress_ip": ctx.egress_ips_seen[-1] if ctx.egress_ips_seen else None,
                     "pre_chunk_code": 0, "post_chunk_code": None,
                     "matches": 0, "rc": None, "banned": True,
-                    "note": "skipped — already unreachable before chunk",
+                    "note": f"skipped — {egress_reason} before chunk",
                 })
-            # 2026-06-13: append chunk_name to tools_run BEFORE the
-            # tool_status stamp + raise — matches the ffuf abort site
-            # (run_medium.py:1864) and Bug surfaced by validate run
-            # 648313cd-d734-4b7f-b639-1f272dfdb48e where tool_status
-            # got ahead of tools_run on the pre-chunk health gate.
-            # The post-chunk append below (line 1374) only fires for
-            # chunks that survive the gate; the abort path needs its
-            # own append to keep set(tools_run) == set(tool_status).
-            # Idempotent (defensive) — same guard ffuf uses.
             if chunk_name not in ctx.tools_run:
                 ctx.tools_run.append(chunk_name)
-            # Unify on the canonical {"degraded": reason} shape used by
-            # mark_tool_degraded (run_medium.py:425) + run_light.py. Inline
-            # `{"ok": False, "reason": ...}` would carry the same meaning
-            # but defeat the documented `"degraded" in entry` readers.
-            mark_tool_degraded(ctx, chunk_name, "skipped_target_unreachable")
-            # TODO (S2): partial-degraded mode would `continue` here and
-            # collect remaining chunks before raising at end-of-scan. For
-            # v1 (advisor ruling Q1 2026-06-12) we abort on first skip.
+            mark_tool_degraded(ctx, chunk_name, egress_reason)
             raise DegradedRunError(
-                "rotation_exhausted",
+                egress_reason,
                 f"{chunk_name} after {ctx.rotation_count} rotations",
             )
 
@@ -1808,22 +1860,21 @@ def run_nikto(ctx: ScanContext) -> None:
         mark_tool_skipped(ctx, "nikto", "auth_gated")
         return
 
-    if not ensure_healthy_egress(ctx, max_rotations=2):
-        # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug A — first chunk-skip
-        # aborts. Stamp the tool so the set-equality invariant doesn't
-        # surface "missing" later (it's actually "ran, was unreachable").
-        log("  ✗ target unreachable — ABORT (nikto)")
+    healthy, egress_reason = ensure_healthy_egress(ctx, max_rotations=2)
+    if not healthy:
+        # #30 reason taxonomy: egress_unstable vs skipped_target_unreachable.
+        log(f"  ✗ pre-nikto healthy gate failed ({egress_reason}) — ABORT")
         note_ban_event(ctx, {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "type": "chunk_skipped_unreachable",
             "chunk": "nikto",
+            "reason": egress_reason,
         })
         if "nikto" not in ctx.tools_run:
             ctx.tools_run.append("nikto")
-        # Canonical {"degraded": reason} shape (see mark_tool_degraded).
-        mark_tool_degraded(ctx, "nikto", "skipped_target_unreachable")
+        mark_tool_degraded(ctx, "nikto", egress_reason)
         raise DegradedRunError(
-            "rotation_exhausted",
+            egress_reason,
             f"nikto after {ctx.rotation_count} rotations",
         )
 
@@ -2154,21 +2205,21 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
         chunk_name = f"ffuf[{len(words)}w]#{i+1}"
         log(f"chunk {i+1}/{len(chunks)}: {len(words)} words ({chunk_name})")
 
-        if not ensure_healthy_egress(ctx, max_rotations=2):
-            # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug A — first
-            # chunk-skip aborts (advisor ruling Q1, strict v1).
-            log(f"  ✗ target unreachable — ABORT ({chunk_name})")
+        healthy, egress_reason = ensure_healthy_egress(ctx, max_rotations=2)
+        if not healthy:
+            # #30 reason taxonomy: egress_unstable vs skipped_target_unreachable.
+            log(f"  ✗ pre-chunk healthy gate failed ({egress_reason}) — ABORT ({chunk_name})")
             note_ban_event(ctx, {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "type": "chunk_skipped_unreachable",
                 "chunk": chunk_name,
+                "reason": egress_reason,
             })
             if chunk_name not in ctx.tools_run:
                 ctx.tools_run.append(chunk_name)
-            # Canonical {"degraded": reason} shape (see mark_tool_degraded).
-            mark_tool_degraded(ctx, chunk_name, "skipped_target_unreachable")
+            mark_tool_degraded(ctx, chunk_name, egress_reason)
             raise DegradedRunError(
-                "rotation_exhausted",
+                egress_reason,
                 f"{chunk_name} after {ctx.rotation_count} rotations",
             )
 

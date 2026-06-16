@@ -302,6 +302,102 @@ def assert_validate_mode_target_allowed(
         )
 
 
+# ─── Healthcheck retry helper (#30 — 2026-06-16) ───────────────────────
+#
+# Surfaced by scan_run 57a79615 (ftp.sciimage.com, GH 27634661757,
+# 18s degraded). The same run had wafw00f + httpx ok on the egress IP
+# that immediately triggered "unhealthy" + rotation seconds later.
+# Root cause: ensure_healthy_egress rotated on the FIRST unhealthy
+# probe with no retry — one dropped curl tore down a working tunnel.
+#
+# Pattern: pure helper takes a healthcheck callable + sleep callable.
+# Caller (ensure_healthy_egress) wires the real functions; tests inject
+# canned-result + no-op sleep so the retry logic is unit-testable
+# without touching the network.
+
+PRE_ROTATE_RETRY_ATTEMPTS = 3   # retry the pre-rotate check N times
+PRE_ROTATE_RETRY_DELAY_S = 2    # wait between retries (~2s per advisor)
+POST_ROTATE_SETTLE_ATTEMPTS = 3 # retry post-rotate settle N times
+POST_ROTATE_SETTLE_DELAY_S = 5  # wait between settle probes (~15s total)
+
+
+def egress_failure_reason(probe_codes: list[int]) -> str:
+    """Classify why an ensure_healthy_egress loop ended without a
+    healthy result. The single piece of new logic introduced by #30's
+    reason taxonomy — exposed as a pure helper so the branch is
+    unit-testable independent of the loop machinery.
+
+    Heuristic:
+      - If ANY probe returned an HTTP code > 0 → 'skipped_target_unreachable'
+        The egress worked (target spoke HTTP back, even if the response
+        was a ban code like 403/503). Target is the problem, not the tunnel.
+      - If EVERY probe returned 0 (or the list is empty) → 'egress_unstable'
+        No tunnel ever produced a target-reachable state. WG layer + or
+        rotation pool is the problem, not the target.
+
+    Empty input → 'egress_unstable' (defensive — caller shouldn't pass
+    an empty list but if it does, "we have no evidence the egress
+    works" is the honest read).
+
+    Decoupled from ensure_healthy_egress's loop so:
+      (a) the rule is testable without mocking healthcheck + rotate_vpn
+      (b) future tools (heavy tier, ad-hoc probes) can reuse the same
+          classification logic without copy-pasting the heuristic
+    """
+    if any(code > 0 for code in probe_codes):
+        return "skipped_target_unreachable"
+    return "egress_unstable"
+
+
+def healthcheck_with_retry(
+    healthcheck_fn,
+    attempts: int,
+    delay_s: float,
+    sleep_fn=None,
+) -> tuple[bool, int]:
+    """Call `healthcheck_fn()` up to `attempts` times with `delay_s`
+    wait between, returning AS SOON AS a healthy result lands. If all
+    attempts come back unhealthy, returns the LAST result.
+
+    Pure helper — `healthcheck_fn` is any callable returning
+    `(healthy: bool, http_code: int)`. `sleep_fn` defaults to
+    `time.sleep` but can be injected for tests (use a no-op or a
+    counter).
+
+    Single attempt (attempts=1) → no retry, no sleep. Equivalent to
+    calling healthcheck_fn() directly. Lets callers opt out of retry
+    semantics in validate-mode (pristine-or-nothing) without a
+    different code path.
+
+    Behavioral contract:
+      - If 1st call returns healthy → returns (True, code) immediately,
+        zero sleeps.
+      - If 1st call returns unhealthy, 2nd healthy → returns (True,
+        code), 1 sleep.
+      - If all `attempts` unhealthy → returns (False, last_code),
+        `attempts - 1` sleeps.
+
+    Used by ensure_healthy_egress in two places:
+      1. PRE-rotate (PRE_ROTATE_RETRY_ATTEMPTS) — filter transient
+         blips before tearing down a working tunnel.
+      2. POST-rotate settle (POST_ROTATE_SETTLE_ATTEMPTS) — give the
+         new tunnel time to start passing target traffic before
+         declaring it unhealthy.
+    """
+    import time
+    if sleep_fn is None:
+        sleep_fn = time.sleep
+    last_result = (False, 0)
+    for i in range(attempts):
+        healthy, code = healthcheck_fn()
+        last_result = (healthy, code)
+        if healthy:
+            return last_result
+        if i < attempts - 1:
+            sleep_fn(delay_s)
+    return last_result
+
+
 def assert_tool_status_invariant(
     tools_run: list[str], tool_status: dict[str, dict]
 ) -> None:
