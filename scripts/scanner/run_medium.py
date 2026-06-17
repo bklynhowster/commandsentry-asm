@@ -2842,10 +2842,13 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
             # so the close scopes to write-source by construction — not re-derived
             # from scan_run.intensity (avoids any standard/medium normalization gap).
             cur.execute(
-                "SELECT delta_close_for_scan_run(%s, %s)",
+                "SELECT delta_close_for_scan_run(%s, %s) AS n_closed",
                 (ctx.scan_run_id, f"commandsentry_{ctx.intensity}"),
             )
-            n_closed = cur.fetchone()[0] or 0
+            # conn is dict_row — read the aliased column by NAME, not [0]
+            # (indexing a dict-row with 0 raises KeyError(0)).
+            _dc_row = cur.fetchone()
+            n_closed = (_dc_row["n_closed"] if _dc_row else 0) or 0
             if n_closed:
                 log(f"delta-close: {n_closed} finding(s) marked remediated "
                     f"(open, not re-observed this clean scan)")
