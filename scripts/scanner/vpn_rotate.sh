@@ -97,7 +97,37 @@ END=$(date +%s)
 TOTAL=$((END - START))
 log "rotation took: ${TOTAL}s"
 
-sleep 2
+# #30 (2026-06-16) — replace bare `sleep 2` with WG handshake poll.
+# Surfaced by scan_run 57a79615: the previous sleep-then-probe was
+# insufficient for wireguard-go to negotiate first handshake-to-target.
+# rotate_vpn returned "rotated OK" → ensure_healthy_egress
+# healthchecked the TARGET on a tunnel not yet passing traffic → http
+# 0 → rotated again → spiral. Polling `wg show <iface>
+# latest-handshakes` for a non-zero value gives a concrete "WG layer
+# negotiated" signal before we hand control back. ipify probe + target
+# settle (caller-side) layer on top of this.
+WG_HANDSHAKE_WAIT_TIMEOUT_S=10
+log "waiting up to ${WG_HANDSHAKE_WAIT_TIMEOUT_S}s for WG handshake on $NEW_REGION"
+HANDSHAKE_OK=0
+for ((i=0; i<WG_HANDSHAKE_WAIT_TIMEOUT_S; i++)); do
+  # `wg show <iface> latest-handshakes` outputs:
+  #   <peer-pubkey>\t<unix-timestamp>
+  # 0 = never handshook; non-zero = handshake completed.
+  HS_TS=$(sudo wg show "$NEW_REGION" latest-handshakes 2>/dev/null | awk '{print $2}' | head -1)
+  if [[ -n "$HS_TS" && "$HS_TS" != "0" ]]; then
+    log "  ✓ WG handshake at ${HS_TS} (${i}s after bringup)"
+    HANDSHAKE_OK=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$HANDSHAKE_OK" != "1" ]]; then
+  # Not fatal — fall through. Caller's post-rotate healthcheck retry
+  # may still pass once the tunnel catches up. But log loudly so
+  # forensics can correlate "no handshake within window" with
+  # downstream failures.
+  log "  ⚠ no WG handshake within ${WG_HANDSHAKE_WAIT_TIMEOUT_S}s — tunnel may be unsettled"
+fi
 
 POST_IP=$(get_egress_ip)
 log "post-rotate egress: ${POST_IP:-<unknown>}"
