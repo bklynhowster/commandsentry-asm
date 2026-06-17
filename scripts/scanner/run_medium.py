@@ -84,6 +84,7 @@ from degradation import (
     assert_validate_mode_target_allowed,
     cap_aware_append_ban,
     cap_aware_append_healthcheck_failure,
+    delta_close_eligible,
     egress_failure_reason,
     healthcheck_with_retry,
     is_tool_output_degraded,
@@ -2518,14 +2519,14 @@ INSERT INTO public.findings (
     cwe, "references", current_status, first_detected_at,
     last_observed_at, source, tags,
     validation_status, scanner_version, validated_at,
-    first_detected_scan
+    first_detected_scan, last_seen_scan_run
 )
 VALUES (%(finding_id)s, %(asset_id)s, %(title)s, %(severity)s, %(category)s,
         %(description)s, %(cwe)s, %(references)s, 'detected',
         now(), now(), %(source)s, %(tags)s,
         %(validation_status)s, %(scanner_version)s,
         CASE WHEN %(validation_status)s = 'validated' THEN now() ELSE NULL END,
-        %(scan_run_id)s)
+        %(scan_run_id)s, %(scan_run_id)s)
 ON CONFLICT (finding_id) DO UPDATE SET
     title             = EXCLUDED.title,
     category          = EXCLUDED.category,
@@ -2577,7 +2578,11 @@ ON CONFLICT (finding_id) DO UPDATE SET
     -- against re-detect by a different scan_run clobbering the lineage.
     -- Same one-way semantics as first_detected_at (LEAST). New INSERTs
     -- get %(scan_run_id)s; subsequent UPDATEs keep the original.
-    first_detected_scan = COALESCE(findings.first_detected_scan, EXCLUDED.first_detected_scan)
+    first_detected_scan = COALESCE(findings.first_detected_scan, EXCLUDED.first_detected_scan),
+    -- #35 — stamp the observing scan_run on EVERY observation (EXCLUDED, not
+    -- COALESCE — unlike first_detected_scan). This is the signal delta-close
+    -- keys on: a finding NOT re-stamped by the current run wasn't re-observed.
+    last_seen_scan_run = EXCLUDED.last_seen_scan_run
 RETURNING (xmax = 0) as inserted;
 """
 
@@ -2821,6 +2826,34 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
         }
         cur.execute(CLOSE_SCAN_RUN_SQL, params)
         cur.execute(CLOSE_SCAN_QUEUE_SQL, params)
+
+        # #35 — live-path delta-close. Called ONLY from close_out (the clean
+        # exit); degraded_out NEVER calls it, so a degraded scan can't close
+        # anything — the structural safety guard against false-remediation.
+        # Finer gate: ALL tools must be 'ok'. A skipped/degraded tool means a
+        # partial scan that must NOT close (it didn't re-run everything). The
+        # live medium writes one source per scan (commandsentry_{intensity}),
+        # so one ineligible tool blocks the whole scan's closing — the safe
+        # side. Runs AFTER CLOSE_SCAN_RUN_SQL (scan_run.completed_at now set =
+        # remediated_at) and in the SAME txn — committed together by run().
+        eligible = delta_close_eligible(ctx.tool_status)
+        if eligible:
+            # Pass the EXACT source the writes used (f"commandsentry_{intensity}")
+            # so the close scopes to write-source by construction — not re-derived
+            # from scan_run.intensity (avoids any standard/medium normalization gap).
+            cur.execute(
+                "SELECT delta_close_for_scan_run(%s, %s)",
+                (ctx.scan_run_id, f"commandsentry_{ctx.intensity}"),
+            )
+            n_closed = cur.fetchone()[0] or 0
+            if n_closed:
+                log(f"delta-close: {n_closed} finding(s) marked remediated "
+                    f"(open, not re-observed this clean scan)")
+            else:
+                log("delta-close: 0 closed (nothing went stale this scan)")
+        else:
+            log("delta-close: skipped — scan not fully clean "
+                "(a tool degraded/skipped); nothing closed")
 
 
 def fail_out(conn, ctx: ScanContext, error: str) -> None:

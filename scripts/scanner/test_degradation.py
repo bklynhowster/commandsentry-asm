@@ -40,6 +40,7 @@ from degradation import (  # noqa: E402
     assert_validate_mode_target_allowed,
     cap_aware_append_ban,
     cap_aware_append_healthcheck_failure,
+    delta_close_eligible,
     egress_failure_reason,
     healthcheck_with_retry,
     is_tool_output_degraded,
@@ -2026,3 +2027,43 @@ def test_reconcile_does_not_raise():
     # b and d unchanged
     assert ctx.tool_status["b"] == {"ok": True}
     assert ctx.tool_status["d"] == {"degraded": "x"}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# delta_close_eligible (#35 — live-path delta-close gate)
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_delta_close_eligible_all_ok():
+    assert delta_close_eligible(
+        {"wafw00f": {"ok": True}, "httpx[-td]": {"ok": True},
+         "nikto": {"ok": True}, "nuclei[medium:tech]": {"ok": True}}
+    ) is True
+
+
+def test_delta_close_eligible_one_degraded_blocks():
+    # HEADLINE SAFETY (Python side): a single degraded tool -> not eligible
+    # -> nothing closes. Over-closing (false-remediation) is the failure
+    # delta-close exists to avoid.
+    assert delta_close_eligible(
+        {"wafw00f": {"ok": True}, "nuclei[medium:tech]": {"degraded": "egress_unstable"}}
+    ) is False
+
+
+def test_delta_close_eligible_one_skipped_blocks():
+    # auth_gated skips nikto/ffuf -> partial scan -> must NOT close (it didn't
+    # re-run those tools; a finding they'd re-find could be wrongly closed).
+    assert delta_close_eligible(
+        {"wafw00f": {"ok": True}, "httpx[-td]": {"ok": True},
+         "nikto": {"skipped": "auth_gated"}}
+    ) is False
+
+
+def test_delta_close_eligible_empty_is_false():
+    # No tools ran -> nothing proven -> not eligible.
+    assert delta_close_eligible({}) is False
+
+
+def test_delta_close_eligible_ok_value_irrelevant():
+    # Eligibility is key-membership of 'ok', value-blind (matches the
+    # three-state tool_status invariant elsewhere).
+    assert delta_close_eligible({"x": {"ok": True}, "y": {"ok": "whatever"}}) is True

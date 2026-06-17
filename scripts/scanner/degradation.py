@@ -485,3 +485,28 @@ def cap_aware_append_healthcheck_failure(
         return True
     failures_list.append(event)
     return False
+
+
+def delta_close_eligible(tool_status: dict) -> bool:
+    """#35 — is a clean scan eligible to delta-close (remediate) its findings?
+
+    True iff EVERY tool in tool_status ran 'ok'. A skipped or degraded tool
+    means a PARTIAL scan — it didn't re-run everything, so a finding it would
+    have re-observed could be 'missing' only because that tool didn't run. The
+    live medium writes one source per scan (commandsentry_{intensity}), so one
+    ineligible tool blocks the whole scan's closing. That's the safe side:
+    under-close (a remediated finding lingers until a fully-clean scan) is a
+    cosmetic lag; over-close (false-remediating a live finding) is the dangerous
+    failure delta-close exists to avoid.
+
+    Empty tool_status -> False (no scan ran, nothing proven). Values are the
+    three-state shape {"ok": true} | {"degraded": "..."} | {"skipped": "..."};
+    'ok' key-membership is the eligibility test.
+
+    NOTE: this is the FINER gate. The STRUCTURAL guard is that delta-close is
+    called only from close_out (the clean exit) — degraded_out never calls it,
+    so a scan that raised DegradedRunError can't close anything regardless.
+    """
+    if not tool_status:
+        return False
+    return all("ok" in v for v in tool_status.values())
