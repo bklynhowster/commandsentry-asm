@@ -517,6 +517,13 @@ FROM public.asset_surface s
 JOIN public.assets a ON a.asset_id = s.asset_id
 WHERE a.discovery_status = 'confirmed_live'
   AND a.ownership = 'owned'
+  -- #34 Gate #2 (note 93, "respond don't just resolve"): an asset that never
+  -- had a responding service can't "go dark" — it was never lit. Gate on
+  -- service_count, NOT the `alive` flag: `alive` is HTTP-reachability-based,
+  -- so DNS-only infra (ns01/ns02, service_count=1, alive=False) would be
+  -- wrongly dropped. service_count keeps real infra, drops the svc=0 phantoms
+  -- (sciimage.com apex + the bare IPs). Verified 2026-06-17.
+  AND s.service_count > 0
   AND s.last_seen IS NOT NULL
   AND s.last_seen < (now() - (%s::int * interval '1 hour'))
   AND NOT EXISTS (
