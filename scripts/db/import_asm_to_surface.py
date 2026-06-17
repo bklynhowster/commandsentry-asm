@@ -1112,7 +1112,7 @@ ON CONFLICT (asset_id) DO UPDATE SET
   -- we don't oscillate on transient DNS hiccups.
   discovery_status = CASE
     WHEN EXCLUDED.discovery_status = 'confirmed_live'
-      AND public.assets.discovery_status IN ('ct_ghost', 'unverified')
+      AND public.assets.discovery_status IN ('ct_ghost', 'unverified', 'dns_only')
       THEN 'confirmed_live'
     ELSE public.assets.discovery_status
   END,
@@ -1146,7 +1146,7 @@ ON CONFLICT (asset_id) DO UPDATE SET
   last_observed = GREATEST(public.assets.last_observed, EXCLUDED.last_observed),
   discovery_status = CASE
     WHEN EXCLUDED.discovery_status = 'confirmed_live'
-      AND public.assets.discovery_status IN ('ct_ghost', 'unverified')
+      AND public.assets.discovery_status IN ('ct_ghost', 'unverified', 'dns_only')
       THEN 'confirmed_live'
     ELSE public.assets.discovery_status
   END,
@@ -1317,11 +1317,21 @@ def import_one(
             #    UPSERT_ASSET (preserves its existing kind/aliases).
             #    Non-apex subdomains use UPSERT_NEW_SUBDOMAIN_ASSET which
             #    auto-classifies kind on insert and sets apex_domain.
-            # Tier 2 phantom defense — any row written by asm-discover is
-            # by definition in scope (targets.yml = scope_verified) and
-            # has resolved DNS (asm-discover.sh dnsx gate filtered phantoms
-            # out of the deep-scan loop before we got here). Stamp the
-            # row 'owned' + 'confirmed_live' so downstream gates work.
+            # #34 Gate #1 (note 93, "respond don't just resolve"): stamp
+            # discovery_status from whether the asset actually answered with a
+            # SERVICE, not merely whether it resolves. asm-discover rows are in
+            # scope (targets.yml) + resolved DNS (Tier 2 dnsx gate) — but a
+            # resolve-with-no-service name (sciimage.com apex, bare IPs) is
+            # `dns_only`, NOT a confirmed_live asset.
+            # SIGNAL = service_count, NOT `alive`: alive is HTTP-reachability,
+            # so DNS-only infra (ns01/ns02: svc=1, alive=False) must stay
+            # confirmed_live — service_count keeps them, drops only svc=0.
+            # The upsert CASE re-promotes dns_only → confirmed_live
+            # if a later discovery finds svc>0. No downgrade here (confirmed_live
+            # that loses service is demoted by Tier 3 heartbeat / backfill, not
+            # this path — mirrors the existing no-downgrade-in-upsert rule).
+            svc_count = int(bucket_convenience.get("service_count") or 0)
+            disc = "confirmed_live" if svc_count > 0 else "dns_only"
             if is_apex:
                 cur.execute(UPSERT_ASSET, {
                     "asset_id": bucket_id,
@@ -1329,7 +1339,7 @@ def import_one(
                     "type": asset_type,
                     "organization": organization,
                     "ownership": "owned",
-                    "discovery_status": "confirmed_live",
+                    "discovery_status": disc,
                     "first_observed": bucket_lifecycle["first_discovered"],
                     "last_observed": bucket_lifecycle["last_seen"],
                 })
@@ -1340,7 +1350,7 @@ def import_one(
                     "kind": classify_subdomain_kind(bucket_id),
                     "apex_domain": apex_asset_id,
                     "ownership": "owned",
-                    "discovery_status": "confirmed_live",
+                    "discovery_status": disc,
                     "first_observed": bucket_lifecycle["first_discovered"],
                     "last_observed": bucket_lifecycle["last_seen"],
                 })

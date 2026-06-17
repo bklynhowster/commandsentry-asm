@@ -305,7 +305,21 @@ SELECT
   a.last_observed
 FROM expected e
 LEFT JOIN public.assets a ON a.asset_id = e.asset_id
-WHERE COALESCE(a.discovery_status, 'MISSING') <> 'confirmed_live'
+-- #34 Gate #1: `dns_only` is an ACCEPTABLE state for a scope_verified host,
+-- not a violation. The canary exists to catch hosts WRONGLY demoted to
+-- ct_ghost (the 2026-06-06 broken-dnsx misclassification). A resolve-but-
+-- no-service host correctly classified `dns_only` (e.g. sciimage.com apex —
+-- NS/MX only, web lives on ftp/vpn subdomains) is NOT a regression; flagging
+-- it would just re-create the false-positive we're removing. Both
+-- confirmed_live and dns_only are "known + correctly classified."
+-- FORWARD NOTE (revisit when the Tier-3 DNS heartbeat lands): today nothing
+-- demotes confirmed_live → dns_only except the one-time #34 backfill (no
+-- downgrade in the asm-discover upsert). If Tier-3 ever demotes a host that
+-- USED to serve, a canary host transitioning confirmed_live → dns_only would
+-- mean "lost a service it used to have" — at that point decide whether that
+-- transition deserves its own notice, distinct from a host that was always
+-- dns_only (sciimage). Until Tier-3 exists, accepting dns_only masks nothing.
+WHERE COALESCE(a.discovery_status, 'MISSING') NOT IN ('confirmed_live', 'dns_only')
    OR COALESCE(a.ownership,        'MISSING') <> 'owned'
 ORDER BY e.asset_id;
 """
