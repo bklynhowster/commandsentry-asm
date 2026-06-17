@@ -50,10 +50,14 @@ DECLARE
   v_completed  timestamptz;
   v_n          integer;
 BEGIN
+  -- scan_run.scan_run_id is UUID; p_scan_run_id arrives as text (same string
+  -- form the scanner stamps into findings.last_seen_scan_run). Cast to uuid for
+  -- this lookup. The findings comparison below stays text-vs-text (both hold the
+  -- scan_run_id as text), so it does NOT get cast.
   SELECT asset_id, COALESCE(completed_at, started_at, now())
     INTO v_asset, v_completed
     FROM public.scan_run
-   WHERE scan_run_id = p_scan_run_id;
+   WHERE scan_run_id = p_scan_run_id::uuid;
   IF v_asset IS NULL THEN
     RAISE NOTICE 'delta_close_for_scan_run: scan_run % not found, skipping', p_scan_run_id;
     RETURN 0;
@@ -84,7 +88,11 @@ BEGIN
      SET current_status = 'remediated',
          remediated_at  = v_completed
    WHERE f.asset_id = v_asset
-     AND f.source   = p_source
+     -- findings.source is enum finding_source_t (NOT text). Cast to compare
+     -- against the text param — matches the existing delta_close_for_scan,
+     -- which casts f.source::text for the same reason. asset_id is text
+     -- (no cast); current_status enum coerces the string literals in the IN.
+     AND f.source::text = p_source
      AND f.current_status IN ('detected', 'confirmed', 'open', 'regressed')
      AND f.last_seen_scan_run <> p_scan_run_id;
 
