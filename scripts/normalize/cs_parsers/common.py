@@ -399,6 +399,75 @@ def resolve_finding_asset_id(target_dirname: str, *url_candidates: Optional[str]
 
 
 # ─── category inference ───────────────────────────────────────────────────────
+# ─── cross-source semantic dedup (#36) ────────────────────────────────────────
+# Curated, conservative same-fact equivalence map. When the same single fact
+# is detected by multiple sources with divergent normalized_keys (or none),
+# this map collapses them to a shared canonical key so the dedup view
+# (v_open_findings_dedup, grouped on (asset_id, normalized_key)) sees ONE
+# group instead of N.
+#
+# SCOPE — DO NOT BROADEN. Two classes only. Each entry must be EARNED with
+# evidence that the matched (source, title) pairs describe the SAME single
+# fact — not just topically related, not opposite states, not multi-issue.
+#
+# NEVER MERGE (and the negative-test fixture in test_cross_source_equivalence.py
+# locks these in as regression guards):
+#   • ciphers (LUCKY13 != CBC-enabled != obsoleted — distinct fixes)
+#   • HSTS-present vs HSTS-missing (OPPOSITES — merging hides the gap)
+#   • CSRF F-02 vs F-03 (distinct)
+#   • nuclei `dmarc-detect` (INFO DETECTION — opposite semantic of "missing")
+#
+# DEFERRED: CSP, forward-secrecy.
+#
+# Patterns are applied case-insensitively. Pattern precision IS the
+# conservatism: e.g. the DMARC entry uses the exact phrase 'no dmarc record'
+# (NOT a generic 'dmarc' match) to avoid catching manual_named F-02
+# "Domain Spoofing Enabled — No SPF, DMARC, or…" and L-05 "No SPF/DMARC/MX"
+# which are multi-issue findings that would wrongly fold SPF/DKIM into the
+# DMARC dedup group.
+#
+# Mirrors migration 20260618a_cross_source_dedup_dmarc_ocsp.sql exactly —
+# both the (source, pattern) → canonical_key map AND the never-merge list.
+# Any edit here MUST land in the SQL migration too (or the next normalize
+# pass diverges from the backfilled DB state).
+CROSS_SOURCE_EQUIVALENCE: list[dict] = [
+    {
+        "canonical_key": "dns-missing-dmarc",
+        "patterns": [
+            ("manual_named",        re.compile(r"no dmarc record", re.IGNORECASE)),
+            ("commandsentry_light", re.compile(r"dns missing dmarc", re.IGNORECASE)),
+        ],
+    },
+    {
+        "canonical_key": "tls-ocsp-stapling-missing",
+        "patterns": [
+            ("manual_named", re.compile(r"no ocsp stapling", re.IGNORECASE)),
+            ("testssl",      re.compile(r"ocsp stapling not enabled", re.IGNORECASE)),
+        ],
+    },
+]
+
+
+def apply_cross_source_equivalence(source: Optional[str], title: Optional[str]) -> Optional[str]:
+    """
+    Return the canonical normalized_key for a (source, title) pair if it
+    matches a curated cross-source equivalence entry. Returns None otherwise
+    (caller preserves whatever normalized_key the source originally derived,
+    or leaves it NULL for sources that don't derive one — e.g. manual_named).
+
+    Applied during rollup_findings() in run_normalize.py. Findings that don't
+    match any entry keep their source-specific key (or no key), which is the
+    correct conservative behavior — only same-fact equivalences earn merging.
+    """
+    if not source or not title:
+        return None
+    for entry in CROSS_SOURCE_EQUIVALENCE:
+        for entry_source, pattern in entry["patterns"]:
+            if entry_source == source and pattern.search(title):
+                return entry["canonical_key"]
+    return None
+
+
 def infer_category_from_tags(tags: list[str], template_id: str = "") -> str:
     """
     Heuristic mapping from nuclei tags / template-id to canonical category.

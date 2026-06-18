@@ -237,6 +237,11 @@ def load_findings(cur, path: Path) -> tuple[int, int]:
             coerce_int(rec.get("port")),
             rec.get("protocol") or None,
             rec.get("tags") or [],
+            # #36 — normalized_key derived in rollup_findings via
+            # apply_cross_source_equivalence(). None when no curated entry
+            # matched (caller preserves whatever DB-side derivation is
+            # already there — see UPDATE clause's COALESCE).
+            rec.get("normalized_key") or None,
         ))
 
         for h in rec.get("history", []) or []:
@@ -258,10 +263,12 @@ def load_findings(cur, path: Path) -> tuple[int, int]:
                 finding_id, asset_id, title, severity, category, description,
                 cwe, cve, "references", current_status, first_detected_at,
                 first_detected_scan, last_observed_at, remediated_at,
-                owner, deadline, source, subdomain, host_ip, port, protocol, tags
+                owner, deadline, source, subdomain, host_ip, port, protocol, tags,
+                normalized_key
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s)
             ON CONFLICT (finding_id) DO UPDATE SET
                 asset_id            = EXCLUDED.asset_id,
                 title               = EXCLUDED.title,
@@ -337,7 +344,15 @@ def load_findings(cur, path: Path) -> tuple[int, int]:
                 host_ip             = EXCLUDED.host_ip,
                 port                = EXCLUDED.port,
                 protocol            = EXCLUDED.protocol,
-                tags                = EXCLUDED.tags
+                tags                = EXCLUDED.tags,
+                -- #36 — cross-source equivalence key wins when present (the
+                -- whole point: collapse same-fact findings across sources).
+                -- When EXCLUDED.normalized_key is NULL (no curated entry
+                -- matched), preserve whatever derivation is already in the
+                -- DB (e.g. run_light's per-source key, or a prior backfill
+                -- migration). COALESCE is correct here: NULL from the
+                -- importer means "I have no opinion," not "set it to NULL."
+                normalized_key      = COALESCE(EXCLUDED.normalized_key, findings.normalized_key)
             """,
             find_rows,
         )

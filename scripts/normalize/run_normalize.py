@@ -51,7 +51,7 @@ THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(THIS_DIR))
 
 from cs_parsers import nuclei, nuclei_text, summary_md, verdict_md, testssl, sslyze, nikto, wpscan, curated_html, wpvuln_json, probe_results  # noqa: E402
-from cs_parsers.common import FindingEvent, now_iso  # noqa: E402
+from cs_parsers.common import FindingEvent, apply_cross_source_equivalence, now_iso  # noqa: E402
 from cs_importers import commandsentry_assets, posture_rollup  # noqa: E402
 
 
@@ -170,6 +170,16 @@ def rollup_findings(events: list[FindingEvent]) -> list[dict]:
                 remediated_at = h["observed_at"]
                 break
 
+        # #36 — cross-source semantic dedup. Apply the curated equivalence map
+        # to derive a normalized_key when (source, title) matches a same-fact
+        # entry. Returns None for non-matching findings; those keep whatever
+        # normalized_key derivation runs downstream (run_light.py at upsert
+        # time for commandsentry_light, or NULL for manual_named/testssl until
+        # a future entry earns its way into the map). The conservative
+        # behavior on no-match is intentional — only same-fact pairs that
+        # earned an explicit entry merge.
+        cross_source_key = apply_cross_source_equivalence(first.source, title)
+
         # New schema fields — use latest observation's values for current state
         finding = {
             "finding_id":            fid,
@@ -193,6 +203,7 @@ def rollup_findings(events: list[FindingEvent]) -> list[dict]:
             "host_ip":               last.host_ip or first.host_ip,
             "port":                  last.port or first.port,
             "protocol":              last.protocol or first.protocol,
+            "normalized_key":        cross_source_key,  # #36 — None if no entry matches
             "history":               history,
             "evidence_ids":          [],   # populated by evidence-artifact parser
             "tags":                  [],
