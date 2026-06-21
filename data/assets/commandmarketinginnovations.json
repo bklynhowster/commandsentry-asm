@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-20T19:59:52Z_d4318527",
-    "started_at": "2026-06-20T19:59:52Z",
-    "completed_at": "2026-06-20T20:02:16Z",
-    "duration_seconds": 144,
+    "id": "scan_2026-06-21T05:15:15Z_dbd1fff0",
+    "started_at": "2026-06-21T05:15:15Z",
+    "completed_at": "2026-06-21T05:18:00Z",
+    "duration_seconds": 165,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-20T20:02:16Z",
-      "last_seen": "2026-06-20T20:02:16Z",
+      "first_discovered": "2026-06-21T05:18:00Z",
+      "last_seen": "2026-06-21T05:18:00Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -118,8 +118,8 @@
       ],
       "dns": {
         "a": [
-          "199.16.172.41",
-          "199.16.173.231"
+          "199.16.173.231",
+          "199.16.172.41"
         ],
         "aaaa": [],
         "cname": null,
@@ -247,8 +247,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-20T20:02:16Z",
-      "last_seen": "2026-06-20T20:02:16Z",
+      "first_discovered": "2026-06-21T05:18:00Z",
+      "last_seen": "2026-06-21T05:18:00Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -562,7 +562,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-06-20T14:32:33Z_9a35696f",
+    "since_scan": "scan_2026-06-20T19:59:52Z_d4318527",
     "added": {
       "subdomains": [],
       "services": [],
@@ -5146,6 +5146,50 @@
       "scan_id": "scan_2026-06-20T19:59:52Z_d4318527",
       "started_at": "2026-06-20T19:59:52Z",
       "completed_at": "2026-06-20T20:02:16Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.7.56",
+        "WPMU DEV Smush": "4.1.1",
+        "Yoast SEO": "27.8",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-06-21T05:15:15Z_dbd1fff0",
+      "started_at": "2026-06-21T05:15:15Z",
+      "completed_at": "2026-06-21T05:18:00Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 2,
