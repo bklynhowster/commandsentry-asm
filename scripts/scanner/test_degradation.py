@@ -2131,6 +2131,381 @@ def test_ffuf_catchall_status_field_defaults():
     assert ctx.ffuf_catchall_status_count == 0
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# S3 Part 2 (2026-06-18) — ffuf severity tuning. Curated path-sensitivity
+# (SECRET / ADMIN) × HTTP status → severity matrix. Replaces the blanket
+# `severity='INFO'` at the per-path ffuf emit site so real hits surface
+# above the INFO noise floor. Curated, anchored — same discipline as #36
+# cross-source dedup.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# ─── SECRET × accessible (200/204) → HIGH ──────────────────────────────────
+
+
+def test_classify_dotenv_200_is_high():
+    """The headline case — /.env returning 200 is direct secret exposure."""
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity(".env", "https://x/.env", 200) == "HIGH"
+
+
+def test_classify_wp_config_200_is_high():
+    """wp-config.php → HIGH on 200. WordPress DB creds + auth keys in the
+    clear if this is publicly readable."""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity("wp-config.php", "https://x/wp-config.php", 200)
+        == "HIGH"
+    )
+
+
+def test_classify_id_rsa_200_is_high():
+    """SSH private key reachable → HIGH."""
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity("id_rsa", "https://x/id_rsa", 200) == "HIGH"
+
+
+def test_classify_dump_sql_200_is_high():
+    """Database dump reachable → HIGH."""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity("dump.sql", "https://x/dump.sql", 200)
+        == "HIGH"
+    )
+
+
+def test_classify_secret_nested_path_200_is_high():
+    """Nested secret like backup/.env should also catch as SECRET — the
+    trailing path component is what classifies."""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity("backup/.env", "https://x/backup/.env", 200)
+        == "HIGH"
+    )
+
+
+# ─── SECRET × gated (401/403) → LOW ────────────────────────────────────────
+
+
+def test_classify_dotenv_403_is_low():
+    """/.env exists but is gated → LOW (inventory value)."""
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity(".env", "https://x/.env", 403) == "LOW"
+
+
+def test_classify_git_config_403_is_low():
+    """/.git/config matches the ADMIN_PATH entry; 403 → LOW. (The broader
+    /.git directory would match SECRET; this specific config file matches
+    ADMIN. Either way 403 lands LOW.)"""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity(".git/config", "https://x/.git/config", 403)
+        == "LOW"
+    )
+
+
+def test_classify_secret_401_is_low():
+    """401 is the auth-required twin of 403 — same LOW for sensitive paths."""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity("wp-config.php", "https://x/wp-config.php", 401)
+        == "LOW"
+    )
+
+
+# ─── ADMIN × accessible (200/204) → MODERATE ────────────────────────────────
+
+
+def test_classify_admin_200_is_moderate():
+    """The headline case — /admin returning 200 is a privileged surface
+    reachable to anyone. MODERATE, not HIGH (not a direct secret leak,
+    but high-value attack surface)."""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity("admin", "https://x/admin", 200) == "MODERATE"
+    )
+
+
+def test_classify_phpmyadmin_200_is_moderate():
+    """phpmyadmin landing page reachable → MODERATE."""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity("phpmyadmin", "https://x/phpmyadmin", 200)
+        == "MODERATE"
+    )
+
+
+def test_classify_swagger_200_is_moderate():
+    """Swagger UI reachable → MODERATE (API surface map exposed)."""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity("swagger", "https://x/swagger", 200)
+        == "MODERATE"
+    )
+
+
+def test_classify_actuator_200_is_moderate():
+    """Spring Boot /actuator exposed → MODERATE (env/config/metrics)."""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity("actuator", "https://x/actuator", 200)
+        == "MODERATE"
+    )
+
+
+def test_classify_manager_html_200_is_moderate():
+    """Tomcat /manager/html → MODERATE."""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity(
+            "manager/html", "https://x/manager/html", 200
+        )
+        == "MODERATE"
+    )
+
+
+# ─── ADMIN × gated (401/403) → LOW ──────────────────────────────────────────
+
+
+def test_classify_admin_403_is_low():
+    """/admin exists but is gated → LOW (inventory: 'they have an admin
+    panel; it's locked down at the WAF or app layer')."""
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity("admin", "https://x/admin", 403) == "LOW"
+
+
+def test_classify_admin_401_is_low():
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity("admin", "https://x/admin", 401) == "LOW"
+
+
+# ─── generic × any → INFO ───────────────────────────────────────────────────
+
+
+def test_classify_about_200_is_info():
+    """Non-sensitive path /about → INFO regardless of status."""
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity("about", "https://x/about", 200) == "INFO"
+
+
+def test_classify_generic_403_is_info():
+    """Generic 403 (single non-catchall, e.g. a path the WAF specifically
+    blocks) stays INFO. Distinct from a SECRET/ADMIN 403 which goes LOW."""
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity("api", "https://x/api", 403) == "INFO"
+
+
+def test_classify_generic_401_is_info():
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity("auth", "https://x/auth", 401) == "INFO"
+
+
+# ─── redirects (301/302/307) → INFO always ─────────────────────────────────
+
+
+def test_classify_admin_302_is_info():
+    """Redirects stay INFO regardless of path class. The catch-all redirect
+    case (#33) is suppressed before reaching here; surviving redirects are
+    low signal regardless of where they point or what path they're on."""
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity("admin", "https://x/admin", 302) == "INFO"
+
+
+def test_classify_dotenv_301_is_info():
+    """Even SECRET paths go INFO on a redirect — the redirect itself isn't
+    the exposure, the destination would be (and gets emitted at the
+    destination's status by the next probe in a real attack)."""
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity(".env", "https://x/.env", 301) == "INFO"
+
+
+def test_classify_secret_307_is_info():
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity("id_rsa", "https://x/id_rsa", 307) == "INFO"
+
+
+# ─── SUBSTRING-GUARD — anchored regex must reject false positives ──────────
+
+
+def test_classify_env_no_dot_is_not_secret():
+    """`env` (no leading dot — already in FFUF_WORDS as a generic) must NOT
+    match SECRET `\\.env`. This is the substring guard against the regex
+    matching `env` inside `.env`. /env exists in the wordlist and SHOULD
+    land INFO, not HIGH."""
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity("env", "https://x/env", 200) == "INFO"
+
+
+def test_classify_envrc_not_secret():
+    """`.envrc` is a distinct file (shell config — not a secret exposure
+    by itself). Must NOT match SECRET `\\.env`. The anchored regex
+    requires the matched pattern to be the full word or trailing
+    component — `.envrc` has trailing `rc` after `.env`, so no match."""
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity(".envrc", "https://x/.envrc", 200) == "INFO"
+
+
+def test_classify_environment_not_secret():
+    """`environment` contains `env` as substring but isn't a secret.
+    The anchored regex rejects it."""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity("environment", "https://x/environment", 200)
+        == "INFO"
+    )
+
+
+def test_classify_administrative_not_admin():
+    """`administrative` contains `admin` as substring but isn't the admin
+    surface. Must NOT match. Catches the broad-keyword failure mode."""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity(
+            "administrative", "https://x/administrative", 200
+        )
+        == "INFO"
+    )
+
+
+def test_classify_admin_panel_not_admin():
+    """`admin-panel` contains `admin` as prefix but isn't a path-final
+    match. Anchored regex rejects."""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity(
+            "admin-panel", "https://x/admin-panel", 200
+        )
+        == "INFO"
+    )
+
+
+def test_classify_wp_admin_does_match_admin_tier():
+    """`wp-admin` IS an explicit ADMIN entry — must match as MODERATE,
+    NOT fall through to INFO. Pins the WordPress-specific case so a
+    future refactor that drops the entry breaks here."""
+    from run_medium import classify_ffuf_severity
+    assert (
+        classify_ffuf_severity("wp-admin", "https://x/wp-admin", 200)
+        == "MODERATE"
+    )
+
+
+# ─── case-insensitivity + edge cases ───────────────────────────────────────
+
+
+def test_classify_case_insensitive():
+    """`.ENV` is the same secret as `.env`. ffuf wordlists are mixed-case;
+    don't lose a match on capitalization."""
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity(".ENV", "https://x/.ENV", 200) == "HIGH"
+    assert classify_ffuf_severity("Admin", "https://x/Admin", 200) == "MODERATE"
+
+
+def test_classify_empty_word_is_info():
+    """Defensive — empty word (parser failure / blank entry) → INFO,
+    don't raise."""
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity("", "https://x/", 200) == "INFO"
+
+
+def test_classify_unknown_status_is_info():
+    """Statuses outside the 200/204/401/403/30x set default to INFO.
+    ffuf -mc is constrained today, but defensive against widening."""
+    from run_medium import classify_ffuf_severity
+    assert classify_ffuf_severity(".env", "https://x/.env", 500) == "INFO"
+    assert classify_ffuf_severity("admin", "https://x/admin", 404) == "INFO"
+
+
+# ─── #35 delta-close interaction — elevating severity doesn't break close ──
+
+
+def test_classify_ffuf_severity_does_not_interfere_with_close():
+    """Lock-in: an elevated severity is just a string in the finding row.
+    delta_close_for_scan_run (#35) keys on last_seen_scan_run, NOT on
+    severity. The UPSERT max-severity ratchet (~L2543 in run_medium.py)
+    preserves elevated severity across re-scans, but the close path
+    remains independent of severity entirely.
+
+    This test verifies the helper's output is purely a string — no
+    side effects on ScanContext, no global state. The actual close
+    SQL is exercised by the existing #35 test suite (delta_close_eligible
+    + DB integration). This test pins that elevating severity here can't
+    leak into close-eligibility.
+    """
+    from run_medium import classify_ffuf_severity, ScanContext
+
+    ctx = ScanContext(
+        descriptor={}, hostname="example.com", asset_id="example.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+    )
+    pre_findings = len(ctx.findings)
+    pre_tools = list(ctx.tools_run)
+    pre_tool_status = dict(ctx.tool_status)
+
+    # Call the classifier across the matrix
+    for word, status in [
+        (".env", 200), (".env", 403), ("admin", 200), ("admin", 403),
+        ("about", 200), ("admin", 302),
+    ]:
+        result = classify_ffuf_severity(word, f"https://x/{word}", status)
+        assert isinstance(result, str)
+
+    # No mutation of ctx whatsoever — classifier is pure.
+    assert len(ctx.findings) == pre_findings
+    assert ctx.tools_run == pre_tools
+    assert ctx.tool_status == pre_tool_status
+
+
+# ─── idempotency — repeated calls return identical results ─────────────────
+
+
+def test_classify_ffuf_severity_idempotent():
+    """Pure function — same input gives same output across N calls. Pinning
+    so a future caching/memoization optimization can't accidentally drift."""
+    from run_medium import classify_ffuf_severity
+    cases = [
+        (".env", "https://x/.env", 200, "HIGH"),
+        ("admin", "https://x/admin", 200, "MODERATE"),
+        (".env", "https://x/.env", 403, "LOW"),
+        ("admin", "https://x/admin", 403, "LOW"),
+        ("about", "https://x/about", 200, "INFO"),
+        ("env", "https://x/env", 200, "INFO"),
+        ("admin", "https://x/admin", 302, "INFO"),
+    ]
+    for word, url, status, expected in cases:
+        a = classify_ffuf_severity(word, url, status)
+        b = classify_ffuf_severity(word, url, status)
+        assert a == b == expected, (
+            f"({word!r}, {status}) expected {expected!r}, got {a!r}/{b!r}"
+        )
+
+
+# ─── lock-in: path-table membership ─────────────────────────────────────────
+
+
+def test_secret_paths_contain_required_entries():
+    """The SECRET path table contains the core entries from the S3 spec.
+    A future PR that drops one of these (e.g. as part of a 'cleanup') has
+    to break this test to do so — forces an explicit decision."""
+    from run_medium import SECRET_PATHS_PATTERNS
+    required = {
+        r"\.env", r"\.git", r"\.sql", r"wp-config\.php",
+        r"id_rsa", r"\.htpasswd", r"\.aws/credentials",
+    }
+    missing = required - set(SECRET_PATHS_PATTERNS)
+    assert missing == set(), f"SECRET_PATHS missing: {missing}"
+
+
+def test_admin_paths_contain_required_entries():
+    """The ADMIN path table contains the core entries from the S3 spec."""
+    from run_medium import ADMIN_PATHS_PATTERNS
+    required = {r"admin", r"phpmyadmin", r"swagger", r"actuator", r"wp-admin"}
+    missing = required - set(ADMIN_PATHS_PATTERNS)
+    assert missing == set(), f"ADMIN_PATHS missing: {missing}"
+
+
 def test_target_proven_reachable_field_settable():
     """Sanity: the field is writable. Sites that get a real HTTP
     response from the target (detect_waf parse, detect_tech_stack

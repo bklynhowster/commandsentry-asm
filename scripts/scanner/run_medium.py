@@ -368,6 +368,139 @@ FFUF_WORDS = [
 ]
 
 
+# ─── S3 Part 2 (2026-06-18) — ffuf path-sensitivity classification ────────
+#
+# Curated, anchored — earn each entry, same discipline as #36 cross-source
+# dedup. Never substring-broad: a wordlist hit on /env (no dot) is generic
+# (already in FFUF_WORDS); only the literal `.env` (dotfile) is a secret.
+# Adding an entry requires evidence that the path-class semantics are
+# unambiguous — when in doubt, leave it out (it stays INFO under the
+# generic case, which is the safe under-classify direction).
+#
+# Two tiers consumed by classify_ffuf_severity():
+#   SECRET_PATHS  — exposure of these = serious (secrets / config /
+#                   repo-private content reachable to anyone). 200 → HIGH.
+#   ADMIN_PATHS   — privileged surface reachable to anyone. 200 → MODERATE.
+# A 401/403 on EITHER tier downgrades to LOW (the path exists but is
+# gated — inventory value, not active exposure). Redirects stay INFO.
+#
+# Matched case-insensitively against the fuzzed `word` (the wordlist entry,
+# typically a single path component, occasionally nested like `.git/config`
+# or `manager/html`). Anchored: matches the full word OR the trailing
+# path component after a slash — never a substring inside another word.
+# Examples (positive):    .env  ·  path/.env  ·  admin  ·  foo/admin
+# Examples (negative):    myenv ·  .envrc ·  administrative ·  admin-panel
+
+SECRET_PATHS_PATTERNS = (
+    r"\.env",
+    r"\.git",
+    r"\.svn",
+    r"\.hg",
+    r"\.sql",
+    r"\.bak",
+    r"\.backup",
+    r"dump\.sql",
+    r"\.htpasswd",
+    r"wp-config\.php",
+    r"config\.php",
+    r"id_rsa",
+    r"\.aws/credentials",
+    r"\.npmrc",
+    r"\.pem",
+    r"web\.config",
+    r"\.DS_Store",
+    r"backup\.zip",
+    r"database\.yml",
+    r"\.dockercfg",
+)
+
+ADMIN_PATHS_PATTERNS = (
+    r"admin",
+    r"administrator",
+    r"manager/html",
+    r"phpmyadmin",
+    r"console",
+    r"wp-admin",
+    # .git/config is the specific config file — distinct from .git directory
+    # (in SECRET above). On a host that exposes the whole .git, the SECRET
+    # entry catches the directory; on a host that only exposes /.git/config
+    # via a more narrow probe, this entry catches the file.
+    r"\.git/config",
+    r"actuator",
+    r"swagger",
+    r"api-docs",
+)
+
+# Build the anchored matchers. `^(?:.*/)?<pat>/?$` anchors to either the
+# whole word OR the trailing path component after a slash. The optional
+# trailing slash tolerates ffuf words with directory-style suffixes.
+SECRET_PATH_RE = re.compile(
+    r"^(?:.*/)?(?:" + "|".join(SECRET_PATHS_PATTERNS) + r")/?$",
+    re.IGNORECASE,
+)
+ADMIN_PATH_RE = re.compile(
+    r"^(?:.*/)?(?:" + "|".join(ADMIN_PATHS_PATTERNS) + r")/?$",
+    re.IGNORECASE,
+)
+
+
+def classify_ffuf_severity(word: str, url: str, status: int) -> str:
+    """S3 Part 2 (2026-06-18) — assign severity by (path-sensitivity × status).
+    Replaces the blanket `severity='INFO'` at the ffuf per-path emit site,
+    so a real hit on /.env (HIGH) or /admin (MODERATE) surfaces above the
+    INFO noise floor.
+
+    Matrix:
+      path class       200/204         401/403          301/302/307
+      SECRET_PATH      HIGH            LOW              INFO
+      ADMIN_PATH       MODERATE        LOW              INFO
+      generic          INFO            INFO             INFO
+
+    Other statuses default to INFO. Anchored regex match on `word` —
+    substring matches inside other words (e.g. `myenv` matching `.env`,
+    `administrative` matching `admin`) are excluded. Empty word → INFO.
+
+    SECRET wins on overlap: if a word somehow matches both tiers (rare
+    today; reserved for edge cases like a new entry being mis-classified),
+    the higher classification applies.
+
+    The `url` parameter is currently unused — kept in the signature so a
+    future enrichment that checks the response URL (e.g. for path traversal
+    in the redirect) can land without a call-site change.
+
+    Pure function — testable without subprocess. The matrix lives entirely
+    in the call site of the helper; promotion logic isn't smeared across
+    multiple decision points.
+    """
+    if not word:
+        return "INFO"
+    # Redirects: stay INFO regardless of path class. The catch-all-redirect
+    # case (#33) is suppressed before reaching here; a non-catch-all 30x is
+    # low signal (target exists, intentionally redirects elsewhere — not a
+    # direct exposure or privileged-surface hit).
+    if status in (301, 302, 307):
+        return "INFO"
+
+    is_secret = bool(SECRET_PATH_RE.match(word))
+    is_admin = bool(ADMIN_PATH_RE.match(word))
+
+    if status in (200, 204):
+        if is_secret:
+            return "HIGH"
+        if is_admin:
+            return "MODERATE"
+        return "INFO"
+
+    if status in (401, 403):
+        if is_secret or is_admin:
+            return "LOW"
+        return "INFO"
+
+    # Any other status (404 shouldn't be in ffuf -mc, but defensive; 500s
+    # could appear if ffuf -mc is widened later) → INFO.
+    return "INFO"
+
+
 # ─── Data classes ───────────────────────────────────────────────────────
 @dataclass
 class MediumFinding:
@@ -2510,11 +2643,23 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str],
         if redirect_to:
             raw += f" (Location: {redirect_to})"
 
+        # S3 Part 2 (2026-06-18) — kill blanket INFO. Severity by
+        # (path-sensitivity × status) via curated SECRET_PATHS /
+        # ADMIN_PATHS matchers + the matrix in classify_ffuf_severity.
+        # A real hit on /.env (HIGH) or /admin (MODERATE) now surfaces
+        # above the INFO noise floor; gated sensitive paths land at
+        # LOW; generic + redirects stay INFO. UPSERT_FINDING_SQL's
+        # max-severity ratchet (~L2543) keeps elevated rows elevated
+        # across re-scans; #35 delta-close still closes on
+        # last_seen_scan_run mismatch independent of severity (verified
+        # in test_classify_ffuf_severity_does_not_interfere_with_close).
+        severity = classify_ffuf_severity(word, url, status)
+
         interesting += 1
         ctx.findings.append(MediumFinding(
             check_name=f"ffuf-found-{word}",
             title=f"{title_kind}: /{word} (HTTP {status})",
-            severity="INFO",
+            severity=severity,
             category="info_disclosure",
             description=(
                 f"Directory fuzzing discovered /{word} on {ctx.hostname} "
