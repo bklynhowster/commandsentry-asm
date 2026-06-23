@@ -1944,6 +1944,193 @@ def test_ffuf_catchall_field_defaults():
     assert ctx.ffuf_catchall_count == 0
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# S3 Part 1 (2026-06-18) — ffuf flood-cap: catch-all STATUS suppression.
+# Generalizes #33's redirect-only catch-all to any uniform non-discriminating
+# status (403/401/200/etc). Tests mirror the #33 redirect-path suite shape
+# above so the safety semantics are pinned the same way.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_should_suppress_ffuf_status_exact_match_returns_true():
+    """The headline case — status equals baseline AND no redirect → suppress."""
+    from run_medium import should_suppress_ffuf_status
+
+    assert should_suppress_ffuf_status(403, 403, "") is True
+    assert should_suppress_ffuf_status(401, 401, "") is True
+    assert should_suppress_ffuf_status(200, 200, "") is True
+
+
+def test_should_suppress_ffuf_status_distinct_status_emits():
+    """Real discrimination on a blanket-403 host — a path that returns
+    200 (the actual /admin survived) MUST emit. EXACT-equality only;
+    no substring or range match."""
+    from run_medium import should_suppress_ffuf_status
+
+    # Baseline 403 catch-all; real /admin returned 200 → don't suppress.
+    assert should_suppress_ffuf_status(200, 403, "") is False
+    # Baseline 401 catch-all; a 200 hit on /robots.txt → don't suppress.
+    assert should_suppress_ffuf_status(200, 401, "") is False
+    # Even a "close" status (404 vs 403) is distinct → don't suppress.
+    assert should_suppress_ffuf_status(404, 403, "") is False
+
+
+def test_should_suppress_ffuf_status_no_baseline_emits_everything():
+    """No catch-all status calibrated (None) → never suppress. The
+    pre-S3 default behavior must be preserved when calibration fails."""
+    from run_medium import should_suppress_ffuf_status
+
+    assert should_suppress_ffuf_status(403, None, "") is False
+    assert should_suppress_ffuf_status(200, None, "") is False
+    assert should_suppress_ffuf_status(401, None, "") is False
+
+
+def test_should_suppress_ffuf_status_zero_status_emits():
+    """Defensive: status 0 (no response) shouldn't be suppressed even
+    if baseline is 0. ffuf shouldn't emit rows for non-responses, but
+    if one slips through we don't want it caught by status suppression."""
+    from run_medium import should_suppress_ffuf_status
+
+    assert should_suppress_ffuf_status(0, 403, "") is False
+    assert should_suppress_ffuf_status(0, None, "") is False
+
+
+def test_should_suppress_ffuf_status_redirect_skips_status_suppress():
+    """If the result IS a redirect, status-suppress is a no-op (the
+    redirect-suppress runs first and handles it). Prevents double-counting
+    a 302 row in both ffuf_catchall_count AND ffuf_catchall_status_count.
+    Specifically: a 302 row that happens to match a status baseline
+    of 302 still falls through to the redirect path."""
+    from run_medium import should_suppress_ffuf_status
+
+    # 302 with redirect → status suppress is no-op (redirect path handles it).
+    assert should_suppress_ffuf_status(302, 302, "https://x/login") is False
+    # Same status, no redirect → status suppress fires.
+    assert should_suppress_ffuf_status(302, 302, "") is True
+
+
+def test_emit_ffuf_catchall_status_summary_no_op_when_count_zero():
+    """No per-path matches collapsed → no summary emit. ctx.findings
+    must not grow."""
+    from run_medium import ScanContext, emit_ffuf_catchall_status_summary
+
+    ctx = ScanContext(
+        descriptor={}, hostname="example.com", asset_id="example.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+    )
+    ctx.ffuf_catchall_status = 403
+    ctx.ffuf_catchall_status_count = 0
+    pre = len(ctx.findings)
+    emit_ffuf_catchall_status_summary(ctx)
+    assert len(ctx.findings) == pre
+
+
+def test_emit_ffuf_catchall_status_summary_no_op_when_no_baseline():
+    """No baseline calibrated (None) → no emit even if count > 0
+    (defensive — the predicate requires a baseline, so count should
+    never grow above 0 without one, but lock the invariant)."""
+    from run_medium import ScanContext, emit_ffuf_catchall_status_summary
+
+    ctx = ScanContext(
+        descriptor={}, hostname="example.com", asset_id="example.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+    )
+    ctx.ffuf_catchall_status = None
+    ctx.ffuf_catchall_status_count = 5
+    pre = len(ctx.findings)
+    emit_ffuf_catchall_status_summary(ctx)
+    assert len(ctx.findings) == pre
+
+
+def test_emit_ffuf_catchall_status_summary_403_is_low_severity():
+    """A host that blanket-403s every path is a weak posture signal —
+    LOW finding, not INFO. The 'uniform deny across the wordlist'
+    behavior earns one LOW row (more attention than the redirect
+    summary's INFO, less than a real vuln)."""
+    from run_medium import ScanContext, emit_ffuf_catchall_status_summary
+
+    ctx = ScanContext(
+        descriptor={}, hostname="cc.example.com", asset_id="cc.example.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+    )
+    ctx.ffuf_catchall_status = 403
+    ctx.ffuf_catchall_status_count = 99
+    emit_ffuf_catchall_status_summary(ctx)
+    assert len(ctx.findings) == 1
+    f = ctx.findings[0]
+    assert f.severity == "LOW"
+    assert "403" in f.title
+    assert "99" in f.title
+    assert "uniformly" in f.title.lower()
+    assert "catchall_status" in f.tags
+    assert "ffuf" in f.tags
+    assert f.check_name.startswith("ffuf-catchall-status-")
+
+
+def test_emit_ffuf_catchall_status_summary_401_is_low_severity():
+    """401 uniform-auth-gate is the same shape as 403 blanket-deny —
+    weak posture, LOW row. Pins the LOW classification for the second
+    member of the gated-status pair."""
+    from run_medium import ScanContext, emit_ffuf_catchall_status_summary
+
+    ctx = ScanContext(
+        descriptor={}, hostname="api.example.com",
+        asset_id="api.example.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+    )
+    ctx.ffuf_catchall_status = 401
+    ctx.ffuf_catchall_status_count = 42
+    emit_ffuf_catchall_status_summary(ctx)
+    assert len(ctx.findings) == 1
+    f = ctx.findings[0]
+    assert f.severity == "LOW"
+    assert "401" in f.title
+
+
+def test_emit_ffuf_catchall_status_summary_200_is_info():
+    """A SPA / soft-404 host returning 200 to everything is informational —
+    not weak posture, just non-discriminating. INFO row, not LOW."""
+    from run_medium import ScanContext, emit_ffuf_catchall_status_summary
+
+    ctx = ScanContext(
+        descriptor={}, hostname="spa.example.com",
+        asset_id="spa.example.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+    )
+    ctx.ffuf_catchall_status = 200
+    ctx.ffuf_catchall_status_count = 50
+    emit_ffuf_catchall_status_summary(ctx)
+    assert len(ctx.findings) == 1
+    assert ctx.findings[0].severity == "INFO"
+
+
+def test_ffuf_catchall_status_field_defaults():
+    """Lock-in: new ScanContext fields default to safe non-suppressing
+    values. ffuf_catchall_status=None → suppression no-op by default;
+    ffuf_catchall_status_count=0 → no summary emission by default.
+    Catches a refactor that defaults to suppress-all on an uncalibrated run."""
+    from run_medium import ScanContext
+
+    ctx = ScanContext(
+        descriptor={}, hostname="example.com", asset_id="example.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+    )
+    assert ctx.ffuf_catchall_status is None
+    assert ctx.ffuf_catchall_status_count == 0
+
+
 def test_target_proven_reachable_field_settable():
     """Sanity: the field is writable. Sites that get a real HTTP
     response from the target (detect_waf parse, detect_tech_stack

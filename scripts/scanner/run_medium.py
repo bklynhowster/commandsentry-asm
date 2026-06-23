@@ -442,6 +442,22 @@ class ScanContext:
     # catch-all baseline. Drives the collapsed summary finding at end of
     # run_ffuf_chunked.
     ffuf_catchall_count: int = 0
+    # S3 Part 1 (2026-06-18) — ffuf catch-all STATUS calibration. Generalizes
+    # #33's redirect-only catch-all to also capture a blanket non-discriminating
+    # status (403 from a FortiGate-fronted asset, 401 from a uniformly
+    # auth-gated host, 200 from a SPA / soft-404 host). detect_ffuf_catchall
+    # probes 2 random paths; if BOTH return the same non-404 status, that
+    # status is the catch-all baseline. Per-path ffuf findings matching the
+    # baseline get suppressed at emit time (one fact, not N phantoms) and
+    # collapsed into ONE summary finding at end of run_ffuf_chunked.
+    # EXACT-status-equality only — distinct statuses still emit individually
+    # (a real signal that survives a blanket-deny host). None = no catch-all
+    # status detected → suppression is a no-op, per-path emission unchanged.
+    ffuf_catchall_status: int | None = None
+    # Count of per-path ffuf findings suppressed because their status matched
+    # ffuf_catchall_status. Drives the collapsed status summary finding at
+    # end of run_ffuf_chunked.
+    ffuf_catchall_status_count: int = 0
     # #32 (2026-06-16) — set True the FIRST time any tool successfully
     # gets a real HTTP response from the target (wafw00f verdict
     # parsed / httpx tech-detect parsed / nuclei chunk completed with
@@ -960,6 +976,83 @@ def should_suppress_ffuf_redirect(
     return bool(redirect_to and baseline and redirect_to == baseline)
 
 
+def should_suppress_ffuf_status(
+    status: int, baseline: int | None, redirect_to: str
+) -> bool:
+    """S3 Part 1 (2026-06-18) suppression predicate. True iff this ffuf
+    result's status matches the calibrated catch-all status EXACTLY and the
+    result is NOT a redirect (those go through should_suppress_ffuf_redirect
+    instead — never double-suppress).
+
+    No baseline (None) → False (no suppression — calibration didn't detect
+    a catch-all status). Status 0 / falsy → False (defensive: don't suppress
+    on no-response rows that ffuf shouldn't have emitted anyway).
+
+    EXACT-equality only — this is the load-bearing safety vs. the 59ad6a13
+    regression (blanket -fc/-fs/-fr ffuf args that hid real /admin findings).
+    Distinct statuses (e.g. /admin returning 200 on a 403-blanket host) still
+    emit per-path. Pure function — testable without subprocess.
+
+    The not-redirect clause: if a row IS a redirect, the redirect-suppress
+    runs first (#33). A status-suppress here would be either redundant
+    (redirect already suppressed → continue already hit) or wrong (the
+    redirect didn't match the baseline → should emit). Excluding redirects
+    here keeps the two suppression paths orthogonal.
+    """
+    if not baseline or not status:
+        return False
+    if redirect_to:
+        return False
+    return status == baseline
+
+
+def emit_ffuf_catchall_status_summary(ctx: ScanContext) -> None:
+    """S3 Part 1 collapsed STATUS-catchall summary emit. If the calibration
+    probe detected a host-wide non-discriminating status (403/401/200/etc)
+    AND ffuf saw N per-path matches collapsed into it, emit ONE finding
+    summarizing the count. Idempotent: no-op if no catchall status detected
+    or count is 0.
+
+    Severity:
+      - 403, 401 → LOW. A host that blanket-403/401s every path is a weak
+        posture signal worth one LOW finding (uniform deny across the
+        wordlist is a real story, just not per-path noise).
+      - 200, 302, anything else → INFO. SPA / soft-404 / catch-all redirect
+        are lower-signal — collapse to a single informational row.
+
+    Called once at end of run_ffuf_chunked AFTER all chunks complete, beside
+    the existing emit_ffuf_catchall_summary. The per-path findings are NOT
+    in ctx.findings (suppressed at emit time inside the loop); this is the
+    single replacement finding.
+    """
+    if ctx.ffuf_catchall_status_count <= 0 or ctx.ffuf_catchall_status is None:
+        return
+    status = ctx.ffuf_catchall_status
+    severity = "LOW" if status in (401, 403) else "INFO"
+    ctx.findings.append(MediumFinding(
+        check_name=f"ffuf-catchall-status-{status}",
+        title=(
+            f"Host returns HTTP {status} to {ctx.ffuf_catchall_status_count} "
+            f"paths uniformly"
+        ),
+        severity=severity,
+        category="info_disclosure",
+        description=(
+            f"{ctx.ffuf_catchall_status_count} wordlist paths on "
+            f"{ctx.hostname} uniformly return HTTP {status} regardless of "
+            f"existence — directory discovery is not discriminating on this "
+            f"host (WAF blanket-deny / soft-404 / SPA). Per-path results "
+            f"suppressed as non-discriminating; distinct statuses still "
+            f"emit individually."
+        ),
+        tags=["ffuf", "directory", "discovery", "catchall_status"],
+        raw_excerpt=(
+            f"Calibration probe: 2 random paths → HTTP {status}\n"
+            f"Suppressed per-path matches: {ctx.ffuf_catchall_status_count}"
+        ),
+    ))
+
+
 def emit_ffuf_catchall_summary(ctx: ScanContext) -> None:
     """#33 collapsed summary emit. If the calibration probe detected a
     host-wide redirect AND ffuf saw N per-path matches collapsed into
@@ -1006,24 +1099,13 @@ def emit_ffuf_catchall_summary(ctx: ScanContext) -> None:
     ))
 
 
-def detect_ffuf_catchall_redirect(ctx: ScanContext) -> str | None:
-    """#33 (2026-06-16) ffuf catch-all calibration. Probe a known-random
-    path; if the host returns 301/302/307 with a redirect Location, that
-    Location is the catch-all baseline. Per-path ffuf findings later
-    matching this Location get suppressed (one fact, not N phantoms).
+def _probe_calibration_path(ctx: ScanContext) -> tuple[int, str | None]:
+    """Single calibration probe — fetch a known-random path and return
+    (status_code, redirect_location). Helper for detect_ffuf_catchall.
 
-    Returns:
-        Location string (absolute URL) if catch-all detected, else None.
-
-    Uses httpx — same Go stack ffuf runs, so Location semantics agree
-    (no chance of probe-vs-tool divergence like the #32 curl/httpx
-    fingerprint issue). Best-effort: any failure → None (no suppression,
-    per-path emission unchanged from pre-#33 behavior).
-
-    NOT a tool registration. Does NOT touch ctx.tools_run, ctx.tool_status,
-    or the trust-layer invariant. The calibration probe is auxiliary
-    state used at emit time inside ffuf — its success/failure has no
-    bearing on the run's scan_quality.
+    Returns (0, None) on any failure (rc != 0, no stdout, JSON parse error)
+    so callers can treat failure as "no catch-all detected" without raising.
+    Same httpx invocation as the pre-S3 detect_ffuf_catchall_redirect.
     """
     import uuid as _uuid
     random_path = f"cs-calib-{_uuid.uuid4().hex[:12]}"
@@ -1036,26 +1118,90 @@ def detect_ffuf_catchall_redirect(ctx: ScanContext) -> str | None:
         timeout=15,
     )
     if rc != 0:
-        return None
+        return 0, None
     line = stdout.strip().splitlines()[0] if stdout.strip() else ""
     if not line:
-        return None
+        return 0, None
     try:
         data = json.loads(line)
     except Exception:
-        return None
-    status_code = data.get("status_code", 0)
-    if status_code not in (301, 302, 307):
-        return None
-    # httpx field names for redirect Location vary slightly across
-    # versions. Try the most likely candidates in preference order.
-    # "location" is the canonical Location header value (relative or
-    # absolute). "final_url" is set when -follow-redirects is used (we
-    # don't, but defensive). Anything truthy wins.
+        return 0, None
+    status_code = int(data.get("status_code", 0) or 0)
+    # httpx field names for redirect Location vary slightly across versions.
+    # Try the most likely candidates. "location" is the canonical Location
+    # header (relative or absolute). "final_url" is set with -follow-redirects
+    # (we don't use it, but defensive). Anything truthy wins.
     location = data.get("location") or data.get("final_url")
-    if not location:
-        return None
-    return str(location).strip() or None
+    location_str = str(location).strip() if location else None
+    return status_code, (location_str or None)
+
+
+def detect_ffuf_catchall(
+    ctx: ScanContext,
+) -> tuple[str | None, int | None]:
+    """S3 Part 1 (2026-06-18) ffuf catch-all calibration. Generalizes #33's
+    redirect-only catch-all to also detect a uniform non-discriminating
+    STATUS (403/401/200/etc) that ffuf would otherwise mint N findings for.
+
+    Probes TWO known-random paths. Catch-all is detected only if BOTH probes
+    return the same non-404 signal — defends against transient flukes that
+    a single probe couldn't distinguish from a real catch-all.
+
+    Returns:
+        (redirect_location, status) — both can be None.
+          - redirect_location: set if BOTH probes returned 301/302/307 with
+            the same Location. The catch-all redirect baseline (#33 path).
+          - status: set if BOTH probes returned the same non-404 status
+            AND neither was a redirect. The catch-all status baseline
+            (S3 Part 1 path).
+          - (None, None): real discrimination on this host — per-path
+            emission unchanged from pre-#33 behavior.
+
+    Uses httpx (same Go stack ffuf runs — no probe-vs-tool TLS fingerprint
+    divergence). Best-effort: any failure on either probe → (None, None).
+
+    NOT a tool registration. Does NOT touch ctx.tools_run, ctx.tool_status,
+    or the trust-layer invariant. Calibration is auxiliary emit-time state;
+    its success/failure has no bearing on scan_quality.
+    """
+    status1, redirect1 = _probe_calibration_path(ctx)
+    if status1 == 0:
+        return None, None
+    status2, redirect2 = _probe_calibration_path(ctx)
+    if status2 == 0:
+        return None, None
+
+    # Redirect catch-all (#33 path): both probes 30x AND same Location.
+    if (
+        status1 in (301, 302, 307)
+        and status2 in (301, 302, 307)
+        and redirect1
+        and redirect1 == redirect2
+    ):
+        return redirect1, None
+
+    # Status catch-all (S3 Part 1): both probes same non-404 non-redirect
+    # status. 404 is the expected response to a random path, so it indicates
+    # the host IS discriminating — not a catch-all.
+    if (
+        status1 == status2
+        and status1 != 404
+        and status1 not in (301, 302, 307)
+    ):
+        return None, status1
+
+    # Otherwise: discrimination present (different responses across probes,
+    # or 404 = real not-found behavior). No catch-all.
+    return None, None
+
+
+def detect_ffuf_catchall_redirect(ctx: ScanContext) -> str | None:
+    """#33 backward-compatible thin wrapper around detect_ffuf_catchall.
+    Returns only the redirect Location, dropping the status component.
+    Preserved for any external/test caller still using the old name.
+    """
+    redirect, _ = detect_ffuf_catchall(ctx)
+    return redirect
 
 
 def ensure_healthy_egress(
@@ -2311,6 +2457,20 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str],
             ctx.ffuf_catchall_count += 1
             continue
 
+        # S3 Part 1 (2026-06-18) — catch-all STATUS suppression. Generalizes
+        # the redirect path to any uniform non-discriminating status (403 on
+        # a FortiGate-blanket-deny host, 401 on a uniformly auth-gated host,
+        # 200 on a SPA / soft-404 host). Same EXACT-equality safety:
+        # distinct statuses (real signal) still emit per-path. The collapsed
+        # summary at end-of-chunked-loop emits ONE finding for all of them
+        # (LOW for 403/401, INFO for 200/302). Locked in
+        # should_suppress_ffuf_status.
+        if should_suppress_ffuf_status(
+            status, ctx.ffuf_catchall_status, redirect_to
+        ):
+            ctx.ffuf_catchall_status_count += 1
+            continue
+
         # Title + description per status class. Trust ffuf -mc as the
         # promotion gate; don't second-guess on the Python side.
         if status in (200, 204):
@@ -2393,24 +2553,39 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
             mark_tool_skipped(ctx, chunk_name, "auth_gated")
         return
 
-    # #33 (2026-06-16) — ffuf catch-all redirect calibration. Probe a
-    # known-random path BEFORE the chunk loop. If the host returns
-    # 301/302/307 with a redirect Location, every per-path 302→same-L
-    # finding ffuf produces is the same fact mint'd N times. The
-    # calibration is chunk-agnostic — single baseline applied across
-    # all chunks via ctx.ffuf_catchall_redirect. Suppression logic in
-    # run_ffuf_chunk emit loop; collapsed summary finding at end of
-    # this function. See detect_ffuf_catchall_redirect docstring for
-    # safety analysis vs. the 59ad6a13 regression (blanket -fc/-fs
-    # filter that hid real /admin/swagger).
-    ctx.ffuf_catchall_redirect = detect_ffuf_catchall_redirect(ctx)
+    # #33 + S3 Part 1 (2026-06-16/18) — ffuf catch-all calibration. Probe
+    # 2 random paths BEFORE the chunk loop. Two outcomes (one or the other
+    # may fire; never both — calibration is hierarchical):
+    #   (a) #33 — both probes 301/302/307 to same Location → catch-all
+    #       redirect baseline. Per-path 302→same-L is non-discriminating
+    #       noise, gets suppressed and collapsed to ONE INFO summary.
+    #   (b) S3 Part 1 — both probes same non-404 non-redirect status (403
+    #       on FortiGate-blanket-deny, 401 on uniform-auth, 200 on SPA /
+    #       soft-404) → catch-all status baseline. Per-path matching status
+    #       gets suppressed and collapsed to ONE LOW (403/401) or INFO
+    #       (200/etc) summary.
+    # Calibration is chunk-agnostic — single baseline applied across all
+    # chunks via ctx.ffuf_catchall_{redirect,status}. Suppression logic in
+    # run_ffuf_chunk emit loop; collapsed summaries at end of this function.
+    # See detect_ffuf_catchall docstring for safety analysis vs. the
+    # 59ad6a13 regression (blanket -fc/-fs/-fr filter that hid real
+    # /admin/swagger). Both suppression paths use EXACT-equality, never
+    # blanket filtering — distinct statuses (real signal) always survive.
+    ctx.ffuf_catchall_redirect, ctx.ffuf_catchall_status = (
+        detect_ffuf_catchall(ctx)
+    )
     if ctx.ffuf_catchall_redirect:
         log(f"  ffuf catch-all calibration: host redirects random paths "
             f"→ {ctx.ffuf_catchall_redirect} (per-path matches will be "
             f"suppressed + collapsed into one summary INFO)")
+    elif ctx.ffuf_catchall_status is not None:
+        log(f"  ffuf catch-all calibration: host returns HTTP "
+            f"{ctx.ffuf_catchall_status} uniformly to random paths "
+            f"(per-path matches at that status will be suppressed + "
+            f"collapsed into one summary)")
     else:
-        log("  ffuf catch-all calibration: no host-wide redirect detected "
-            "(per-path emission unchanged)")
+        log("  ffuf catch-all calibration: no host-wide redirect or status "
+            "catch-all detected (per-path emission unchanged)")
 
     for i, words in enumerate(chunks):
         # 2026-06-13: chunk_name uses #index to disambiguate ffuf[25w]#1
@@ -2477,12 +2652,21 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
             log(f"hit hard request ceiling — stopping ffuf")
             break
 
-    # #33 (2026-06-16) — collapsed catch-all summary. Helper does the
-    # emit + idempotency check. See emit_ffuf_catchall_summary docstring.
+    # #33 (2026-06-16) — collapsed catch-all redirect summary. Helper does
+    # the emit + idempotency check. See emit_ffuf_catchall_summary docstring.
     if ctx.ffuf_catchall_count > 0 and ctx.ffuf_catchall_redirect:
         log(f"  ffuf catch-all summary: {ctx.ffuf_catchall_count} per-path "
             f"matches collapsed into 1 INFO (all → {ctx.ffuf_catchall_redirect})")
     emit_ffuf_catchall_summary(ctx)
+
+    # S3 Part 1 (2026-06-18) — collapsed catch-all status summary. Helper
+    # does the emit + idempotency check. Severity LOW for 403/401, INFO for
+    # 200/etc. See emit_ffuf_catchall_status_summary docstring.
+    if ctx.ffuf_catchall_status_count > 0 and ctx.ffuf_catchall_status is not None:
+        log(f"  ffuf catch-all status summary: "
+            f"{ctx.ffuf_catchall_status_count} per-path matches collapsed "
+            f"into 1 finding (all → HTTP {ctx.ffuf_catchall_status})")
+    emit_ffuf_catchall_status_summary(ctx)
 
 
 # ─── SQL helpers (DUPED from run_light — TODO: refactor) ───────────────
