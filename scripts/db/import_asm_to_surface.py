@@ -1331,7 +1331,20 @@ def import_one(
             # that loses service is demoted by Tier 3 heartbeat / backfill, not
             # this path — mirrors the existing no-downgrade-in-upsert rule).
             svc_count = int(bucket_convenience.get("service_count") or 0)
-            disc = "confirmed_live" if svc_count > 0 else "dns_only"
+            host_count = int(bucket_convenience.get("host_count") or 0)
+            # Phantom-classification fix (2026-06-24): a 0-service name is
+            # `dns_only` ONLY if it actually resolved to a host. A non-apex
+            # subdomain with host_count=0 never resolved — it's a passively-
+            # discovered (subfinder/CT) phantom and must be `ct_ghost`, not
+            # surfaced as a live-IP asset. Apexes stay dns_only even at
+            # host_count=0 (scoped real domains, e.g. sciimage.com). svc>0
+            # always wins (keeps DNS infra like ns01/ns02 confirmed_live).
+            if svc_count > 0:
+                disc = "confirmed_live"
+            elif is_apex or host_count > 0:
+                disc = "dns_only"
+            else:
+                disc = "ct_ghost"
             if is_apex:
                 cur.execute(UPSERT_ASSET, {
                     "asset_id": bucket_id,
