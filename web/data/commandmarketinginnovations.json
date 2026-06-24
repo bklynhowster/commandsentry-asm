@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-23T20:27:27Z_1df0c35e",
-    "started_at": "2026-06-23T20:27:27Z",
-    "completed_at": "2026-06-23T20:30:10Z",
-    "duration_seconds": 163,
+    "id": "scan_2026-06-24T04:25:31Z_3e237b48",
+    "started_at": "2026-06-24T04:25:32Z",
+    "completed_at": "2026-06-24T04:29:34Z",
+    "duration_seconds": 242,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -28,8 +28,8 @@
   },
   "registration": {},
   "summary": {
-    "subdomain_count": 2,
-    "live_subdomain_count": 2,
+    "subdomain_count": 9,
+    "live_subdomain_count": 9,
     "host_count": 2,
     "service_count": 8,
     "newest_cert_expiry_days": 46,
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-23T20:30:10Z",
-      "last_seen": "2026-06-23T20:30:10Z",
+      "first_discovered": "2026-06-24T04:29:34Z",
+      "last_seen": "2026-06-24T04:29:34Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -129,8 +129,8 @@
           "ns18.domaincontrol.com"
         ],
         "txt": [
-          "",
-          "ca3-109f68bf8eb24748b4c4aaa123b93e17"
+          "ca3-109f68bf8eb24748b4c4aaa123b93e17",
+          ""
         ],
         "spf": null,
         "dnssec": false
@@ -186,7 +186,7 @@
           },
           {
             "name": "WPMU DEV Smush",
-            "version": "4.1.1",
+            "version": "4.1.2",
             "category": "wp-plugin"
           },
           {
@@ -243,12 +243,264 @@
       }
     },
     {
+      "name": "access.commandmarketinginnovations.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-06-24T04:29:34Z",
+      "last_seen": "2026-06-24T04:29:34Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "hosts": [],
+      "services": [],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
+      "name": "finance.commandmarketinginnovations.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-06-24T04:29:35Z",
+      "last_seen": "2026-06-24T04:29:35Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "hosts": [],
+      "services": [],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
+      "name": "manager.commandmarketinginnovations.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-06-24T04:29:35Z",
+      "last_seen": "2026-06-24T04:29:35Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "hosts": [],
+      "services": [],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
+      "name": "mx3.commandmarketinginnovations.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-06-24T04:29:35Z",
+      "last_seen": "2026-06-24T04:29:35Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "hosts": [],
+      "services": [],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
+      "name": "projects.commandmarketinginnovations.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-06-24T04:29:35Z",
+      "last_seen": "2026-06-24T04:29:35Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "hosts": [],
+      "services": [],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
+      "name": "storage.commandmarketinginnovations.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-06-24T04:29:35Z",
+      "last_seen": "2026-06-24T04:29:35Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "hosts": [],
+      "services": [],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
+      "name": "workers.commandmarketinginnovations.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-06-24T04:29:35Z",
+      "last_seen": "2026-06-24T04:29:35Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "hosts": [],
+      "services": [],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
       "name": "www.commandmarketinginnovations.com",
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-23T20:30:10Z",
-      "last_seen": "2026-06-23T20:30:10Z",
+      "first_discovered": "2026-06-24T04:29:35Z",
+      "last_seen": "2026-06-24T04:29:35Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -503,7 +755,7 @@
           },
           {
             "name": "WPMU DEV Smush",
-            "version": "4.1.1",
+            "version": "4.1.2",
             "category": "wp-plugin"
           },
           {
@@ -560,11 +812,49 @@
       }
     }
   ],
-  "phantom_subdomains": [],
+  "phantom_subdomains": [
+    "admin.commandmarketinginnovations.com",
+    "api-v2.commandmarketinginnovations.com",
+    "cd.commandmarketinginnovations.com",
+    "cdn2.commandmarketinginnovations.com",
+    "confluence.commandmarketinginnovations.com",
+    "content.commandmarketinginnovations.com",
+    "db.commandmarketinginnovations.com",
+    "doc.commandmarketinginnovations.com",
+    "ecommerce.commandmarketinginnovations.com",
+    "faq.commandmarketinginnovations.com",
+    "github.commandmarketinginnovations.com",
+    "img.commandmarketinginnovations.com",
+    "jira.commandmarketinginnovations.com",
+    "kafka.commandmarketinginnovations.com",
+    "kb.commandmarketinginnovations.com",
+    "learn.commandmarketinginnovations.com",
+    "lp.commandmarketinginnovations.com",
+    "owa.commandmarketinginnovations.com",
+    "production.commandmarketinginnovations.com",
+    "promo.commandmarketinginnovations.com",
+    "shop.commandmarketinginnovations.com",
+    "smtp1.commandmarketinginnovations.com",
+    "splunk.commandmarketinginnovations.com",
+    "stage.commandmarketinginnovations.com",
+    "store.commandmarketinginnovations.com",
+    "support.commandmarketinginnovations.com",
+    "v1.commandmarketinginnovations.com",
+    "vendor.commandmarketinginnovations.com",
+    "ws.commandmarketinginnovations.com"
+  ],
   "deltas": {
-    "since_scan": "scan_2026-06-23T15:28:03Z_353b0ff1",
+    "since_scan": "scan_2026-06-23T20:27:27Z_1df0c35e",
     "added": {
-      "subdomains": [],
+      "subdomains": [
+        "access.commandmarketinginnovations.com",
+        "finance.commandmarketinginnovations.com",
+        "manager.commandmarketinginnovations.com",
+        "mx3.commandmarketinginnovations.com",
+        "projects.commandmarketinginnovations.com",
+        "storage.commandmarketinginnovations.com",
+        "workers.commandmarketinginnovations.com"
+      ],
       "services": [],
       "hosts": []
     },
@@ -577,15 +867,15 @@
       "fingerprint": [
         {
           "subdomain": "commandmarketinginnovations.com",
-          "name": "Yoast SEO",
-          "from": "27.8",
-          "to": "27.9"
+          "name": "WPMU DEV Smush",
+          "from": "4.1.1",
+          "to": "4.1.2"
         },
         {
           "subdomain": "www.commandmarketinginnovations.com",
-          "name": "Yoast SEO",
-          "from": "27.8",
-          "to": "27.9"
+          "name": "WPMU DEV Smush",
+          "from": "4.1.1",
+          "to": "4.1.2"
         }
       ],
       "cert": [],
@@ -5678,6 +5968,64 @@
         "Mailcheck": "1.1.2",
         "Slider Revolution": "6.7.56",
         "WPMU DEV Smush": "4.1.1",
+        "Yoast SEO": "27.9",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-06-24T04:25:31Z_3e237b48",
+      "started_at": "2026-06-24T04:25:32Z",
+      "completed_at": "2026-06-24T04:29:34Z",
+      "subdomain_count": 9,
+      "live_subdomain_count": 9,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "access.commandmarketinginnovations.com",
+        "commandmarketinginnovations.com",
+        "finance.commandmarketinginnovations.com",
+        "manager.commandmarketinginnovations.com",
+        "mx3.commandmarketinginnovations.com",
+        "projects.commandmarketinginnovations.com",
+        "storage.commandmarketinginnovations.com",
+        "workers.commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
+        "access.commandmarketinginnovations.com": {},
+        "finance.commandmarketinginnovations.com": {},
+        "manager.commandmarketinginnovations.com": {},
+        "mx3.commandmarketinginnovations.com": {},
+        "projects.commandmarketinginnovations.com": {},
+        "storage.commandmarketinginnovations.com": {},
+        "workers.commandmarketinginnovations.com": {},
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.7.56",
+        "WPMU DEV Smush": "4.1.2",
         "Yoast SEO": "27.9",
         "jQuery Migrate": "3.4.1",
         "punycode": "1.0.0"
