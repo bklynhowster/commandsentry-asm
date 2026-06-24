@@ -560,6 +560,19 @@ class ScanContext:
     # so any health failure aborts immediately — the validate run is
     # PRISTINE-or-NOTHING, never "rotated to find another path."
     validate_mode: bool = False
+    # Live scan progress (note 103 2026-06-24). Set in run() once we have
+    # the DSN. flush_progress() opens its OWN short-lived autocommit conn
+    # per call (the main scan conn is deferred until close_out per the
+    # 2026-05-30 idle-close lesson, and we don't want progress writes to
+    # interact with the main scan transaction). dsn=None → flush_progress
+    # is a no-op (validate-mode runs + unit tests).
+    dsn: str | None = None
+    # planned_steps — expected phase list, written ONCE after Phase 1 so
+    # build_chunk_plan can produce the actual nuclei chunk names. Honest
+    # about auth_gated skips (ffuf/nikto/non-tech nuclei excluded when
+    # auth_gated). None = not yet computed; portal renders without a
+    # total ("Scanning…") until it lands.
+    planned_steps: list[str] | None = None
     # #33 (2026-06-16) — ffuf catch-all redirect calibration. Set at the
     # start of run_ffuf_chunked by detect_ffuf_catchall_redirect(): if the
     # target redirects a known-random path with 301/302/307, the redirect
@@ -633,9 +646,192 @@ class ScanContext:
 # (True,  "<reason>") if a failure shape is recognized.
 
 
+# ─── Live scan progress (note 103, 2026-06-24) ─────────────────────────
+#
+# Three helpers + ctx fields make scan_run.tool_status / tools_run /
+# updated_at observable mid-run. The portal polls scan_run every ~4s and
+# renders a "N/M steps · current tool" bar that advances on REAL tool
+# completion (no fake timer). close_out remains the authoritative final
+# write — these flushes are additive and best-effort: any DB failure is
+# logged and swallowed so the scan continues regardless.
+#
+# Architectural note: flush_progress opens its OWN short-lived autocommit
+# connection per call from ctx.dsn. The main scan conn is deferred until
+# close_out (per the 2026-05-30 Supabase idle-close lesson — scan #35
+# discovered idle conns get dropped after 7 min and we used to open at
+# scan-start which broke long scans). A separate per-call conn keeps
+# progress writes orthogonal to the main scan transaction's lifecycle
+# AND inherits the same best-effort discipline (connection-refused →
+# log + continue, never raise).
+
+
+def _open_progress_conn(ctx: "ScanContext"):
+    """Open a short-lived autocommit conn for a single progress write.
+    Returns the live conn or None on any failure (best-effort).
+
+    Defensive on ctx.dsn — test fixtures may use minimal mock contexts
+    that don't carry the live-progress fields. getattr keeps the
+    best-effort hook from breaking those tests.
+    """
+    dsn = getattr(ctx, "dsn", None)
+    if not dsn:
+        return None
+    try:
+        psycopg, dict_row, _Json = _import_deps()
+        return psycopg.connect(
+            dsn, row_factory=dict_row, autocommit=True, connect_timeout=5
+        )
+    except Exception as e:  # pragma: no cover — connection-time failures
+        log(f"  progress flush: connect failed (non-fatal): "
+            f"{type(e).__name__}: {e}")
+        return None
+
+
+def flush_progress(ctx: "ScanContext") -> None:
+    """Best-effort incremental progress flush — UPDATE scan_run with the
+    current tool_status + tools_run + updated_at=now(). Called after each
+    mark_tool_ok / mark_tool_skipped / mark_tool_degraded so the portal's
+    ScanProgress poller sees per-step completion as it happens.
+
+    GUARANTEES (per note 103 §Part 1):
+      - Opens its OWN short-lived autocommit conn (does not interfere
+        with the main scan transaction, which doesn't even exist yet
+        during tool runs — deferred-conn pattern per 2026-05-30).
+      - ALL failures swallowed (try/except, log, continue). A failed
+        progress write MUST NOT fail the scan.
+      - No-op if ctx.dsn is not set (validate-mode + unit tests).
+      - Touches ONLY tool_status + tools_run + updated_at. Never status /
+        completed_at / findings_added — close_out remains the
+        authoritative final write of those columns.
+      - scan_run_id cast `::uuid` (load-bearing per note 103 trap list;
+        matches the #35 `aa7c98f` cast pattern).
+    """
+    if not getattr(ctx, "dsn", None):
+        return
+    conn = _open_progress_conn(ctx)
+    if conn is None:
+        return
+    try:
+        _psycopg, _dict_row, Json = _import_deps()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE public.scan_run "
+                "SET tool_status = %s, "
+                "    tools_run   = %s, "
+                "    updated_at  = now() "
+                "WHERE scan_run_id = %s::uuid",
+                (
+                    Json(ctx.tool_status or {}),
+                    list(ctx.tools_run),
+                    str(ctx.scan_run_id),
+                ),
+            )
+    except Exception as e:
+        log(f"  progress flush failed (non-fatal): "
+            f"{type(e).__name__}: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover
+            pass
+
+
+def flush_planned_steps(ctx: "ScanContext") -> None:
+    """Best-effort one-shot write of ctx.planned_steps to scan_run.
+    Called once after Phase 1 (detect_waf + detect_tech_stack) when
+    build_chunk_plan can produce the actual nuclei chunk names and
+    auth_gated is known so ffuf/nikto inclusion is honest.
+
+    Same best-effort discipline as flush_progress: own conn, swallow
+    failures, no-op if dsn not set or planned_steps not computed.
+    """
+    if not getattr(ctx, "dsn", None) or getattr(ctx, "planned_steps", None) is None:
+        return
+    conn = _open_progress_conn(ctx)
+    if conn is None:
+        return
+    try:
+        _psycopg, _dict_row, Json = _import_deps()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE public.scan_run "
+                "SET planned_steps = %s, updated_at = now() "
+                "WHERE scan_run_id = %s::uuid",
+                (Json(list(ctx.planned_steps)), str(ctx.scan_run_id)),
+            )
+    except Exception as e:
+        log(f"  planned_steps flush failed (non-fatal): "
+            f"{type(e).__name__}: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover
+            pass
+
+
+def build_planned_steps(ctx: "ScanContext") -> list[str]:
+    """Compute the expected phase/tool list for a medium run, given the
+    current ctx (tech_stack + auth_gated populated from Phase 1). Mirrors
+    the actual run() dispatch order in scripts/scanner/run_medium.py so
+    the portal denominator matches reality.
+
+    auth_gated DROPS ffuf + nikto + non-tech nuclei chunks (those won't
+    really attempt a scan — they get marked skipped at runtime). The
+    spec called for "reflect the real plan, not a fixed 12."
+
+    THRESHOLD_PROBE_MODE skips nikto + ffuf (the run() flow already
+    short-circuits them under probe mode).
+
+    Pure function — no side effects on ctx. Safe to call repeatedly or
+    in tests.
+    """
+    steps: list[str] = ["wafw00f", "httpx[-td]"]
+    if CRAWL_FIRST_MODE:
+        steps.append("katana")
+
+    # nuclei chunks — only the chunk names that'll actually attempt a scan.
+    # build_chunk_plan returns (sev, tag, desc) tuples; chunk_name must
+    # match the per-chunk format used in run_nuclei_chunked (L2005):
+    #   f"nuclei[{sev}{':'+tag if tag else ''}]"
+    nuclei_chunks = build_chunk_plan(ctx)
+    for sev, tag, _desc in nuclei_chunks:
+        # Mirror the auth_gated per-chunk skip (run_medium L2018):
+        # auth_gated targets only run the medium:tech chunk; everything
+        # else is intentionally skipped from the plan.
+        if ctx.auth_gated and tag != "tech":
+            continue
+        chunk_name = f"nuclei[{sev}{':'+tag if tag else ''}]"
+        steps.append(chunk_name)
+
+    if THRESHOLD_PROBE_MODE:
+        return steps
+
+    # nikto — single tool; auth_gated skips it from the plan entirely.
+    if not ctx.auth_gated:
+        steps.append("nikto")
+
+    # ffuf — chunked wordlist; auth_gated skips the whole tool from the
+    # plan. Chunk names match the format in run_ffuf_chunked (L2421):
+    #   f"ffuf[{len(words)}w]#{i+1}"
+    # Slice EXACTLY the same way the runner does so the names don't
+    # drift (the last chunk has fewer words than the rest).
+    if not ctx.auth_gated:
+        ffuf_chunks = [
+            FFUF_WORDS[i:i + FFUF_WORDS_PER_CHUNK]
+            for i in range(0, len(FFUF_WORDS), FFUF_WORDS_PER_CHUNK)
+        ]
+        for i, words in enumerate(ffuf_chunks):
+            steps.append(f"ffuf[{len(words)}w]#{i+1}")
+
+    return steps
+
+
 def mark_tool_ok(ctx: ScanContext, tool_name: str) -> None:
     """Record that a tool produced real output."""
     ctx.tool_status[tool_name] = {"ok": True}
+    # Live scan progress (note 103): best-effort flush so the portal's
+    # ScanProgress poller sees this step complete. No-op if ctx.dsn unset.
+    flush_progress(ctx)
 
 
 # Cap on stderr captured into ctx.artifacts (per Howie A′ design 2026-06-15)
@@ -683,6 +879,8 @@ def mark_tool_skipped(ctx: ScanContext, tool_name: str, reason: str) -> None:
     execute, there's no stderr to capture.
     """
     ctx.tool_status[tool_name] = {"skipped": reason}
+    # Live scan progress (note 103): best-effort flush.
+    flush_progress(ctx)
 
 
 def mark_tool_degraded(
@@ -722,6 +920,10 @@ def mark_tool_degraded(
     this capture path.
     """
     ctx.tool_status[tool_name] = {"degraded": reason}
+    # Live scan progress (note 103): best-effort flush. Done BEFORE
+    # the stderr capture below so the portal sees the degraded status
+    # ASAP even if stderr serialization is slow.
+    flush_progress(ctx)
     if stderr:
         # Truncate at cap; full stderr is preserved upstream in run_cmd's
         # return value if anything else wants the full bytes.
@@ -3489,6 +3691,10 @@ def run(descriptor_path: str, dsn: str) -> int:
         scan_run_id=descriptor["scan_run_id"],
         queue_id=descriptor["queue_id"],
         intensity=descriptor["intensity"],
+        # Live scan progress (note 103) — flush_progress reads this to
+        # open its short-lived autocommit conn per call. None elsewhere
+        # (validate-mode + tests) → flush_progress is a no-op.
+        dsn=dsn,
     )
     log(f"asset_id={ctx.asset_id} hostname={ctx.hostname} scan_run_id={ctx.scan_run_id}")
 
@@ -3592,6 +3798,18 @@ def run(descriptor_path: str, dsn: str) -> int:
         detect_waf(ctx)
         log("→ detect_tech_stack")
         detect_tech_stack(ctx)
+
+        # ─── Live scan progress (note 103) — write planned_steps ────
+        # Now that Phase 1 has populated tech_stack + waf_detected, and
+        # auth_gated was read at descriptor-load time, build_chunk_plan
+        # produces the actual nuclei chunk names. Write once — drives
+        # the portal denominator. Best-effort: write failure logs +
+        # continues (planned_steps stays NULL on scan_run, portal
+        # renders "Scanning…" without a total — graceful degrade).
+        ctx.planned_steps = build_planned_steps(ctx)
+        log(f"planned_steps ({len(ctx.planned_steps)} total): "
+            f"{ctx.planned_steps}")
+        flush_planned_steps(ctx)
 
         # ─── Phase 2: nuclei (chunked + rotation) ──────────────────
         if ctx.total_requests < MAX_REQUESTS_TOTAL:

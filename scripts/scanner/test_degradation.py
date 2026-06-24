@@ -2132,6 +2132,219 @@ def test_ffuf_catchall_status_field_defaults():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Live scan progress (note 103, 2026-06-24) — incremental flush_progress
+# + flush_planned_steps + build_planned_steps. All three are best-effort:
+# no DSN = no-op; bad DSN = swallow + continue; scan execution unaffected.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _progress_ctx(dsn=None):
+    """Minimal ScanContext for flush/build progress tests."""
+    from run_medium import ScanContext
+    ctx = ScanContext(
+        descriptor={}, hostname="example.com", asset_id="example.com",
+        scan_run_id="00000000-0000-0000-0000-000000000000",
+        queue_id="00000000-0000-0000-0000-000000000000",
+        intensity="medium",
+        dsn=dsn,
+    )
+    return ctx
+
+
+def test_scan_context_progress_fields_default_safely():
+    """ScanContext gains dsn + planned_steps for note 103. Both default
+    to None — flush_progress + flush_planned_steps become no-ops, so
+    test/validate-mode runs that don't set them keep working unchanged.
+    Pins the defaults so a refactor can't accidentally enable always-on
+    progress writes in test contexts."""
+    ctx = _progress_ctx()
+    assert ctx.dsn is None
+    assert ctx.planned_steps is None
+
+
+def test_flush_progress_no_op_when_dsn_unset():
+    """No DSN configured → no DB connection attempted, no exception, no
+    mutation of ctx. Mirrors the validate-mode contract (the run never
+    tries to write progress when there's no DSN)."""
+    from run_medium import flush_progress
+    ctx = _progress_ctx(dsn=None)
+    pre_status = dict(ctx.tool_status)
+    pre_tools = list(ctx.tools_run)
+    flush_progress(ctx)  # must not raise
+    # ctx untouched by a no-op flush
+    assert ctx.tool_status == pre_status
+    assert ctx.tools_run == pre_tools
+
+
+def test_flush_progress_swallows_bad_dsn_connection_failure():
+    """Bad DSN (unreachable host on port 1 — guaranteed connect-refused)
+    → flush swallows the exception, logs, returns normally. The scan
+    MUST continue regardless of progress-write failures. This is the
+    load-bearing 'best-effort' guarantee from note 103 §Part 1."""
+    from run_medium import flush_progress
+    # Use a DSN that will fail fast (RFC-5737 TEST-NET-1 + closed port)
+    bad_dsn = "postgresql://nobody:nothing@192.0.2.1:1/never?connect_timeout=1"
+    ctx = _progress_ctx(dsn=bad_dsn)
+    ctx.tool_status = {"wafw00f": {"ok": True}}
+    ctx.tools_run = ["wafw00f"]
+    # Must NOT raise — best-effort discipline.
+    flush_progress(ctx)
+    # Ctx state preserved through the failed flush.
+    assert ctx.tool_status == {"wafw00f": {"ok": True}}
+    assert ctx.tools_run == ["wafw00f"]
+
+
+def test_flush_planned_steps_no_op_when_dsn_unset():
+    from run_medium import flush_planned_steps
+    ctx = _progress_ctx(dsn=None)
+    ctx.planned_steps = ["wafw00f", "httpx[-td]"]
+    flush_planned_steps(ctx)  # must not raise
+    # No mutation expected — write is no-op.
+    assert ctx.planned_steps == ["wafw00f", "httpx[-td]"]
+
+
+def test_flush_planned_steps_no_op_when_planned_steps_none():
+    """planned_steps=None (Phase 1 hasn't run yet) → no-op even with a
+    real DSN. The portal's denominator stays NULL → renders 'Scanning…'
+    without a total, which is the graceful-degrade behavior."""
+    from run_medium import flush_planned_steps
+    ctx = _progress_ctx(dsn="postgresql://x")
+    ctx.planned_steps = None
+    flush_planned_steps(ctx)  # must not raise
+    assert ctx.planned_steps is None
+
+
+def test_flush_planned_steps_swallows_bad_dsn():
+    """Same best-effort discipline as flush_progress for the one-shot
+    planned_steps write."""
+    from run_medium import flush_planned_steps
+    bad_dsn = "postgresql://nobody:nothing@192.0.2.1:1/never?connect_timeout=1"
+    ctx = _progress_ctx(dsn=bad_dsn)
+    ctx.planned_steps = ["wafw00f", "httpx[-td]", "nikto"]
+    flush_planned_steps(ctx)  # must not raise
+    assert ctx.planned_steps == ["wafw00f", "httpx[-td]", "nikto"]
+
+
+def test_mark_tool_ok_still_mutates_ctx_when_dsn_unset():
+    """Regression: adding the progress flush to mark_tool_ok must not
+    break the existing pure-ctx-mutation contract used by tests + the
+    validate-mode run. dsn=None makes the flush a no-op; the
+    tool_status mutation still happens normally."""
+    from run_medium import mark_tool_ok
+    ctx = _progress_ctx(dsn=None)
+    mark_tool_ok(ctx, "wafw00f")
+    assert ctx.tool_status == {"wafw00f": {"ok": True}}
+
+
+def test_mark_tool_skipped_still_mutates_ctx_when_dsn_unset():
+    from run_medium import mark_tool_skipped
+    ctx = _progress_ctx(dsn=None)
+    mark_tool_skipped(ctx, "nikto", "auth_gated")
+    assert ctx.tool_status == {"nikto": {"skipped": "auth_gated"}}
+
+
+def test_mark_tool_degraded_still_mutates_ctx_when_dsn_unset():
+    from run_medium import mark_tool_degraded
+    ctx = _progress_ctx(dsn=None)
+    mark_tool_degraded(ctx, "ffuf[25w]#1", "egress_unstable")
+    assert ctx.tool_status == {"ffuf[25w]#1": {"degraded": "egress_unstable"}}
+
+
+# ─── build_planned_steps — phase plan generation ──────────────────────────
+
+
+def test_build_planned_steps_includes_always_run_tools():
+    """wafw00f + httpx[-td] are always in the plan regardless of
+    auth_gated state. These run unconditionally in Phase 1."""
+    from run_medium import build_planned_steps
+    ctx = _progress_ctx()
+    ctx.auth_gated = False
+    steps = build_planned_steps(ctx)
+    assert "wafw00f" in steps
+    assert "httpx[-td]" in steps
+    # wafw00f comes first (Phase 1 ordering)
+    assert steps[0] == "wafw00f"
+    assert steps[1] == "httpx[-td]"
+
+
+def test_build_planned_steps_non_auth_gated_includes_full_suite():
+    """Non-auth_gated medium scan: nuclei chunks + nikto + ffuf chunks
+    all appear. The exact nuclei chunk names depend on build_chunk_plan
+    (target-class + stack aware); test the surface — at least one
+    nuclei chunk + nikto + at least one ffuf chunk."""
+    from run_medium import build_planned_steps
+    ctx = _progress_ctx()
+    ctx.auth_gated = False
+    steps = build_planned_steps(ctx)
+    assert any(s.startswith("nuclei[") for s in steps), (
+        f"expected at least one nuclei chunk in {steps}"
+    )
+    assert "nikto" in steps
+    assert any(s.startswith("ffuf[") for s in steps), (
+        f"expected at least one ffuf chunk in {steps}"
+    )
+
+
+def test_build_planned_steps_auth_gated_omits_ffuf_entirely():
+    """auth_gated → ffuf chunks not in the plan (the runner skips ALL
+    ffuf chunks for auth-gated targets — there's no unauth path surface
+    to fuzz). 'Reflect the real plan, not a fixed 12' per note 103."""
+    from run_medium import build_planned_steps
+    ctx = _progress_ctx()
+    ctx.auth_gated = True
+    steps = build_planned_steps(ctx)
+    assert not any(s.startswith("ffuf[") for s in steps), (
+        f"auth_gated must drop ffuf from plan; got {steps}"
+    )
+
+
+def test_build_planned_steps_auth_gated_omits_nikto():
+    """auth_gated → nikto not in the plan (skipped at runtime against
+    auth-gated targets per #24 Phase 2). Plan must reflect the truth."""
+    from run_medium import build_planned_steps
+    ctx = _progress_ctx()
+    ctx.auth_gated = True
+    steps = build_planned_steps(ctx)
+    assert "nikto" not in steps, f"auth_gated must drop nikto; got {steps}"
+
+
+def test_build_planned_steps_auth_gated_keeps_only_tech_nuclei():
+    """auth_gated → only the medium:tech nuclei chunk runs (everything
+    else fires templates that 401/redirect uniformly = zero signal).
+    Plan must include nuclei[medium:tech] and exclude other nuclei chunks."""
+    from run_medium import build_planned_steps
+    ctx = _progress_ctx()
+    ctx.auth_gated = True
+    steps = build_planned_steps(ctx)
+    nuclei_steps = [s for s in steps if s.startswith("nuclei[")]
+    # The tech chunk should be present; every nuclei chunk in the plan
+    # must be a tech chunk.
+    assert "nuclei[medium:tech]" in nuclei_steps, (
+        f"expected nuclei[medium:tech] in {nuclei_steps}"
+    )
+    for chunk in nuclei_steps:
+        assert ":tech" in chunk, (
+            f"auth_gated must only plan :tech nuclei chunks; got {chunk}"
+        )
+
+
+def test_build_planned_steps_pure_function():
+    """No side effects on ctx — calling repeatedly produces same result
+    without mutating the input. Pinning so a future caching/memoization
+    refactor can't accidentally introduce state."""
+    from run_medium import build_planned_steps
+    ctx = _progress_ctx()
+    ctx.auth_gated = False
+    first = build_planned_steps(ctx)
+    second = build_planned_steps(ctx)
+    assert first == second
+    # Re-call with a different auth_gated value gives a different plan.
+    ctx.auth_gated = True
+    third = build_planned_steps(ctx)
+    assert third != first
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # S3 Part 2 (2026-06-18) — ffuf severity tuning. Curated path-sensitivity
 # (SECRET / ADMIN) × HTTP status → severity matrix. Replaces the blanket
 # `severity='INFO'` at the per-path ffuf emit site so real hits surface
