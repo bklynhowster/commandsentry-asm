@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-24T09:55:40Z_767e63b3",
-    "started_at": "2026-06-24T09:55:40Z",
-    "completed_at": "2026-06-24T09:57:57Z",
-    "duration_seconds": 137,
+    "id": "scan_2026-06-24T14:59:20Z_46acde19",
+    "started_at": "2026-06-24T14:59:20Z",
+    "completed_at": "2026-06-24T15:02:01Z",
+    "duration_seconds": 161,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-24T09:57:57Z",
-      "last_seen": "2026-06-24T09:57:57Z",
+      "first_discovered": "2026-06-24T15:02:01Z",
+      "last_seen": "2026-06-24T15:02:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -247,8 +247,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-24T09:57:58Z",
-      "last_seen": "2026-06-24T09:57:58Z",
+      "first_discovered": "2026-06-24T15:02:01Z",
+      "last_seen": "2026-06-24T15:02:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -446,8 +446,8 @@
           "ns18.domaincontrol.com"
         ],
         "txt": [
-          "",
-          "ca3-109f68bf8eb24748b4c4aaa123b93e17"
+          "ca3-109f68bf8eb24748b4c4aaa123b93e17",
+          ""
         ],
         "spf": null,
         "dnssec": false
@@ -503,7 +503,7 @@
           },
           {
             "name": "WPMU DEV Smush",
-            "version": "4.1.1",
+            "version": "4.1.2",
             "category": "wp-plugin"
           },
           {
@@ -513,7 +513,7 @@
           },
           {
             "name": "Yoast SEO",
-            "version": "27.8",
+            "version": "27.9",
             "category": "wp-plugin"
           },
           {
@@ -562,22 +562,14 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-06-24T04:25:31Z_3e237b48",
+    "since_scan": "scan_2026-06-24T09:55:40Z_767e63b3",
     "added": {
       "subdomains": [],
       "services": [],
       "hosts": []
     },
     "removed": {
-      "subdomains": [
-        "access.commandmarketinginnovations.com",
-        "finance.commandmarketinginnovations.com",
-        "manager.commandmarketinginnovations.com",
-        "mx3.commandmarketinginnovations.com",
-        "projects.commandmarketinginnovations.com",
-        "storage.commandmarketinginnovations.com",
-        "workers.commandmarketinginnovations.com"
-      ],
+      "subdomains": [],
       "services": [],
       "hosts": []
     },
@@ -586,14 +578,14 @@
         {
           "subdomain": "www.commandmarketinginnovations.com",
           "name": "WPMU DEV Smush",
-          "from": "4.1.2",
-          "to": "4.1.1"
+          "from": "4.1.1",
+          "to": "4.1.2"
         },
         {
           "subdomain": "www.commandmarketinginnovations.com",
           "name": "Yoast SEO",
-          "from": "27.9",
-          "to": "27.8"
+          "from": "27.8",
+          "to": "27.9"
         }
       ],
       "cert": [],
@@ -5789,6 +5781,50 @@
         "Slider Revolution": "6.7.56",
         "WPMU DEV Smush": "4.1.1",
         "Yoast SEO": "27.8",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-06-24T14:59:20Z_46acde19",
+      "started_at": "2026-06-24T14:59:20Z",
+      "completed_at": "2026-06-24T15:02:01Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.7.56",
+        "WPMU DEV Smush": "4.1.2",
+        "Yoast SEO": "27.9",
         "jQuery Migrate": "3.4.1",
         "punycode": "1.0.0"
       }
