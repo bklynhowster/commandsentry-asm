@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-26T09:52:25Z_d644feaf",
-    "started_at": "2026-06-26T09:52:25Z",
-    "completed_at": "2026-06-26T09:54:42Z",
-    "duration_seconds": 137,
+    "id": "scan_2026-06-26T14:52:03Z_ee0e3b4c",
+    "started_at": "2026-06-26T14:52:03Z",
+    "completed_at": "2026-06-26T14:54:54Z",
+    "duration_seconds": 171,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-26T09:54:42Z",
-      "last_seen": "2026-06-26T09:54:42Z",
+      "first_discovered": "2026-06-26T14:54:54Z",
+      "last_seen": "2026-06-26T14:54:54Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -118,8 +118,8 @@
       ],
       "dns": {
         "a": [
-          "199.16.172.41",
-          "199.16.173.231"
+          "199.16.173.231",
+          "199.16.172.41"
         ],
         "aaaa": [],
         "cname": null,
@@ -238,7 +238,7 @@
       },
       "waf": {
         "detected": true,
-        "vendor": "Generic",
+        "vendor": "Wordfence",
         "confidence": "high"
       }
     },
@@ -247,8 +247,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-26T09:54:42Z",
-      "last_seen": "2026-06-26T09:54:42Z",
+      "first_discovered": "2026-06-26T14:54:54Z",
+      "last_seen": "2026-06-26T14:54:54Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -562,7 +562,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-06-26T04:29:54Z_5ae88513",
+    "since_scan": "scan_2026-06-26T09:52:25Z_d644feaf",
     "added": {
       "subdomains": [],
       "services": [],
@@ -574,63 +574,12 @@
       "hosts": []
     },
     "changed": {
-      "fingerprint": [
-        {
-          "subdomain": "www.commandmarketinginnovations.com",
-          "name": "Slider Revolution",
-          "from": "6.7.56",
-          "to": "6.7.58"
-        }
-      ],
+      "fingerprint": [],
       "cert": [],
       "reachability": []
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-05-28T16:26:20Z_0bc10a86",
-      "started_at": "2026-05-28T16:26:20Z",
-      "completed_at": "2026-05-28T16:28:58Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 2,
-      "service_count": 8,
-      "subdomain_names": [
-        "commandmarketinginnovations.com",
-        "www.commandmarketinginnovations.com"
-      ],
-      "ports_by_sub": {
-        "commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        },
-        "www.commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.0",
-        "Mailcheck": "1.1.2",
-        "Slider Revolution": "6.7.55",
-        "WPMU DEV Smush": "4.0.3",
-        "Yoast SEO": "27.7",
-        "jQuery Migrate": "3.4.1",
-        "punycode": "1.0.0"
-      }
-    },
     {
       "scan_id": "scan_2026-05-28T20:42:49Z_939e7e72",
       "started_at": "2026-05-28T20:42:49Z",
@@ -5783,6 +5732,50 @@
       "scan_id": "scan_2026-06-26T09:52:25Z_d644feaf",
       "started_at": "2026-06-26T09:52:25Z",
       "completed_at": "2026-06-26T09:54:42Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.7.58",
+        "WPMU DEV Smush": "4.1.2",
+        "Yoast SEO": "27.9",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-06-26T14:52:03Z_ee0e3b4c",
+      "started_at": "2026-06-26T14:52:03Z",
+      "completed_at": "2026-06-26T14:54:54Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 2,
