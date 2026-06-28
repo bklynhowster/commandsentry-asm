@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-28T05:00:47Z_d521092d",
-    "started_at": "2026-06-28T05:00:47Z",
-    "completed_at": "2026-06-28T05:02:18Z",
-    "duration_seconds": 91,
+    "id": "scan_2026-06-28T09:45:58Z_31800f4a",
+    "started_at": "2026-06-28T09:45:58Z",
+    "completed_at": "2026-06-28T09:47:30Z",
+    "duration_seconds": 92,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -40,8 +40,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-06-28T05:02:18Z",
-      "last_seen": "2026-06-28T05:02:18Z",
+      "first_discovered": "2026-06-28T09:47:31Z",
+      "last_seen": "2026-06-28T09:47:31Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -114,7 +114,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-06-27T20:01:02Z_b6d72fd5",
+    "since_scan": "scan_2026-06-28T05:00:47Z_d521092d",
     "added": {
       "subdomains": [],
       "services": [],
@@ -132,27 +132,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-05-29T16:23:17Z_447e935c",
-      "started_at": "2026-05-29T16:23:17Z",
-      "completed_at": "2026-05-29T16:25:20Z",
-      "subdomain_count": 1,
-      "live_subdomain_count": 1,
-      "host_count": 1,
-      "service_count": 2,
-      "subdomain_names": [
-        "24.157.51.88"
-      ],
-      "ports_by_sub": {
-        "24.157.51.88": {
-          "24.157.51.88": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {}
-    },
     {
       "scan_id": "scan_2026-05-29T20:55:02Z_c0557d25",
       "started_at": "2026-05-29T20:55:02Z",
@@ -2625,6 +2604,27 @@
       "scan_id": "scan_2026-06-28T05:00:47Z_d521092d",
       "started_at": "2026-06-28T05:00:47Z",
       "completed_at": "2026-06-28T05:02:18Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_names": [
+        "24.157.51.88"
+      ],
+      "ports_by_sub": {
+        "24.157.51.88": {
+          "24.157.51.88": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-06-28T09:45:58Z_31800f4a",
+      "started_at": "2026-06-28T09:45:58Z",
+      "completed_at": "2026-06-28T09:47:30Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 1,
