@@ -36,6 +36,15 @@ from run_heavy import testssl_is_degraded
 
 
 # ─── testssl_is_degraded — VALID NEGATIVE cases (must NOT be degraded) ──
+#
+# Note 129 follow-up (4.8 verify of 87f09d4): a valid negative now
+# requires POSITIVE EVIDENCE the host was actually reached + scanned —
+# at least one record that survives the parser's drop list
+# (cs_parsers/testssl.py SKIP_SEVERITIES + SCORECARD_IDS). Pre-fix the
+# detector said "rc=0 + parseable non-empty array = valid negative,"
+# which let unreachable-host runs (only engine_problem records) read
+# as clean scans → note-127 auto-closer would false-close the entire
+# testssl backlog. The new gate prevents that.
 
 def _write_json(payload, suffix=".json") -> Path:
     """Helper: write JSON to a temp file, return its Path."""
@@ -45,13 +54,16 @@ def _write_json(payload, suffix=".json") -> Path:
     return Path(f.name)
 
 
-def test_rc_zero_empty_array_is_NOT_degraded():
-    """Real testssl on a no-TLS host: rc=0, valid empty JSON array. This
-    IS the "valid negative" outcome — scan must register as complete +
-    0 findings. The note-127 auto-closer will then correctly treat the
-    asset as having been scanned with no current TLS findings.
+def test_rc_zero_with_low_cipher_record_is_NOT_degraded():
+    """Real testssl on a host with TLS: rc=0, contains LOW-severity
+    cipher records. parse_testssl_file would emit at least one
+    FindingEvent → positive evidence the host was reached + scanned →
+    valid scan. Auto-closer can credit testssl.sh coverage.
     """
-    p = _write_json([])
+    p = _write_json([
+        {"id": "cipher-tls1_2_xc028", "ip": "host/1.2.3.4", "port": "443",
+         "severity": "LOW", "finding": "TLSv1.2  xc028  ECDHE-RSA-AES256-SHA384"},
+    ])
     try:
         degraded, reason = testssl_is_degraded(0, p, "", "")
         assert not degraded, f"valid negative misclassified as degraded: {reason!r}"
@@ -60,9 +72,12 @@ def test_rc_zero_empty_array_is_NOT_degraded():
         p.unlink()
 
 
-def test_rc_zero_populated_records_is_NOT_degraded():
-    """Real testssl with findings: rc=0, populated JSON array. NOT degraded."""
-    p = _write_json([{"id": "TLS1", "severity": "LOW", "finding": "offered"}])
+def test_rc_zero_with_named_attack_record_is_NOT_degraded():
+    """Real testssl with a named-attack finding: rc=0, MEDIUM severity
+    record that survives the parser's drop list. NOT degraded."""
+    p = _write_json([
+        {"id": "BEAST", "severity": "MEDIUM", "finding": "detected"},
+    ])
     try:
         degraded, reason = testssl_is_degraded(0, p, "", "")
         assert not degraded, f"healthy scan misclassified as degraded: {reason!r}"
@@ -70,13 +85,15 @@ def test_rc_zero_populated_records_is_NOT_degraded():
         p.unlink()
 
 
-def test_nonzero_rc_with_records_is_NOT_degraded():
+def test_nonzero_rc_with_eligible_record_is_NOT_degraded():
     """testssl frequently returns rc!=0 on findings (rc reflects severity
-    count, not failure). As long as records parsed, the scan IS clean —
-    the data is what matters. Without this carve-out we'd flip every
-    productive testssl scan to degraded.
+    count, not failure). As long as at least one eligible record exists,
+    the scan IS clean — the data is what matters. Without this carve-out
+    we'd flip every productive testssl scan to degraded.
     """
-    p = _write_json([{"id": "BEAST", "severity": "MEDIUM", "finding": "detected"}])
+    p = _write_json([
+        {"id": "BEAST", "severity": "MEDIUM", "finding": "detected"},
+    ])
     try:
         degraded, reason = testssl_is_degraded(200, p, "", "")
         assert not degraded, f"nonzero-rc-with-records misclassified: {reason!r}"
@@ -165,15 +182,137 @@ def test_jsonfile_pretty_shape_is_degraded():
 
 def test_nonzero_rc_with_empty_records_is_degraded():
     """testssl exited non-zero AND produced zero records → degraded.
-    Distinguishes "rc!=0 because findings exist" (clean) from "rc!=0
-    because something broke" (degraded). Empty + nonzero rc is the
-    crash shape, not the findings shape.
+    rc!=0 + no eligible records is the crash shape, not the findings
+    shape. Reason slug encodes both signals so forensics can tell
+    "exited nonzero with nothing parseable" apart from the generic
+    "produced records but all got dropped" path.
     """
     p = _write_json([])
     try:
         degraded, reason = testssl_is_degraded(2, p, "", "")
         assert degraded, "nonzero-rc + empty records must be degraded"
-        assert reason.startswith("nonzero_rc_empty_records:"), f"got {reason!r}"
+        assert reason.startswith("nonzero_rc_no_eligible_records:"), f"got {reason!r}"
+    finally:
+        p.unlink()
+
+
+# ─── testssl_is_degraded — host-unreachable cases (4.8 verify safety fix) ─
+
+def test_rc_zero_empty_array_IS_degraded():
+    """Empty JSON array. Pre-fix this was treated as "valid negative"
+    (host has no TLS, no findings to report). Post-fix: an empty array
+    means testssl emitted nothing at all — not even diagnostic records
+    — which is a crash shape, not a clean-no-findings shape. DEGRADED
+    (no_eligible_records). The "real testssl on a clean modern TLS
+    endpoint" case ALWAYS emits at least cipher records that survive
+    the drop list; an empty array means we didn't actually scan.
+    """
+    p = _write_json([])
+    try:
+        degraded, reason = testssl_is_degraded(0, p, "", "")
+        assert degraded, "empty JSON array must be degraded (no positive evidence)"
+        assert reason == "no_eligible_records", f"got {reason!r}"
+    finally:
+        p.unlink()
+
+
+def test_engine_problem_only_IS_degraded():
+    """THE bug 4.8 caught. Host unreachable: testssl emits only
+    engine_problem records at WARN severity. The offline parser drops
+    these (severity in SKIP_SEVERITIES + id in SCORECARD_IDS) → returns
+    0 events. Pre-fix the live detector saw rc=0 + parseable non-empty
+    array and called it valid-negative → scan_run marked complete →
+    note-127 auto-closer credited testssl.sh coverage → false-closed
+    the entire prior testssl backlog for the asset. Post-fix: this
+    case MUST be DEGRADED with the diagnostic-marker slug.
+    """
+    p = _write_json([
+        {"id": "engine_problem", "ip": "/", "port": "443",
+         "severity": "WARN", "finding": "TCP connection refused"},
+        {"id": "engine_problem", "ip": "/", "port": "443",
+         "severity": "WARN", "finding": "scan aborted"},
+    ])
+    try:
+        degraded, reason = testssl_is_degraded(0, p, "", "")
+        assert degraded, "engine_problem-only output must be degraded"
+        assert reason == "tool_diagnostic_records_only", f"got {reason!r}"
+    finally:
+        p.unlink()
+
+
+def test_scanproblem_only_IS_degraded():
+    """Variant of the above: scanProblem records (also in SCORECARD_IDS)
+    indicate testssl failed to scan. Must be DEGRADED with the
+    diagnostic-marker slug — auto-closer doesn't credit coverage.
+    """
+    p = _write_json([
+        {"id": "scanProblem", "ip": "host/1.2.3.4", "port": "443",
+         "severity": "FATAL", "finding": "could not connect"},
+    ])
+    try:
+        degraded, reason = testssl_is_degraded(0, p, "", "")
+        assert degraded, "scanProblem-only output must be degraded"
+        assert reason == "tool_diagnostic_records_only", f"got {reason!r}"
+    finally:
+        p.unlink()
+
+
+def test_scorecard_meta_only_IS_degraded():
+    """testssl emitted only overall_grade / service meta records — no
+    cipher / protocol / named-attack records. Without positive evidence
+    of a TLS evaluation, we don't credit testssl.sh coverage. DEGRADED
+    with the generic no_eligible_records slug (no diagnostic marker
+    here, so we can't claim "unreachable" specifically).
+    """
+    p = _write_json([
+        {"id": "overall_grade", "severity": "OK", "finding": "A"},
+        {"id": "service", "severity": "INFO", "finding": "HTTPS"},
+    ])
+    try:
+        degraded, reason = testssl_is_degraded(0, p, "", "")
+        assert degraded, "scorecard/meta-only output must be degraded"
+        assert reason == "no_eligible_records", f"got {reason!r}"
+    finally:
+        p.unlink()
+
+
+def test_all_skipped_severities_IS_degraded():
+    """Output contains only WARN / OK / DEBUG / INFO severity records.
+    parse_testssl_file would drop every one (SKIP_SEVERITIES gate) →
+    0 events. Positive-evidence gate must reject this → DEGRADED.
+    Tests the severity half of the drop list independent of the
+    SCORECARD_IDS half.
+    """
+    p = _write_json([
+        {"id": "TLS1_3", "severity": "OK", "finding": "offered"},
+        {"id": "ALPN", "severity": "INFO", "finding": "h2,http/1.1"},
+        {"id": "some_diagnostic", "severity": "DEBUG", "finding": "..."},
+    ])
+    try:
+        degraded, reason = testssl_is_degraded(0, p, "", "")
+        assert degraded, "all-skipped-severity output must be degraded"
+        assert reason == "no_eligible_records", f"got {reason!r}"
+    finally:
+        p.unlink()
+
+
+def test_diagnostic_plus_eligible_record_is_NOT_degraded():
+    """Mixed output: engine_problem AND at least one real finding. The
+    positive evidence (cipher LOW record) wins — testssl actually got
+    far enough to evaluate at least one part of the TLS stack, so the
+    scan IS real. Auto-closer can credit coverage. (Realistic shape:
+    a partial TLS handshake that surfaces one cipher before the
+    connection drops, recording an engine_problem alongside it.)
+    """
+    p = _write_json([
+        {"id": "engine_problem", "ip": "/", "port": "443",
+         "severity": "WARN", "finding": "scan interrupted"},
+        {"id": "cipher-tls1_2_xc028", "ip": "host/1.2.3.4", "port": "443",
+         "severity": "LOW", "finding": "TLSv1.2  xc028  ECDHE-RSA-AES256-SHA384"},
+    ])
+    try:
+        degraded, reason = testssl_is_degraded(0, p, "", "")
+        assert not degraded, f"mixed-eligible scan misclassified: {reason!r}"
     finally:
         p.unlink()
 

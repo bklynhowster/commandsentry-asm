@@ -258,25 +258,38 @@ def run_testssl(ctx: HeavyScanContext, work_dir: Path) -> tuple[int, Path, str, 
 def testssl_is_degraded(
     rc: int, jsonfile: Path, stdout: str, stderr: str
 ) -> tuple[bool, str]:
-    """SAFETY-CRITICAL — distinguishes a VALID NEGATIVE (host has no TLS
-    on :443 → 0 findings, scan IS complete) from a DEGRADED run (timeout,
-    binary missing, mid-handshake reset, unparseable JSON → scan_run
-    must NOT be 'complete'). The note-127 auto-closer treats a complete
-    scan whose tools_run includes 'testssl.sh' as evidence of remediation
-    on every previously-observed testssl finding for that asset. A
-    flaky-but-mislabeled-complete run → false-close of live findings.
+    """SAFETY-CRITICAL — distinguishes a VALID NEGATIVE (host has clean
+    TLS / actionable findings — auto-closer can credit coverage) from a
+    DEGRADED run (timeout, binary missing, mid-handshake reset,
+    unparseable JSON, OR host-unreachable with only diagnostic records
+    → scan_run must NOT be 'complete'). The note-127 auto-closer treats
+    a complete scan whose tools_run includes 'testssl.sh' as evidence
+    of remediation on every previously-observed testssl finding for
+    that asset. A flaky-but-mislabeled-complete run → false-close of
+    live findings.
 
-    Conservative shape:
+    Note 129 follow-up (4.8 verify of 87f09d4): JSON shape alone isn't
+    enough. When a backlog host is unreachable (transient net, VPN
+    egress, port 443 filtered), testssl emits ONLY 'engine_problem' /
+    'scanProblem' diagnostic records at WARN severity. The offline
+    parser (cs_parsers/testssl.py) drops those via SKIP_SEVERITIES +
+    SCORECARD_IDS → returns 0 events. Pre-fix this read as "rc=0 +
+    parseable non-empty array = valid negative" → complete → auto-
+    closer false-closes the whole backlog. SAFETY FIX: require POSITIVE
+    EVIDENCE (at least one record that would actually produce a
+    FindingEvent) before declaring valid-negative.
+
+    Detection order:
       - Tool not found / binary missing                    → DEGRADED
-      - subprocess timed out (rc == 124, the run_cmd code) → DEGRADED
+      - Subprocess timed out (rc == 124)                   → DEGRADED
       - Output file missing / 0 bytes / unparseable JSON   → DEGRADED
-        (a clean no-TLS run still produces a valid JSON array, just
-        usually small — testssl.sh emits the scorecard preamble even
-        when no TLS handshake completes)
-      - Non-zero rc + EMPTY JSON                           → DEGRADED
-      - Non-zero rc but JSON parsed with records           → OK (testssl
-        often returns rc!=0 on findings; the data is what matters)
-      - rc == 0 + parsed JSON (may be empty array)         → OK
+      - Non-list root (e.g. --jsonfile-pretty mistake)     → DEGRADED
+      - JSON parsed but ZERO records would survive the     → DEGRADED
+        parser's drop list (no positive evidence the host    (`tool_diagnostic_records_only`
+        was actually reached + scanned)                       / `no_eligible_records`
+                                                              / `nonzero_rc_no_eligible_records:N`)
+      - JSON parsed + at least one eligible record         → OK
+        (matches what parse_testssl_file would emit)
 
     Returns (is_degraded, reason_slug). Empty slug iff not degraded.
     """
@@ -318,13 +331,60 @@ def testssl_is_degraded(
         # we don't trust this output as a clean scan.
         return True, "unexpected_json_shape"
 
-    # Non-zero rc with valid records is OK — testssl commonly returns
-    # 200/240/etc on findings. The presence of parseable records is the
-    # ground truth.
-    if rc != 0 and len(data) == 0:
-        return True, f"nonzero_rc_empty_records:{rc}"
+    # Positive-evidence gate (note 129 follow-up, 4.8 verify safety fix).
+    # Mirror parse_testssl_file's drop rules EXACTLY so we can answer
+    # "would this JSON produce any FindingEvent?" without re-running
+    # the parser. If the answer is no, the run did not actually scan
+    # TLS — either the host was unreachable (engine_problem /
+    # scanProblem records only), the JSON is meta-only (overall_grade
+    # + service), or some edge testssl chose not to emit anything
+    # actionable. In all three cases, crediting 'testssl.sh' coverage
+    # to the auto-closer would be wrong: it would treat a non-scan
+    # as scan-confirms-no-findings → false-close the entire prior
+    # backlog for the asset.
+    #
+    # KEEP IN SYNC with cs_parsers/testssl.py SKIP_SEVERITIES +
+    # SCORECARD_IDS. Mismatch here means the live detector either
+    # under-counts (over-degrades clean scans) or over-counts (lets
+    # diagnostic-only JSON through as valid-negative).
+    _SKIP_SEVERITIES = {"WARN", "OK", "DEBUG", "INFO"}
+    _SCORECARD_IDS = {
+        "overall_grade", "overall_grade_warning",
+        "service",                       # protocol identification, not a finding
+        "engine_problem", "scanProblem", # tool diagnostics — UNREACHABLE marker
+    }
 
-    # All checks passed.
+    eligible = 0
+    has_diagnostic_marker = False
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        rid = rec.get("id") or ""
+        if rid in ("engine_problem", "scanProblem"):
+            has_diagnostic_marker = True
+        sev = (rec.get("severity") or "").strip().upper()
+        if sev in _SKIP_SEVERITIES:
+            continue
+        if rid in _SCORECARD_IDS:
+            continue
+        eligible += 1
+
+    if eligible == 0:
+        # Forensics-friendly slug. tool_diagnostic_records_only is the
+        # canonical "host unreachable" signal — engine_problem /
+        # scanProblem records are testssl's way of saying "I couldn't
+        # talk to the target."
+        if has_diagnostic_marker:
+            return True, "tool_diagnostic_records_only"
+        if rc != 0:
+            return True, f"nonzero_rc_no_eligible_records:{rc}"
+        return True, "no_eligible_records"
+
+    # At least one record survives the parser's drop list → testssl
+    # actually evaluated TLS and produced something parse_testssl_file
+    # would emit. Non-zero rc here is fine — testssl frequently returns
+    # rc!=0 on findings; the eligible-records gate above is the real
+    # signal.
     return False, ""
 
 
