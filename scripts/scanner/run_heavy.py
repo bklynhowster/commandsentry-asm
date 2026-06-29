@@ -259,50 +259,57 @@ def testssl_is_degraded(
     rc: int, jsonfile: Path, stdout: str, stderr: str
 ) -> tuple[bool, str]:
     """SAFETY-CRITICAL — distinguishes a VALID NEGATIVE (host was reached
-    + TLS scanned — auto-closer can credit coverage) from a DEGRADED
-    run (timeout, binary missing, mid-handshake reset, unparseable JSON,
-    OR host-unreachable → scan_run must NOT be 'complete'). The note-127
-    auto-closer treats a complete scan whose tools_run includes
-    'testssl.sh' as evidence of remediation on every previously-observed
-    testssl finding for that asset. A flaky-but-mislabeled-complete run
-    → false-close of live findings.
+    + TLS scan ran to completion — auto-closer can credit coverage)
+    from a DEGRADED run (timeout, binary missing, unparseable JSON,
+    host-unreachable, OR truncated mid-scan → scan_run must NOT be
+    'complete'). The note-127 auto-closer treats a complete scan whose
+    tools_run includes 'testssl.sh' as evidence of remediation on every
+    previously-observed testssl finding for that asset. A flaky-but-
+    mislabeled-complete run → false-close of live findings.
 
     EVOLUTION:
       - 87f09d4 — JSON shape only. Hole: engine_problem-only output
         read as valid-negative.
-      - e9340ff — count records that survive the parser drop list as
-        positive evidence. Over-corrected: a reachable + fully-remediated
-        host emits only `service` + `TLS1_x` records (all dropped by
-        parser INFO/OK rules) → 0 eligible → mis-flagged DEGRADED →
-        auto-closer never credits coverage → backlog for clean hosts
-        never clears (silent fail on the exact remediation path v1
-        exists to enable).
-      - THIS — discriminate on REACH, not findings. testssl records
-        whose mere PRESENCE proves the host was scanned:
-          `service`             — protocol identification (always
-                                  emitted on a reached host)
-          `TLS1_3` / `TLS1_2`   — protocol-offered tests (the
-          `TLS1_1` / `TLS1_0`     "did we even speak TLS to this
-          `SSLv3`  / `SSLv2`      host" signal)
-        Whether they survive the FindingEvent drop list is irrelevant
-        — their presence is the reach proof.
+      - e9340ff — count records that survive parser drop list. Over-
+        corrected: reachable+remediated hosts produce only INFO/OK
+        reach records → 0 eligible → falsely degraded → backlog for
+        clean hosts never clears.
+      - 4c149cd — reach-based (service / TLS1_x) + diagnostic wins
+        unconditionally. Over-corrected differently: real complete
+        testssl scans routinely carry one `engine_problem` WARN
+        (OCSP hiccup / STARTTLS quirk), so "diagnostic wins" flagged
+        essentially every real scan as degraded — proven by live
+        heavy run #794 against demo.testfire.net (rc=0, 195-record
+        scan, mis-degraded by the e_p WARN).
+      - THIS (round 4) — judge by testssl's own COMPLETION MARKERS,
+        not by diagnostic noise. testssl emits `overall_grade` and/or
+        `scanTime` records at end-of-run; their presence means the
+        scan ran to completion regardless of any non-fatal e_p WARN
+        encountered along the way. Reach guards the "did we even
+        reach the host" axis; completion guards the "did we finish
+        the test battery" axis. Engine_problem / scanProblem records
+        are NOT a standalone degrade trigger anymore — the truncation
+        guard (reach without completion) catches the truly-interrupted
+        case without false-positiving on every real scan.
 
     Detection order:
       - Tool not found / binary missing                    → DEGRADED
       - Subprocess timed out (rc == 124)                   → DEGRADED
       - Output file missing / 0 bytes / unparseable JSON   → DEGRADED
       - Non-list root (e.g. --jsonfile-pretty mistake)     → DEGRADED
-      - Any `engine_problem` / `scanProblem` record        → DEGRADED
-        present (diagnostic markers — testssl logged a       (`tool_diagnostic_records_only`)
-        connection problem; we can't trust the verdict
-        even if a partial result also appears)
-      - No reach evidence at all (no `service`, no         → DEGRADED
-        `TLS1_x`, no `SSLv2`/`SSLv3` record)                 (`no_reach_evidence`
+      - has_reach AND has_completion                       → OK
+        (even with engine_problem / scanProblem records —
+        non-fatal diagnostic noise routine in real scans)
+      - has_reach AND NOT has_completion                   → DEGRADED
+        (truncated mid-scan; don't trust partial verdict)    (`scan_incomplete`)
+      - NOT has_reach                                      → DEGRADED
+                                                              (`no_reach_evidence`
                                                               / `nonzero_rc_no_reach_evidence:N`)
-      - Reach evidence present + no diagnostic marker      → OK
-        (host was reached + TLS scanned — clean or with
-        findings, both are valid-negative for the
-        auto-closer's purposes)
+
+      has_reach      = any record id in {service, TLS1, TLS1_1,
+                       TLS1_2, TLS1_3, SSLv2, SSLv3}
+                       (testssl emits `TLS1`, not `TLS1_0`.)
+      has_completion = any record id in {overall_grade, scanTime}
 
     Returns (is_degraded, reason_slug). Empty slug iff not degraded.
     """
@@ -344,72 +351,77 @@ def testssl_is_degraded(
         # we don't trust this output as a clean scan.
         return True, "unexpected_json_shape"
 
-    # Reach-based discrimination (note 129 follow-up #2, 4.8 re-verify).
-    # The previous "eligible records survive parser drop list" check
-    # over-corrected: a reachable + fully-remediated host emits only
-    # `service` + `TLS1_x` protocol records (all dropped by the parser's
-    # INFO/OK severity rules) → 0 eligible → mis-flagged DEGRADED →
-    # auto-closer never credits coverage → remediation path silently
-    # fails for clean hosts. Verified empirically against a real 214-row
-    # testssl.json from test.commandcommcentral.com: the protocol +
-    # service records are all INFO/OK-severity, so finding-count can't
-    # separate "reachable + clean" from "unreachable."
+    # Completion-marker gate (round 4, 4.8 verify defect 3 fix).
+    # Round-3's "diagnostic wins unconditionally" rule was wrong: real
+    # complete testssl scans routinely carry one engine_problem WARN
+    # (OCSP hiccup, STARTTLS quirk) without being broken. Proven by
+    # the failing live heavy run #794 on demo.testfire.net — 195
+    # records, rc=0, full battery, mis-degraded by a single non-fatal
+    # WARN. The reliable trust axis is "did the test battery run to
+    # completion," and testssl tells us that directly with two
+    # end-of-run records:
     #
-    # The reliable signal is REACH, not findings:
-    #   - `service` record: protocol identification ("HTTPS" /
-    #     "STARTTLS" / etc.) — emitted as soon as testssl probes the
-    #     port and gets a response.
-    #   - `TLS1_x` / `SSLv2` / `SSLv3` records: protocol-offered tests.
-    #     Their PRESENCE means testssl completed enough handshakes to
-    #     test "is this protocol enabled?" Even an "offered=no" answer
-    #     at OK severity is reach evidence.
-    # Their parser-drop status (INFO/OK or in SCORECARD_IDS) doesn't
-    # matter — we're not asking "would this produce a FindingEvent,"
-    # we're asking "did testssl actually talk to the host."
+    #   `overall_grade` — the A/B/C/F letter grade derived from all
+    #                     other tests. Only emitted when scoring
+    #                     completes.
+    #   `scanTime`      — total runtime stamp. Only emitted at end-
+    #                     of-scan.
     #
-    # Diagnostic markers (`engine_problem`, `scanProblem`) always win:
-    # their presence means testssl logged a problem mid-scan, and we
-    # don't trust the verdict on what was missed — even if a partial
-    # reach record also appears. Conservative call.
+    # Either of these present means the scan ran to completion. We
+    # treat them as an OR (testssl variants / target classes don't
+    # always emit both; one is sufficient proof).
+    #
+    # Reach is still the necessary first axis: a JSON that never
+    # touched the host can't be valid-negative even if some completion
+    # field accidentally landed in the array.
+    #
+    # NOTE: testssl emits `TLS1` (not `TLS1_0`) for the TLS 1.0 probe.
+    # Round-3 had this wrong; fixed here.
     _REACH_IDS = {
         "service",
-        "TLS1_3", "TLS1_2", "TLS1_1", "TLS1_0",
+        "TLS1_3", "TLS1_2", "TLS1_1", "TLS1",
         "SSLv3", "SSLv2",
     }
+    _COMPLETION_IDS = {"overall_grade", "scanTime"}
 
-    has_diagnostic_marker = False
     has_reach_evidence = False
+    has_completion = False
     for rec in data:
         if not isinstance(rec, dict):
             continue
         rid = rec.get("id") or ""
-        if rid in ("engine_problem", "scanProblem"):
-            has_diagnostic_marker = True
         if rid in _REACH_IDS:
             has_reach_evidence = True
-
-    # Diagnostic marker wins unconditionally — partial scans with
-    # connection problems don't get credited as coverage. tool_
-    # diagnostic_records_only is the canonical "host unreachable /
-    # connection interrupted" signal.
-    if has_diagnostic_marker:
-        return True, "tool_diagnostic_records_only"
+        if rid in _COMPLETION_IDS:
+            has_completion = True
 
     if not has_reach_evidence:
-        # No service or TLS1_x/SSLv2/v3 record → testssl didn't reach
-        # the TLS stack at all. Either the JSON is malformed in a way
-        # the shape check missed, or the tool ran but emitted nothing
-        # we recognize as a reach signal. SAFE default: DEGRADED.
+        # No service / TLS1_x / SSLv2 / SSLv3 record → testssl didn't
+        # reach the TLS stack at all. Unreachable host or malformed
+        # output. SAFE default: DEGRADED. The legacy
+        # `tool_diagnostic_records_only` slug is gone — engine_problem-
+        # only output now lands here via no_reach_evidence (no service,
+        # no TLS1_x → no_reach_evidence is the correct + sufficient
+        # signal; the diagnostic-marker slug was a forensics nicety the
+        # real-world fix doesn't need).
         if rc != 0:
             return True, f"nonzero_rc_no_reach_evidence:{rc}"
         return True, "no_reach_evidence"
 
-    # Reach evidence present + no diagnostic marker → testssl actually
-    # talked to the host and completed at least the protocol-detect
-    # battery. Non-zero rc here is fine (testssl frequently returns
-    # rc!=0 on real findings; the reach gate is the trust signal).
-    # Zero LOW+ findings is also fine — that's the "fully remediated"
-    # state v1 exists to detect.
+    if not has_completion:
+        # Reached but no overall_grade / scanTime → scan was interrupted
+        # mid-battery. Even with reach records, we don't trust a
+        # truncated verdict on what was/wasn't checked. The truncation
+        # guard 4.8 explicitly called for.
+        return True, "scan_incomplete"
+
+    # has_reach AND has_completion → testssl ran the full battery
+    # against the host. Engine_problem / scanProblem records here are
+    # non-fatal diagnostic noise (the routine OCSP / STARTTLS hiccups
+    # in real scans); the completion records prove the test suite
+    # finished anyway. Non-zero rc is fine (testssl returns rc!=0 on
+    # real findings). Zero LOW+ findings is fine — that's the
+    # fully-remediated state v1 exists to detect.
     return False, ""
 
 
@@ -475,13 +487,15 @@ def run_testssl_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
 # FindingEvent-aware writer (the load-bearing P2 adapter)
 # ============================================================================
 
-def write_event_findings_and_artifacts(conn, ctx: HeavyScanContext, Json) -> tuple[int, int]:
-    """Persist ctx.findings (FindingEvent[]) + ctx.artifacts. Mirror
-    run_medium.write_findings_and_artifacts's structure, but read
-    finding_id + source FROM EACH FindingEvent rather than hardcoding
-    them. This is what makes a re-scan of a still-present testssl
-    finding bump the EXISTING source='testssl' backlog row instead of
-    minting a new source='commandsentry_heavy' row.
+def write_event_findings_and_artifacts(
+    conn, ctx: HeavyScanContext, Json, *, write_artifacts: bool = True
+) -> tuple[int, int]:
+    """Persist ctx.findings (FindingEvent[]) + (optionally) ctx.artifacts.
+    Mirrors run_medium.write_findings_and_artifacts's structure, but
+    reads finding_id + source FROM EACH FindingEvent rather than
+    hardcoding them. This is what makes a re-scan of a still-present
+    testssl finding bump the EXISTING source='testssl' backlog row
+    instead of minting a new source='commandsentry_heavy' row.
 
     ADR-001 scanner_version + derive_validation_status() stamping
     preserved — heavy findings start UNvalidated until P5's
@@ -489,6 +503,14 @@ def write_event_findings_and_artifacts(conn, ctx: HeavyScanContext, Json) -> tup
 
     Reuses the canonical UPSERT_FINDING_SQL + INSERT_ARTIFACT_SQL
     from run_medium so column shape can't drift.
+
+    write_artifacts (note 129 follow-up #3): controls whether the
+    artifact loop runs. Defaults True for the clean path. The degraded
+    path calls flush_artifacts_to_db separately (Task #21-style
+    pre-abort flush so forensics survive even if this write fails),
+    so it MUST pass write_artifacts=False here — otherwise both code
+    paths write the same artifacts and scan_run_artifacts ends up
+    with duplicate rows (the minor 4.8 flagged on heavy run #794).
     """
     # Local re-import — UPSERT_FINDING_SQL is module-private in run_medium.
     from run_medium import UPSERT_FINDING_SQL
@@ -548,18 +570,19 @@ def write_event_findings_and_artifacts(conn, ctx: HeavyScanContext, Json) -> tup
             else:
                 updated += 1
 
-        for tool_name, output_format, content_str in ctx.artifacts:
-            try:
-                content_obj = json.loads(content_str)
-            except Exception:
-                content_obj = {"raw": content_str}
-            cur.execute(INSERT_ARTIFACT_SQL, {
-                "scan_run_id": ctx.scan_run_id,
-                "tool_name": tool_name,
-                "output_format": output_format,
-                "size_bytes": len(content_str.encode("utf-8")),
-                "content_jsonb": Json(content_obj),
-            })
+        if write_artifacts:
+            for tool_name, output_format, content_str in ctx.artifacts:
+                try:
+                    content_obj = json.loads(content_str)
+                except Exception:
+                    content_obj = {"raw": content_str}
+                cur.execute(INSERT_ARTIFACT_SQL, {
+                    "scan_run_id": ctx.scan_run_id,
+                    "tool_name": tool_name,
+                    "output_format": output_format,
+                    "size_bytes": len(content_str.encode("utf-8")),
+                    "content_jsonb": Json(content_obj),
+                })
     return inserted, updated
 
 
@@ -814,8 +837,13 @@ def run(descriptor_path: str, dsn: str) -> int:
             # write_event_findings still runs in degraded mode so any
             # already-emitted findings get persisted (they'll get
             # scan_quality=degraded via STAMP_FINDINGS_DEGRADED_SQL).
+            # write_artifacts=False because flush_artifacts_to_db above
+            # already wrote them — pre-#3 the artifact loop ran twice,
+            # producing duplicate scan_run_artifacts rows per tool.
             try:
-                inserted, updated = write_event_findings_and_artifacts(conn, ctx, Json)
+                inserted, updated = write_event_findings_and_artifacts(
+                    conn, ctx, Json, write_artifacts=False,
+                )
             except Exception as write_err:
                 log(f"write in degraded path failed (non-fatal): {write_err!r}")
                 inserted, updated = 0, 0
