@@ -1,0 +1,67 @@
+-- ============================================================================
+-- MIGRATION — 2026-06-29c — note 129 round 7 follow-up
+--                          extend history_status_t to cover every
+--                          finding_status_t value
+--
+-- WHY:
+--   Round-7 commit cfe8406 added write_finding_history_for_scan_run,
+--   which INSERTs SELECT f.current_status (typed finding_status_t)
+--   into finding_history.status (typed history_status_t). Live heavy
+--   #805 crashed exit 1 because:
+--     (a) the two enums are distinct types with no implicit cast →
+--         INSERT throws → run_heavy's UPSERT-conn txn aborts → close-
+--         out never runs cleanly
+--     (b) history_status_t is missing 'wont_fix' and 'accepted_risk',
+--         which finding_status_t carries — even with a cast, an INSERT
+--         of those values would fail the enum check
+--
+--   This migration handles (b). The code-side ::text cast (committed
+--   alongside this migration) handles (a) — the assignment cast from
+--   text to history_status_t lets Postgres convert as long as the
+--   string is a valid enum value, which now includes wont_fix and
+--   accepted_risk.
+--
+-- ADD VALUE constraints:
+--   ALTER TYPE ... ADD VALUE cannot run inside a DO block or an
+--   explicit transaction (Postgres enum constraint). It must be
+--   top-level. This file deliberately has no BEGIN/COMMIT wrap; psql
+--   runs each statement in its own implicit txn under autocommit
+--   defaults. Mirrors the pattern in schema.sql L72:
+--     ALTER TYPE history_status_t ADD VALUE IF NOT EXISTS 'open';
+--
+-- IF NOT EXISTS makes the migration idempotent — safe to re-apply.
+-- ============================================================================
+
+ALTER TYPE public.history_status_t ADD VALUE IF NOT EXISTS 'wont_fix';
+ALTER TYPE public.history_status_t ADD VALUE IF NOT EXISTS 'accepted_risk';
+
+-- ============================================================================
+-- SANITY QUERIES — after migration applies.
+-- ============================================================================
+--
+-- 1) Confirm both values now in history_status_t:
+--      SELECT unnest(enum_range(NULL::public.history_status_t));
+--      -- expect: detected, confirmed, open, remediated,
+--      --         validated_remediated, regressed, false_positive,
+--      --         absent, wont_fix, accepted_risk
+--
+-- 2) Confirm finding_status_t ⊆ history_status_t now (set-equality
+--    on the names; finding_status_t has no 'absent' which is
+--    history-only — that's fine, write_finding_history_for_scan_run
+--    only writes current_status values, none of which is 'absent'):
+--      WITH fs AS (SELECT unnest(enum_range(NULL::public.finding_status_t)) AS v),
+--           hs AS (SELECT unnest(enum_range(NULL::public.history_status_t)) AS v)
+--      SELECT fs.v AS missing_in_history
+--        FROM fs LEFT JOIN hs ON hs.v::text = fs.v::text
+--       WHERE hs.v IS NULL;
+--      -- expect: zero rows
+--
+-- 3) Sanity-insert with each new value:
+--      INSERT INTO public.finding_history
+--        (finding_id, scan_id, observed_at, status)
+--      SELECT finding_id, 'enum-test-' || s, now(), s::history_status_t
+--        FROM public.findings, (VALUES ('wont_fix'), ('accepted_risk')) AS x(s)
+--       LIMIT 2
+--       ON CONFLICT (finding_id, scan_id) DO NOTHING;
+--      -- expect: 0 or more rows inserted (depending on collisions), no
+--      -- enum-value error.

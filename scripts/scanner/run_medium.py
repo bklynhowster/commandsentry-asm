@@ -3379,7 +3379,20 @@ SELECT
     f.finding_id,
     %(scan_run_id)s,
     now(),
-    f.current_status,
+    -- Round 7 follow-up: cast current_status to text. findings.current_status
+    -- is enum finding_status_t; finding_history.status is enum
+    -- history_status_t — two distinct types, no implicit cast.
+    -- Postgres has an assignment-cast from text → enum so the
+    -- target column will accept any text value that matches an
+    -- enum label. Migration 20260629c added 'wont_fix' +
+    -- 'accepted_risk' to history_status_t so every finding_status_t
+    -- value now has a matching history_status_t label.
+    -- ('absent' is history-only — write_finding_history never emits
+    -- it; it's reserved for offline reconciliation paths.)
+    f.current_status::text,
+    -- severity_at_scan is enum severity_t — SAME type as
+    -- findings.severity — so no cast needed (would be a no-op
+    -- round-trip if added).
     f.severity,
     %(notes)s
   FROM public.findings f
