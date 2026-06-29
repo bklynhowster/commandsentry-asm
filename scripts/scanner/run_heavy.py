@@ -258,38 +258,51 @@ def run_testssl(ctx: HeavyScanContext, work_dir: Path) -> tuple[int, Path, str, 
 def testssl_is_degraded(
     rc: int, jsonfile: Path, stdout: str, stderr: str
 ) -> tuple[bool, str]:
-    """SAFETY-CRITICAL — distinguishes a VALID NEGATIVE (host has clean
-    TLS / actionable findings — auto-closer can credit coverage) from a
-    DEGRADED run (timeout, binary missing, mid-handshake reset,
-    unparseable JSON, OR host-unreachable with only diagnostic records
-    → scan_run must NOT be 'complete'). The note-127 auto-closer treats
-    a complete scan whose tools_run includes 'testssl.sh' as evidence
-    of remediation on every previously-observed testssl finding for
-    that asset. A flaky-but-mislabeled-complete run → false-close of
-    live findings.
+    """SAFETY-CRITICAL — distinguishes a VALID NEGATIVE (host was reached
+    + TLS scanned — auto-closer can credit coverage) from a DEGRADED
+    run (timeout, binary missing, mid-handshake reset, unparseable JSON,
+    OR host-unreachable → scan_run must NOT be 'complete'). The note-127
+    auto-closer treats a complete scan whose tools_run includes
+    'testssl.sh' as evidence of remediation on every previously-observed
+    testssl finding for that asset. A flaky-but-mislabeled-complete run
+    → false-close of live findings.
 
-    Note 129 follow-up (4.8 verify of 87f09d4): JSON shape alone isn't
-    enough. When a backlog host is unreachable (transient net, VPN
-    egress, port 443 filtered), testssl emits ONLY 'engine_problem' /
-    'scanProblem' diagnostic records at WARN severity. The offline
-    parser (cs_parsers/testssl.py) drops those via SKIP_SEVERITIES +
-    SCORECARD_IDS → returns 0 events. Pre-fix this read as "rc=0 +
-    parseable non-empty array = valid negative" → complete → auto-
-    closer false-closes the whole backlog. SAFETY FIX: require POSITIVE
-    EVIDENCE (at least one record that would actually produce a
-    FindingEvent) before declaring valid-negative.
+    EVOLUTION:
+      - 87f09d4 — JSON shape only. Hole: engine_problem-only output
+        read as valid-negative.
+      - e9340ff — count records that survive the parser drop list as
+        positive evidence. Over-corrected: a reachable + fully-remediated
+        host emits only `service` + `TLS1_x` records (all dropped by
+        parser INFO/OK rules) → 0 eligible → mis-flagged DEGRADED →
+        auto-closer never credits coverage → backlog for clean hosts
+        never clears (silent fail on the exact remediation path v1
+        exists to enable).
+      - THIS — discriminate on REACH, not findings. testssl records
+        whose mere PRESENCE proves the host was scanned:
+          `service`             — protocol identification (always
+                                  emitted on a reached host)
+          `TLS1_3` / `TLS1_2`   — protocol-offered tests (the
+          `TLS1_1` / `TLS1_0`     "did we even speak TLS to this
+          `SSLv3`  / `SSLv2`      host" signal)
+        Whether they survive the FindingEvent drop list is irrelevant
+        — their presence is the reach proof.
 
     Detection order:
       - Tool not found / binary missing                    → DEGRADED
       - Subprocess timed out (rc == 124)                   → DEGRADED
       - Output file missing / 0 bytes / unparseable JSON   → DEGRADED
       - Non-list root (e.g. --jsonfile-pretty mistake)     → DEGRADED
-      - JSON parsed but ZERO records would survive the     → DEGRADED
-        parser's drop list (no positive evidence the host    (`tool_diagnostic_records_only`
-        was actually reached + scanned)                       / `no_eligible_records`
-                                                              / `nonzero_rc_no_eligible_records:N`)
-      - JSON parsed + at least one eligible record         → OK
-        (matches what parse_testssl_file would emit)
+      - Any `engine_problem` / `scanProblem` record        → DEGRADED
+        present (diagnostic markers — testssl logged a       (`tool_diagnostic_records_only`)
+        connection problem; we can't trust the verdict
+        even if a partial result also appears)
+      - No reach evidence at all (no `service`, no         → DEGRADED
+        `TLS1_x`, no `SSLv2`/`SSLv3` record)                 (`no_reach_evidence`
+                                                              / `nonzero_rc_no_reach_evidence:N`)
+      - Reach evidence present + no diagnostic marker      → OK
+        (host was reached + TLS scanned — clean or with
+        findings, both are valid-negative for the
+        auto-closer's purposes)
 
     Returns (is_degraded, reason_slug). Empty slug iff not degraded.
     """
@@ -331,60 +344,72 @@ def testssl_is_degraded(
         # we don't trust this output as a clean scan.
         return True, "unexpected_json_shape"
 
-    # Positive-evidence gate (note 129 follow-up, 4.8 verify safety fix).
-    # Mirror parse_testssl_file's drop rules EXACTLY so we can answer
-    # "would this JSON produce any FindingEvent?" without re-running
-    # the parser. If the answer is no, the run did not actually scan
-    # TLS — either the host was unreachable (engine_problem /
-    # scanProblem records only), the JSON is meta-only (overall_grade
-    # + service), or some edge testssl chose not to emit anything
-    # actionable. In all three cases, crediting 'testssl.sh' coverage
-    # to the auto-closer would be wrong: it would treat a non-scan
-    # as scan-confirms-no-findings → false-close the entire prior
-    # backlog for the asset.
+    # Reach-based discrimination (note 129 follow-up #2, 4.8 re-verify).
+    # The previous "eligible records survive parser drop list" check
+    # over-corrected: a reachable + fully-remediated host emits only
+    # `service` + `TLS1_x` protocol records (all dropped by the parser's
+    # INFO/OK severity rules) → 0 eligible → mis-flagged DEGRADED →
+    # auto-closer never credits coverage → remediation path silently
+    # fails for clean hosts. Verified empirically against a real 214-row
+    # testssl.json from test.commandcommcentral.com: the protocol +
+    # service records are all INFO/OK-severity, so finding-count can't
+    # separate "reachable + clean" from "unreachable."
     #
-    # KEEP IN SYNC with cs_parsers/testssl.py SKIP_SEVERITIES +
-    # SCORECARD_IDS. Mismatch here means the live detector either
-    # under-counts (over-degrades clean scans) or over-counts (lets
-    # diagnostic-only JSON through as valid-negative).
-    _SKIP_SEVERITIES = {"WARN", "OK", "DEBUG", "INFO"}
-    _SCORECARD_IDS = {
-        "overall_grade", "overall_grade_warning",
-        "service",                       # protocol identification, not a finding
-        "engine_problem", "scanProblem", # tool diagnostics — UNREACHABLE marker
+    # The reliable signal is REACH, not findings:
+    #   - `service` record: protocol identification ("HTTPS" /
+    #     "STARTTLS" / etc.) — emitted as soon as testssl probes the
+    #     port and gets a response.
+    #   - `TLS1_x` / `SSLv2` / `SSLv3` records: protocol-offered tests.
+    #     Their PRESENCE means testssl completed enough handshakes to
+    #     test "is this protocol enabled?" Even an "offered=no" answer
+    #     at OK severity is reach evidence.
+    # Their parser-drop status (INFO/OK or in SCORECARD_IDS) doesn't
+    # matter — we're not asking "would this produce a FindingEvent,"
+    # we're asking "did testssl actually talk to the host."
+    #
+    # Diagnostic markers (`engine_problem`, `scanProblem`) always win:
+    # their presence means testssl logged a problem mid-scan, and we
+    # don't trust the verdict on what was missed — even if a partial
+    # reach record also appears. Conservative call.
+    _REACH_IDS = {
+        "service",
+        "TLS1_3", "TLS1_2", "TLS1_1", "TLS1_0",
+        "SSLv3", "SSLv2",
     }
 
-    eligible = 0
     has_diagnostic_marker = False
+    has_reach_evidence = False
     for rec in data:
         if not isinstance(rec, dict):
             continue
         rid = rec.get("id") or ""
         if rid in ("engine_problem", "scanProblem"):
             has_diagnostic_marker = True
-        sev = (rec.get("severity") or "").strip().upper()
-        if sev in _SKIP_SEVERITIES:
-            continue
-        if rid in _SCORECARD_IDS:
-            continue
-        eligible += 1
+        if rid in _REACH_IDS:
+            has_reach_evidence = True
 
-    if eligible == 0:
-        # Forensics-friendly slug. tool_diagnostic_records_only is the
-        # canonical "host unreachable" signal — engine_problem /
-        # scanProblem records are testssl's way of saying "I couldn't
-        # talk to the target."
-        if has_diagnostic_marker:
-            return True, "tool_diagnostic_records_only"
+    # Diagnostic marker wins unconditionally — partial scans with
+    # connection problems don't get credited as coverage. tool_
+    # diagnostic_records_only is the canonical "host unreachable /
+    # connection interrupted" signal.
+    if has_diagnostic_marker:
+        return True, "tool_diagnostic_records_only"
+
+    if not has_reach_evidence:
+        # No service or TLS1_x/SSLv2/v3 record → testssl didn't reach
+        # the TLS stack at all. Either the JSON is malformed in a way
+        # the shape check missed, or the tool ran but emitted nothing
+        # we recognize as a reach signal. SAFE default: DEGRADED.
         if rc != 0:
-            return True, f"nonzero_rc_no_eligible_records:{rc}"
-        return True, "no_eligible_records"
+            return True, f"nonzero_rc_no_reach_evidence:{rc}"
+        return True, "no_reach_evidence"
 
-    # At least one record survives the parser's drop list → testssl
-    # actually evaluated TLS and produced something parse_testssl_file
-    # would emit. Non-zero rc here is fine — testssl frequently returns
-    # rc!=0 on findings; the eligible-records gate above is the real
-    # signal.
+    # Reach evidence present + no diagnostic marker → testssl actually
+    # talked to the host and completed at least the protocol-detect
+    # battery. Non-zero rc here is fine (testssl frequently returns
+    # rc!=0 on real findings; the reach gate is the trust signal).
+    # Zero LOW+ findings is also fine — that's the "fully remediated"
+    # state v1 exists to detect.
     return False, ""
 
 
