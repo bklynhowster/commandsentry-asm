@@ -587,190 +587,42 @@ def write_event_findings_and_artifacts(
 
 
 # ============================================================================
-# Regress-on-observed (note 129 follow-up #4 — P6 QA fix)
+# Regress-on-observed (centralized via SQL helper — round 6)
 # ============================================================================
 #
-# Heavy v1 inherits a regression-handling gap from the rest of the
-# scanner stack. The medium UPSERT_FINDING_SQL's ON CONFLICT preserves
-# the existing terminal status when a remediated finding is re-detected
-# (the CASE WHEN findings.current_status IN ('remediated', ...) THEN
-# findings.current_status branch). And delta_close_for_scan_run only
-# touches detected/confirmed/open/regressed — it has no regress branch
-# either. So a tool that directly re-detects a remediated finding leaves
-# the remediated status in place. Medium has the same gap. Heavy
-# inheriting it is unsafe because heavy is the tier we use to clear the
-# stranded backlog: a regressed CRITICAL that gets re-emitted but stays
-# 'remediated' is a real returned issue silently masked.
+# Note 129 round 6 / migration 20260629a: the regression logic was
+# centralized into a SQL function that both medium + heavy call —
+# regress_observed_for_scan_run(p_scan_run_id, p_source). It mirrors
+# delta_close_for_scan_run as a structural sibling:
+#   delta_close:  current_status IN open      AND last_seen <> this
+#                 → mark remediated
+#   regress:      current_status IN remediated AND last_seen =  this
+#                 → mark regressed (+ clear remediated_at)
 #
-# Surfaced live by P6 QA on ftp.sciimage.com (scan_run
-# a1f80994-5350-4867-93b7-44b321f4036c): the CRITICAL cert_chain_of_
-# trust finding was currently remediated, this scan re-observed it
-# (last_observed_at bumped), but the status stayed remediated.
-# Verified live — the chain is genuinely broken (incomplete chain),
-# so this is a REAL returned CRITICAL being masked.
+# Both clauses are mutually exclusive (open-set vs remediated-set, <>
+# vs =) so disjoint, order-independent, and idempotent. The SQL fn
+# writes one admin_audit_log row per flip (rule=
+# 'regress_observed_for_scan_run_v1') and captures the prior status
+# via a CTE so the audit before_state is accurate.
 #
-# THE FIX — narrow, evidence-positive:
-#   For each finding in ctx.findings (i.e., actually re-observed by
-#   this scan) whose CURRENT db status is remediated or
-#   validated_remediated, flip current_status='regressed' and clear
-#   remediated_at. Honors note-126 invariant
-#   (remediated_at NOT NULL iff status IN remediated/validated_remediated;
-#   regressed → must be NULL).
+# Heavy's previous Python helper (regress_observed_remediated +
+# _SELECT_OBSERVED_REMEDIATED_SQL + _REGRESS_FINDING_SQL) was retired
+# in this round — the SQL function is the single source of truth.
+# Call site lives in run() below: clean path only, one SELECT per
+# distinct source observed in ctx.findings (today: 'testssl'; future
+# net-depth P4 adds 'commandsentry_heavy').
 #
-# WHY OK to do here but NOT to add a close_observed counterpart:
-#   Reopening acts on POSITIVE evidence (we directly emitted this
-#   finding). Closing would require INFERRED evidence (absence). The
-#   asymmetry is the safety property — note-127's auto-closer is the
-#   authority on closure because it reasons about coverage maps; the
-#   live runner is the authority on observation. Clean split:
-#     run_heavy regress = "I saw it"
-#     note-127 close    = "I didn't"
+# CLEAN-PATH ONLY discipline preserved — never call from the
+# degraded except branch. A degraded scan isn't trustworthy evidence
+# of presence (it can't credit "I saw it" against an existing
+# remediated finding).
 #
-# SCOPE STRICTLY to ctx.findings's finding_ids. Never touch a finding
-# the scan didn't see — that would be inferring absence from absence,
-# which is note-127's territory.
-#
-# CLEAN-PATH ONLY. A degraded scan isn't trustworthy evidence of
-# presence; calling this from the degraded except branch would let a
-# flaky run mark a remediated finding regressed on partial evidence.
-# The clean-path-only discipline mirrors note-127's "complete scans
-# only" rule from the other direction.
-#
-# AUDIT in admin_audit_log (action='auto_regress_observed') mirroring
-# the note-127 audit shape. finding_history NOT written here, same
-# reason as note-127: its scan_id is NOT NULL + FK-constrained to the
-# legacy scans table which scan_run-driven flows have no counterpart
-# in. admin_audit_log carries the durable trail.
-#
-# MEDIUM-PARITY FLAG (for 4.8 / Howie): medium has the same gap. A
-# medium scan that re-detects a remediated finding via nuclei /
-# nikto / ffuf also leaves it remediated. If we want this regress
-# behavior centralized rather than heavy-only, it could land as a
-# SQL helper (regress_observed_for_scan_run(scan_run_id, observed_
-# finding_ids[])) that both run_medium and run_heavy call. Deferred
-# to 4.8's call after this lands and reproves on ftp.sciimage.com.
-
-# Statuses considered "remediated" for the invariant — match note-126.
-_REMEDIATED_STATUSES = ("remediated", "validated_remediated")
-
-# Read query: pull current_status + remediated_at for each finding the
-# scan re-observed. WHERE finding_id = ANY(%(ids)s) takes a list and
-# does one round-trip vs N. Filtered to the remediated-set early so
-# we only carry rows we might flip — keeps the audit insert small.
-_SELECT_OBSERVED_REMEDIATED_SQL = """
-SELECT finding_id, asset_id, source::text AS source,
-       current_status::text AS current_status,
-       remediated_at
-  FROM public.findings
- WHERE finding_id = ANY(%(finding_ids)s)
-   AND current_status IN ('remediated', 'validated_remediated');
-"""
-
-# Flip query: UPDATE WITH a race guard (same-status AND clause) so a
-# concurrent close-from-elsewhere can't be clobbered. RETURNING
-# preserves the previous state for the audit row's before_state.
-_REGRESS_FINDING_SQL = """
-UPDATE public.findings
-   SET current_status = 'regressed',
-       remediated_at  = NULL,
-       updated_at     = now()
- WHERE finding_id = %(finding_id)s
-   AND current_status IN ('remediated', 'validated_remediated')
-RETURNING finding_id;
-"""
-
-
-def regress_observed_remediated(conn, ctx: HeavyScanContext, Json) -> int:
-    """Flip re-observed remediated findings to 'regressed'. CLEAN-PATH
-    ONLY — do NOT call from the degraded except branch (a degraded
-    scan isn't trustworthy evidence of presence). Returns the count
-    of findings flipped.
-
-    Per-finding flow:
-      1. SELECT the subset of ctx.findings currently in
-         (remediated, validated_remediated).
-      2. For each, UPDATE to status='regressed' + remediated_at=NULL,
-         with a same-status race guard.
-      3. INSERT one admin_audit_log row per flip with the note-127
-         audit shape.
-
-    No-op if ctx.findings is empty (early return — saves a round trip
-    on degraded-path-style invocations that the caller shouldn't make
-    but that we defensively handle).
-    """
-    if not ctx.findings:
-        return 0
-    # Extract finding_ids — ctx.findings is FindingEvent[] per the
-    # heavy identity-unification decision (note 129).
-    finding_ids = [ev.finding_id for ev in ctx.findings]
-
-    with conn.cursor() as cur:
-        cur.execute(
-            _SELECT_OBSERVED_REMEDIATED_SQL,
-            {"finding_ids": finding_ids},
-        )
-        candidates = list(cur.fetchall())
-
-        if not candidates:
-            return 0
-
-        flipped = 0
-        for row in candidates:
-            # row may be dict-row or tuple depending on conn factory.
-            # Read by name to match the dashboard / portal pattern.
-            fid = row["finding_id"]
-            prev_status = row["current_status"]
-            prev_remediated_at = row["remediated_at"]
-            asset_id = row["asset_id"]
-            source = row["source"]
-
-            cur.execute(_REGRESS_FINDING_SQL, {"finding_id": fid})
-            ret = cur.fetchone()
-            if ret is None:
-                # Race guard fired — something else flipped this row
-                # out of the remediated set between our SELECT and
-                # UPDATE. Skip the audit; the other actor is
-                # responsible for that row's audit trail.
-                continue
-            flipped += 1
-
-            cur.execute(
-                """
-                INSERT INTO public.admin_audit_log (
-                    actor_user_id, action, target_user_id, target_email,
-                    before_state, after_state, details
-                )
-                VALUES (
-                    NULL, 'auto_regress_observed', NULL, NULL,
-                    %(before_state)s, %(after_state)s, %(details)s
-                );
-                """,
-                {
-                    "before_state": Json({
-                        "current_status": prev_status,
-                        "remediated_at": (
-                            prev_remediated_at.isoformat()
-                            if prev_remediated_at is not None
-                               and hasattr(prev_remediated_at, "isoformat")
-                            else prev_remediated_at
-                        ),
-                    }),
-                    "after_state": Json({
-                        "current_status": "regressed",
-                        "remediated_at": None,
-                    }),
-                    "details": Json({
-                        "finding_id": fid,
-                        "asset_id": asset_id,
-                        "source": source,
-                        "scan_run_id": ctx.scan_run_id,
-                        "scan_intensity": ctx.intensity,
-                        "tools_run": list(ctx.tools_run),
-                        "rule": "note_129_heavy_regress_observed_v1",
-                    }),
-                },
-            )
-        return flipped
+# Why scope per-source: a heavy scan emits findings under multiple
+# sources (canonical 'testssl' for TLS depth, 'commandsentry_heavy'
+# for net depth). Source-scoping the SQL call mirrors delta_close's
+# discipline — closes/reopens stay confined to what THIS source
+# actually emitted, so an unrelated source's findings can't be
+# touched by accident.
 
 
 # ============================================================================
@@ -1002,19 +854,41 @@ def run(descriptor_path: str, dsn: str) -> int:
         inserted, updated = write_event_findings_and_artifacts(conn, ctx, Json)
         log(f"persisted: {inserted} new + {updated} re-observed "
             f"({inserted + updated} total)")
-        # Note 129 follow-up #4 (P6 QA fix) — regress-on-observed.
-        # CLEAN PATH ONLY. After the UPSERT, any finding in
-        # ctx.findings whose existing db status is remediated/
-        # validated_remediated gets flipped to regressed + remediated_at
-        # cleared (honors note 126 invariant). Scoped strictly to
-        # ctx.findings — never touches findings the scan didn't see
-        # (that's note-127's job). NEVER call this from the degraded
-        # except branch below — see helper docstring.
-        regressed = regress_observed_remediated(conn, ctx, Json)
-        if regressed:
-            log(f"regress-on-observed: {regressed} previously-remediated "
-                f"finding(s) re-emitted → flipped to 'regressed', "
-                f"remediated_at cleared (audit rows in admin_audit_log)")
+        # Note 129 round 6 — centralized regress-on-observed via the
+        # SQL helper regress_observed_for_scan_run (migration
+        # 20260629a). One call per distinct source observed in
+        # ctx.findings — source-scoped to mirror delta_close's
+        # discipline so each source's reopen stays confined to its
+        # own findings (a heavy scan can emit both 'testssl' and
+        # future 'commandsentry_heavy' findings; each gets its own
+        # gate). CLEAN PATH ONLY — the except DegradedRunError
+        # branch below explicitly does NOT call this. The SQL
+        # function reads findings.last_seen_scan_run (stamped by
+        # the UPSERT in write_event_findings_and_artifacts) to
+        # identify what this scan actually re-emitted, and writes
+        # one admin_audit_log row per flip.
+        distinct_sources = sorted({ev.source for ev in ctx.findings})
+        total_regressed = 0
+        for src in distinct_sources:
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "SELECT regress_observed_for_scan_run(%s, %s) AS n_regressed",
+                    (ctx.scan_run_id, src),
+                )
+                _rg_row = cur.fetchone()
+                n_regressed = (_rg_row["n_regressed"] if _rg_row else 0) or 0
+            finally:
+                cur.close()
+            if n_regressed:
+                log(f"regress-on-observed[{src}]: {n_regressed} previously-"
+                    f"remediated finding(s) re-emitted → flipped to "
+                    f"'regressed', remediated_at cleared (audit rows in "
+                    f"admin_audit_log)")
+                total_regressed += n_regressed
+        if total_regressed == 0 and distinct_sources:
+            log(f"regress-on-observed: 0 flipped across sources "
+                f"{distinct_sources} (no returned remediated findings)")
         close_out_heavy(conn, ctx, inserted, updated, Json)
         conn.commit()
         log("scan_run + scan_queue marked complete.")

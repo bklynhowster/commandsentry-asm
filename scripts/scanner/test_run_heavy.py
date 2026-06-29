@@ -32,7 +32,7 @@ from pathlib import Path
 # Ensure module is importable when run from anywhere.
 sys.path.insert(0, str(Path(__file__).parent))
 
-from run_heavy import testssl_is_degraded, regress_observed_remediated
+from run_heavy import testssl_is_degraded
 
 
 # ─── testssl_is_degraded — VALID NEGATIVE cases (must NOT be degraded) ──
@@ -410,300 +410,31 @@ def test_reach_truncated_with_engine_problem_IS_degraded():
         p.unlink()
 
 
-# ─── regress_observed_remediated — note 129 follow-up #4 (P6 QA fix) ────
+# ─── regress-on-observed (round 6 — centralized SQL helper) ────────────
 #
-# Helper unit-tests using a mock psycopg cursor. Verifies the four
-# gates 4.8 called out:
-#   (a) re-observe a remediated finding → flips to regressed,
-#       remediated_at cleared, audit row inserted
-#   (b) re-observe an open/detected finding → unchanged
-#   (c) a finding NOT in ctx.findings → not touched (scoped writes)
-#   (d) degraded run → no regression applied (verified by call-site
-#       review — the helper is only invoked from the clean path in
-#       run(), never from the except DegradedRunError branch; no
-#       unit test needed for path-level discipline)
-
-
-class _FakeCursor:
-    """Minimal stand-in for a psycopg cursor. Records each execute()
-    call as (sql_text, params); fetch* return canned rows seeded by
-    the test. Supports the context-manager protocol. Doesn't try to
-    actually parse SQL — tests assert against `.calls`.
-    """
-
-    def __init__(self, canned_select_rows=None):
-        self.calls: list[tuple[str, object]] = []
-        self._canned_select = list(canned_select_rows or [])
-        # Queue of canned RETURNING row results for UPDATE statements
-        # (one per expected flip). Drained left-to-right as UPDATE
-        # statements execute. Race-guard tests stuff a `None` here
-        # to simulate "row no longer in the remediated set."
-        self._update_returning_queue: list[dict | None] = []
-        self._last_op: str = ""
-        self._last_result: list[dict] = []
-
-    def queue_update_returning(self, row):
-        """Test helper — append a canned row for the next UPDATE's
-        RETURNING fetchone(). Pass None to simulate the race-guard
-        fire (UPDATE matched nothing)."""
-        self._update_returning_queue.append(row)
-
-    def execute(self, sql, params=None):
-        self.calls.append((sql, params))
-        sql_upper = sql.lstrip().upper()
-        if sql_upper.startswith("SELECT"):
-            self._last_op = "select"
-            self._last_result = list(self._canned_select)
-        elif sql_upper.startswith("UPDATE"):
-            self._last_op = "update"
-            if self._update_returning_queue:
-                ret = self._update_returning_queue.pop(0)
-                self._last_result = [ret] if ret is not None else []
-            else:
-                # Default: assume the update succeeded.
-                fid = (params or {}).get("finding_id", "unknown")
-                self._last_result = [{"finding_id": fid}]
-        elif sql_upper.startswith("INSERT"):
-            self._last_op = "insert"
-            self._last_result = []
-        else:
-            self._last_op = "other"
-            self._last_result = []
-
-    def fetchall(self):
-        return list(self._last_result)
-
-    def fetchone(self):
-        rows = list(self._last_result)
-        return rows[0] if rows else None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        return False
-
-
-class _FakeConn:
-    def __init__(self, canned_select_rows=None):
-        self._cursor = _FakeCursor(canned_select_rows)
-
-    def cursor(self):
-        return self._cursor
-
-
-class _FakeJson:
-    """Minimal stand-in for psycopg.types.json.Json — stores the
-    wrapped value for inspection in tests."""
-
-    def __init__(self, value):
-        self.value = value
-
-
-class _FakeFindingEvent:
-    """Minimal FindingEvent-like object — only needs finding_id for
-    the regress helper. Avoids dragging in the full dataclass dep."""
-
-    def __init__(self, finding_id):
-        self.finding_id = finding_id
-
-
-class _FakeHeavyContext:
-    """Minimal stand-in for HeavyScanContext — only the fields
-    regress_observed_remediated reads."""
-
-    def __init__(self, finding_ids, scan_run_id="run-1", intensity="heavy",
-                 tools_run=None):
-        self.findings = [_FakeFindingEvent(fid) for fid in finding_ids]
-        self.scan_run_id = scan_run_id
-        self.intensity = intensity
-        self.tools_run = list(tools_run or ["testssl.sh"])
-
-
-def _count_calls(cursor, sql_prefix):
-    """How many recorded execute() calls start with sql_prefix?"""
-    pfx = sql_prefix.lstrip().upper()
-    return sum(
-        1 for sql, _params in cursor.calls
-        if sql.lstrip().upper().startswith(pfx)
-    )
-
-
-def test_regress_remediated_finding_is_flipped():
-    """(a) Re-observed finding currently 'remediated' → UPDATE fires to
-    flip status='regressed' + remediated_at=NULL, and one
-    admin_audit_log INSERT fires with action='auto_regress_observed'.
-    Helper returns count=1.
-    """
-    canned = [{
-        "finding_id": "asset.example.com:testssl:cert_chain_of_trust:abc1234",
-        "asset_id": "asset.example.com",
-        "source": "testssl",
-        "current_status": "remediated",
-        "remediated_at": None,
-    }]
-    conn = _FakeConn(canned_select_rows=canned)
-    ctx = _FakeHeavyContext(
-        finding_ids=["asset.example.com:testssl:cert_chain_of_trust:abc1234"],
-    )
-
-    flipped = regress_observed_remediated(conn, ctx, _FakeJson)
-    assert flipped == 1, f"expected 1 flip, got {flipped}"
-
-    cur = conn._cursor
-    # Exactly one SELECT (the scoped read), one UPDATE (the flip), one
-    # INSERT (the audit row).
-    assert _count_calls(cur, "SELECT") == 1
-    assert _count_calls(cur, "UPDATE") == 1
-    assert _count_calls(cur, "INSERT") == 1
-
-    # The UPDATE targets the right finding_id and matches the regress SQL
-    update_calls = [
-        (sql, params) for sql, params in cur.calls
-        if sql.lstrip().upper().startswith("UPDATE")
-    ]
-    update_sql, update_params = update_calls[0]
-    assert "current_status = 'regressed'" in update_sql
-    assert "remediated_at  = NULL" in update_sql or "remediated_at = NULL" in update_sql
-    assert update_params["finding_id"] == canned[0]["finding_id"]
-
-    # The audit row before_state captures the prior remediated status,
-    # after_state captures the flipped regressed state. action literal
-    # lives in the SQL string itself.
-    insert_calls = [
-        (sql, params) for sql, params in cur.calls
-        if sql.lstrip().upper().startswith("INSERT")
-    ]
-    audit_sql, audit_params = insert_calls[0]
-    assert "auto_regress_observed" in audit_sql, (
-        "audit row must use action='auto_regress_observed' per note 127 mirror"
-    )
-    # before_state wraps the prior status in our _FakeJson stub
-    before = audit_params["before_state"].value
-    assert before["current_status"] == "remediated"
-    after = audit_params["after_state"].value
-    assert after["current_status"] == "regressed"
-    assert after["remediated_at"] is None
-    # details payload carries the forensics fields used to grep
-    # admin_audit_log later.
-    details = audit_params["details"].value
-    assert details["finding_id"] == canned[0]["finding_id"]
-    assert details["scan_run_id"] == ctx.scan_run_id
-    assert details["source"] == "testssl"
-    assert details["rule"] == "note_129_heavy_regress_observed_v1"
-
-
-def test_regress_validated_remediated_finding_is_flipped():
-    """Variant of (a) — validated_remediated is also in the invariant
-    remediated-set per note 126. Same flip behavior.
-    """
-    canned = [{
-        "finding_id": "asset.example.com:testssl:hsts:def5678",
-        "asset_id": "asset.example.com",
-        "source": "testssl",
-        "current_status": "validated_remediated",
-        "remediated_at": None,
-    }]
-    conn = _FakeConn(canned_select_rows=canned)
-    ctx = _FakeHeavyContext(
-        finding_ids=["asset.example.com:testssl:hsts:def5678"],
-    )
-    flipped = regress_observed_remediated(conn, ctx, _FakeJson)
-    assert flipped == 1, f"expected 1 flip, got {flipped}"
-
-
-def test_regress_open_finding_is_not_flipped():
-    """(b) Re-observed finding currently 'open' → SELECT returns no
-    candidates (the SQL filters by current_status IN remediated set),
-    no UPDATE fires, no audit row. Helper returns 0.
-    """
-    # Simulate the SELECT returning empty — the actual DB query
-    # filters by current_status IN (remediated, validated_remediated),
-    # so an 'open' finding wouldn't show up.
-    conn = _FakeConn(canned_select_rows=[])
-    ctx = _FakeHeavyContext(
-        finding_ids=["asset.example.com:testssl:cipher-tls12:111"],
-    )
-    flipped = regress_observed_remediated(conn, ctx, _FakeJson)
-    assert flipped == 0, f"expected 0 flips, got {flipped}"
-
-    cur = conn._cursor
-    # One SELECT to check, zero UPDATEs, zero INSERTs.
-    assert _count_calls(cur, "SELECT") == 1
-    assert _count_calls(cur, "UPDATE") == 0
-    assert _count_calls(cur, "INSERT") == 0
-
-
-def test_regress_does_not_touch_findings_not_in_ctx():
-    """(c) The SELECT is scoped by finding_id = ANY(%(finding_ids)s)
-    — verify the params carry only ctx.findings's ids. A finding the
-    scan didn't see can't be touched because it's never queried.
-    """
-    canned = []  # whatever the DB returns is irrelevant for this check
-    conn = _FakeConn(canned_select_rows=canned)
-    ctx = _FakeHeavyContext(
-        finding_ids=["fid-emitted-1", "fid-emitted-2"],
-    )
-    regress_observed_remediated(conn, ctx, _FakeJson)
-
-    cur = conn._cursor
-    select_calls = [
-        (sql, params) for sql, params in cur.calls
-        if sql.lstrip().upper().startswith("SELECT")
-    ]
-    assert len(select_calls) == 1
-    _select_sql, select_params = select_calls[0]
-    assert select_params["finding_ids"] == ["fid-emitted-1", "fid-emitted-2"]
-    # The scoped read is the only protection against false-regressing
-    # findings not in ctx.findings — confirm no other UPDATE / INSERT
-    # touched unrelated rows.
-    assert _count_calls(cur, "UPDATE") == 0
-    assert _count_calls(cur, "INSERT") == 0
-
-
-def test_regress_empty_findings_is_noop():
-    """Defensive: empty ctx.findings → zero round trips, returns 0.
-    Protects against the (improper) degraded-path-style invocation we
-    document as forbidden but defensively handle.
-    """
-    conn = _FakeConn(canned_select_rows=[])
-    ctx = _FakeHeavyContext(finding_ids=[])
-    flipped = regress_observed_remediated(conn, ctx, _FakeJson)
-    assert flipped == 0
-    cur = conn._cursor
-    assert len(cur.calls) == 0, (
-        f"empty ctx.findings should be a no-op, got {len(cur.calls)} calls"
-    )
-
-
-def test_regress_race_guard_skips_audit_when_update_returns_empty():
-    """Belt+suspenders: between our SELECT and UPDATE, something else
-    flipped the row out of the remediated set. UPDATE WHERE +
-    current_status IN (remediated, validated_remediated) returns no
-    row. We do NOT emit an audit row for that finding.
-    """
-    canned = [{
-        "finding_id": "fid-race",
-        "asset_id": "asset.example.com",
-        "source": "testssl",
-        "current_status": "remediated",
-        "remediated_at": None,
-    }]
-    conn = _FakeConn(canned_select_rows=canned)
-    ctx = _FakeHeavyContext(finding_ids=["fid-race"])
-    # Queue None for the UPDATE's RETURNING fetchone → simulate the
-    # race guard firing.
-    conn._cursor.queue_update_returning(None)
-
-    flipped = regress_observed_remediated(conn, ctx, _FakeJson)
-    assert flipped == 0, "race-guard fire must not count as flipped"
-
-    cur = conn._cursor
-    # SELECT + UPDATE both fired, but no audit INSERT because the
-    # race guard caught us.
-    assert _count_calls(cur, "SELECT") == 1
-    assert _count_calls(cur, "UPDATE") == 1
-    assert _count_calls(cur, "INSERT") == 0
+# Note 129 round 6: regression logic moved from a Python helper in
+# run_heavy to a shared SQL function (migration 20260629a)
+# regress_observed_for_scan_run(scan_run_id, source) that both medium
+# AND heavy call — mirror of delta_close_for_scan_run.
+#
+# Round-4's Python-helper unit tests + mock-cursor scaffolding were
+# retired with the helper. The SQL fn is the single source of truth
+# now; its idempotency / disjoint-from-delta_close / 126-invariant
+# properties live in the migration body + comment block. 4.8's
+# live-verify gates (REGRESSION_CENTRALIZATION_SPEC.md):
+#   1. Re-run heavy on ftp.sciimage.com → cert_chain_of_trust stays
+#      regressed, NO new auto_regress_observed audit row (idempotency).
+#   2. Engineer a medium remediated→re-observe case → flips to
+#      regressed + remediated_at cleared + one audit row, nothing
+#      unseen got touched.
+#   3. Confirm heavy still flips a freshly-engineered remediated
+#      testssl finding (parity with the retired Python helper —
+#      same behavior via the new shared path).
+#
+# Unit-test surface in this file narrows to testssl_is_degraded
+# (above). DB-coupled tests would force a Supabase dep into the
+# suite; the migration's sanity-queries section + 4.8's gates cover
+# the function-body verification.
 
 
 # ─── Test driver — bare-Python fallback when pytest isn't installed ─────

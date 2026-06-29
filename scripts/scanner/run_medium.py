@@ -3385,9 +3385,31 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
                     f"(open, not re-observed this clean scan)")
             else:
                 log("delta-close: 0 closed (nothing went stale this scan)")
+
+            # Note 129 round 6 — sibling reopen path. delta_close handles
+            # "open + not seen → remediated"; regress_observed_for_scan_run
+            # handles the inverse "remediated + seen → regressed" (notes
+            # 126 invariant: remediated_at cleared on the flip). Disjoint
+            # WHERE clauses (open-set vs remediated-set, <> vs =) so
+            # order-independent and idempotent — once regressed, subsequent
+            # scans skip the row. Same source token + clean-path gate as
+            # the close above.
+            cur.execute(
+                "SELECT regress_observed_for_scan_run(%s, %s) AS n_regressed",
+                (ctx.scan_run_id, f"commandsentry_{ctx.intensity}"),
+            )
+            _rg_row = cur.fetchone()
+            n_regressed = (_rg_row["n_regressed"] if _rg_row else 0) or 0
+            if n_regressed:
+                log(f"regress-on-observed: {n_regressed} previously-remediated "
+                    f"finding(s) re-emitted → flipped to 'regressed', "
+                    f"remediated_at cleared (audit rows in admin_audit_log)")
+            else:
+                log("regress-on-observed: 0 flipped (no returned remediated findings)")
         else:
-            log("delta-close: skipped — scan not fully clean "
-                "(a tool degraded/skipped); nothing closed")
+            log("delta-close + regress-on-observed: skipped — scan not "
+                "fully clean (a tool degraded/skipped); neither close nor "
+                "reopen will fire on partial evidence")
 
 
 def fail_out(conn, ctx: ScanContext, error: str) -> None:
