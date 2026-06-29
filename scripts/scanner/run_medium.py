@@ -3379,17 +3379,20 @@ SELECT
     f.finding_id,
     %(scan_run_id)s,
     now(),
-    -- Round 7 follow-up: cast current_status to text. findings.current_status
-    -- is enum finding_status_t; finding_history.status is enum
-    -- history_status_t — two distinct types, no implicit cast.
-    -- Postgres has an assignment-cast from text → enum so the
-    -- target column will accept any text value that matches an
-    -- enum label. Migration 20260629c added 'wont_fix' +
-    -- 'accepted_risk' to history_status_t so every finding_status_t
-    -- value now has a matching history_status_t label.
+    -- Round 7 follow-up #2: EXPLICIT enum → text → target-enum cast.
+    -- findings.current_status is finding_status_t; finding_history.status
+    -- is history_status_t — two distinct enum types with no direct
+    -- cast between them. Postgres ALSO has no IMPLICIT text → enum
+    -- assignment cast (live #811 proved my round-7-follow-up
+    -- assumption wrong); the target column required an explicit
+    -- cast. The double-cast pattern is the supported idiom:
+    --   source_enum::text::target_enum
+    -- Migration 20260629c made sure every finding_status_t label
+    -- exists in history_status_t so the text → history_status_t
+    -- cast cannot fail on a valid input.
     -- ('absent' is history-only — write_finding_history never emits
     -- it; it's reserved for offline reconciliation paths.)
-    f.current_status::text,
+    f.current_status::text::history_status_t,
     -- severity_at_scan is enum severity_t — SAME type as
     -- findings.severity — so no cast needed (would be a no-op
     -- round-trip if added).
