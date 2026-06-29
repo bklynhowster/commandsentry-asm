@@ -3065,7 +3065,19 @@ ON CONFLICT (finding_id) DO UPDATE SET
     current_status = CASE
       WHEN findings.current_status IN (
              'remediated', 'validated_remediated',
-             'false_positive', 'wont_fix', 'accepted_risk'
+             'false_positive', 'wont_fix', 'accepted_risk',
+             -- Note 129 round 7 — `regressed` is now sticky while open.
+             -- Pre-round-7 a re-observation flipped regressed → detected
+             -- via the ELSE branch, erasing the "this was fixed and
+             -- came back" signal one scan after the regress fn set it
+             -- (the cert_chain_of_trust churn 4.8 caught on
+             -- ftp.sciimage.com #800 → #801). The regress fn is gated
+             -- on current_status IN (remediated, validated_remediated)
+             -- so it can't re-flip a sticky-regressed row → no churn
+             -- in the other direction either. Regressed exits via the
+             -- same paths remediated does: note-127 auto-closer (when
+             -- the producer stops re-observing) or admin queue.
+             'regressed'
            )
         THEN findings.current_status
       ELSE 'detected'
@@ -3332,6 +3344,74 @@ def write_scan_metadata_artifact(conn, ctx: ScanContext, Json,
         })
 
 
+# ─── finding_history writer (note 129 round 7) ──────────────────────────
+#
+# After all transition logic runs (UPSERT + delta_close + regress in
+# medium; UPSERT + regress in heavy), stamp one finding_history row
+# per finding the scan re-emitted. Status captured is the FINAL
+# current_status — so a finding that was flipped to 'remediated' by
+# delta_close, or to 'regressed' by regress_observed_for_scan_run,
+# gets that final value recorded in history (not the intermediate
+# status the UPSERT wrote pre-flip).
+#
+# WHERE last_seen_scan_run = scan_run_id scopes the write to
+# findings this scan actually re-emitted — same signal delta_close
+# and regress use. ON CONFLICT (finding_id, scan_id) DO NOTHING
+# guarantees idempotency: re-running the close-out (e.g., transient
+# commit failure + retry) doesn't write duplicates.
+#
+# scan_id = scan_run_id::text is now safe because the FK to
+# legacy scans was dropped in migration 20260629b. Free-text column
+# accepts either an offline-import scan_id (existing rows) or a
+# scan_run UUID-as-text (new rows from live runs).
+#
+# CLEAN PATH ONLY. Caller chooses when to invoke this — typically
+# from close_out (medium) or run() clean branch (heavy) AFTER all
+# status flips have landed. Calling from a degraded close-out would
+# stamp history rows whose status field can't be trusted (a degraded
+# scan's last_seen stamps are partial / inconsistent), so the
+# convention is: don't.
+
+INSERT_FINDING_HISTORY_FOR_SCAN_RUN_SQL = """
+INSERT INTO public.finding_history
+    (finding_id, scan_id, observed_at, status, severity_at_scan, notes)
+SELECT
+    f.finding_id,
+    %(scan_run_id)s,
+    now(),
+    f.current_status,
+    f.severity,
+    %(notes)s
+  FROM public.findings f
+ WHERE f.last_seen_scan_run = %(scan_run_id)s
+ON CONFLICT (finding_id, scan_id) DO NOTHING;
+"""
+
+
+def write_finding_history_for_scan_run(
+    conn, scan_run_id: str, notes: str | None = None,
+) -> int:
+    """Stamp finding_history with one row per finding re-emitted this
+    scan. status = the FINAL current_status (post-close, post-regress).
+    Returns the count of rows actually inserted (ON CONFLICT DO NOTHING
+    will not count collisions). Safe to call multiple times — second
+    call inserts nothing because of the unique constraint.
+
+    Note 129 round 7 (FINDING_HISTORY_FIX_SPEC.md). Both heavy and
+    medium call this from their clean-path close-out so the per-
+    finding observation timeline keeps growing on every re-scan.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            INSERT_FINDING_HISTORY_FOR_SCAN_RUN_SQL,
+            {"scan_run_id": scan_run_id, "notes": notes},
+        )
+        # psycopg's rowcount reflects the rows actually inserted;
+        # ON CONFLICT skips are not counted (good — we want the
+        # post-dedup count for forensics).
+        return cur.rowcount if cur.rowcount is not None else 0
+
+
 def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None:
     # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug B2 (ruling ⑦): set-equality
     # invariant. Every tool in tools_run must have a tool_status entry.
@@ -3406,10 +3486,26 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
                     f"remediated_at cleared (audit rows in admin_audit_log)")
             else:
                 log("regress-on-observed: 0 flipped (no returned remediated findings)")
+
+            # Note 129 round 7 — finding_history per re-emitted finding.
+            # Runs AFTER delta_close + regress so the recorded status is
+            # FINAL for this scan (remediated/regressed/whatever).
+            # Same eligibility gate as close + regress (delta_close_
+            # eligible) — degraded/skipped tool blocks all three.
+            n_history = write_finding_history_for_scan_run(
+                conn, ctx.scan_run_id,
+                notes=f"observed by run_medium scan_run {ctx.scan_run_id}",
+            )
+            if n_history:
+                log(f"finding-history: {n_history} observation row(s) "
+                    f"written (scan_id={ctx.scan_run_id})")
+            else:
+                log("finding-history: 0 rows written (no re-emitted findings)")
         else:
-            log("delta-close + regress-on-observed: skipped — scan not "
-                "fully clean (a tool degraded/skipped); neither close nor "
-                "reopen will fire on partial evidence")
+            log("delta-close + regress-on-observed + finding-history: skipped "
+                "— scan not fully clean (a tool degraded/skipped); neither "
+                "close, reopen, nor observation history will fire on partial "
+                "evidence")
 
 
 def fail_out(conn, ctx: ScanContext, error: str) -> None:

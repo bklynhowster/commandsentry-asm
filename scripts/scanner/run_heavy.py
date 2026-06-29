@@ -121,6 +121,7 @@ from run_medium import (
     STAMP_FINDINGS_DEGRADED_SQL,
     flush_artifacts_to_db,
     reconcile_tool_status_invariant,
+    write_finding_history_for_scan_run,
 )
 from run_light import derive_hostname
 
@@ -889,6 +890,22 @@ def run(descriptor_path: str, dsn: str) -> int:
         if total_regressed == 0 and distinct_sources:
             log(f"regress-on-observed: 0 flipped across sources "
                 f"{distinct_sources} (no returned remediated findings)")
+
+        # Note 129 round 7 — finding_history per re-emitted finding.
+        # Runs AFTER the per-source regress loop so the recorded
+        # status reflects any flips that just happened. CLEAN-PATH
+        # ONLY (the except DegradedRunError branch below does NOT
+        # call this — partial last_seen stamps from a degraded scan
+        # shouldn't drive the observation timeline).
+        n_history = write_finding_history_for_scan_run(
+            conn, ctx.scan_run_id,
+            notes=f"observed by run_heavy scan_run {ctx.scan_run_id}",
+        )
+        if n_history:
+            log(f"finding-history: {n_history} observation row(s) "
+                f"written (scan_id={ctx.scan_run_id})")
+        else:
+            log("finding-history: 0 rows written (no re-emitted findings)")
         close_out_heavy(conn, ctx, inserted, updated, Json)
         conn.commit()
         log("scan_run + scan_queue marked complete.")
