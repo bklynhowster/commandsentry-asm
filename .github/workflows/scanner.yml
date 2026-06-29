@@ -443,30 +443,26 @@ jobs:
         run: |
           python scripts/scanner/run_medium.py /tmp/scan_descriptor.json
 
-      - name: Run Heavy tier (NOT YET IMPLEMENTED — M9)
+      - name: Run Heavy tier
+        # note 129 / RUN_HEAVY_V1_BUILD_SPEC.md P0 — replaced the M9
+        # no-op stub with the real run_heavy invocation. v1 scope:
+        # testssl (TLS depth via cs_parsers/testssl.py canonical
+        # identity) + naabu/fingerprintx (net depth). VPN already
+        # wrapped by the upstream vpn_decision step for
+        # intensity in (medium,heavy). No medium-specific tunables
+        # carried over (WAF-rate, patient mode, stealth UA, etc.) —
+        # heavy's TLS-handshake/port-probe surface doesn't share
+        # medium's HTTP-fuzzing WAF-survival problem (HEAVY_TIER_
+        # READINESS_ASSESSMENT.md §4). SKIP_VPN exposed for
+        # validate-mode interlock (Batch-2 step d carries over to
+        # heavy when v1 lands).
         if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'heavy' }}
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          ROE_ALERT_TOKEN: ${{ secrets.ROE_ALERT_TOKEN }}
+          SKIP_VPN: ${{ github.event.inputs.skip_vpn || 'false' }}
         run: |
-          SCAN_RUN_ID="${{ steps.poll.outputs.scan_run_id }}"
-          echo "::warning::Heavy tier runner is not yet implemented (Phase 4a M9). Marking scan failed."
-          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
-            update public.scan_run
-               set status = 'failed',
-                   completed_at = now(),
-                   duration_seconds = extract(epoch from (now() - started_at))::int,
-                   error_message = 'Heavy tier runner not yet implemented (Phase 4a M9)'
-             where scan_run_id = '$SCAN_RUN_ID';
-          "
-          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
-            update public.scan_queue
-               set status = 'failed',
-                   completed_at = now(),
-                   duration_seconds = extract(epoch from (now() - started_at))::int,
-                   error_message = 'Heavy tier runner not yet implemented (Phase 4a M9)'
-             where scan_run_id = '$SCAN_RUN_ID';
-          "
-          exit 1
+          python scripts/scanner/run_heavy.py /tmp/scan_descriptor.json
 
       # ─── Tear down VPN (always, if we brought it up) ───────────────
       # Runs even when the scan failed so we never leave a connection
