@@ -426,6 +426,244 @@ def testssl_is_degraded(
     return False, ""
 
 
+# ============================================================================
+# Round 9 Part 1 — testssl instrumentation (instrument first, fix gated)
+# ============================================================================
+#
+# Heavy-v2 commit 0bfc7d7 cleared the ROE-gate timeout (DB carve-out
+# from round 8) but testssl itself still fails post-VPN-bring-up. We
+# don't know whether it's IPv6, tunnel-wide TLS, or testssl-specific.
+# Per 4.8's Part 1 spec: STOP GUESSING. Add three instrumentation
+# surfaces; let the next live run tell us what's happening; THEN fix.
+#
+#   1. run_pre_testssl_probes — diagnostic block that runs BEFORE
+#      testssl. getent v4/v6, ip route get for both, curl -4/-6 HEAD,
+#      openssl s_client -4 raw handshake. Splits the v4-vs-v6 and
+#      isolates testssl from openssl. Best-effort, never raises —
+#      probe failures don't block the scan; the log lines are the
+#      product.
+#
+#   2. _log_stderr_tail — print last N lines of testssl's stderr on
+#      every run (success or degrade). Catches non-fatal warnings
+#      we're currently dropping on the floor + provides forensic
+#      context on degrades without needing a second run.
+#
+#   3. _dump_small_testssl_json — when the jsonfile is suspiciously
+#      small (<4KB) on a degraded exit, log its full contents AND
+#      extract any engine_problem / scanProblem records' finding
+#      text. testssl's degraded output usually puts the actual
+#      error in scanProblem.finding — this dumps the smoking gun
+#      directly to the runner log instead of hoping somebody fetches
+#      the artifact later.
+
+
+def run_pre_testssl_probes(ctx: HeavyScanContext, work_dir: Path) -> None:
+    """Round 9 Part 1 — pre-testssl diagnostic probe block.
+
+    Goal per 4.8 spec: definitively tell us whether a subsequent testssl
+    failure is IPv6, tunnel-wide TLS, or testssl-specific. Each probe
+    is short-timeout + result logged inline so 4.8 can read the runner
+    log directly without joining to a separate artifact.
+
+    Best-effort: every probe is wrapped + bounded. Failures are LOGGED
+    (so we see them) but never raised — the probe block must not
+    short-circuit the scan it's diagnosing.
+    """
+    target = ctx.hostname
+    log(f"─── pre-testssl probe block (round 9 Part 1) target={target} ───")
+
+    # 1. DNS — v4 + v6 separately. getent ahostsv4/v6 reflects what
+    #    libnss-dns would hand to a connect() call from this runner.
+    log(f"  [probe-dns] getent ahostsv4 {target}:")
+    try:
+        rc, out, _ = run_cmd(["getent", "ahostsv4", target], timeout=8)
+        for line in (out or "").splitlines():
+            log(f"    {line}")
+        if not out:
+            log(f"    (no IPv4 records, rc={rc})")
+    except Exception as e:
+        log(f"    probe failed: {e!r}")
+
+    log(f"  [probe-dns] getent ahostsv6 {target}:")
+    try:
+        rc, out, _ = run_cmd(["getent", "ahostsv6", target], timeout=8)
+        for line in (out or "").splitlines():
+            log(f"    {line}")
+        if not out:
+            log(f"    (no IPv6 records, rc={rc})")
+    except Exception as e:
+        log(f"    probe failed: {e!r}")
+
+    # 2. Routing decisions per family. `ip route get` shows the kernel's
+    #    actual routing decision for a specific destination, which is
+    #    the ground truth on whether the destination flows via the wg
+    #    interface or the original gateway (post-round-8 carve-out).
+    def _first_ip(family_arg: str) -> str:
+        try:
+            rc, out, _ = run_cmd(["getent", family_arg, target], timeout=8)
+            for line in (out or "").splitlines():
+                ip = line.strip().split()[0] if line.strip() else ""
+                if ip:
+                    return ip
+        except Exception:
+            pass
+        return ""
+
+    v4_ip = _first_ip("ahostsv4")
+    v6_ip = _first_ip("ahostsv6")
+
+    if v4_ip:
+        log(f"  [probe-route] ip route get {v4_ip} (v4):")
+        try:
+            rc, out, _ = run_cmd(["ip", "route", "get", v4_ip], timeout=5)
+            for line in (out or "").splitlines():
+                log(f"    {line}")
+        except Exception as e:
+            log(f"    probe failed: {e!r}")
+    else:
+        log("  [probe-route] no IPv4 address to route-check")
+
+    if v6_ip:
+        log(f"  [probe-route] ip route get {v6_ip} (v6):")
+        try:
+            rc, out, _ = run_cmd(["ip", "route", "get", v6_ip], timeout=5)
+            for line in (out or "").splitlines():
+                log(f"    {line}")
+        except Exception as e:
+            log(f"    probe failed: {e!r}")
+    else:
+        log("  [probe-route] no IPv6 address (or v6 disabled in resolver)")
+
+    # 3. HTTPS reachability split by family. curl -4 forces IPv4,
+    #    curl -6 forces IPv6. -sIv = silent + HEAD + verbose so we
+    #    get the connection negotiation in stderr without dragging
+    #    the response body.
+    target_url = f"https://{target}/"
+    for flag, label in (("-4", "v4"), ("-6", "v6")):
+        log(f"  [probe-https] curl {flag} -sIv --max-time 10 {target_url}:")
+        try:
+            rc, _, err = run_cmd(
+                ["curl", flag, "-sIv", "--max-time", "10", target_url],
+                timeout=15,
+            )
+            log(f"    rc={rc}")
+            # Last few stderr lines tell us how far the TLS / HTTP
+            # connection got (handshake, cert load, response code).
+            tail = (err or "").splitlines()[-8:]
+            for line in tail:
+                log(f"    {line}")
+            if not tail:
+                log("    (no stderr; curl produced no diagnostic output)")
+        except Exception as e:
+            log(f"    probe failed: {e!r}")
+
+    # 4. Raw TLS handshake via openssl — isolates testssl from openssl.
+    #    If openssl s_client succeeds and testssl still fails, the
+    #    problem is testssl-specific (its tool flags, parallelism,
+    #    parser); if both fail the same way, it's a transport/TLS
+    #    layer problem. Limit to v4 first; spec calls v6 the prime
+    #    suspect but openssl-v6 isn't load-bearing for the diagnostic.
+    log(f"  [probe-tls] openssl s_client -4 -connect {target}:443:")
+    try:
+        rc, out, err = run_cmd(
+            ["sh", "-c",
+             f"echo Q | timeout 10 openssl s_client -4 "
+             f"-connect {target}:443 -servername {target} 2>&1 | head -30"],
+            timeout=15,
+        )
+        log(f"    rc={rc}")
+        # openssl writes the handshake trace to stdout when -2>&1'd
+        # via the shell; print what we got.
+        for line in (out or "").splitlines()[:30]:
+            log(f"    {line}")
+        if not out:
+            log("    (no output)")
+    except Exception as e:
+        log(f"    probe failed: {e!r}")
+
+    log("─── end pre-testssl probe block ───")
+
+
+def _log_stderr_tail(stderr: str, *, label: str = "testssl",
+                     max_lines: int = 40) -> None:
+    """Round 9 Part 1 — log the last N lines of a tool's stderr.
+
+    Bounded by max_lines (default 40) so a chatty tool can't flood
+    the runner log; the tail is usually where the useful diagnostic
+    text lives (warnings, fatal errors, last-handshake state).
+    """
+    if not stderr:
+        log(f"  [{label}-stderr] (empty)")
+        return
+    lines = stderr.splitlines()
+    shown = min(max_lines, len(lines))
+    log(f"  [{label}-stderr] last {shown} of {len(lines)} line(s):")
+    for line in lines[-max_lines:]:
+        log(f"    {line}")
+
+
+def _dump_small_testssl_json(jsonfile: Path) -> None:
+    """Round 9 Part 1 — on degraded exit, log the contents of a
+    suspiciously-small testssl JSON file (likely contains scanProblem
+    records with the actual error text) plus an explicit per-record
+    extraction of any engine_problem / scanProblem entries.
+
+    Threshold: 4096 bytes. testssl emits ≥30KB for any real scan;
+    anything under 4KB is almost certainly a diagnostic-only output
+    from a crashed/aborted run, and worth dumping inline. Larger
+    files get a size-only line + the dedicated artifact (already
+    captured to scan_run_artifacts) for offline inspection.
+    """
+    if not jsonfile.exists():
+        log("  [forensics] no jsonfile to dump")
+        return
+    try:
+        size = jsonfile.stat().st_size
+    except OSError as e:
+        log(f"  [forensics] stat failed: {e!r}")
+        return
+    log(f"  [forensics] jsonfile size: {size} bytes")
+    if size > 4096:
+        log("  [forensics] jsonfile > 4KB, full dump skipped "
+            "(see scan_run_artifacts for the captured copy)")
+        return
+    try:
+        content = jsonfile.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        log(f"  [forensics] read failed: {e!r}")
+        return
+    log("  [forensics] jsonfile contents:")
+    for line in content.splitlines():
+        log(f"    {line}")
+    # Extract diagnostic records specifically — testssl's degraded
+    # output usually puts the actual error in scanProblem.finding.
+    try:
+        data = json.loads(content)
+    except Exception as e:
+        log(f"  [forensics] JSON unparseable ({type(e).__name__}); "
+            f"can't extract scanProblem records")
+        return
+    if not isinstance(data, list):
+        log(f"  [forensics] JSON root is {type(data).__name__}, not list — "
+            f"unexpected shape")
+        return
+    diag_records = [
+        r for r in data
+        if isinstance(r, dict)
+        and r.get("id") in ("engine_problem", "scanProblem")
+    ]
+    if diag_records:
+        log(f"  [forensics] {len(diag_records)} diagnostic record(s):")
+        for r in diag_records:
+            log(f"    id={r.get('id')!r} severity={r.get('severity')!r} "
+                f"finding={(r.get('finding') or '')!r}")
+    else:
+        log("  [forensics] no engine_problem/scanProblem records found "
+            "in the JSON — degradation reason came from a structural "
+            "check (rc, file size, parse) rather than testssl's own "
+            "diagnostic")
+
+
 def run_testssl_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     """Run testssl.sh and emit FindingEvents into ctx.findings. Marks
     'testssl.sh' in ctx.tools_run + ctx.tool_status. On degradation,
@@ -433,12 +671,25 @@ def run_testssl_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
 
     Note 'testssl.sh' (with .sh suffix) is the canonical tool token; the
     note-127 producer map matches on 'testssl.sh' OR 'testssl'.
+
+    Round 9 Part 1 — wraps the invocation with diagnostic probes
+    (run_pre_testssl_probes) and always logs the stderr tail
+    (_log_stderr_tail) regardless of outcome. On degraded exit also
+    dumps small JSON files (_dump_small_testssl_json) so the smoking
+    gun lands directly in the runner log, no second run required.
     """
     tool_name = "testssl.sh"
     # Append to tools_run UP FRONT so close_out's set-equality invariant
     # holds even if we abort mid-tool. mark_tool_* will also write
     # tool_status accordingly. Mirrors run_medium pre-chunk pattern.
     ctx.tools_run.append(tool_name)
+
+    # Round 9 Part 1: pre-flight probe block. Best-effort; never raises
+    # — probe failures don't short-circuit the scan they're diagnosing.
+    try:
+        run_pre_testssl_probes(ctx, work_dir)
+    except Exception as e:
+        log(f"  [probe-block] unexpected failure (non-fatal): {e!r}")
 
     rc, jsonfile, stdout, stderr = run_testssl(ctx, work_dir)
 
@@ -451,9 +702,18 @@ def run_testssl_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
         except OSError as e:
             log(f"  testssl: artifact read failed (non-fatal): {e!r}")
 
+    # Round 9 Part 1: always log a stderr tail. Catches non-fatal
+    # warnings on success paths AND provides forensic context on
+    # degraded paths without needing a second run.
+    _log_stderr_tail(stderr, label="testssl")
+
     degraded, reason = testssl_is_degraded(rc, jsonfile, stdout, stderr)
     if degraded:
         log(f"  testssl DEGRADED: reason={reason} rc={rc}")
+        # Round 9 Part 1: dump small JSON contents (likely contains
+        # scanProblem records with the actual error text) + extract
+        # any diagnostic records explicitly.
+        _dump_small_testssl_json(jsonfile)
         mark_tool_degraded(ctx, tool_name, reason)
         flush_progress(ctx)
         # DegradedRunError signature is (reason, context=""). The reason
