@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-06-30T10:07:13Z_a916ca8a",
-    "started_at": "2026-06-30T10:07:13Z",
-    "completed_at": "2026-06-30T10:09:33Z",
-    "duration_seconds": 140,
+    "id": "scan_2026-06-30T14:45:54Z_1e7dd7e2",
+    "started_at": "2026-06-30T14:45:55Z",
+    "completed_at": "2026-06-30T14:48:40Z",
+    "duration_seconds": 165,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-06-30T10:09:33Z",
-      "last_seen": "2026-06-30T10:09:33Z",
+      "first_discovered": "2026-06-30T14:48:40Z",
+      "last_seen": "2026-06-30T14:48:40Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -247,8 +247,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-06-30T10:09:34Z",
-      "last_seen": "2026-06-30T10:09:34Z",
+      "first_discovered": "2026-06-30T14:48:40Z",
+      "last_seen": "2026-06-30T14:48:40Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -446,8 +446,8 @@
           "ns18.domaincontrol.com"
         ],
         "txt": [
-          "",
-          "ca3-109f68bf8eb24748b4c4aaa123b93e17"
+          "ca3-109f68bf8eb24748b4c4aaa123b93e17",
+          ""
         ],
         "spf": null,
         "dnssec": false
@@ -560,9 +560,12 @@
       }
     }
   ],
-  "phantom_subdomains": [],
+  "phantom_subdomains": [
+    "builds.commandmarketinginnovations.com",
+    "hr.commandmarketinginnovations.com"
+  ],
   "deltas": {
-    "since_scan": "scan_2026-06-30T04:28:16Z_1a77b21f",
+    "since_scan": "scan_2026-06-30T10:07:13Z_a916ca8a",
     "added": {
       "subdomains": [],
       "services": [],
@@ -580,50 +583,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-06-01T12:00:14Z_d3904e4f",
-      "started_at": "2026-06-01T12:00:14Z",
-      "completed_at": "2026-06-01T12:02:40Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 2,
-      "service_count": 8,
-      "subdomain_names": [
-        "commandmarketinginnovations.com",
-        "www.commandmarketinginnovations.com"
-      ],
-      "ports_by_sub": {
-        "commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        },
-        "www.commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.0",
-        "Mailcheck": "1.1.2",
-        "Slider Revolution": "6.7.56",
-        "WPMU DEV Smush": "4.0.3",
-        "Yoast SEO": "27.7",
-        "jQuery Migrate": "3.4.1",
-        "punycode": "1.0.0"
-      }
-    },
     {
       "scan_id": "scan_2026-06-01T18:06:20Z_4adbc51c",
       "started_at": "2026-06-01T18:06:20Z",
@@ -5776,6 +5735,50 @@
       "scan_id": "scan_2026-06-30T10:07:13Z_a916ca8a",
       "started_at": "2026-06-30T10:07:13Z",
       "completed_at": "2026-06-30T10:09:33Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.7.58",
+        "WPMU DEV Smush": "4.1.2",
+        "Yoast SEO": "27.9",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-06-30T14:45:54Z_1e7dd7e2",
+      "started_at": "2026-06-30T14:45:55Z",
+      "completed_at": "2026-06-30T14:48:40Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 2,
