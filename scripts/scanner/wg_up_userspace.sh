@@ -125,8 +125,14 @@ for addr in "${ADDRS[@]}"; do
 done
 
 # ─── 4. Bring the interface up + set MTU ─────────────────────────────
-log "ip link set mtu 1420 up dev $IFACE"
-if ! sudo ip link set mtu 1420 up dev "$IFACE"; then
+# MTU 1280 (IPv6 floor), not the usual WG 1420: heavy-tier testssl pulls
+# full cert chains / large TLS handshakes. At 1420 the encapsulated packet
+# (~1480 with WG overhead) blackholes on Mullvad/cloud underlays whose real
+# path MTU is < 1500 — small HTTPS GETs fit, big handshakes stall (every
+# testssl probe timed out → 900-byte degraded output, scans #836-840).
+# 1280 makes the kernel auto-advertise a smaller TCP MSS so handshakes fit.
+log "ip link set mtu 1280 up dev $IFACE"
+if ! sudo ip link set mtu 1280 up dev "$IFACE"; then
   err "ip link set up failed"
   exit 4
 fi
