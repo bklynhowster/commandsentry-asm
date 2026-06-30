@@ -388,6 +388,60 @@ jobs:
           VPN_REGION: ${{ vars.SCANNER_VPN_REGION || '' }}
         run: scripts/scanner/vpn_bringup.sh
 
+      # ─── Carve Supabase out of the VPN tunnel ─────────────────────
+      # HEAVY_VPN_DB_ROUTING_FIX_SPEC.md. Heavy-v1 runs #831–#835 (5/5)
+      # failed: ROE gate could not reach Supabase :5432 through the
+      # deterministic us-atl-wg-001 exit — a Mullvad-side port/dest
+      # restriction times out the TCP connect even though DNS resolved
+      # fine. Fix: install /32 direct routes for each Supabase pooler IP
+      # via the original gateway. wg_up_userspace.sh already installs
+      # `ip rule … table main suppress_prefixlength 0`, so any non-default
+      # route in the main table beats the tunnel default — and the
+      # original `default via <gw>` is still in main (suppressed, not
+      # deleted), so we can read the gw/dev straight from `ip route show`.
+      #
+      # Scan target traffic still egresses via Mullvad (only specific
+      # /32s carve out); resolve at runtime every bring-up since pooler
+      # IPs rotate (today: 18.214.78.123 / 3.227.209.82 / 18.213.155.45).
+      # `ip route replace` is idempotent on re-run / rotation.
+      #
+      # SAME gate condition as the VPN bring-up step above (only runs
+      # when VPN is up). Fails LOUD on missing host/gw/dev because a
+      # silent carve-out failure would let the next run trip the same
+      # ROE-gate timeout and we'd be back to square one — better to
+      # surface the misconfig at bring-up than during scan execution.
+      - name: Carve Supabase out of the VPN tunnel
+        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' }}
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          set -uo pipefail
+          # Original default route still lives in main (wg only suppresses
+          # it via ip-rule, doesn't delete it). awk-extract the gw + dev
+          # from the FIRST `default` line; LIMIT 1 in case multiple
+          # interfaces have defaults.
+          ORIG_GW=$(ip route show default table main | awk '/default/{print $3; exit}')
+          ORIG_DEV=$(ip route show default table main | awk '/default/{print $5; exit}')
+          echo "[db-carveout] original gw=$ORIG_GW dev=$ORIG_DEV"
+          DB_HOST=$(python3 -c 'import os,urllib.parse as u; print(u.urlparse(os.environ["SUPABASE_DSN"]).hostname or "")')
+          echo "[db-carveout] resolving DB host: $DB_HOST"
+          if [ -z "$DB_HOST" ] || [ -z "$ORIG_GW" ] || [ -z "$ORIG_DEV" ]; then
+            echo "[db-carveout] missing host/gw/dev — aborting carve-out (fail loud)"
+            exit 1
+          fi
+          # Resolve at runtime every bring-up — pooler IPs rotate;
+          # never hardcode. getent ahostsv4 uses libnss-dns which
+          # routes through the tunnel; resolution works post-bring-up
+          # (the failing runs already returned 3 pooler IPs).
+          for ip in $(getent ahostsv4 "$DB_HOST" | awk '{print $1}' | sort -u); do
+            echo "[db-carveout] direct route $ip/32 via $ORIG_GW dev $ORIG_DEV"
+            sudo ip route replace "$ip/32" via "$ORIG_GW" dev "$ORIG_DEV"
+          done
+          echo "[db-carveout] verify:"
+          for ip in $(getent ahostsv4 "$DB_HOST" | awk '{print $1}' | sort -u); do
+            ip route get "$ip" | sed 's/^/  /'
+          done
+
       # ─── Dispatch to tier-specific runner ──────────────────────────
       # Light + Medium implemented; Heavy still pending (M9).
 
