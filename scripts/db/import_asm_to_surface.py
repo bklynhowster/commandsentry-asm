@@ -585,8 +585,14 @@ EVENT_TYPE_TO_PREF_KEY = {
     "asset_went_dark":  "asset_went_dark",
 }
 
-RESEND_API_URL = "https://api.resend.com/emails"
-RESEND_FROM = "Command Companies — Information Security <commandsentry@alerts.goldenlaneinc.com>"
+# Migrated 2026-07-01 — Resend/Golden Lane → SendGrid/commandcompanies.com,
+# completing D-031. The old sender (commandsentry@alerts.goldenlaneinc.com) was
+# Howie's personal domain over Resend; commandcompanies.com is Command-owned,
+# SendGrid-verified, and IronPort-trusted. Uses the SAME SENDGRID_API_KEY the
+# daily digest already runs on (asm repo Actions secret).
+SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send"
+SENDGRID_FROM_EMAIL = "CommandSentry@commandcompanies.com"
+SENDGRID_FROM_NAME = "COMMANDsentry"
 
 FETCH_SUBSCRIBERS = """
 SELECT
@@ -619,13 +625,13 @@ def dispatch_event_notifications(
     if not all_events:
         return stats
 
-    api_key = os.environ.get("RESEND_API_KEY")
+    api_key = os.environ.get("SENDGRID_API_KEY")
     if not api_key:
         # Not a failure — just nothing to send. Importer still committed
         # the events to the table; the UI timeline will still render them.
         # Email is a best-effort augmentation.
         stats["skipped_no_key"] = 1
-        print("  ! RESEND_API_KEY not set — skipping notification fan-out", file=sys.stderr)
+        print("  ! SENDGRID_API_KEY not set — skipping notification fan-out", file=sys.stderr)
         return stats
 
     # Fetch subscribers once. Small table; cheap.
@@ -721,9 +727,9 @@ def _send_notification_email(
     asset_id: str,
     events: list[dict],
 ) -> bool:
-    """Send one branded Resend email summarizing all event matches for this
-    asset for this user. Returns True on Resend 200, False on any failure.
-    Failures print to stderr but never raise (notification is best-effort).
+    """Send one branded SendGrid email summarizing all event matches for this
+    asset for this user. Returns True on SendGrid 2xx (202), False on any
+    failure. Failures print to stderr but never raise (best-effort).
     """
     import urllib.request
     import urllib.error
@@ -820,11 +826,14 @@ def _send_notification_email(
     # The unsubscribe URL points at the user's notification-prefs page so
     # they can actually opt out (good citizenship + RFC 8058 compliance).
     portal_url = "https://commandsentry-portal.netlify.app"
+    # SendGrid v3 shape: recipients under personalizations[].to[], sender as
+    # {email,name}, MIME parts under content[]. Custom deliverability headers
+    # (List-Unsubscribe / RFC 8058 one-click, X-Entity-Ref-ID) go top-level.
     body = json.dumps({
-        "from": RESEND_FROM,
-        "to": [to_email],
+        "personalizations": [{"to": [{"email": to_email}]}],
+        "from": {"email": SENDGRID_FROM_EMAIL, "name": SENDGRID_FROM_NAME},
         "subject": subject,
-        "html": html,
+        "content": [{"type": "text/html", "value": html}],
         "headers": {
             "List-Unsubscribe": f"<{portal_url}/account/notifications>",
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
@@ -833,22 +842,19 @@ def _send_notification_email(
     }).encode("utf-8")
 
     req = urllib.request.Request(
-        RESEND_API_URL,
+        SENDGRID_API_URL,
         data=body,
         method="POST",
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            # Cloudflare WAF in front of api.resend.com returns 1010 on the
-            # default Python-urllib UA. Use a real-looking string. Resend
-            # itself doesn't care about the UA — this is purely to satisfy
-            # the front-edge bot check.
             "User-Agent": "COMMANDsentry-importer/1.0 (+https://commandsentry-portal.netlify.app)",
             "Accept": "application/json",
         },
     )
 
     try:
+        # SendGrid returns 202 Accepted (empty body) on success.
         with urllib.request.urlopen(req, timeout=10) as resp:
             return 200 <= resp.status < 300
     except urllib.error.HTTPError as e:
@@ -858,7 +864,7 @@ def _send_notification_email(
         except Exception:
             pass
         print(
-            f"  ! Resend {e.code} for {to_email} ({asset_id}): {err_body[:200]}",
+            f"  ! SendGrid {e.code} for {to_email} ({asset_id}): {err_body[:200]}",
             file=sys.stderr,
         )
         return False

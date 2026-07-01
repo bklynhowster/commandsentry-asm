@@ -13,8 +13,8 @@ Triggers:
   notice — new subdomain, subdomain gone, port closed, cert 7-30d, tech version change
 
 Environment:
-  RESEND_API_KEY    — Resend API key (required)
-  ALERT_FROM_EMAIL  — sender (required)
+  SENDGRID_API_KEY  — SendGrid API key (required; same secret as the digest)
+  ALERT_FROM_EMAIL  — sender (optional; defaults to CommandSentry@commandcompanies.com)
   ALERT_TO_EMAIL    — recipient (required)
   DASHBOARD_URL     — link in email (default: commandsentry-asm.netlify.app)
   ALERT_FROM_NAME   — sender display name
@@ -37,8 +37,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
-API_KEY        = os.environ.get("RESEND_API_KEY", "").strip()
-FROM_EMAIL     = os.environ.get("ALERT_FROM_EMAIL", "").strip()
+API_KEY        = os.environ.get("SENDGRID_API_KEY", "").strip()
+FROM_EMAIL     = os.environ.get("ALERT_FROM_EMAIL", "CommandSentry@commandcompanies.com").strip()
 FROM_NAME      = os.environ.get("ALERT_FROM_NAME", "COMMANDsentry ASM").strip()
 TO_EMAIL       = os.environ.get("ALERT_TO_EMAIL", "").strip()
 DASHBOARD_URL  = os.environ.get("DASHBOARD_URL", "https://commandsentry-asm.netlify.app").strip()
@@ -480,11 +480,14 @@ def render_subject(alerts):
     return f"[COMMANDsentry] {len(alerts)} surface change(s)"
 
 def send_email(subject, html):
+    # SendGrid v3 shape (migrated from Resend/Golden Lane 2026-07-01, D-031):
+    # recipients under personalizations[].to[], sender as {email,name}, MIME
+    # under content[]. Success = HTTP 202 (empty body).
     body = json.dumps({
-        "from":    f"{FROM_NAME} <{FROM_EMAIL}>",
-        "to":      [TO_EMAIL],
+        "personalizations": [{"to": [{"email": TO_EMAIL}]}],
+        "from":    {"email": FROM_EMAIL, "name": FROM_NAME},
         "subject": subject,
-        "html":    html,
+        "content": [{"type": "text/html", "value": html}],
     })
     if not shutil.which("curl"):
         print("ERROR: curl not found.", file=sys.stderr)
@@ -493,7 +496,7 @@ def send_email(subject, html):
         "curl", "--silent", "--show-error", "--fail-with-body",
         "--max-time", "30",
         "--user-agent", "commandsentry-asm/2.0",
-        "-X", "POST", "https://api.resend.com/emails",
+        "-X", "POST", "https://api.sendgrid.com/v3/mail/send",
         "-H", f"Authorization: Bearer {API_KEY}",
         "-H", "Content-Type: application/json",
         "-w", "\n[HTTP %{http_code}]",
@@ -502,17 +505,17 @@ def send_email(subject, html):
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=40)
     except subprocess.TimeoutExpired:
-        print("Resend network error: curl timed out", file=sys.stderr)
+        print("SendGrid network error: curl timed out", file=sys.stderr)
         sys.exit(2)
     out = (result.stdout or "")[:1000]
     if result.returncode != 0 or "[HTTP 2" not in out:
-        print(f"Resend failed (exit {result.returncode}): {out}  stderr={(result.stderr or '')[:300]}", file=sys.stderr)
+        print(f"SendGrid failed (exit {result.returncode}): {out}  stderr={(result.stderr or '')[:300]}", file=sys.stderr)
         sys.exit(2)
-    print(f"Resend OK: {out}", file=sys.stderr)
+    print(f"SendGrid OK: {out}", file=sys.stderr)
 
 def main():
     if not API_KEY or not FROM_EMAIL or not TO_EMAIL:
-        print("Email alerts disabled — RESEND_API_KEY / ALERT_FROM_EMAIL / ALERT_TO_EMAIL not all set. Skipping.")
+        print("Email alerts disabled — SENDGRID_API_KEY / ALERT_TO_EMAIL not set. Skipping.")
         return
     alerts = collect_alerts()
     if not alerts:

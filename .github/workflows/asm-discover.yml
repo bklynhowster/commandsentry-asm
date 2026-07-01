@@ -207,10 +207,11 @@ jobs:
 
       - name: Send email alerts (changes only)
         if: steps.targets.outputs.mode != 'skipped'
-        # Graceful no-op if RESEND_API_KEY isn't set, so workflow doesn't fail
-        # before the operator has wired email alerts.
+        # Graceful no-op if SENDGRID_API_KEY isn't set, so workflow doesn't fail
+        # before the operator has wired email alerts. (Migrated Resend→SendGrid
+        # 2026-07-01 — reuses the same secret the daily digest already runs on.)
         env:
-          RESEND_API_KEY:    ${{ secrets.RESEND_API_KEY }}
+          SENDGRID_API_KEY:  ${{ secrets.SENDGRID_API_KEY }}
           ALERT_FROM_EMAIL:  ${{ vars.ALERT_FROM_EMAIL }}
           ALERT_TO_EMAIL:    ${{ vars.ALERT_TO_EMAIL }}
           ALERT_FROM_NAME:   ${{ vars.ALERT_FROM_NAME }}
@@ -292,10 +293,11 @@ jobs:
         if: success() && steps.targets.outputs.mode != 'skipped'
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
-          # Optional: if set, the importer fans out Resend notification
+          # Optional: if set, the importer fans out SendGrid notification
           # emails to users subscribed to ASM events at real_time cadence.
           # Missing key = silent (events still written to DB, just no email).
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          # Migrated Resend→SendGrid 2026-07-01 (same secret as the digest).
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
         run: |
           if [[ -z "${SUPABASE_DSN}" ]]; then
             echo "::warning::SUPABASE_DSN secret not set — skipping Surface upload."
