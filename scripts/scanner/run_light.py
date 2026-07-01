@@ -186,6 +186,14 @@ class LightFinding:
     cve:          list[str] = field(default_factory=list)
     references:   list[str] = field(default_factory=list)
     raw_excerpt:  str | None = None
+    # Explicit normalized_key. When set, this WINS over the default derivation
+    # at upsert time (CVE-join / check_name). Used by wpvulnerability findings
+    # to force plugin-level master dedup (normalized_key = wpplugin-<slug>) so
+    # every advisory for one plugin install collapses into ONE group instead
+    # of one row per CVE. Without it, cve-populated wp findings key off the CVE
+    # and each CVE renders as its own row (P-008 regression — the reason
+    # migration 20260604c's backfill kept getting undone on re-scan).
+    normalized_key_override: str | None = None
 
 
 @dataclass
@@ -872,6 +880,21 @@ def _wpvuln_emit_finding(ctx: ScanContext, v, wpc) -> None:
     else:
         check_name = f"wpvuln-{v.affected_target.replace(':', '-')}-{v.affected_version}"
 
+    # Plugin-level master dedup (P-008, 2026-06-04): all advisories for one
+    # plugin install share normalized_key = wpplugin-<slug> so they collapse
+    # into a single group instead of one row per CVE. The slug comes from the
+    # [slug] token the wpvulnerability.net title always carries
+    # ("Slider Revolution [revslider] < 7.0.11") — the SAME derivation the
+    # 20260604c / 20260701 backfill migrations use, so scanner + backfill agree.
+    # Titles without a slug (e.g. WordPress core advisories) get no override
+    # and fall back to the CVE/check_name key at upsert time.
+    slug_match = re.search(r"\[([^\]]+)\]", v.title or "")
+    normalized_key_override = (
+        f"wpplugin-{slug_match.group(1).strip().lower()}"
+        if slug_match and slug_match.group(1).strip()
+        else None
+    )
+
     references = []
     if v.source_link:
         references.append(v.source_link)
@@ -910,6 +933,7 @@ def _wpvuln_emit_finding(ctx: ScanContext, v, wpc) -> None:
         # imported + manual_named findings of the same CVE
         cve=[v.cve_id] if v.cve_id else [],
         references=references,
+        normalized_key_override=normalized_key_override,
         raw_excerpt=(
             f"Target: {v.affected_target}\n"
             f"Detected version: {v.affected_version}\n"
@@ -2080,7 +2104,14 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
             # behavioral probes that should merge with a specific manual_named
             # finding) should ensure their check_name matches the migration's
             # 2a target slug.
-            if f.cve:
+            if f.normalized_key_override:
+                # Explicit key (e.g. wpplugin-<slug> for WP plugin vulns) —
+                # forces plugin-level master dedup regardless of CVE. MUST win
+                # over the CVE-join below, otherwise cve-populated wp findings
+                # key off the CVE and re-split into one row per CVE on every
+                # re-scan (the P-008 regression migration 20260604c fought).
+                normalized_key = f.normalized_key_override
+            elif f.cve:
                 normalized_key = ",".join(sorted(c.lower() for c in f.cve))
             else:
                 normalized_key = f.check_name
