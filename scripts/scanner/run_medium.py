@@ -2281,7 +2281,25 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # (previously only ran in PROBE/PATIENT). First time the post-check
         # path is exercised in NORMAL mode is on testfire; a flaky check
         # there would surface as a healthcheck-unreachable degradation.
-        post_chunk_healthy, _ = healthcheck(ctx)
+        # Retry the post-chunk probe so a single transient blip (code 0
+        # tunnel timeout / momentary 5xx) doesn't discard a scan whose target
+        # was reachable throughout — the docs/preview false-degrade
+        # (2026-07-04). Returns on the first healthy probe, so zero added
+        # latency on good hosts. A dead backend (persistent 504) fails every
+        # attempt with a non-zero ban code and still degrades.
+        post_chunk_healthy, post_chunk_code = healthcheck_with_retry(
+            lambda: healthcheck(ctx),
+            attempts=POST_ROTATE_SETTLE_ATTEMPTS,
+            delay_s=POST_ROTATE_SETTLE_DELAY_S,
+        )
+        # Lone code-0 (pure no-response) after a tool already proved the
+        # target reachable this run → trust the tool output over a trailing
+        # tunnel blip (mirrors the #32 pre-chunk prior-tool-success bypass).
+        if not post_chunk_healthy and post_chunk_code == 0 and ctx.target_proven_reachable:
+            log("  post-chunk probe failed (code 0) but a tool already "
+                "proved the target reachable this run — transient blip, "
+                "not degrading")
+            post_chunk_healthy = True
         b1_reason = is_tool_output_degraded(
             tool=chunk_name,
             stdout=chunk_stdout,
@@ -2975,7 +2993,25 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
         # Layer 2: unconditional post-chunk healthcheck + B1 detector.
         # Layer 1 (ffuf_is_degraded) ran inside run_ffuf_chunk and
         # raised on failure — if we reach here, Layer 1 cleared.
-        post_chunk_healthy, _ = healthcheck(ctx)
+        # Retry the post-chunk probe so a single transient blip (code 0
+        # tunnel timeout / momentary 5xx) doesn't discard a scan whose target
+        # was reachable throughout — the docs/preview false-degrade
+        # (2026-07-04). Returns on the first healthy probe, so zero added
+        # latency on good hosts. A dead backend (persistent 504) fails every
+        # attempt with a non-zero ban code and still degrades.
+        post_chunk_healthy, post_chunk_code = healthcheck_with_retry(
+            lambda: healthcheck(ctx),
+            attempts=POST_ROTATE_SETTLE_ATTEMPTS,
+            delay_s=POST_ROTATE_SETTLE_DELAY_S,
+        )
+        # Lone code-0 (pure no-response) after a tool already proved the
+        # target reachable this run → trust the tool output over a trailing
+        # tunnel blip (mirrors the #32 pre-chunk prior-tool-success bypass).
+        if not post_chunk_healthy and post_chunk_code == 0 and ctx.target_proven_reachable:
+            log("  post-chunk probe failed (code 0) but a tool already "
+                "proved the target reachable this run — transient blip, "
+                "not degrading")
+            post_chunk_healthy = True
         b1_reason = is_tool_output_degraded(
             tool=chunk_name,
             stdout=out_blob or "",
