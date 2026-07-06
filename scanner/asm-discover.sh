@@ -278,28 +278,41 @@ discover_fqdn() {
 }
 
 # ─── Phase: Apex discovery (v3 — multi-source enum + per-sub deep scan) ─
-# Three discovery sources merged & deduped before liveness check:
-#   1. subfinder         — passive (CT logs, public aggregators)
+# Five discovery sources merged & deduped before liveness check:
+#   1. subfinder (-all)  — passive; ALL sources (CT logs, aggregators, keyed APIs)
 #   2. DNS-derived       — MX, NS, SPF includes, DMARC rua hostnames within the apex
-#   3. wordlist resolve  — dnsx brute-force against ~200 common sub names
+#   3. wordlist resolve  — dig brute-force against the common-subs wordlist
+#   4. cert SAN harvest  — subjectAltName names off the apex :443 cert
+#   5. crt.sh CT         — direct Certificate Transparency query (subfinder CT lag)
 # For each live subdomain, runs the full FQDN scan flow into a per-sub
 # subdirectory. normalize.py walks all per-sub dirs to build the nested
 # v3 asset record.
+#
+# 2026-07-06: added subfinder `-all` + keyed sources (chaos/virustotal via the
+# workflow's provider-config, from GH secrets) + source 5 (direct crt.sh). Fixes
+# the datacenter-IP enumeration blind spot — the runner was silently missing subs
+# a residential run finds because the free sources rate-limit datacenter IPs.
 discover_apex() {
   local apex="$1" wd="$2"
 
-  # ─── Source 1: passive (subfinder) ─────────────────────────
-  phase "Subdomain enum source 1/3: passive (subfinder)"
-  subfinder -d "$apex" -silent -json \
+  # ─── Source 1: passive (subfinder, ALL sources) ────────────
+  # `-all` pulls every subfinder source, incl. keyed APIs (chaos/virustotal) via
+  # the provider-config the asm-discover workflow writes from GH secrets before
+  # this runs. Default-sources-only + a datacenter runner IP is what silently
+  # missed subs (2026-07-06 enumeration-gap fix — free sources rate-limit
+  # datacenter IPs; keyed sources meter by key, not IP). timeout 120 caps a
+  # hung/slow source; partial output is still captured, ||warn keeps it non-fatal.
+  phase "Subdomain enum source 1/5: passive (subfinder -all)"
+  timeout 120 subfinder -d "$apex" -all -silent -json \
     -t "${SUBFINDER_CONCURRENCY:-10}" \
-    > "$wd/subfinder.json" 2> "$wd/subfinder.err" </dev/null || warn "subfinder had errors"
+    > "$wd/subfinder.json" 2> "$wd/subfinder.err" </dev/null || warn "subfinder had errors (or hit the 120s timeout)"
   jq -r '.host' "$wd/subfinder.json" 2>/dev/null | sort -u > "$wd/_src_passive.txt"
   log "  passive: $(wc -l < "$wd/_src_passive.txt" | tr -d ' ') candidates"
 
   # ─── Source 2: DNS-derived (MX/NS/SPF/DMARC) ──────────────
   # Catches subs hidden behind wildcard certs (which subfinder misses) when
   # they're referenced in the apex zone records (e.g. mail.apex from MX).
-  phase "Subdomain enum source 2/3: DNS-derived (MX/NS/SPF/DMARC)"
+  phase "Subdomain enum source 2/5: DNS-derived (MX/NS/SPF/DMARC)"
   if command -v dig >/dev/null 2>&1; then
     {
       # MX records → mail server hostnames
@@ -334,7 +347,7 @@ discover_apex() {
   # random name, every wordlist query "succeeds" and we'd flood the live list
   # with phantom subs. Detect by querying a junk name and skip wordlist if
   # it resolves.
-  phase "Subdomain enum source 3/4: wordlist brute-force (dig)"
+  phase "Subdomain enum source 3/5: wordlist brute-force (dig)"
   local wordlist="$REPO_ROOT/scanner/wordlists/subdomains-asm.txt"
   local wildcard_test_name="zzznonexistent$(date +%s).${apex}"
   local has_wildcard=0
@@ -374,7 +387,7 @@ discover_apex() {
   # Even wildcard certs sometimes have specific SANs for things like
   # 'test.example.com'. Especially useful when the host is fronted by a CDN
   # that serves multiple sites from one cert.
-  phase "Subdomain enum source 4/4: TLS cert SAN harvesting"
+  phase "Subdomain enum source 4/5: TLS cert SAN harvesting"
   : > "$wd/_src_cert_sans.txt"
   if command -v openssl >/dev/null 2>&1; then
     # Try apex on :443. -servername for SNI, -connect for the target IP+port.
@@ -392,12 +405,36 @@ discover_apex() {
   fi
   log "  cert SAN hits: $(wc -l < "$wd/_src_cert_sans.txt" | tr -d ' ')"
 
+  # ─── Source 5: Certificate Transparency (direct crt.sh) ────
+  # subfinder's CT coverage lags; a direct crt.sh query catches names issued in
+  # certs that haven't propagated to subfinder's aggregators yet. BELT-AND-
+  # SUSPENDERS ONLY — crt.sh rate-limits and can time out (esp. from a datacenter
+  # runner IP), so one shot with a timeout, tolerate empty, never load-bearing.
+  # Same filtering as the other sources: lowercase, strip wildcards, within apex.
+  phase "Subdomain enum source 5/5: Certificate Transparency (crt.sh)"
+  : > "$wd/_src_crtsh.txt"
+  if command -v curl >/dev/null 2>&1; then
+    curl -s --max-time 30 --retry 0 --max-filesize 10485760 \
+      "https://crt.sh/?q=%25.${apex}&output=json" 2>/dev/null \
+      | jq -r '.[]?.name_value // empty' 2>/dev/null \
+      | tr '[:upper:]' '[:lower:]' \
+      | tr ',' '\n' \
+      | sed 's/\*\.//g; s/^[[:space:]]*//; s/[[:space:]]*$//' \
+      | grep -E "(^|\.)${apex}$" \
+      | grep -v '\*' \
+      | sort -u > "$wd/_src_crtsh.txt"
+  else
+    warn "curl not installed — crt.sh CT enum skipped"
+  fi
+  log "  crt.sh hits: $(wc -l < "$wd/_src_crtsh.txt" | tr -d ' ')"
+
   # ─── Merge + dedupe across all sources ────────────────────
   {
     cat "$wd/_src_passive.txt"
     cat "$wd/_src_dns_derived.txt"
     cat "$wd/_src_wordlist.txt"
     cat "$wd/_src_cert_sans.txt"
+    cat "$wd/_src_crtsh.txt"
     echo "$apex"
   } | tr '[:upper:]' '[:lower:]' \
     | grep -E "(^|\.)${apex}$" \
@@ -405,7 +442,7 @@ discover_apex() {
 
   local sub_count
   sub_count=$(wc -l < "$wd/_subdomains.txt" | tr -d ' ')
-  log "Multi-source enum total: $sub_count unique candidates (passive=$(wc -l < "$wd/_src_passive.txt" | tr -d ' '), dns=$(wc -l < "$wd/_src_dns_derived.txt" | tr -d ' '), wordlist=$(wc -l < "$wd/_src_wordlist.txt" | tr -d ' '), certSAN=$(wc -l < "$wd/_src_cert_sans.txt" | tr -d ' '))"
+  log "Multi-source enum total: $sub_count unique candidates (passive=$(wc -l < "$wd/_src_passive.txt" | tr -d ' '), dns=$(wc -l < "$wd/_src_dns_derived.txt" | tr -d ' '), wordlist=$(wc -l < "$wd/_src_wordlist.txt" | tr -d ' '), certSAN=$(wc -l < "$wd/_src_cert_sans.txt" | tr -d ' '), crtsh=$(wc -l < "$wd/_src_crtsh.txt" | tr -d ' '))"
 
   phase "Liveness check (httpx) on all subdomains"
   httpx -list "$wd/_subdomains.txt" -silent -json \

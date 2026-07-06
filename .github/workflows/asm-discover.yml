@@ -95,6 +95,35 @@ jobs:
           done
           echo "All tools present."
 
+      - name: Configure subfinder API keys (keyed sources for datacenter runner)
+        # Chaos + VirusTotal are metered by API KEY, not IP — so the datacenter
+        # runner stops getting rate-limited the way the free sources (crt.sh /
+        # hackertarget) throttle datacenter IPs. Closes the ASM enumeration blind
+        # spot found 2026-07-06. Graceful: an unset secret just omits that source,
+        # subfinder still runs on its free sources. Secrets are never echoed (GH
+        # masks them anyway) — we only report the line count.
+        env:
+          PDCP_API_KEY:       ${{ secrets.PDCP_API_KEY }}
+          VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+        run: |
+          mkdir -p ~/.config/subfinder
+          cfg="$HOME/.config/subfinder/provider-config.yaml"
+          : > "$cfg"
+          # Quoted YAML value (4.7 ruling 2) — future-proofs against a rotated
+          # key format that contains a YAML-special char; today's UUID/hex keys
+          # don't need it, but it costs nothing and protects the next source added.
+          if [[ -n "$PDCP_API_KEY" ]]; then
+            printf 'chaos:\n  - "%s"\n' "$PDCP_API_KEY" >> "$cfg"
+          else
+            echo "::warning::PDCP_API_KEY secret not set — chaos source disabled"
+          fi
+          if [[ -n "$VIRUSTOTAL_API_KEY" ]]; then
+            printf 'virustotal:\n  - "%s"\n' "$VIRUSTOTAL_API_KEY" >> "$cfg"
+          else
+            echo "::warning::VIRUSTOTAL_API_KEY secret not set — virustotal source disabled"
+          fi
+          echo "subfinder provider-config written: $(wc -l < "$cfg" | tr -d ' ') line(s)"
+
       - name: Determine targets to scan
         id: targets
         # Diff-aware: push events only scan NEW targets added in this commit
@@ -198,6 +227,12 @@ jobs:
             scanner/asm-discover.sh "$tid" </dev/null || echo "::warning::Target $tid had non-zero exit"
             echo "::endgroup::"
           done < /tmp/scan_list
+
+      - name: Scrub subfinder provider-config (defensive — 4.7 ruling 1b)
+        # Runner is ephemeral so this is belt-and-suspenders, but it guarantees
+        # the keyed-source config never lingers into a reused-runner filesystem.
+        if: always()
+        run: rm -f "$HOME/.config/subfinder/provider-config.yaml" || true
 
       - name: Sync dashboard data
         if: steps.targets.outputs.mode != 'skipped'
