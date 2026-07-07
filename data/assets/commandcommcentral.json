@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-07-07T10:04:28Z_db006a62",
-    "started_at": "2026-07-07T10:04:28Z",
-    "completed_at": "2026-07-07T10:09:38Z",
-    "duration_seconds": 310,
+    "id": "scan_2026-07-07T15:02:43Z_28081572",
+    "started_at": "2026-07-07T15:02:43Z",
+    "completed_at": "2026-07-07T15:07:59Z",
+    "duration_seconds": 316,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-07-07T10:09:38Z",
-      "last_seen": "2026-07-07T10:09:38Z",
+      "first_discovered": "2026-07-07T15:07:59Z",
+      "last_seen": "2026-07-07T15:07:59Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -155,13 +155,13 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-07T10:09:38Z",
-      "last_seen": "2026-07-07T10:09:38Z",
+      "first_discovered": "2026-07-07T15:07:59Z",
+      "last_seen": "2026-07-07T15:07:59Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 500,
-        "title": "The URL you requested has been blocked"
+        "http_status": 404,
+        "title": null
       },
       "hosts": [
         {
@@ -218,9 +218,30 @@
         "dnssec": false
       },
       "fingerprint": {
-        "server": null,
-        "platform_label": null,
-        "tech": []
+        "server": "Microsoft-IIS/10.0",
+        "platform_label": "Microsoft .NET / IIS",
+        "tech": [
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          },
+          {
+            "name": "IIS",
+            "version": "10.0",
+            "category": "webserver"
+          },
+          {
+            "name": "Microsoft ASP.NET",
+            "version": null,
+            "category": "framework"
+          },
+          {
+            "name": "Windows Server",
+            "version": null,
+            "category": null
+          }
+        ]
       },
       "waf": {
         "detected": true,
@@ -233,8 +254,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-07T10:09:38Z",
-      "last_seen": "2026-07-07T10:09:38Z",
+      "first_discovered": "2026-07-07T15:07:59Z",
+      "last_seen": "2026-07-07T15:07:59Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -322,8 +343,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-07T10:09:38Z",
-      "last_seen": "2026-07-07T10:09:38Z",
+      "first_discovered": "2026-07-07T15:07:59Z",
+      "last_seen": "2026-07-07T15:07:59Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -421,8 +442,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-07T10:09:38Z",
-      "last_seen": "2026-07-07T10:09:38Z",
+      "first_discovered": "2026-07-07T15:07:59Z",
+      "last_seen": "2026-07-07T15:07:59Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -479,8 +500,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-07T10:09:38Z",
-      "last_seen": "2026-07-07T10:09:38Z",
+      "first_discovered": "2026-07-07T15:07:59Z",
+      "last_seen": "2026-07-07T15:07:59Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -535,8 +556,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-07T10:09:38Z",
-      "last_seen": "2026-07-07T10:09:38Z",
+      "first_discovered": "2026-07-07T15:08:00Z",
+      "last_seen": "2026-07-07T15:08:00Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -644,8 +665,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-07T10:09:38Z",
-      "last_seen": "2026-07-07T10:09:38Z",
+      "first_discovered": "2026-07-07T15:08:00Z",
+      "last_seen": "2026-07-07T15:08:00Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -743,8 +764,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-07T10:09:38Z",
-      "last_seen": "2026-07-07T10:09:38Z",
+      "first_discovered": "2026-07-07T15:08:00Z",
+      "last_seen": "2026-07-07T15:08:00Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -848,12 +869,9 @@
       }
     }
   ],
-  "phantom_subdomains": [
-    "admin1.commandcommcentral.com",
-    "intranet2.commandcommcentral.com"
-  ],
+  "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-07-07T04:12:52Z_bbdd3d96",
+    "since_scan": "scan_2026-07-07T10:04:28Z_db006a62",
     "added": {
       "subdomains": [],
       "services": [],
@@ -871,62 +889,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-06-07T18:08:52Z_2b3aaf4b",
-      "started_at": "2026-06-07T18:08:52Z",
-      "completed_at": "2026-06-07T18:14:08Z",
-      "subdomain_count": 6,
-      "live_subdomain_count": 6,
-      "host_count": 5,
-      "service_count": 10,
-      "subdomain_names": [
-        "api.commandcommcentral.com",
-        "commandcommcentral.com",
-        "ns01.commandcommcentral.com",
-        "ns02.commandcommcentral.com",
-        "test.commandcommcentral.com",
-        "www.commandcommcentral.com"
-      ],
-      "ports_by_sub": {
-        "commandcommcentral.com": {
-          "24.38.70.5": [
-            80,
-            443
-          ]
-        },
-        "api.commandcommcentral.com": {
-          "24.157.51.85": [
-            80,
-            443
-          ]
-        },
-        "ns01.commandcommcentral.com": {
-          "13.248.212.206": [
-            53
-          ]
-        },
-        "ns02.commandcommcentral.com": {
-          "76.223.76.45": [
-            53
-          ]
-        },
-        "test.commandcommcentral.com": {
-          "24.38.70.8": [
-            80,
-            443
-          ]
-        },
-        "www.commandcommcentral.com": {
-          "24.38.70.5": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "IIS": "10.0"
-      }
-    },
     {
       "scan_id": "scan_2026-06-07T19:49:32Z_6cad5894",
       "started_at": "2026-06-07T19:49:32Z",
@@ -7531,6 +7493,83 @@
       "scan_id": "scan_2026-07-07T10:04:28Z_db006a62",
       "started_at": "2026-07-07T10:04:28Z",
       "completed_at": "2026-07-07T10:09:38Z",
+      "subdomain_count": 9,
+      "live_subdomain_count": 9,
+      "host_count": 8,
+      "service_count": 16,
+      "subdomain_names": [
+        "api.commandcommcentral.com",
+        "commandcommcentral.com",
+        "edelivery.commandcommcentral.com",
+        "geisinger.commandcommcentral.com",
+        "ns01.commandcommcentral.com",
+        "ns02.commandcommcentral.com",
+        "test.commandcommcentral.com",
+        "testapi.commandcommcentral.com",
+        "www.commandcommcentral.com"
+      ],
+      "ports_by_sub": {
+        "commandcommcentral.com": {
+          "24.38.70.5": [
+            80,
+            443
+          ]
+        },
+        "api.commandcommcentral.com": {
+          "24.157.51.85": [
+            80,
+            443
+          ]
+        },
+        "edelivery.commandcommcentral.com": {
+          "24.157.51.88": [
+            80,
+            443
+          ]
+        },
+        "geisinger.commandcommcentral.com": {
+          "24.157.51.82": [
+            80,
+            443
+          ]
+        },
+        "ns01.commandcommcentral.com": {
+          "13.248.212.206": [
+            53
+          ]
+        },
+        "ns02.commandcommcentral.com": {
+          "76.223.76.45": [
+            53
+          ]
+        },
+        "test.commandcommcentral.com": {
+          "24.38.70.8": [
+            80,
+            443
+          ]
+        },
+        "testapi.commandcommcentral.com": {
+          "24.38.70.14": [
+            80,
+            443
+          ]
+        },
+        "www.commandcommcentral.com": {
+          "24.38.70.5": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "IIS": "10.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-07-07T15:02:43Z_28081572",
+      "started_at": "2026-07-07T15:02:43Z",
+      "completed_at": "2026-07-07T15:07:59Z",
       "subdomain_count": 9,
       "live_subdomain_count": 9,
       "host_count": 8,
