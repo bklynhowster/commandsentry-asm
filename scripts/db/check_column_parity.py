@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """
+SUPPLEMENTARY TOOL (4.7 ruling D5, 2026-07-07). The ACTIVE V3 deploy gate is
+commandsentry-portal/tests/column-guard.mjs (build-time, Netlify-blocking). This
+script is for offline verification / an independent CI check — a green run here does
+NOT substitute for the build-time gate.
+
 check_column_parity.py — ASM Verification Procedure V3 (cross-instance column parity).
 
 Mechanical, fail-closed assist for the HARD pre-deploy gate. Given the committed

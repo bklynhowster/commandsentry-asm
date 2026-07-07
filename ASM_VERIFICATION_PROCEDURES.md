@@ -25,6 +25,8 @@ git -C <repo> show origin/main:data/assets/<apex>.json | jq -r '.subdomains[].na
 ```
 
 ## V3 — Cross-instance schema/migration parity — HARD PRE-DEPLOY GATE
+**UPDATE 2026-07-07 PM (4.7 ruling D1):** the ACTIVE mechanism is now the **build-time guard** `commandsentry-portal/tests/column-guard.mjs` (wired via package.json `prebuild`; verifies every static `.from().select()` column read through PostgREST against the live DB each Netlify build targets — also catches stale PostgREST schema cache). The portal ships direct-push-to-main and the shared codebase deploys to BOTH instances, so each site's build guards its own DB → cross-instance coverage is automatic. The PR-gate + snapshot form described below is retained but DORMANT. Full ruling: `V3_GUARD_AND_CLOUD_ENDPOINT_SPEC.md`.
+
 **Rule (HARD GATE, not a review-checklist — 4.7):** any change that introduces a new column READ against a DB table ships only after that column exists on EVERY instance DB (commandsentry + prodexsentry). The check BLOCKS the deploy/merge; it is not an advisory checkbox.
 **Read surfaces to scan:** (a) portal Supabase `.select("... , new_col, ...")` strings (the actual 2026-07-07 trigger was `commandsentry-portal` adding `assets.is_staging`), and (b) SQL view/query changes referencing new columns.
 **Why hard, not soft (4.7):** Netlify auto-deploys on merge to main, so there is no "catch it at deploy time" second chance — the review window closes at merge. The failure mode is a user-visible dashboard returning `column ... does not exist` for an *unknown window*. A soft checklist that's missed ships the outage; a missed hard-gate step only blocks a PR. **Soft V3 is worse than no V3 — it creates the illusion of coverage without the mechanism.**

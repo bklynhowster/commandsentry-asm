@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """
+SUPPLEMENTARY TOOL (4.7 ruling D5, 2026-07-07). The ACTIVE V3 deploy gate is
+commandsentry-portal/tests/column-guard.mjs (build-time, Netlify-blocking). This
+snapshot generator supports the offline/independent-CI parity check only — not the
+active gate.
+
 dump_schema_snapshot.py — ASM Verification Procedure V3 helper.
 
 Snapshot a Supabase/Postgres instance's public-schema columns to JSON so the
