@@ -1,0 +1,169 @@
+# ASM cloud-provider registry — 4.7 ruling D10 (V3_GUARD_AND_CLOUD_ENDPOINT_SPEC).
+#
+# Source of truth for cloud/CDN endpoint classification. Consumed by
+# scripts/normalize/derive_cloud_endpoint.py (auto-stamps assets.is_cloud_endpoint
+# + cloud_provider at import time).
+#
+# Detection-signal priority (D6): CNAME/MX target suffix > ASN / asn_org > IP range.
+# The ASM already records hosts[].asn / hosts[].asn_org per IP, so ASN/org is the
+# strongest reliable signal after an explicit CNAME.
+#
+#   rotating: true   -> asset gets is_cloud_endpoint=true (per-IP surface changes are
+#                       pool churn — suppress). Reserve for providers that front an
+#                       asset behind a large ROTATING IP pool (mail / CDN / edge).
+#   rotating: false  -> cloud_provider is recorded for context, but is_cloud_endpoint
+#                       stays false — a stable cloud-hosted VM's IP change IS meaningful.
+#
+# PR-reviewed, git-versioned. Add a provider = add a block; no code change. IP
+# prefixes are a backstop only (partial by design); ASN/org + CNAME carry the load.
+
+providers:
+
+  microsoft_o365:
+    label: "Microsoft 365 / Exchange Online"
+    rotating: true
+    asns: ["AS8075"]
+    asn_org_patterns: ["microsoft"]
+    cname_suffixes:
+      - ".mail.protection.outlook.com"
+      - ".outlook.com"
+      - ".office365.com"
+      - ".office.com"
+      - ".protection.outlook.com"
+    # ip_prefixes source (4.7 E8): https://learn.microsoft.com/microsoft-365/enterprise/urls-and-ip-address-ranges
+    #   (live feed: endpoints.office.com worldwide). Partial hand-curated backstop —
+    #   ASN AS8075 + CNAME carry detection. last synced: 2026-07-07.
+    ip_prefixes:
+      - "52.96."
+      - "52.97."
+      - "52.98."
+      - "52.99."
+      - "40.92."
+      - "40.93."
+      - "40.94."
+      - "40.95."
+      - "40.99."
+      - "40.104."
+      - "40.107."
+      - "104.47."
+      - "2603:1006:"
+      - "2603:1016:"
+      - "2603:1026:"
+      - "2603:1036:"
+      - "2603:1046:"
+      - "2603:1056:"
+
+  azure:
+    label: "Microsoft Azure"
+    rotating: false          # Azure app/VM IPs are typically stable; a change is meaningful.
+    asns: ["AS8075"]         # shares Microsoft ASN with O365 — disambiguated by CNAME / mail ports.
+    asn_org_patterns: ["microsoft"]
+    cname_suffixes:
+      - ".azurewebsites.net"
+      - ".cloudapp.azure.com"
+      - ".cloudapp.net"
+      - ".azure.com"
+      - ".azureedge.net"
+      - ".trafficmanager.net"
+    ip_prefixes: []
+
+  cloudflare:
+    label: "Cloudflare"
+    rotating: true
+    asns: ["AS13335"]
+    asn_org_patterns: ["cloudflare"]
+    cname_suffixes: [".cloudflare.net", ".cdn.cloudflare.net"]
+    # ip_prefixes source (4.7 E8): https://www.cloudflare.com/ips/ (AS13335). last synced: 2026-07-07.
+    ip_prefixes:
+      - "104.16."
+      - "104.17."
+      - "104.18."
+      - "104.19."
+      - "104.20."
+      - "104.21."
+      - "104.22."
+      - "104.23."
+      - "104.24."
+      - "104.25."
+      - "104.26."
+      - "104.27."
+      - "104.28."
+      - "104.29."
+      - "104.30."
+      - "104.31."
+      - "172.64."
+      - "172.65."
+      - "172.66."
+      - "172.67."
+      - "172.68."
+      - "172.69."
+      - "172.70."
+      - "172.71."
+
+  akamai:
+    label: "Akamai"
+    rotating: true
+    asns: ["AS16625", "AS20940", "AS12222", "AS16702", "AS21342"]
+    asn_org_patterns: ["akamai"]
+    cname_suffixes:
+      - ".akamaiedge.net"
+      - ".akamai.net"
+      - ".akamaihd.net"
+      - ".edgekey.net"
+      - ".edgesuite.net"
+      - ".akadns.net"
+    # ip_prefixes (4.7 E8): no official published list; partial hand-curated from
+    #   observed AS16625/AS20940 ranges — ASN + CNAME carry detection. last synced: 2026-07-07.
+    ip_prefixes:
+      - "23.32."
+      - "23.33."
+      - "23.34."
+      - "23.35."
+      - "23.36."
+      - "23.37."
+      - "23.38."
+      - "23.39."
+      - "23.192."
+      - "23.193."
+      - "23.194."
+      - "23.195."
+      - "23.196."
+      - "23.197."
+      - "23.198."
+      - "23.199."
+      - "104.64."
+      - "104.72."
+      - "184.24."
+      - "184.28."
+
+  aws:
+    label: "Amazon Web Services"
+    rotating: false          # EC2/EIP stable; CloudFront edge rotates but is CNAME-detected below.
+    asns: ["AS16509", "AS14618", "AS8987", "AS7224"]
+    asn_org_patterns: ["amazon"]
+    cname_suffixes:
+      - ".cloudfront.net"     # NOTE: CloudFront IS a rotating CDN — see cloudfront override below.
+      - ".amazonaws.com"
+      - ".elb.amazonaws.com"
+      - ".awsglobalaccelerator.com"
+    ip_prefixes: []
+
+  gcp:
+    label: "Google Cloud Platform"
+    rotating: false
+    asns: ["AS15169", "AS396982", "AS19527"]
+    asn_org_patterns: ["google"]
+    cname_suffixes:
+      - ".googleusercontent.com"
+      - ".run.app"
+      - ".appspot.com"
+      - ".googleapis.com"
+      - ".ghs.googlehosted.com"
+    ip_prefixes: []
+
+# Rotating CDN services that live INSIDE an otherwise-static cloud provider and
+# must override rotating=false when their CNAME is seen (D7/D10 nuance).
+rotating_cname_overrides:
+  - ".cloudfront.net"        # AWS CloudFront edge — rotating pool
+  - ".azureedge.net"         # Azure CDN edge
+  - ".azurefd.net"           # Azure Front Door

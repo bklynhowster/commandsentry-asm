@@ -1103,13 +1103,45 @@ def build_sliced_doc(orig_doc: dict, sub_list: list[dict]) -> dict:
     return sliced
 
 
+# --- Cloud-endpoint classifier (4.7 D6 / E1-E9) -----------------------------
+# Lives in scripts/normalize/. Add that dir to the path and import directly so
+# this works regardless of CWD. Graceful: if the classifier or its YAML can't
+# load, the importer runs normally and simply doesn't stamp the cloud columns
+# (fail-open to prior behavior — never break the ingest over classification).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "normalize"))
+try:
+    from derive_cloud_endpoint import classify as _classify_cloud, load_registry as _load_cloud_registry
+    _CLOUD_REGISTRY = _load_cloud_registry()
+except Exception as _cloud_err:  # noqa: BLE001
+    _classify_cloud = None
+    _CLOUD_REGISTRY = None
+    print(f"  ! cloud classifier unavailable ({_cloud_err}) — is_cloud_endpoint not stamped this run",
+          file=sys.stderr)
+
+
+def _bucket_cloud(sliced: dict) -> tuple[bool, str | None]:
+    """Classify a bucket (one asset) -> (is_cloud_endpoint, cloud_provider).
+    Uses the first subdomain in the bucket that classifies as cloud (buckets are
+    one-asset/one-site, so any representative sub decides it). (False, None) if
+    unclassifiable or the classifier is unavailable."""
+    if _classify_cloud is None or _CLOUD_REGISTRY is None:
+        return (False, None)
+    for sub in (sliced.get("subdomains") or []):
+        r = _classify_cloud(sub, _CLOUD_REGISTRY)
+        if r:
+            return (bool(r.get("is_cloud_endpoint")), r.get("cloud_provider"))
+    return (False, None)
+
+
 UPSERT_ASSET = """
 INSERT INTO public.assets
   (asset_id, name, type, organization, ownership, discovery_status,
-   first_observed, last_observed)
+   first_observed, last_observed,
+   is_cloud_endpoint, cloud_provider, cloud_source, cloud_endpoint_classified_at)
 VALUES (%(asset_id)s, %(name)s, %(type)s, %(organization)s,
         %(ownership)s, %(discovery_status)s,
-        %(first_observed)s, %(last_observed)s)
+        %(first_observed)s, %(last_observed)s,
+        %(is_cloud_endpoint)s, %(cloud_provider)s, 'derived', now())
 ON CONFLICT (asset_id) DO UPDATE SET
   last_observed = GREATEST(public.assets.last_observed, EXCLUDED.last_observed),
   -- Tier 2 phantom defense: promote ct_ghost → confirmed_live if a later
@@ -1130,8 +1162,26 @@ ON CONFLICT (asset_id) DO UPDATE SET
       AND public.assets.ownership IN ('unknown', 'unverified')
       THEN 'owned'
     ELSE public.assets.ownership
-  END
-RETURNING asset_id, (xmax = 0) AS inserted;
+  END,
+  -- Cloud-endpoint classification (4.7 D6/E5/E7). Sticky-manual: a manual flag
+  -- (cloud_source='manual', set only via the flag helper) is NEVER overwritten
+  -- by derivation. cloud_source itself is left unchanged (manual stays manual,
+  -- derived stays derived).
+  is_cloud_endpoint = CASE WHEN public.assets.cloud_source = 'manual'
+    THEN public.assets.is_cloud_endpoint ELSE EXCLUDED.is_cloud_endpoint END,
+  cloud_provider = CASE WHEN public.assets.cloud_source = 'manual'
+    THEN public.assets.cloud_provider ELSE EXCLUDED.cloud_provider END,
+  cloud_endpoint_classified_at = CASE WHEN public.assets.cloud_source = 'manual'
+    THEN public.assets.cloud_endpoint_classified_at ELSE now() END,
+  -- cloud_drift (4.7 E7): true when a sticky MANUAL flag disagrees with the fresh
+  -- derived value. IS DISTINCT FROM so NULL-vs-value counts as a real disagreement
+  -- (intended: manual='microsoft_o365' vs derived NULL = drift worth surfacing).
+  cloud_drift = CASE
+    WHEN public.assets.cloud_source = 'manual'
+      AND (public.assets.is_cloud_endpoint IS DISTINCT FROM EXCLUDED.is_cloud_endpoint
+           OR public.assets.cloud_provider   IS DISTINCT FROM EXCLUDED.cloud_provider)
+    THEN true ELSE false END
+RETURNING asset_id, (xmax = 0) AS inserted, cloud_drift;
 """
 
 # Auto-create row for a newly-discovered subdomain. Sets kind + apex_domain
@@ -1142,12 +1192,14 @@ UPSERT_NEW_SUBDOMAIN_ASSET = """
 INSERT INTO public.assets
   (asset_id, name, type, organization, kind, apex_domain,
    ownership, discovery_status,
-   first_observed, last_observed)
+   first_observed, last_observed,
+   is_cloud_endpoint, cloud_provider, cloud_source, cloud_endpoint_classified_at)
 VALUES
   (%(asset_id)s, %(asset_id)s, 'single_host', %(organization)s,
    %(kind)s, %(apex_domain)s,
    %(ownership)s, %(discovery_status)s,
-   %(first_observed)s, %(last_observed)s)
+   %(first_observed)s, %(last_observed)s,
+   %(is_cloud_endpoint)s, %(cloud_provider)s, 'derived', now())
 ON CONFLICT (asset_id) DO UPDATE SET
   last_observed = GREATEST(public.assets.last_observed, EXCLUDED.last_observed),
   discovery_status = CASE
@@ -1161,8 +1213,22 @@ ON CONFLICT (asset_id) DO UPDATE SET
       AND public.assets.ownership IN ('unknown', 'unverified')
       THEN 'owned'
     ELSE public.assets.ownership
-  END
-RETURNING asset_id, (xmax = 0) AS inserted;
+  END,
+  -- Cloud-endpoint classification (4.7 D6/E5/E7). Sticky-manual: manual flag never
+  -- overwritten by derivation; cloud_source unchanged. cloud_drift = manual disagrees
+  -- with derived (IS DISTINCT FROM so NULL-vs-value counts as a real disagreement).
+  is_cloud_endpoint = CASE WHEN public.assets.cloud_source = 'manual'
+    THEN public.assets.is_cloud_endpoint ELSE EXCLUDED.is_cloud_endpoint END,
+  cloud_provider = CASE WHEN public.assets.cloud_source = 'manual'
+    THEN public.assets.cloud_provider ELSE EXCLUDED.cloud_provider END,
+  cloud_endpoint_classified_at = CASE WHEN public.assets.cloud_source = 'manual'
+    THEN public.assets.cloud_endpoint_classified_at ELSE now() END,
+  cloud_drift = CASE
+    WHEN public.assets.cloud_source = 'manual'
+      AND (public.assets.is_cloud_endpoint IS DISTINCT FROM EXCLUDED.is_cloud_endpoint
+           OR public.assets.cloud_provider   IS DISTINCT FROM EXCLUDED.cloud_provider)
+    THEN true ELSE false END
+RETURNING asset_id, (xmax = 0) AS inserted, cloud_drift;
 """
 
 # Tier 2 phantom defense — separate UPSERT path for phantom subdomains.
@@ -1319,6 +1385,19 @@ def import_one(
                 if row and row[0] is not None:
                     existing_blob = row[0]
 
+            # 1b. Cloud-endpoint classification (4.7 E5/E7): fetch the existing
+            #     cloud fields (for the sticky-manual drift audit) + derive from
+            #     this scan's surface data. Runs regardless of skip_events.
+            cur.execute(
+                "SELECT cloud_source, is_cloud_endpoint, cloud_provider "
+                "FROM public.assets WHERE asset_id = %s",
+                (bucket_id,),
+            )
+            _crow = cur.fetchone()
+            _existing_is_cloud = _crow[1] if _crow else None
+            _existing_provider = _crow[2] if _crow else None
+            _derived_is_cloud, _derived_provider = _bucket_cloud(sliced)
+
             # 2. Upsert the asset row. The apex uses the standard
             #    UPSERT_ASSET (preserves its existing kind/aliases).
             #    Non-apex subdomains use UPSERT_NEW_SUBDOMAIN_ASSET which
@@ -1361,6 +1440,8 @@ def import_one(
                     "discovery_status": disc,
                     "first_observed": bucket_lifecycle["first_discovered"],
                     "last_observed": bucket_lifecycle["last_seen"],
+                    "is_cloud_endpoint": _derived_is_cloud,
+                    "cloud_provider": _derived_provider,
                 })
             else:
                 cur.execute(UPSERT_NEW_SUBDOMAIN_ASSET, {
@@ -1372,10 +1453,28 @@ def import_one(
                     "discovery_status": disc,
                     "first_observed": bucket_lifecycle["first_discovered"],
                     "last_observed": bucket_lifecycle["last_seen"],
+                    "is_cloud_endpoint": _derived_is_cloud,
+                    "cloud_provider": _derived_provider,
                 })
             a_row = cur.fetchone()
             if a_row and a_row[1]:
                 assets_inserted += 1
+            # 2b. cloud_drift audit (4.7 E7): the UPSERT flags cloud_drift=true when a
+            #     sticky manual flag disagreed with the fresh derived value. Record the
+            #     temporal trail (the boolean column drives the portal chip).
+            if a_row and len(a_row) > 2 and a_row[2] and not skip_events:
+                cur.execute(
+                    "INSERT INTO public.admin_audit_log "
+                    "(action, before_state, after_state, details) VALUES (%s, %s, %s, %s)",
+                    (
+                        "cloud_classification_drift",
+                        Json({"is_cloud_endpoint": _existing_is_cloud, "cloud_provider": _existing_provider}),
+                        Json({"is_cloud_endpoint": _derived_is_cloud, "cloud_provider": _derived_provider}),
+                        Json({"asset_id": bucket_id, "rule": "derive_cloud_endpoint_v1",
+                              "manual": {"is_cloud_endpoint": _existing_is_cloud, "cloud_provider": _existing_provider},
+                              "derived": {"is_cloud_endpoint": _derived_is_cloud, "cloud_provider": _derived_provider}}),
+                    ),
+                )
 
             # 3. Upsert the per-asset surface row
             cur.execute(UPSERT_SURFACE, {

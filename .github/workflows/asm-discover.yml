@@ -339,7 +339,11 @@ jobs:
             echo "Add it in GitHub repo settings to enable per-scan Supabase sync."
             exit 0
           fi
-          python3 -m pip install --break-system-packages --quiet 'psycopg[binary]==3.3.4'
+          # pyyaml: required by scripts/normalize/derive_cloud_endpoint.py (cloud
+          # classifier reads scripts/asm/cloud_providers.yaml). Without it the
+          # importer's classifier import falls back to a no-op (no is_cloud_endpoint
+          # stamped) — so it's a hard dep for the classifier to work on the runner.
+          python3 -m pip install --break-system-packages --quiet 'psycopg[binary]==3.3.4' pyyaml
           python3 scripts/db/import_asm_to_surface.py --source-tag asm_cron
 
       - name: Trigger Netlify deploy (chain past GITHUB_TOKEN anti-recursion)
