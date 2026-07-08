@@ -364,6 +364,16 @@ def build_waf(work: Path) -> dict:
 
 # ─── Build subdomain record ──────────────────────────────────────────────────
 
+def build_probe_status(work: Path) -> dict:
+    """Per-tool probe health for this host THIS scan, read from `_probe_status.json`
+    ({tool: {"ok": true} | {"degraded": "<reason>"}}, written by the scanner).
+    4.7 G3: lets the differ distinguish 'probes ran, item genuinely absent' (a real
+    removal) from 'probes degraded, item not observed' (UNKNOWN, never removed).
+    Absent file → {} → the G1 gate treats every item as observed (no suppression),
+    i.e. exactly current behaviour until the scanner writes the file."""
+    data = read_json(work / "_probe_status.json")
+    return data if isinstance(data, dict) else {}
+
 def build_subdomain_record(name: str, sub_work: Path, *, is_root: bool,
                            discovered_via: str, ip_cache: dict) -> dict:
     return {
@@ -375,6 +385,7 @@ def build_subdomain_record(name: str, sub_work: Path, *, is_root: bool,
         "last_seen":        utc_now(),
         "tags":             [],
         "reachability":     build_reachability(sub_work),
+        "probe_status":     build_probe_status(sub_work),   # 4.7 G3: per-tool health
         "hosts":            build_hosts(sub_work, ip_cache),
         "services":         build_services(sub_work),
         "dns":              build_dns(sub_work),
@@ -431,6 +442,19 @@ def compute_deltas(prev: dict | None, current: dict) -> dict:
         return out
     out["since_scan"] = prev.get("scan", {}).get("id")
 
+    # 4.7 G1/G3: a host/service that dropped out is only a REAL removal if the
+    # probes that would observe it ran OK this scan. If they degraded, the item
+    # is UNKNOWN — carry forward, never emit a removal. Per delta class: ports
+    # need naabu; a host needs naabu OR httpx (any successful observation). A sub
+    # with no probe_status (file absent) reads as fully observed → no suppression.
+    _curr_by_sub = {s.get("name"): s for s in current.get("subdomains", [])}
+    def _degraded(sub, tool):
+        return "degraded" in ((_curr_by_sub.get(sub, {}).get("probe_status") or {}).get(tool) or {})
+    def _host_unobserved(sub):   # no way to confirm the host is gone this scan
+        return _degraded(sub, "naabu") and _degraded(sub, "httpx_tech")
+    def _ports_unobserved(sub):  # can't confirm a port closed if the port scan failed
+        return _degraded(sub, "naabu")
+
     prev_subs = {s["name"] for s in prev.get("subdomains", []) if s.get("alive")}
     curr_subs = {s["name"] for s in current["subdomains"] if s.get("alive")}
     out["added"]["subdomains"]   = sorted(curr_subs - prev_subs)
@@ -448,7 +472,8 @@ def compute_deltas(prev: dict | None, current: dict) -> dict:
     out["added"]["services"]   = [{"subdomain": sub, "ip": ip, "port": p, "protocol": pr}
                                   for (sub, ip, p, pr) in sorted(curr_svcs - prev_svcs)]
     out["removed"]["services"] = [{"subdomain": sub, "ip": ip, "port": p, "protocol": pr}
-                                  for (sub, ip, p, pr) in sorted(prev_svcs - curr_svcs)]
+                                  for (sub, ip, p, pr) in sorted(prev_svcs - curr_svcs)
+                                  if not _ports_unobserved(sub)]   # 4.7 G1
 
     def hosts_with_owner(record: dict) -> set[tuple]:
         bag = set()
@@ -461,7 +486,8 @@ def compute_deltas(prev: dict | None, current: dict) -> dict:
     prev_hosts = hosts_with_owner(prev)
     curr_hosts = hosts_with_owner(current)
     out["added"]["hosts"]   = [{"subdomain": sub, "ip": ip} for (sub, ip) in sorted(curr_hosts - prev_hosts)]
-    out["removed"]["hosts"] = [{"subdomain": sub, "ip": ip} for (sub, ip) in sorted(prev_hosts - curr_hosts)]
+    out["removed"]["hosts"] = [{"subdomain": sub, "ip": ip} for (sub, ip) in sorted(prev_hosts - curr_hosts)
+                               if not _host_unobserved(sub)]   # 4.7 G1
 
     # Tech version changes per subdomain
     def tech_index(record: dict) -> dict[tuple[str, str], str | None]:
