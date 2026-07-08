@@ -81,14 +81,76 @@ def _derive(title: str, description: str):
     return None
 
 
+def _close_orphaned_synthetics(conn, cur, args) -> int:
+    """4.7 I6 — close leftover roll-up synthetics after I5 retired the roll-up
+    (COMMANDsentry never emitted these; this is a no-op there — it exists so the
+    shared script stays identical across instances). Discriminator
+    `finding_id LIKE '%:medium:nikto-tech-fingerprint-headers'` is unique to the
+    retired emitter, so nothing else can match. Mirrors delta_close: only rows
+    still in the OPEN set flip to 'remediated' with remediated_at set; one
+    admin_audit_log row each. DRY-RUN unless --apply (+ 'yes')."""
+    where = ("finding_id LIKE %s AND "
+             "current_status IN ('detected','confirmed','open','regressed')")
+    params: list = ["%:medium:nikto-tech-fingerprint-headers"]
+    if args.asset:
+        where += " AND asset_id = %s"
+        params.append(args.asset)
+    cur.execute(
+        f"select finding_id, asset_id, current_status from findings where {where}",
+        params)
+    rows = cur.fetchall()
+
+    print(f"open roll-up synthetics to retire: {len(rows)}"
+          + (f" (asset={args.asset})" if args.asset else ""))
+    for fid, asset_id, st in rows[:40]:
+        print(f"  {asset_id:40.40s} {str(st):10s} {fid}")
+    if not rows:
+        print("nothing to do.")
+        return 0
+    if not args.apply:
+        print("\nDRY-RUN — no writes performed. Re-run with --apply to close.")
+        return 0
+
+    resp = input(f"\nClose {len(rows)} synthetic(s) -> remediated on this DB? type 'yes': ").strip()
+    if resp != "yes":
+        print("aborted — no writes.")
+        return 0
+
+    done = 0
+    for i in range(0, len(rows), BATCH):
+        for fid, asset_id, st in rows[i:i + BATCH]:
+            cur.execute("update findings set current_status = 'remediated', "
+                        "remediated_at = now() where finding_id = %s", (fid,))
+            cur.execute(
+                "insert into admin_audit_log (action, before_state, after_state, details) "
+                "values (%s, %s, %s, %s)",
+                ("nikto_rollup_synthetic_retired",
+                 Json({"current_status": str(st)}),
+                 Json({"current_status": "remediated"}),
+                 Json({"finding_id": fid, "asset_id": asset_id, "ref": "4.7-I5/I6",
+                       "reason": "roll-up-retired-in-favor-of-per-header-collapse"})))
+        conn.commit()
+        done += len(rows[i:i + BATCH])
+        print(f"  committed {done}/{len(rows)}")
+    print(f"done — {done} synthetic(s) closed (superseded by per-header collapse).")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry-run)")
     ap.add_argument("--asset", help="restrict to one asset_id (e.g. cooked.prodexlabs.com)")
+    ap.add_argument("--close-orphaned-synthetics", action="store_true",
+                    help="4.7 I6: separate one-shot — close leftover roll-up synthetic "
+                         "findings (nikto-tech-fingerprint-headers) retired by I5, "
+                         "current_status -> remediated. Does NOT run the key backfill.")
     args = ap.parse_args()
 
     conn = psycopg.connect(DSN, connect_timeout=15)
     cur = conn.cursor()
+
+    if args.close_orphaned_synthetics:
+        return _close_orphaned_synthetics(conn, cur, args)
 
     # I4: live rows are commandsentry_* with a NULL key. Pattern is bound as a
     # PARAMETER (not inlined) so the LIKE metachars live in the value, not the SQL

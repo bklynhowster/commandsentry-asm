@@ -122,6 +122,20 @@ def test_extraction_agreement_across_parser_formats():
         assert bare == titled == expected, (desc, bare, titled)
 
 
+def test_extraction_spares_non_header_lines():
+    # 4.7 I8 coverage port — the retired Prodex roll-up's "spares real findings"
+    # set. These are NOT header disclosures, so extract_header_disclosure returns
+    # None and they never receive a class-collapse key (stay Bucket 3 / own row).
+    for line in (
+        'The Content-Encoding header is set to "deflate" which may mean that the '
+        "server is vulnerable to the BREACH attack.",
+        "Server may leak inodes via ETags, header found with file /, fields: 0x123",
+        "/admin/: This might be interesting.",
+        "",
+    ):
+        assert extract_header_disclosure(line) is None, line
+
+
 if __name__ == "__main__":
     test_fingerprint_bucket()
     test_version_bucket_never_swallowed()
@@ -129,4 +143,5 @@ if __name__ == "__main__":
     test_line_dispositions()
     test_classify_nikto_header_ssot()
     test_extraction_agreement_across_parser_formats()
+    test_extraction_spares_non_header_lines()
     print("all nikto header-classify anchor tests PASSED")
