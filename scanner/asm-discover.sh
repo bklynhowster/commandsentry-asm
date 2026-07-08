@@ -236,7 +236,9 @@ discover_fqdn() {
     -rate "${NAABU_RATE:-1000}" \
     -scan-type CONNECT \
     -silent -json \
-    > "$wd/naabu.json" 2> "$wd/naabu.err" || warn "naabu had errors"
+    > "$wd/naabu.json" 2> "$wd/naabu.err"
+  local naabu_rc=$?   # 4.7 G3: preserve rc — rc!=0 = couldn't reach host this scan
+  [[ $naabu_rc -ne 0 ]] && warn "naabu had errors (rc=$naabu_rc)"
 
   phase "Service fingerprinting (fingerprintx)"
   if [[ -s "$wd/naabu.json" ]]; then
@@ -251,7 +253,24 @@ discover_fqdn() {
     -tech-detect -title -status-code -server -content-type \
     -tls-grab -follow-redirects \
     -threads "${HTTPX_THREADS:-25}" \
-    > "$wd/httpx.json" 2> "$wd/httpx.err" || warn "httpx had errors"
+    > "$wd/httpx.json" 2> "$wd/httpx.err"
+  local httpx_rc=$?
+  [[ $httpx_rc -ne 0 ]] && warn "httpx had errors (rc=$httpx_rc)"
+
+  # ─── 4.7 G3 producer — per-tool probe health ─────────────────────────
+  # Record whether the reachability probes actually RAN this scan so the differ
+  # (normalize.compute_deltas via build_probe_status) can tell "probes ran, item
+  # genuinely absent" (real removal) from "probes degraded, host unreachable"
+  # (UNKNOWN — never a removal). rc != 0 is the egress-failure signature behind
+  # the false removals (naabu network_unreachable while DNS still resolves).
+  {
+    printf '{'
+    if [[ ${naabu_rc:-0} -eq 0 ]]; then printf '"naabu":{"ok":true}'
+    else printf '"naabu":{"degraded":"naabu_rc_%s"}' "${naabu_rc:-0}"; fi
+    if [[ ${httpx_rc:-0} -eq 0 ]]; then printf ',"httpx_tech":{"ok":true}'
+    else printf ',"httpx_tech":{"degraded":"httpx_rc_%s"}' "${httpx_rc:-0}"; fi
+    printf '}\n'
+  } > "$wd/_probe_status.json"
 
   phase "WAF detection (wafw00f)"
   wafw00f "$target" -a -o "$wd/wafw00f.json" -f json 2> "$wd/wafw00f.err" || warn "wafw00f had errors"
