@@ -111,6 +111,95 @@ def _category_for_text(text: str) -> str:
     return "config"
 
 
+# ─── 4.7 H1/H3 (2026-07-08) — response-header disclosure classification ───────
+# THREE BUCKETS, pure functions + anchor-tested (H5, test_nikto_header_classify.py):
+#   fingerprint → INFO, collapses via shared normalized_key "tech-header-disclosure"
+#   version     → LOW,  own finding, normalized_key "tech-version-disclosure" (a
+#                 version string is a CVE-lookup shortcut — hygiene, stays visible;
+#                 NEVER swallowed into the fingerprint bucket — 4.7 H3 pushback)
+#   None        → not a fingerprint header → caller keeps default handling (Bucket 3:
+#                 missing/misconfigured security headers, cookies, CORS, BREACH,
+#                 exposed paths — untouched).
+# The header-name allowlist is a CLOSED SET (H5) — do not widen to an open regex.
+_FINGERPRINT_HEADER_NAMES = frozenset({
+    "x-powered-by", "server", "via", "alt-svc",
+    "x-cache", "cf-cache-status", "x-varnish",
+    "x-aspnet-version", "x-aspnetmvc-version",   # always version-bearing → Bucket 2
+})
+_FINGERPRINT_HEADER_PREFIXES = ("x-nextjs-", "x-vercel-", "x-fastly-", "x-akamai-", "x-envoy-")
+# Security/actionable header names that must NEVER collapse even when nikto
+# "Retrieved" them — a bad value here is a real finding (Bucket 3).
+_SECURITY_HEADER_NAMES = frozenset({
+    "x-frame-options", "x-content-type-options", "content-security-policy",
+    "strict-transport-security", "referrer-policy", "permissions-policy",
+    "access-control-allow-origin", "access-control-allow-credentials",
+    "access-control-allow-methods", "set-cookie", "cache-control",
+})
+_VERSION_RE = re.compile(r"\d+\.\d+(?:\.\d+)?")
+_HDR_RETRIEVED_RE = re.compile(r"^Retrieved\s+([A-Za-z0-9\-]+)\s+header:\s*(.+)$", re.IGNORECASE)
+_HDR_UNCOMMON_RE  = re.compile(r"^Uncommon header\(s\)\s+'([^']+)'\s+found(?:,\s*with contents:\s*(.*))?$", re.IGNORECASE)
+_HDR_ALTSVC_RE    = re.compile(r"^(?:An?|The)\s+(alt-svc)\s+header\s+was\s+found", re.IGNORECASE)
+
+
+def _is_fingerprint_header_name(name: str) -> bool:
+    n = (name or "").strip().lower()
+    if n in _SECURITY_HEADER_NAMES:
+        return False
+    if n.endswith("-cache"):            # x-*-cache family (x-nextjs-cache, etc.)
+        return True
+    if n in _FINGERPRINT_HEADER_NAMES:
+        return True
+    return any(n.startswith(p) for p in _FINGERPRINT_HEADER_PREFIXES)
+
+
+def _parse_header_disclosure(desc: str):
+    """Extract (header_name, header_value) from a nikto header-disclosure line, or
+    None if it isn't one. Handles 'Retrieved X header: Y', 'Uncommon header(s) 'X'
+    found, with contents: Y', and alt-svc advertisements."""
+    m = _HDR_RETRIEVED_RE.match(desc)
+    if m:
+        return (m.group(1), (m.group(2) or "").strip())
+    m = _HDR_UNCOMMON_RE.match(desc)
+    if m:
+        return (m.group(1), (m.group(2) or "").strip())
+    m = _HDR_ALTSVC_RE.match(desc)
+    if m:
+        return (m.group(1), "")        # alt-svc advertisement — no version
+    return None
+
+
+def classify_header_disclosure(header_name: str, header_value: str):
+    """4.7 H3 pure classifier → "fingerprint" | "version" | None. A SOFTWARE version
+    string routes to "version" (never swallowed into fingerprint). `via` and `alt-svc`
+    are proxy/protocol advertisements — their numbers are PROTOCOL versions
+    (HTTP/1.1, HTTP/3), not software CVE versions — so they always fingerprint."""
+    if not _is_fingerprint_header_name(header_name):
+        return None
+    n = (header_name or "").strip().lower()
+    if n in ("via", "alt-svc"):
+        return "fingerprint"
+    if header_value and _VERSION_RE.search(header_value):
+        return "version"
+    return "fingerprint"
+
+
+def _classify_header_line(desc: str):
+    """If `desc` is a fingerprint/version header disclosure, return
+    (severity, category, normalized_key, title); else None (caller keeps defaults)."""
+    hd = _parse_header_disclosure(desc)
+    if not hd:
+        return None
+    name, value = hd
+    bucket = classify_header_disclosure(name, value)
+    if bucket == "fingerprint":
+        return ("INFO", "info_disclosure", "tech-header-disclosure",
+                "Technology disclosed via response headers")
+    if bucket == "version":
+        return ("LOW", "info_disclosure", "tech-version-disclosure",
+                f"Technology version disclosed via {name.lower()} header")
+    return None
+
+
 def parse_nikto_file(
     text_path: Path,
     asset_id: str,
@@ -178,8 +267,16 @@ def parse_nikto_file(
                 if target_host
                 else (f"https://{target_ip}{path}" if target_ip else path)
             )
-            severity = _severity_for_text(desc)
-            category = _category_for_text(desc)
+            # 4.7 H1/H3 — response-header disclosure buckets (fingerprint → collapse
+            # INFO via shared key; version → own LOW; else default = Bucket 3).
+            _hb = _classify_header_line(desc)
+            if _hb:
+                severity, category, nkey, title = _hb
+            else:
+                severity = _severity_for_text(desc)
+                category = _category_for_text(desc)
+                nkey = None
+                title = f"nikto[{test_id}]: {desc[:120]}"
             fid = stable_finding_id(event_asset_id, "nikto", f"id-{test_id}", matched_at)
             if fid in seen_finding_ids:
                 continue
@@ -189,7 +286,7 @@ def parse_nikto_file(
                 asset_id=event_asset_id,
                 scan_id=scan_id,
                 source="nikto",
-                title=f"nikto[{test_id}]: {desc[:120]}",
+                title=title,
                 severity=severity,
                 category=category,
                 observed_at=observed_at,
@@ -202,6 +299,7 @@ def parse_nikto_file(
                 host_ip=target_ip,
                 port=target_port or 443,
                 protocol="https" if (target_port or 443) == 443 else "http",
+                normalized_key=nkey,
             ))
             continue
 

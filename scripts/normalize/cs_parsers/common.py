@@ -227,6 +227,12 @@ class FindingEvent:
     # to count-based heuristic.
     status_hint: Optional[str] = None   # "open", "remediated", "regressed", "validated_remediated"
 
+    # 4.7 H1/H5 (2026-07-08) — parser-native dedup key for INTRA-source class
+    # collapse (e.g. nikto tech-fingerprint headers → "tech-header-disclosure").
+    # Distinct from the cross-source same-fact map (run_normalize #36); when a
+    # parser sets this, run_normalize honours it over the (None) cross-source lookup.
+    normalized_key: Optional[str] = None
+
     def __post_init__(self):
         # Title normalization happens once at construction so every parser
         # gets it for free without each one having to remember.

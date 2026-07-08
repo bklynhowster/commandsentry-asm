@@ -203,7 +203,7 @@ def rollup_findings(events: list[FindingEvent]) -> list[dict]:
             "host_ip":               last.host_ip or first.host_ip,
             "port":                  last.port or first.port,
             "protocol":              last.protocol or first.protocol,
-            "normalized_key":        cross_source_key,  # #36 — None if no entry matches
+            "normalized_key":        first.normalized_key or cross_source_key,  # 4.7 H1: parser-native intra-source key wins; else #36 cross-source map
             "history":               history,
             "evidence_ids":          [],   # populated by evidence-artifact parser
             "tags":                  [],
