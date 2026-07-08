@@ -53,6 +53,12 @@ except ImportError:
     )
     sys.exit(1)
 
+# 4.7 J5b — shared cross-scan confirmation thresholds (SSOT), same object the
+# file-delta alerter (scanner/post-email-alerts.py) reads. Own dir on path so
+# the sibling import resolves whether run as a script or imported by a test.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from confirmation_thresholds import CONFIRMATION_THRESHOLDS  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Default paths
@@ -342,12 +348,28 @@ def derive_lifecycle(asm_doc: dict) -> dict[str, Any]:
 
 
 def flatten_services(blob: dict) -> dict[tuple[str, int, str], dict]:
-    """Walk surface_data.subdomains[].hosts[].services[] (or the legacy
-    surface_data.subdomains[].services[] shape) and return a map keyed by
-    (host, port, proto) → service detail dict.
+    """Walk a surface_data blob and return a map keyed by (subdomain, port, proto)
+    → service detail dict.
 
-    Returns an empty dict for any unparseable blob — the importer never
-    fails an upsert because of event-diff problems.
+    4.7 J1/J2 (2026-07-08). TWO fixes to a differ that was silently blind:
+      * J1 — services live at surface_data.subdomains[].services[] in the current
+        ASM blob; a legacy shape nested them under subdomains[].hosts[].services[].
+        The prior code took an if/else that read ONLY the host-nested branch when
+        hosts[] existed — and real assets ALWAYS have hosts[] (pure IP/geo metadata,
+        no services) — so it flattened nothing (DB-proven: 0 services for an asset
+        with 32). We now UNION both shapes. The legacy host-nested branch stays as
+        defensive coverage during any shape transition (scheduled removal once no
+        scanner emits it).
+      * J2(A) — identity is (subdomain, port, proto). The per-service `ip` ROTATES
+        on cloud endpoints (e.g. O365 mail = 24 IPs x 8 ports) and is DETAIL only,
+        never identity. Keying on IP would emit port_opened/port_closed every scan
+        as the pool rotates — the exact churn class the cloud-endpoint suppression
+        (D6-F5) killed. The operator concept is "port P open on this subdomain,"
+        independent of which IP answers, so a rotating pool collapses to one tuple
+        per (subdomain, port).
+
+    Returns an empty dict for any unparseable blob — the importer never fails an
+    upsert because of event-diff problems.
     """
     out: dict[tuple[str, int, str], dict] = {}
     if not isinstance(blob, dict):
@@ -359,30 +381,23 @@ def flatten_services(blob: dict) -> dict[tuple[str, int, str], dict]:
     for sub in subs:
         if not isinstance(sub, dict):
             continue
-        sub_name = sub.get("name") or sub.get("subdomain")
-
-        # Two possible shapes — the ASM JSON has services attached either
-        # to each host or directly to the subdomain. Handle both.
-        host_entries = sub.get("hosts") or []
-        if host_entries:
-            for h in host_entries:
-                if not isinstance(h, dict):
-                    continue
-                host_addr = h.get("ip") or h.get("address") or sub_name or "?"
-                for svc in (h.get("services") or []):
-                    _record_service(out, host_addr, sub_name, svc)
-        else:
-            host_addr = sub_name or "?"
-            for svc in (sub.get("services") or []):
-                _record_service(out, host_addr, sub_name, svc)
+        sub_name = sub.get("name") or sub.get("subdomain") or "?"
+        # UNION both shapes (J1) — do NOT if/else. host-nested is legacy/defensive;
+        # subdomain-level is where the live blob actually carries services.
+        svcs: list = []
+        for h in (sub.get("hosts") or []):
+            if isinstance(h, dict):
+                svcs.extend(h.get("services") or [])
+        svcs.extend(sub.get("services") or [])
+        for svc in svcs:
+            _record_service(out, sub_name, svc)
 
     return out
 
 
 def _record_service(
     out: dict[tuple[str, int, str], dict],
-    host: str,
-    subdomain: str | None,
+    subdomain: str,
     svc: dict,
 ) -> None:
     if not isinstance(svc, dict):
@@ -392,19 +407,40 @@ def _record_service(
     except (TypeError, ValueError):
         return
     proto = (svc.get("protocol") or svc.get("proto") or "tcp").lower()
-    key = (host, port, proto)
-    # First-wins: if a service appears twice across hosts for the same
-    # (host, port, proto), keep the first detail.
+    # J2(A) — IP-agnostic identity. The rotating per-service IP is detail, NOT key.
+    key = (subdomain, port, proto)
+    # First-wins: multiple IPs serving the same (subdomain, port, proto) collapse
+    # to one tuple — a rotating pool is one logical service, not N services.
     if key in out:
         return
     out[key] = {
-        "host": host,
+        "host": subdomain,
         "subdomain": subdomain,
+        "ip": svc.get("ip"),          # detail only (may rotate); never identity
         "port": port,
         "proto": proto,
         "service": svc.get("service") or svc.get("name"),
         "tls": bool(svc.get("tls")),
     }
+
+
+def _subdomain_naabu_ok(blob: dict) -> dict[str, bool]:
+    """4.7 J5a — per-subdomain port-scanner health from the blob's probe_status.
+    naabu discovers ports; if it didn't succeed for a subdomain this scan, that
+    subdomain's port set is UNKNOWN and port_closed must NOT fire (carry forward —
+    G1 at the port grain). Deliberately naabu-ONLY: httpx_tech/fingerprintx failing
+    doesn't invalidate port existence. Fail-closed — missing/malformed
+    probe_status.naabu → not ok (absence of evidence isn't evidence of absence)."""
+    out: dict[str, bool] = {}
+    if not isinstance(blob, dict):
+        return out
+    for sub in (blob.get("subdomains") or []):
+        if not isinstance(sub, dict):
+            continue
+        name = sub.get("name") or sub.get("subdomain") or "?"
+        naabu = (sub.get("probe_status") or {}).get("naabu") or {}
+        out[name] = bool(naabu.get("ok"))
+    return out
 
 
 def compute_events(
@@ -439,6 +475,9 @@ def compute_events(
 
     old_map = flatten_services(existing_blob)
     new_map = flatten_services(new_blob)
+    # 4.7 J5a — port_closed is gated on the NEW scan's port-scanner health per
+    # subdomain; port_opened is NOT (G2: a degraded/empty scan can't fabricate a port).
+    new_naabu_ok = _subdomain_naabu_ok(new_blob)
 
     events: list[dict] = []
 
@@ -460,6 +499,10 @@ def compute_events(
         )
 
     for key in old_map.keys() - new_map.keys():
+        # J5a — a subdomain whose naabu failed/absent this scan has an UNTRUSTWORTHY
+        # port set → carry forward as UNKNOWN, emit NO port_closed (G1 pattern).
+        if not new_naabu_ok.get(key[0], False):
+            continue
         det = old_map[key]
         events.append(
             {
@@ -487,6 +530,26 @@ INSERT INTO public.asset_surface_event (
   %(asset_id)s, %(event_type)s, %(host)s, %(port)s, %(proto)s, %(service)s, %(tls)s,
   %(prev_value)s, %(new_value)s, %(source_tag)s
 );
+"""
+
+
+# 4.7 J5b(c) — port_closed EMAIL confirmation streak, counted from the event log
+# itself (the append-only log IS the pending-removal state — no notification_status
+# column). Streak = consecutive port_closed rows for this (asset, host, port, proto)
+# since the last port_opened (a re-open resets it, mirroring G5's file-delta
+# _absent_streak). Backed by idx_asset_surface_event_asset_time (asset_id leads).
+PORT_CLOSED_STREAK_SQL = """
+WITH last_open AS (
+  SELECT MAX(observed_at) AS ts FROM public.asset_surface_event
+   WHERE asset_id = %(asset_id)s AND host = %(host)s
+     AND port = %(port)s AND proto = %(proto)s
+     AND event_type = 'port_opened'
+)
+SELECT COUNT(*) FROM public.asset_surface_event
+ WHERE asset_id = %(asset_id)s AND host = %(host)s
+   AND port = %(port)s AND proto = %(proto)s
+   AND event_type = 'port_closed'
+   AND observed_at > COALESCE((SELECT ts FROM last_open), '-infinity'::timestamptz);
 """
 
 
@@ -681,6 +744,25 @@ def dispatch_event_notifications(
     import urllib.request
     import urllib.error
 
+    # 4.7 J5b(c) — port_closed EMAIL is gated on N-consecutive-scan confirmation.
+    # The DB rows are already written+committed (compute_events ran before the
+    # commit above), so the streak query sees this scan's port_closed too. The
+    # timeline stays honest (every observation persisted); only the notification
+    # waits for the streak to reach N. Computed ONCE per (asset, host, port, proto);
+    # port_opened / asset_first_seen / asset_went_dark are NOT gated.
+    pc_confirmed: dict[tuple, bool] = {}
+    pc_threshold = CONFIRMATION_THRESHOLDS["port_closed"]
+    with conn.cursor() as _pc_cur:
+        for _ev in all_events:
+            if _ev.get("event_type") != "port_closed":
+                continue
+            _k = (_ev["asset_id"], _ev["host"], _ev["port"], _ev["proto"])
+            if _k in pc_confirmed:
+                continue
+            _pc_cur.execute(PORT_CLOSED_STREAK_SQL, {
+                "asset_id": _k[0], "host": _k[1], "port": _k[2], "proto": _k[3]})
+            pc_confirmed[_k] = (_pc_cur.fetchone()[0] or 0) >= pc_threshold
+
     for sub in subscribers:
         user_id, email, asm_prefs = sub
         if not email:
@@ -693,6 +775,11 @@ def dispatch_event_notifications(
             matching = [
                 ev for ev in asset_events
                 if _user_wants_event(asm_prefs, ev["event_type"])
+                and not (
+                    ev["event_type"] == "port_closed"
+                    and not pc_confirmed.get(
+                        (ev["asset_id"], ev["host"], ev["port"], ev["proto"]), False)
+                )
             ]
             if not matching:
                 continue

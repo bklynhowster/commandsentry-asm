@@ -152,9 +152,14 @@ class Alert:
 # runners / tunnels / windows (4.7 G4: cross-scan is the real confirmation, not
 # an in-scan re-probe on the same broken tunnel). The differ-side gate (G1) will
 # import these same constants when it lands.
-HOST_REMOVED_ABSENCE_SCANS   = 3   # match subdomain_gone discipline (4.7 G4)
-SERVICE_CLOSED_ABSENCE_SCANS = 2   # services close more often; smaller blast radius
-SUBDOMAIN_GONE_ABSENCE_SCANS = 3   # centralised (was an inline ABSENCE_THRESHOLD)
+# 4.7 J5b — thresholds now come from the shared SSOT module so this file-delta
+# path and the DB-event path (import_asm_to_surface.py, port_closed) can NEVER
+# drift. Change a value in confirmation_thresholds.py and both paths update.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "db"))
+from confirmation_thresholds import CONFIRMATION_THRESHOLDS  # noqa: E402
+HOST_REMOVED_ABSENCE_SCANS   = CONFIRMATION_THRESHOLDS["host_removed"]
+SERVICE_CLOSED_ABSENCE_SCANS = CONFIRMATION_THRESHOLDS["service_closed"]
+SUBDOMAIN_GONE_ABSENCE_SCANS = CONFIRMATION_THRESHOLDS["subdomain_gone"]
 
 def _host_present(entry: dict, sub: str, ip: str) -> bool:
     """True if host `ip` under `sub` was observed in this scan-history entry.
