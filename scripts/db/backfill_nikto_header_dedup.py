@@ -1,21 +1,33 @@
 #!/usr/bin/env python3
 """
-backfill_nikto_header_dedup.py — 4.7 H6. Retroactively assign the shared
+backfill_nikto_header_dedup.py — 4.7 H6 + I4. Retroactively assign the shared
 normalized_key to EXISTING nikto response-header findings so they collapse in the
 dedup view immediately, instead of waiting for the next scan to re-emit them.
 
-SINGLE SOURCE OF TRUTH (4.7 H6): imports `_classify_header_line` from
-cs_parsers/nikto.py — the exact classifier used at ingest. The bucket boundary is
-NOT re-implemented here, so it cannot drift from the parser.
+I4 PATH CORRECTION (2026-07-08): the live inflating rows are written by
+`run_medium.py :: parse_nikto_findings` with source ∈ {commandsentry_light,
+commandsentry_medium, commandsentry_heavy} and normalized_key=NULL — NOT the
+source='nikto' normalize path. So this backfill targets `source LIKE
+'commandsentry_%'` and reads the header out of the stored TITLE
+('nikto: [id] /path: desc'), which is the only field that parses: the DESCRIPTION
+is wrapped ('Nikto reported on host: [id] ... Review the raw ...') and the
+extractor's regexes are anchored, so the wrapper defeats them.
 
-Scope: only touches nikto findings whose message classifies into the fingerprint
-or version bucket AND whose stored normalized_key differs from the derived one.
-Bucket 3 (missing/misconfigured security headers, cookies, CORS, BREACH, exposed
-paths) classifies to None → never touched. Severity/title are left alone — the
-next scan re-emits them; this backfill only sets normalized_key for the collapse.
+SINGLE SOURCE OF TRUTH (4.7 H5/I1): imports `extract_header_disclosure` +
+`classify_nikto_header` from cs_parsers/nikto.py — the exact SSOT pair used at
+ingest by run_medium.py. The bucket boundary and the title-format parsing are NOT
+re-implemented here, so they cannot drift from the parser or the anchor tests
+(test_extraction_agreement_across_parser_formats pins title==bare agreement).
+
+Scope: only nikto findings that (a) live on a commandsentry_* source, (b) have a
+NULL normalized_key today, and (c) classify into the fingerprint or version
+bucket. Bucket 3 (missing/misconfigured security headers, cookies, CORS, BREACH,
+exposed paths) classifies to None → never touched. Severity/title are left alone —
+the next scan re-emits them; this backfill only sets normalized_key for collapse.
 
 Safety (4.7 H6):
-  * DRY-RUN by default — lists every row that would change (old → new key), NO writes.
+  * DRY-RUN by default — prints per-row classifications (header→bucket→key) AND a
+    grouped N→1 preview. NO writes.
   * --apply required to write, AND an interactive 'yes' confirmation.
   * Batched commits (1000/txn) — bounded blast radius.
   * Every mutation logged to admin_audit_log (action='nikto_header_dedup_backfill').
@@ -30,13 +42,16 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
+from collections import Counter
 from pathlib import Path
 
-# Import the parser's classifier — 4.7 H6 single source of truth.
+# Import the parser's SSOT classifier — 4.7 H5/I1 single source of truth.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "normalize"))
-from cs_parsers.nikto import _classify_header_line  # noqa: E402
+from cs_parsers.nikto import (  # noqa: E402
+    classify_nikto_header,
+    extract_header_disclosure,
+)
 
 try:
     import psycopg
@@ -49,17 +64,20 @@ if not DSN:
     sys.exit("set SUPABASE_DSN (or COMMAND_SUPABASE_DSN) to the TARGET instance's DB")
 
 BATCH = 1000
-_TITLE_PREFIX = re.compile(r"^nikto\[\d+\]:\s*")
 
 
-def _classifiable(title: str, description: str):
-    """Return (severity, category, normalized_key, new_title) for a header
-    disclosure, else None. Tries the raw description first, then the title with
-    its 'nikto[NNNNNN]: ' prefix stripped (pre-fix findings store it there)."""
-    for text in (description or "", _TITLE_PREFIX.sub("", title or "")):
-        hb = _classify_header_line(text)
-        if hb:
-            return hb
+def _derive(title: str, description: str):
+    """Return (new_key, bucket, header_name, header_value) for a fingerprint/version
+    header disclosure, else None. Reads TITLE first (the only field that parses — see
+    module docstring), description as a defensive fallback. Uses the SSOT extractor +
+    classifier so it can never drift from ingest."""
+    for text in (title or "", description or ""):
+        hd = extract_header_disclosure(text)
+        if not hd:
+            continue
+        bucket, nkey = classify_nikto_header(hd[0], hd[1])
+        if bucket in ("fingerprint", "version"):
+            return nkey, bucket, hd[0], hd[1]
     return None
 
 
@@ -72,8 +90,12 @@ def main() -> int:
     conn = psycopg.connect(DSN, connect_timeout=15)
     cur = conn.cursor()
 
-    where = "source::text = 'nikto'"
-    params: list = []
+    # I4: live rows are commandsentry_* with a NULL key. Pattern is bound as a
+    # PARAMETER (not inlined) so the LIKE metachars live in the value, not the SQL
+    # text — no %%-escaping games. normalized_key IS NULL excludes already-collapsed
+    # rows (idempotent re-runs) and anything the light path already keyed.
+    where = "source::text LIKE %s AND normalized_key IS NULL"
+    params: list = ["commandsentry_%"]
     if args.asset:
         where += " AND asset_id = %s"
         params.append(args.asset)
@@ -82,24 +104,33 @@ def main() -> int:
         f"from findings where {where}", params)
     rows = cur.fetchall()
 
-    changes = []  # (finding_id, asset_id, old_key, new_key)
+    # (finding_id, asset_id, old_key, new_key, bucket, header_name, header_value)
+    changes = []
     for fid, asset_id, title, desc, old_key in rows:
-        hb = _classifiable(title, desc)
-        if not hb:
+        d = _derive(title, desc)
+        if not d:
             continue
-        new_key = hb[2]
+        new_key, bucket, hn, hv = d
         if old_key == new_key:
             continue
-        changes.append((fid, asset_id, old_key, new_key))
+        changes.append((fid, asset_id, old_key, new_key, bucket, hn, hv))
 
-    print(f"nikto findings scanned: {len(rows)}"
+    print(f"candidate rows scanned: {len(rows)}"
           + (f" (asset={args.asset})" if args.asset else "")
           + f"  |  need normalized_key backfill: {len(changes)}")
-    # Group preview by (asset, new_key) so the collapse is obvious.
-    from collections import Counter
-    by = Counter((c[1], c[3]) for c in changes)
-    for (asset_id, new_key), n in sorted(by.items(), key=lambda x: -x[1])[:30]:
-        print(f"  {asset_id:40s} {new_key:24s}  {n} finding(s) → 1")
+
+    if changes:
+        # I4 — per-row sample so the classification is auditable BEFORE any write.
+        print("\nsample per-row classifications (first 25):")
+        for fid, asset_id, _o, new_key, bucket, hn, hv in changes[:25]:
+            val = (hv or "")[:20]
+            print(f"  {asset_id:30.30s} {hn.lower():20.20s}={val:20.20s} "
+                  f"→ {bucket:11s} → {new_key}")
+        # Grouped N→1 preview so the collapse is obvious.
+        print("\ncollapse preview (asset, key → count):")
+        by = Counter((c[1], c[3]) for c in changes)
+        for (asset_id, new_key), n in sorted(by.items(), key=lambda x: -x[1])[:30]:
+            print(f"  {asset_id:30.30s} {new_key:26s}  {n} finding(s) → 1")
 
     if not changes:
         print("nothing to do.")
@@ -115,7 +146,7 @@ def main() -> int:
 
     done = 0
     for i in range(0, len(changes), BATCH):
-        for fid, asset_id, old_key, new_key in changes[i:i + BATCH]:
+        for fid, asset_id, old_key, new_key, _b, _hn, _hv in changes[i:i + BATCH]:
             cur.execute("update findings set normalized_key = %s where finding_id = %s",
                         (new_key, fid))
             cur.execute(
@@ -124,7 +155,7 @@ def main() -> int:
                 ("nikto_header_dedup_backfill",
                  Json({"normalized_key": old_key}),
                  Json({"normalized_key": new_key}),
-                 Json({"finding_id": fid, "asset_id": asset_id, "ref": "4.7-H6"})))
+                 Json({"finding_id": fid, "asset_id": asset_id, "ref": "4.7-H6/I4"})))
         conn.commit()
         done += len(changes[i:i + BATCH])
         print(f"  committed {done}/{len(changes)}")

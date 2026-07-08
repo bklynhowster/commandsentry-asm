@@ -820,6 +820,10 @@ def write_event_findings_and_artifacts(
                 # Heavy events from parse_testssl_file don't carry tags;
                 # default to empty list to match column type.
                 "tags": [],
+                # 4.7 I1/I2 — required by the shared UPSERT_FINDING_SQL now that it
+                # writes normalized_key. FindingEvents from cs_parsers carry the
+                # class-collapse key; testssl/net events default to None.
+                "normalized_key": ev.normalized_key,
                 "validation_status": validation_status,
                 "scanner_version": scanner_version,
                 "scan_run_id": ctx.scan_run_id,
