@@ -139,6 +139,13 @@ _VERSION_RE = re.compile(r"\d+\.\d+(?:\.\d+)?")
 _HDR_RETRIEVED_RE = re.compile(r"^Retrieved\s+([A-Za-z0-9\-]+)\s+header:\s*(.+)$", re.IGNORECASE)
 _HDR_UNCOMMON_RE  = re.compile(r"^Uncommon header\(s\)\s+'([^']+)'\s+found(?:,\s*with contents:\s*(.*))?$", re.IGNORECASE)
 _HDR_ALTSVC_RE    = re.compile(r"^(?:An?|The)\s+(alt-svc)\s+header\s+was\s+found", re.IGNORECASE)
+# run_medium.py stores nikto titles as "nikto: [999100] /: <desc>"; strip that
+# prefix so the shared extractor works on both a bare desc and a stored title.
+_NIKTO_TITLE_PREFIX_RE = re.compile(r"^nikto:\s*\[\d+\]\s+\S+:\s+", re.IGNORECASE)
+# Namespace prefix for INTRA-source class-collapse keys (4.7 I2) — keeps them
+# grep-distinct from cross-source curated-map keys that share normalized_key.
+_KEY_FINGERPRINT = "class:tech-header-disclosure"
+_KEY_VERSION     = "class:tech-version-disclosure"
 
 
 def _is_fingerprint_header_name(name: str) -> bool:
@@ -183,19 +190,45 @@ def classify_header_disclosure(header_name: str, header_value: str):
     return "fingerprint"
 
 
+def classify_nikto_header(header_name: str, header_value: str):
+    """4.7 I1 SSOT — pure classifier on PARSED inputs, called by BOTH this parser
+    and run_medium.py::parse_nikto_findings (and the backfill). Returns
+    (bucket, normalized_key): bucket in {'fingerprint','version','actionable'};
+    normalized_key is the shared class-collapse key for fingerprint/version, None
+    for actionable (Bucket 3)."""
+    bucket = classify_header_disclosure(header_name, header_value)
+    if bucket == "fingerprint":
+        return ("fingerprint", _KEY_FINGERPRINT)
+    if bucket == "version":
+        return ("version", _KEY_VERSION)
+    return ("actionable", None)
+
+
+def extract_header_disclosure(text: str):
+    """4.7 I1/I4 SSOT extraction — accepts either a bare nikto description
+    ('Retrieved x-powered-by header: Next.js') OR a stored run_medium title
+    ('nikto: [999100] /: Retrieved ...'). Returns (header_name, header_value) or
+    None. Both run_medium's parser and the backfill call THIS — one regex, no drift."""
+    for candidate in (_NIKTO_TITLE_PREFIX_RE.sub("", text or ""), text or ""):
+        hd = _parse_header_disclosure(candidate)
+        if hd:
+            return hd
+    return None
+
+
 def _classify_header_line(desc: str):
-    """If `desc` is a fingerprint/version header disclosure, return
-    (severity, category, normalized_key, title); else None (caller keeps defaults)."""
-    hd = _parse_header_disclosure(desc)
+    """If `desc` (bare description or stored title) is a fingerprint/version header
+    disclosure, return (severity, category, normalized_key, title); else None."""
+    hd = extract_header_disclosure(desc)
     if not hd:
         return None
     name, value = hd
-    bucket = classify_header_disclosure(name, value)
+    bucket, nkey = classify_nikto_header(name, value)
     if bucket == "fingerprint":
-        return ("INFO", "info_disclosure", "tech-header-disclosure",
+        return ("INFO", "info_disclosure", nkey,
                 "Technology disclosed via response headers")
     if bucket == "version":
-        return ("LOW", "info_disclosure", "tech-version-disclosure",
+        return ("LOW", "info_disclosure", nkey,
                 f"Technology version disclosed via {name.lower()} header")
     return None
 

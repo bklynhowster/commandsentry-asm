@@ -90,6 +90,20 @@ from degradation import (
     is_tool_output_degraded,
 )
 
+# ─── 4.7 I1 — nikto header classifier SSOT ──────────────────────────────
+# Lives in the normalize package so BOTH parser paths (cs_parsers/nikto.py and
+# this one) share one boundary. Fail-open: if the import ever breaks, nikto
+# findings simply don't get the class-collapse key (current behaviour) — the
+# scanner must never crash on a classifier import issue.
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "normalize"))
+    from cs_parsers.nikto import classify_nikto_header, extract_header_disclosure
+except Exception:  # pragma: no cover
+    def classify_nikto_header(_n, _v):
+        return ("actionable", None)
+    def extract_header_disclosure(_t):
+        return None
+
 
 # ─── Lazy import psycopg ────────────────────────────────────────────────
 def _import_deps() -> Any:
@@ -513,6 +527,11 @@ class MediumFinding:
     cwe: list[int] = field(default_factory=list)
     references: list[str] = field(default_factory=list)
     raw_excerpt: str | None = None
+    # 4.7 I2 — parser-native intra-source dedup key. check_name stays UNIQUE per
+    # finding (drives finding_id); this shared key is what the dedup view collapses
+    # on. Overloads normalized_key (same-fact semantics); COALESCE guard in the
+    # UPSERT so a cross-source curated key is never overwritten.
+    normalized_key: str | None = None
 
 
 @dataclass
@@ -2494,6 +2513,23 @@ def parse_nikto_findings(
         severity = _nikto_severity_for_id(nikto_id)
         we_promoted += 1
 
+        # 4.7 I1/I2 — response-header disclosure buckets. fingerprint → collapse
+        # INFO via the shared normalized_key; version → own LOW; else default
+        # (Bucket 3, untouched). check_name stays UNIQUE (drives finding_id) so
+        # the dedup view collapses N distinct findings on the shared key with
+        # member_finding_ids intact.
+        norm_key = None
+        title = f"nikto: {body[:120]}"
+        _hd = extract_header_disclosure(description)
+        if _hd:
+            _bucket, _nkey = classify_nikto_header(_hd[0], _hd[1])
+            if _bucket == "fingerprint":
+                norm_key, severity = _nkey, "INFO"
+                title = "Technology disclosed via response headers"
+            elif _bucket == "version":
+                norm_key, severity = _nkey, "LOW"
+                title = f"Technology version disclosed via {_hd[0].lower()} header"
+
         # Slug derived from the full body for stable finding_id semantics.
         # Preserves existing finding identity across the parser refactor —
         # rows already in the DB (whether marked detected, remediated, or
@@ -2504,7 +2540,7 @@ def parse_nikto_findings(
                f"finding-{we_promoted}"
         findings.append(MediumFinding(
             check_name=f"nikto-{slug}",
-            title=f"nikto: {body[:120]}",
+            title=title,
             severity=severity,
             category="dast",
             description=(
@@ -2514,6 +2550,7 @@ def parse_nikto_findings(
             ),
             tags=["nikto"],
             raw_excerpt=body[:1500],
+            normalized_key=norm_key,
         ))
 
     return findings, nikto_emitted, we_promoted
@@ -3084,13 +3121,13 @@ UPSERT_FINDING_SQL = """
 INSERT INTO public.findings (
     finding_id, asset_id, title, severity, category, description,
     cwe, "references", current_status, first_detected_at,
-    last_observed_at, source, tags,
+    last_observed_at, source, tags, normalized_key,
     validation_status, scanner_version, validated_at,
     first_detected_scan, last_seen_scan_run
 )
 VALUES (%(finding_id)s, %(asset_id)s, %(title)s, %(severity)s, %(category)s,
         %(description)s, %(cwe)s, %(references)s, 'detected',
-        now(), now(), %(source)s, %(tags)s,
+        now(), now(), %(source)s, %(tags)s, %(normalized_key)s,
         %(validation_status)s, %(scanner_version)s,
         CASE WHEN %(validation_status)s = 'validated' THEN now() ELSE NULL END,
         %(scan_run_id)s, %(scan_run_id)s)
@@ -3133,6 +3170,10 @@ ON CONFLICT (finding_id) DO UPDATE SET
     first_detected_at = LEAST(findings.first_detected_at, EXCLUDED.first_detected_at),
     last_observed_at  = EXCLUDED.last_observed_at,
     tags              = EXCLUDED.tags,
+    -- 4.7 I2 — parser-native class-collapse key. New value wins over NULL; a
+    -- Bucket-3 nikto finding (EXCLUDED NULL) preserves the existing key so a
+    -- cross-source curated key is never clobbered.
+    normalized_key    = COALESCE(EXCLUDED.normalized_key, findings.normalized_key),
     -- Trust-layer Part 3 — derive-on-write (replaces upgrade-only CASE).
     -- validation_status follows the CURRENT scanner_version's active-set
     -- membership. Promote AND demote. Re-validation on a different
@@ -3310,6 +3351,7 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 "references": f.references,
                 "source": f"commandsentry_{ctx.intensity}",
                 "tags": f.tags,
+                "normalized_key": f.normalized_key,   # 4.7 I2 — class-collapse key
                 "validation_status": validation_status,
                 "scanner_version": scanner_version,
                 # Bug D fix (paired with trust-layer Part 4) — populate

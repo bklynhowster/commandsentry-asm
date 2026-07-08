@@ -26,6 +26,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from cs_parsers.nikto import (  # noqa: E402
     classify_header_disclosure,
+    classify_nikto_header,
+    extract_header_disclosure,
     _classify_header_line,
 )
 
@@ -80,20 +82,44 @@ def test_security_headers_never_collapse():
 
 def test_line_dispositions():
     fp = _classify_header_line("Retrieved x-powered-by header: Next.js")
-    assert fp == ("INFO", "info_disclosure", "tech-header-disclosure",
+    assert fp == ("INFO", "info_disclosure", "class:tech-header-disclosure",
                   "Technology disclosed via response headers")
     ver = _classify_header_line("Retrieved server header: nginx/1.14.0")
-    assert ver[0] == "LOW" and ver[2] == "tech-version-disclosure"
+    assert ver[0] == "LOW" and ver[2] == "class:tech-version-disclosure"
     unc = _classify_header_line(
         "Uncommon header(s) 'x-nextjs-cache' found, with contents: HIT")
-    assert unc[2] == "tech-header-disclosure"
+    assert unc[2] == "class:tech-header-disclosure"
     alt = _classify_header_line(
         "An alt-svc header was found which is advertising HTTP/3. The endpoint is: ':443'.")
-    assert alt[2] == "tech-header-disclosure"
+    assert alt[2] == "class:tech-header-disclosure"
     # Bucket 3 / non-header lines → None (caller keeps default handling)
     assert _classify_header_line("Retrieved x-frame-options header: ALLOWALL") is None
     assert _classify_header_line("Suggested security header missing: x-frame-options") is None
     assert _classify_header_line("Server is using a wildcard certificate") is None
+
+
+def test_classify_nikto_header_ssot():
+    # 4.7 I1/I2 — the SSOT pure fn returns (bucket, class-prefixed normalized_key).
+    assert classify_nikto_header("x-powered-by", "Next.js") == ("fingerprint", "class:tech-header-disclosure")
+    assert classify_nikto_header("server", "nginx/1.14.0") == ("version", "class:tech-version-disclosure")
+    assert classify_nikto_header("x-frame-options", "ALLOWALL") == ("actionable", None)
+
+
+def test_extraction_agreement_across_parser_formats():
+    # 4.7 I1 — the shared extractor must yield the SAME (name, value) whether given
+    # a bare nikto description (cs_parsers path) OR a stored run_medium title
+    # ("nikto: [id] /: desc"). Prevents extraction drift between the two parsers +
+    # the backfill (I4) — divergence there would give one finding two class keys.
+    cases = [
+        ("Retrieved x-powered-by header: Next.js", ("x-powered-by", "Next.js")),
+        ("Uncommon header(s) 'x-nextjs-cache' found, with contents: HIT", ("x-nextjs-cache", "HIT")),
+        ("Retrieved x-powered-by header: PHP/7.2.14", ("x-powered-by", "PHP/7.2.14")),
+        ("Retrieved via header: 1.1 google", ("via", "1.1 google")),
+    ]
+    for desc, expected in cases:
+        bare = extract_header_disclosure(desc)
+        titled = extract_header_disclosure(f"nikto: [999100] /: {desc}")
+        assert bare == titled == expected, (desc, bare, titled)
 
 
 if __name__ == "__main__":
@@ -101,4 +127,6 @@ if __name__ == "__main__":
     test_version_bucket_never_swallowed()
     test_security_headers_never_collapse()
     test_line_dispositions()
+    test_classify_nikto_header_ssot()
+    test_extraction_agreement_across_parser_formats()
     print("all nikto header-classify anchor tests PASSED")
