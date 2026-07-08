@@ -142,6 +142,48 @@ class Alert:
     def __init__(self, severity, asset, kind, title, detail=""):
         self.severity, self.asset, self.kind, self.title, self.detail = severity, asset, kind, title, detail
 
+# ─── Surface-change confirmation thresholds (4.7 G4/G5, 2026-07-07) ───────────
+# SINGLE SOURCE OF TRUTH for removal/closure confirmation. Root cause of the
+# false "removed" alerts: a degraded scan (egress/VPN unconfirmed → probes hit
+# network_unreachable while DNS still resolves) produces empty results, and the
+# raw prev−current differ reports every live host/service as gone. Requiring N
+# consecutive scans of absence means a one-scan blip — or a whole-run egress
+# failure — can never fire a removal, because different scans use different
+# runners / tunnels / windows (4.7 G4: cross-scan is the real confirmation, not
+# an in-scan re-probe on the same broken tunnel). The differ-side gate (G1) will
+# import these same constants when it lands.
+HOST_REMOVED_ABSENCE_SCANS   = 3   # match subdomain_gone discipline (4.7 G4)
+SERVICE_CLOSED_ABSENCE_SCANS = 2   # services close more often; smaller blast radius
+SUBDOMAIN_GONE_ABSENCE_SCANS = 3   # centralised (was an inline ABSENCE_THRESHOLD)
+
+def _host_present(entry: dict, sub: str, ip: str) -> bool:
+    """True if host `ip` under `sub` was observed in this scan-history entry.
+    history entry shape: entry['ports_by_sub'] = {sub: {ip: [ports]}}."""
+    return bool(ip) and ip in ((entry.get("ports_by_sub") or {}).get(sub) or {})
+
+def _service_present(entry: dict, sub: str, ip: str, port) -> bool:
+    """True if service `sub`/`port` was observed in this history entry (matched on
+    `ip` when known, else on any ip under `sub`). Unknown shape → assume present
+    (bias against firing a false removal)."""
+    try:
+        submap = (entry.get("ports_by_sub") or {}).get(sub) or {}
+        portlists = [submap.get(ip) or []] if ip else list(submap.values())
+        seen = {str(p) for pl in portlists for p in (pl or [])}
+        return str(port) in seen
+    except Exception:
+        return True
+
+def _absent_streak(history: list, present_fn) -> int:
+    """Consecutive most-recent scans (incl. the current one at history[-1]) in
+    which `present_fn(entry)` is False. history[-1] is the current scan, so a
+    single-scan miss yields streak==1 and never reaches a threshold of 2–3."""
+    streak = 0
+    for entry in reversed(history):
+        if present_fn(entry):
+            break
+        streak += 1
+    return streak
+
 def collect_alerts() -> list[Alert]:
     out: list[Alert] = []
     if not ASSETS_DIR.exists():
@@ -278,14 +320,20 @@ def collect_alerts() -> list[Alert]:
                 f"New host IP {ip} on {sub}",
                 "Confirmed by 2 consecutive scans. Hosting expanded or moved."
             ))
-        # Removals still come from deltas — single-scan removal is fine,
-        # the symmetric 'gone' suppression handled below uses its own threshold.
+        # 4.7 G5 (2026-07-07): a "removed" host from ONE scan is NOT trusted. A
+        # degraded/egress-failed scan can't reach a live host and mis-reports it
+        # gone (proven: ftp.unimac + 3 CCC hosts, all live, emailed as removed).
+        # Require absence across N consecutive scans — mirrors subdomain_gone.
         for h in (removed.get("hosts") or []):
-            if is_cloud_rotating_ip(h.get("ip") or ""):
+            _hip = h.get("ip") or ""
+            if is_cloud_rotating_ip(_hip):
                 continue  # rotating cloud pool — per-IP churn, not a real change
             sub = h.get("subdomain") or "?"
+            if _absent_streak(history, lambda e, s=sub, i=_hip: _host_present(e, s, i)) < HOST_REMOVED_ABSENCE_SCANS:
+                continue  # not yet absent for N consecutive scans — hold, unconfirmed
             out.append(Alert("notice", aname, "host_removed",
-                             f"Host IP {h.get('ip')} removed from {sub}", ""))
+                             f"Host IP {_hip} removed from {sub}",
+                             f"Absent from the last {HOST_REMOVED_ABSENCE_SCANS} consecutive scans."))
 
         # WATCH: new services — confirmed by 2 consecutive scans, never seen before
         for (sub, ip, port) in sorted(confirmed_new_services):
@@ -296,13 +344,20 @@ def collect_alerts() -> list[Alert]:
                 f"New service open on {sub}: {port}/tcp",
                 f"On host {ip}. Confirmed by 2 consecutive scans."
             ))
+        # 4.7 G5: same confirmation for closed services — a degraded port scan
+        # (naabu network_unreachable) drops every port at once. Require absence
+        # across N consecutive scans before alerting a closure.
         for s in (removed.get("services") or []):
             _sip = s.get("ip") or ""
             if (_sip and is_cloud_rotating_ip(_sip)) or (not _sip and asset_cloud_rotating):
                 continue  # rotating cloud pool — per-(IP,port) flap, not a real change
             sub = s.get("subdomain") or "?"
+            _sport = s.get("port")
+            if _absent_streak(history, lambda e, su=sub, i=_sip, p=_sport: _service_present(e, su, i, p)) < SERVICE_CLOSED_ABSENCE_SCANS:
+                continue  # not yet absent for N consecutive scans — hold, unconfirmed
             out.append(Alert("notice", aname, "service_closed",
-                             f"Service closed on {sub}: {s.get('port')}/{s.get('protocol')}", ""))
+                             f"Service closed on {sub}: {_sport}/{s.get('protocol')}",
+                             f"Absent from the last {SERVICE_CLOSED_ABSENCE_SCANS} consecutive scans."))
 
         # NOTICE: new subdomain — confirmed by 2 consecutive scans, never seen before
         for sub in sorted(confirmed_new_subs):
@@ -316,7 +371,7 @@ def collect_alerts() -> list[Alert]:
         # 'missing' from one scan even though it still resolves fine. Requires
         # the new 'subdomain_names' field in each history entry (populated by
         # normalize.py and the backfill script).
-        ABSENCE_THRESHOLD = 3
+        ABSENCE_THRESHOLD = SUBDOMAIN_GONE_ABSENCE_SCANS  # 4.7 G5: centralised SSOT
         history = asset.get("history") or []
         recent = history[-ABSENCE_THRESHOLD:] if len(history) >= ABSENCE_THRESHOLD else history
         for sub in (removed.get("subdomains") or []):
