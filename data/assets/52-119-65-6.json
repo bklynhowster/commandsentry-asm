@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-07-09T15:54:05Z_fd2d7dd2",
-    "started_at": "2026-07-09T15:54:05Z",
-    "completed_at": "2026-07-09T15:55:32Z",
-    "duration_seconds": 87,
+    "id": "scan_2026-07-09T20:29:36Z_34111b00",
+    "started_at": "2026-07-09T20:29:36Z",
+    "completed_at": "2026-07-09T20:31:37Z",
+    "duration_seconds": 121,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -31,7 +31,7 @@
     "host_count": 1,
     "service_count": 2,
     "newest_cert_expiry_days": null,
-    "top_hosting_org": null,
+    "top_hosting_org": "Natural Wireless, LLC",
     "platforms": []
   },
   "subdomains": [
@@ -40,8 +40,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-07-09T15:55:32Z",
-      "last_seen": "2026-07-09T15:55:32Z",
+      "first_discovered": "2026-07-09T20:31:37Z",
+      "last_seen": "2026-07-09T20:31:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -52,6 +52,12 @@
       "hosts": [
         {
           "ip": "52.119.65.6",
+          "asn": "AS18616",
+          "asn_org": "Natural Wireless, LLC",
+          "country": "US",
+          "region": "New York",
+          "city": "New York City",
+          "reverse_dns": "6.65.119.52.naturalwireless.com",
           "is_private": false
         }
       ],
@@ -107,7 +113,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-07-09T14:37:52Z_4d2c2714",
+    "since_scan": "scan_2026-07-09T15:54:05Z_fd2d7dd2",
     "added": {
       "subdomains": [],
       "services": [],
@@ -125,27 +131,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-06-11T11:15:55Z_a18dd31e",
-      "started_at": "2026-06-11T11:15:55Z",
-      "completed_at": "2026-06-11T11:17:23Z",
-      "subdomain_count": 1,
-      "live_subdomain_count": 1,
-      "host_count": 1,
-      "service_count": 2,
-      "subdomain_names": [
-        "52.119.65.6"
-      ],
-      "ports_by_sub": {
-        "52.119.65.6": {
-          "52.119.65.6": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {}
-    },
     {
       "scan_id": "scan_2026-06-11T16:41:10Z_4ce838ce",
       "started_at": "2026-06-11T16:41:10Z",
@@ -2623,6 +2608,27 @@
       "scan_id": "scan_2026-07-09T15:54:05Z_fd2d7dd2",
       "started_at": "2026-07-09T15:54:05Z",
       "completed_at": "2026-07-09T15:55:32Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 2,
+      "subdomain_names": [
+        "52.119.65.6"
+      ],
+      "ports_by_sub": {
+        "52.119.65.6": {
+          "52.119.65.6": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-07-09T20:29:36Z_34111b00",
+      "started_at": "2026-07-09T20:29:36Z",
+      "completed_at": "2026-07-09T20:31:37Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 1,
