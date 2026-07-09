@@ -241,9 +241,12 @@ discover_fqdn() {
   [[ $naabu_rc -ne 0 ]] && warn "naabu had errors (rc=$naabu_rc)"
 
   phase "Service fingerprinting (fingerprintx)"
+  local fpx_rc=0
   if [[ -s "$wd/naabu.json" ]]; then
     jq -r '"\(.host):\(.port)"' "$wd/naabu.json" 2>/dev/null | \
-      fingerprintx --json > "$wd/fingerprintx.json" 2> "$wd/fingerprintx.err" || warn "fingerprintx had errors"
+      fingerprintx --json > "$wd/fingerprintx.json" 2> "$wd/fingerprintx.err"
+    fpx_rc=${PIPESTATUS[1]}   # 4.7 K2: fingerprintx's OWN rc (2nd stage of jq|fpx pipe)
+    [[ $fpx_rc -ne 0 ]] && warn "fingerprintx had errors (rc=$fpx_rc)"
   else
     echo "" > "$wd/fingerprintx.json"
   fi
@@ -269,6 +272,11 @@ discover_fqdn() {
     else printf '"naabu":{"degraded":"naabu_rc_%s"}' "${naabu_rc:-0}"; fi
     if [[ ${httpx_rc:-0} -eq 0 ]]; then printf ',"httpx_tech":{"ok":true}'
     else printf ',"httpx_tech":{"degraded":"httpx_rc_%s"}' "${httpx_rc:-0}"; fi
+    # 4.7 K2 (J6): fingerprintx.ok = rc==0 AND non-empty output. Gates the
+    # service-verify DROP in normalize.build_services — a degraded/empty fpx run
+    # means "absence of a service ID proves nothing" → drop nothing (K4).
+    if [[ ${fpx_rc:-0} -eq 0 && -s "$wd/fingerprintx.json" ]]; then printf ',"fingerprintx":{"ok":true}'
+    else printf ',"fingerprintx":{"degraded":"fpx_rc_%s"}' "${fpx_rc:-0}"; fi
     printf '}\n'
   } > "$wd/_probe_status.json"
 

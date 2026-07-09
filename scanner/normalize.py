@@ -233,7 +233,95 @@ def extract_cert_from_httpx(rec: dict) -> dict | None:
             pass
     return cert if any(cert.values()) else None
 
-def build_services(work: Path) -> list[dict]:
+# ─── 4.7 J6/K1–K5+K3′ — service-verify scope (phantom-port suppression) ───────
+# naabu SYN-open ports that fingerprintx (a full connect+protocol probe) does NOT
+# confirm are, on a cloud load balancer, phantom SYN-ACKs (GCP LB etc. — nmap-
+# confirmed filtered). We drop them BEFORE they enter services[], but ONLY when
+# the host is in cloud-LB scope AND both naabu and fingerprintx ran clean this
+# scan (a degraded probe never drops — K1/K2/K4). Scope = ANY provider signal in
+# cloud_providers.yaml: ASN | asn_org pattern | rDNS-suffix | CNAME-suffix |
+# IP-prefix (K3′ — GCP/Azure have EMPTY ip_prefixes, identified by ASN/CNAME).
+_CLOUD_PROVIDERS_PATH = Path(__file__).resolve().parent.parent / "scripts" / "asm" / "cloud_providers.yaml"
+_cloud_providers_cache: dict | None = None
+
+
+def _load_cloud_providers() -> dict:
+    """Provider signal registry. Lazy yaml import so a discovery step without
+    pyyaml never crashes normalize.py; on ANY failure return {} → matcher yields
+    False → nothing scoped → phantoms leak (the K4-safe direction). LOUD-warns if
+    the yaml is expected but unreadable (K3 sequencing sanity check)."""
+    global _cloud_providers_cache
+    if _cloud_providers_cache is not None:
+        return _cloud_providers_cache
+    providers: dict = {}
+    try:
+        import yaml  # lazy — must not break discovery if pyyaml is absent
+        data = yaml.safe_load(_CLOUD_PROVIDERS_PATH.read_text()) or {}
+        providers = data.get("providers") or {
+            k: v for k, v in data.items() if isinstance(v, dict)
+            and any(key in v for key in ("asns", "asn_org_patterns", "cname_suffixes", "ip_prefixes"))
+        }
+    except Exception as e:
+        print(f"WARN: cloud_providers.yaml unreadable ({e}) — service-verify scope OFF "
+              f"(phantoms leak; safe direction)", file=sys.stderr)
+    _cloud_providers_cache = providers
+    return providers
+
+
+def is_in_cloud_lb_scope(host: dict, cname: str, providers: dict) -> bool:
+    """4.7 K3′: True iff any provider signal matches this host.
+    Signal-set = ASN | asn_org pattern | rDNS-suffix | CNAME-suffix | IP-prefix.
+    ipinfo-fail → all signals empty → False → not scoped → phantoms leak (K4-safe)."""
+    asn     = (host or {}).get("asn") or ""
+    asn_org = ((host or {}).get("asn_org") or "").lower()
+    rdns    = ((host or {}).get("reverse_dns") or "").lower()
+    ip      = (host or {}).get("ip") or ""
+    cname_l = (cname or "").lower()
+    for _name, p in (providers or {}).items():
+        if not isinstance(p, dict):
+            continue
+        if asn and asn in (p.get("asns") or []):
+            return True
+        if asn_org and any(str(pat).lower() in asn_org for pat in (p.get("asn_org_patterns") or [])):
+            return True
+        # cname_suffixes doubles as rDNS suffix source: providers use the same root
+        # domain for customer CNAMEs and PTR records (Google .googleusercontent.com,
+        # Cloudflare .cloudflare.net). If a provider ever needs distinct rDNS
+        # patterns, add rdns_suffixes to the yaml — it is checked first here.
+        suffixes = (p.get("rdns_suffixes") or []) + (p.get("cname_suffixes") or [])
+        if rdns and any(rdns.endswith(str(sfx)) for sfx in suffixes):
+            return True
+        if cname_l and any(cname_l.endswith(str(sfx)) for sfx in suffixes):
+            return True
+        if ip and any(ip.startswith(str(pfx)) for pfx in (p.get("ip_prefixes") or [])):
+            return True
+    return False
+
+
+def _read_cname(work: Path) -> str:
+    recs = read_jsonl(work / "dnsx.json")
+    if recs:
+        cn = recs[0].get("cname") or []
+        if isinstance(cn, list) and cn:
+            return cn[0]
+        if isinstance(cn, str):
+            return cn
+    return ""
+
+
+def _httpx_confirmed_ports(work: Path) -> set[int]:
+    out: set[int] = set()
+    for r in read_jsonl(work / "httpx.json"):
+        if r.get("status_code") is not None:
+            try:
+                out.add(int(r.get("port")))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def build_services(work: Path, ip_cache: dict | None = None) -> list[dict]:
+    ip_cache = ip_cache or {}
     services: list[dict] = []
     seen: set[tuple[str, int, str]] = set()
 
@@ -246,6 +334,19 @@ def build_services(work: Path) -> list[dict]:
         port = rec.get("port")
         if host and port:
             fpx_by_key[(host, int(port))] = rec
+
+    # 4.7 J6 verify gate — only DROP when we can trust the absence: scope on, AND
+    # naabu ran clean (else its port list is untrustworthy — K1), AND fingerprintx
+    # ran clean (else absence of a service ID means nothing — K2/K4).
+    probe    = build_probe_status(work)
+    naabu_ok = bool((probe.get("naabu") or {}).get("ok"))
+    fpx_ok   = bool((probe.get("fingerprintx") or {}).get("ok"))
+    scope    = os.environ.get("SERVICE_VERIFY_SCOPE", "cloud_lb_ranges")
+    can_drop = scope != "off" and naabu_ok and fpx_ok
+    providers = _load_cloud_providers() if can_drop else {}
+    cname     = _read_cname(work)
+    httpx_ok_ports = _httpx_confirmed_ports(work)
+    metric = {"dropped_cloud": 0, "dropped_noncloud": 0, "kept": 0}
 
     cert_443: dict | None = None
     testssl_data = read_json(work / "testssl.json")
@@ -268,6 +369,14 @@ def build_services(work: Path) -> list[dict]:
         seen.add(key)
 
         fpx_rec = fpx_by_key.get((host, int(port)))
+        # J6 phantom test — naabu-only (no fingerprintx, no httpx), in cloud-LB scope.
+        if can_drop and fpx_rec is None and int(port) not in httpx_ok_ports:
+            in_cloud = is_in_cloud_lb_scope(ip_cache.get(host) or {"ip": host}, cname, providers)
+            if scope == "all_ports" or in_cloud:
+                metric["dropped_cloud" if in_cloud else "dropped_noncloud"] += 1
+                continue  # phantom — do NOT enter services[]
+        metric["kept"] += 1
+
         service_name = (fpx_rec.get("protocol") if fpx_rec else infer_service(int(port)))
         banner = (fpx_rec or {}).get("metadata", {}).get("banner") if fpx_rec else None
 
@@ -284,6 +393,14 @@ def build_services(work: Path) -> list[dict]:
         services.append(svc)
 
     services.sort(key=lambda s: (s["ip"], s["port"]))
+    # K5 — greppable per-scan visibility: drops bucketed by cloud-LB Y/N + probe
+    # health. A non-cloud drop (scope=all_ports) or a stuck fpx_ok=false is the
+    # signal to revisit scope / fingerprintx health.
+    if metric["dropped_cloud"] or metric["dropped_noncloud"] or scope != "cloud_lb_ranges":
+        print(f"build_services scope={scope} naabu_ok={naabu_ok} fpx_ok={fpx_ok} "
+              f"dropped_cloud={metric['dropped_cloud']} "
+              f"dropped_noncloud={metric['dropped_noncloud']} kept={metric['kept']}",
+              file=sys.stderr)
     return services
 
 def build_dns(work: Path) -> dict:
@@ -387,7 +504,7 @@ def build_subdomain_record(name: str, sub_work: Path, *, is_root: bool,
         "reachability":     build_reachability(sub_work),
         "probe_status":     build_probe_status(sub_work),   # 4.7 G3: per-tool health
         "hosts":            build_hosts(sub_work, ip_cache),
-        "services":         build_services(sub_work),
+        "services":         build_services(sub_work, ip_cache),
         "dns":              build_dns(sub_work),
         "fingerprint":      build_fingerprint(sub_work),
         "waf":              build_waf(sub_work),

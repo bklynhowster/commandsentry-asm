@@ -70,6 +70,13 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install Python deps for normalize (4.7 J6/K3′)
+        # pyyaml: normalize.build_services reads scripts/asm/cloud_providers.yaml
+        # for the service-verify scope. Lazy-imported + fail-safe (scope OFF if
+        # absent), but install it here so the phantom-suppression actually runs
+        # at discovery time (the importer step installs it later — too late).
+        run: python3 -m pip install --break-system-packages --quiet pyyaml
+
       - name: Cache Go binaries
         uses: actions/cache@v4
         with:
