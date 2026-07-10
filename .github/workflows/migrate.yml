@@ -1,0 +1,58 @@
+name: Migrate
+
+# Migration-ledger Phase 3 (4.7 Q5/Q7). Applies pending `safe_auto_apply` migrations to THIS
+# instance's DB at deploy time — separate from scanning (which only READS the ledger via the gate).
+# See SCANNER_MIGRATION_LEDGER_SPEC.md.
+#
+#   detect : validates the MIGRATION-META header on every pending migration (fails the run on a
+#            missing/invalid header) and reports whether any is safe_auto_apply. Read-only.
+#   apply  : only runs when detect found a safe_auto_apply migration; gated on the `production_db`
+#            environment (manual approval) before it touches prod. Advisory-locked + post-apply verify.
+#
+# NOTE: SUPABASE_DSN must be a SESSION-mode connection (pooler :5432) so the advisory lock holds
+# across the run. The concurrency group also serializes migrate runs as belt-and-suspenders.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/db/migrations/**'
+  workflow_dispatch:
+
+concurrency:
+  group: migrate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      has_auto_apply: ${{ steps.check.outputs.has_auto_apply }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install --quiet 'psycopg[binary]'
+      - name: Validate META + detect auto-appliable migrations
+        id: check
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: python scripts/db/apply_pending_migrations.py --instance command --dsn "$SUPABASE_DSN" --check
+
+  apply:
+    needs: detect
+    if: ${{ needs.detect.outputs.has_auto_apply == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production_db   # manual-approval gate before any DDL on prod (4.7 Q7)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install --quiet 'psycopg[binary]'
+      - name: Apply pending safe_auto_apply migrations
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: python scripts/db/apply_pending_migrations.py --instance command --dsn "$SUPABASE_DSN" --auto
