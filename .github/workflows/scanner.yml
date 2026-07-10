@@ -183,6 +183,17 @@ jobs:
           done
           echo "All baked-in tools present."
 
+      # ─── Migration-ledger gate (read-only) ─────────────────────────
+      # Refuses the run BEFORE claiming work if any scripts/db/migrations/*.sql
+      # is unapplied on this DB, or a ledger content_sha256 no longer matches the
+      # file (edited post-apply). Fails in seconds instead of ~18 min at the final
+      # write-back. See SCANNER_MIGRATION_LEDGER_SPEC.md (4.7 Q5). Phase 2.
+      - name: Migration-ledger gate
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          python scripts/db/check_migrations_applied.py --dsn "$SUPABASE_DSN"
+
       # ─── If workflow_dispatch with asset_id was supplied: queue it ──
       # Idempotent — checks for an existing queued/running row first so
       # re-fires don't trip the scan_queue_one_running_per_asset unique
