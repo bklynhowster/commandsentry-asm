@@ -1,0 +1,34 @@
+name: Migration parity
+
+# Migration-ledger Phase 4 (4.7 Q6). NON-BLOCKING visibility: diffs this repo's migration set
+# against the other instance's (via the public GitHub API) and reports intentional vs UNCLASSIFIED
+# divergence. Advisory only — `continue-on-error` keeps it from failing the PR; an unregistered
+# divergence surfaces as a ::warning:: annotation. See SCANNER_MIGRATION_LEDGER_SPEC.md.
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/db/migrations/**'
+      - '.migration-divergence.yaml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/db/migrations/**'
+      - '.migration-divergence.yaml'
+  workflow_dispatch:
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install --quiet pyyaml
+      - name: Compare migration sets vs the other instance
+        continue-on-error: true   # advisory (4.7 Q6) — divergence may be intentional
+        run: >-
+          python scripts/db/compare_migrations.py
+          --self-label command --other-label prodex
+          --other-repo bklynhowster/prodexsentry-asm

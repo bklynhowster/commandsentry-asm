@@ -1,0 +1,27 @@
+# Migration-set divergence registry — 4.7 Q6, migration-ledger Phase 4.
+# See SCANNER_MIGRATION_LEDGER_SPEC.md.
+#
+# The two scanner repos (commandsentry-asm / prodexsentry-asm) intentionally carry some
+# instance-first migrations. compare_migrations.py diffs the two repos' migration SETS and flags
+# anything NOT listed here as UNCLASSIFIED — new/unexpected divergence to decide on (port it, or
+# register it here).
+#   intentional_divergence : accepted instance-first state (context, not an action item)
+#   todo_port              : queued to port to the other instance (surfaced as action items)
+#
+# KEEP THIS FILE IDENTICAL IN BOTH REPOS.
+
+intentional_divergence:
+  command_only:
+    "20260701_grant_v_alerter_changes.sql": "alerter view grant — Command-only"
+    "20260707a_portal_characterization_cols.sql": "portal characterization cols — Command-only"
+    "20260707b_cloud_endpoint_cols.sql": "cloud endpoint classifier — Command-first (not yet ported to Prodex)"
+    "20260707c_cloud_drift_col.sql": "cloud classifier drift column — Command-first"
+  prodex_only:
+    "20260705a_asset_kind_add_redirect_dead.sql": "host characterization: asset_kind redirect/dead — Prodex-first"
+    "20260705b_asset_kind_characterization_cols.sql": "host characterization columns — Prodex-first"
+    "20260706a_targeted_scan_p1_schema.sql": "targeted-scan P1 schema (scan_profile/parent_run_id/matrix_version_sha) — Prodex-first"
+    "20260706b_finding_source_commandsentry_exposure.sql": "targeted-scan exposure finding_source — Prodex-first"
+
+# Migrations queued to port to the OTHER instance. Format:
+#   - {from: prodex, to: command, migration: "20260706a_targeted_scan_p1_schema.sql", reason: "port after review"}
+todo_port: []
