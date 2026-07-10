@@ -7,7 +7,7 @@
 -- (Command=1, Prodex=2 → sum 3, 2 slots of slack). Rebalancing = an env flip, not
 -- a migration, so this file stays byte-identical on both repos.
 --
--- MIGRATION-META
+-- MIGRATION-META:
 -- idempotent: true
 -- transactional: true
 -- safe_auto_apply: true
@@ -18,7 +18,7 @@
 --   instance is capped at claim time by env VPN_SLOTS_N (default 1 if unset —
 --   safe-low), NOT by this row count. Identical on commandsentry-asm and
 --   prodexsentry-asm; no .migration-divergence.yaml entry needed.
--- END-MIGRATION-META
+-- END-META
 
 create table if not exists public.vpn_slots (
   slot_id      int primary key,
