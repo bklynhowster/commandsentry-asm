@@ -24,6 +24,13 @@ docs/scope-auth/
 *token*
 !*.example*
 
+# Working design specs / tickets / advisor-review docs live in Obsidian, NOT this
+# (now-public) repo — keeps internal specs (WAF gaps, findings, ROE, VPN routing)
+# out of git. Ignore root-level markdown except the README. Already-committed docs
+# are unaffected by this rule (decide separately whether to keep those public).
+/*.md
+!/README.md
+
 # Local scratch
 .DS_Store
 node_modules/
