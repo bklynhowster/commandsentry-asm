@@ -526,6 +526,12 @@ jobs:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
           ROE_ALERT_TOKEN: ${{ secrets.ROE_ALERT_TOKEN }}
           SKIP_VPN: ${{ github.event.inputs.skip_vpn || 'false' }}
+          # testssl wall raised to 30 min (was 600s default). The 10-min cap was
+          # marginal over Mullvad latency — api.ccc completed at 557s (93% of cap)
+          # and vpn.sciimage hit wall_timeout only ~1/3 done. Ceiling only: fast
+          # assets still finish in 6-9 min. Well under the 120-min job timeout.
+          # Tune alongside the portal concurrency guard (PORTAL_HEAVY_PROMOTION_SPEC.md Q2).
+          TESTSSL_WALL_S: "1800"
         run: |
           python scripts/scanner/run_heavy.py /tmp/scan_descriptor.json
 
