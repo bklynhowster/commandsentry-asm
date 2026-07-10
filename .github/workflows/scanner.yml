@@ -342,8 +342,26 @@ jobs:
             echo "VPN bypassed (intensity=$INTENSITY, force_vpn=$FORCE_VPN, hosting='$HOSTING_ORG')"
           fi
 
+      # ─── Claim a VPN concurrency slot (shared Mullvad device cap) ───
+      # Every VPN'd scan (medium/heavy, and light-on-Pressable) claims a slot
+      # BEFORE bring-up so concurrent tunnels never exceed the Mullvad 5-device
+      # cap. Command + Prodex share one account → active pool per instance =
+      # VPN_SLOTS_N (Command 1, Prodex 2; sum 3, 2 slots slack). A full pool
+      # DEFERS the scan (requeue + backoff) — it does NOT fail it. Sets
+      # steps.vpn_slot.outputs.acquired; bring-up + runner steps gate on it.
+      # Runs pre-VPN, so it reaches Supabase over the normal runner network.
+      # See scripts/scanner/vpn_slot.py + PORTAL_HEAVY_PROMOTION_SPEC.md §8.
+      - name: Claim VPN slot
+        id: vpn_slot
+        if: ${{ steps.poll.outputs.has_work == 'true' && steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' }}
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          VPN_SLOTS_N: ${{ vars.VPN_SLOTS_N || '1' }}
+        run: |
+          python scripts/scanner/vpn_slot.py claim --scan-run-id "${{ steps.poll.outputs.scan_run_id }}"
+
       - name: Make VPN scripts executable
-        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' }}
+        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' && steps.vpn_slot.outputs.acquired == 'true' }}
         run: |
           chmod +x scripts/scanner/vpn_bringup.sh
           chmod +x scripts/scanner/vpn_rotate.sh
@@ -351,7 +369,7 @@ jobs:
           chmod +x scripts/scanner/wg_up_userspace.sh
 
       - name: Fetch + extract WireGuard configs
-        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' }}
+        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' && steps.vpn_slot.outputs.acquired == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -388,7 +406,7 @@ jobs:
 
       - name: Bring up VPN (WireGuard via wireguard-go userspace)
         id: vpn
-        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' }}
+        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' && steps.vpn_slot.outputs.acquired == 'true' }}
         env:
           # Leave VPN_REGION empty by default — vpn_bringup.sh picks the
           # first available .conf alphabetically when unset. With the
@@ -422,7 +440,7 @@ jobs:
       # ROE-gate timeout and we'd be back to square one — better to
       # surface the misconfig at bring-up than during scan execution.
       - name: Carve Supabase out of the VPN tunnel
-        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' }}
+        if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' && steps.vpn_slot.outputs.acquired == 'true' }}
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
         run: |
@@ -457,14 +475,14 @@ jobs:
       # Light + Medium implemented; Heavy still pending (M9).
 
       - name: Run Light tier
-        if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'light' }}
+        if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'light' && (steps.vpn_decision.outputs.use_vpn != 'true' || steps.vpn_slot.outputs.acquired == 'true' || github.event.inputs.skip_vpn == 'true') }}
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
         run: |
           python scripts/scanner/run_light.py /tmp/scan_descriptor.json
 
       - name: Run Medium tier
-        if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'medium' }}
+        if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'medium' && (steps.vpn_decision.outputs.use_vpn != 'true' || steps.vpn_slot.outputs.acquired == 'true' || github.event.inputs.skip_vpn == 'true') }}
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
           # Bearer for the portal /api/roe-block-alert endpoint. Used
@@ -521,7 +539,7 @@ jobs:
         # READINESS_ASSESSMENT.md §4). SKIP_VPN exposed for
         # validate-mode interlock (Batch-2 step d carries over to
         # heavy when v1 lands).
-        if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'heavy' }}
+        if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'heavy' && (steps.vpn_decision.outputs.use_vpn != 'true' || steps.vpn_slot.outputs.acquired == 'true' || github.event.inputs.skip_vpn == 'true') }}
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
           ROE_ALERT_TOKEN: ${{ secrets.ROE_ALERT_TOKEN }}
@@ -541,8 +559,20 @@ jobs:
       # Skipped in validate-mode (skip_vpn=true) because no tunnel was
       # brought up to tear down — see SPEC_SCANNER_DEGRADATION_HARDENING.
       - name: Tear down VPN
-        if: ${{ always() && steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' }}
+        if: ${{ always() && steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' && steps.vpn_slot.outputs.acquired == 'true' }}
         run: scripts/scanner/vpn_teardown.sh
+
+      # ─── Release the VPN concurrency slot ──────────────────────────
+      # Always runs if we claimed one — even on scan failure — so the normal
+      # path never leaks a slot. (A killed-runner leak is reclaimed by
+      # reap-on-claim in vpn_slot.py.) Runs post-teardown: normal network,
+      # Supabase reachable directly.
+      - name: Release VPN slot
+        if: ${{ always() && steps.vpn_slot.outputs.acquired == 'true' }}
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          python scripts/scanner/vpn_slot.py release --scan-run-id "${{ steps.poll.outputs.scan_run_id }}"
 
       # ─── Cleanup any orphaned 'running' rows from this invocation ──
       # If the runner died mid-step (OOM, GH Actions restart, etc.), the
