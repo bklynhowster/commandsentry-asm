@@ -145,7 +145,7 @@ _NORMALIZE_PATH = _REPO_ROOT / "scripts" / "normalize"
 if str(_NORMALIZE_PATH) not in sys.path:
     sys.path.insert(0, str(_NORMALIZE_PATH))
 from cs_parsers.testssl import parse_testssl_file  # noqa: E402
-from cs_parsers.common import FindingEvent  # noqa: E402
+from cs_parsers.common import FindingEvent, stable_finding_id  # noqa: E402
 
 
 # ─── Scanner version override for tests (mirrors run_medium pattern) ────
@@ -744,6 +744,81 @@ def run_testssl_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     flush_progress(ctx)
 
 
+def run_httpx_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
+    """Run httpx for an HTTP-layer fingerprint; emit one INFO FindingEvent
+    (server + tech + status) into ctx.findings.
+
+    ADDITIVE + NON-FATAL. Unlike testssl (heavy's load-bearing tool, which
+    raises DegradedRunError on failure), an httpx failure here just marks the
+    tool degraded and RETURNS — it never aborts the tier, because testssl has
+    already produced heavy's core findings. A bolted-on tool must not be able
+    to fail the whole scan.
+
+    This is the entire surface of "add a tool to heavy": one phase fn + one
+    call in run(). The FindingEvent writer, the tool_status set-equality
+    invariant, and close_out are all tool-agnostic — they read source/finding_id
+    off each event and need no changes. Invocation mirrors
+    run_light.check_httpx_tech (baked binary, proven flags)."""
+    tool_name = "httpx"
+    ctx.tools_run.append(tool_name)
+
+    rc, stdout, stderr = run_cmd(
+        ["httpx", "-u", f"https://{ctx.hostname}",
+         "-td", "-silent", "-json", "-timeout", "15"],
+        timeout=45,
+    )
+    if stdout.strip():
+        ctx.artifacts.append((tool_name, "json", stdout))
+    _log_stderr_tail(stderr, label="httpx")
+
+    if rc != 0 or not stdout.strip():
+        reason = "binary_unavailable" if rc == 127 else "no_output"
+        log(f"  httpx DEGRADED (non-fatal, additive tool): reason={reason} rc={rc}")
+        mark_tool_degraded(ctx, tool_name, reason)
+        flush_progress(ctx)
+        return
+
+    try:
+        rec = json.loads(stdout.strip().splitlines()[0])
+    except (ValueError, IndexError) as e:
+        log(f"  httpx: JSON parse failed (non-fatal): {e!r}")
+        mark_tool_degraded(ctx, tool_name, "json_parse_failed")
+        flush_progress(ctx)
+        return
+
+    server = rec.get("webserver") or "n/a"
+    tech = rec.get("tech") or []
+    tech_str = ", ".join(tech) if isinstance(tech, list) else str(tech)
+    status = rec.get("status_code")
+    page_title = (rec.get("title") or "").strip()
+    target_url = rec.get("url") or f"https://{ctx.hostname}"
+
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ev = FindingEvent(
+        finding_id=stable_finding_id(ctx.asset_id, tool_name, "httpx-http-surface", target_url),
+        asset_id=ctx.asset_id,
+        scan_id=ctx.scan_run_id,
+        source=tool_name,
+        title=f"HTTP surface (httpx) — server: {server}",
+        severity="INFO",
+        category="recon",
+        observed_at=now_iso,
+        matched_at=target_url,
+        description=(
+            f"httpx HTTP-layer snapshot at scan time: {target_url} -> HTTP {status} "
+            f"'{page_title}'. Server: {server}. Tech: {tech_str or 'none detected'}."
+        ),
+        subdomain=ctx.hostname,
+        port=443,
+        protocol="https",
+    )
+    ctx.findings.append(ev)
+    log(f"  httpx: parsed 1 FindingEvent (source='httpx', server='{server}', "
+        f"tech=[{tech_str}])")
+    mark_tool_ok(ctx, tool_name)
+    flush_progress(ctx)
+
+
 # ============================================================================
 # FindingEvent-aware writer (the load-bearing P2 adapter)
 # ============================================================================
@@ -1104,6 +1179,11 @@ def run(descriptor_path: str, dsn: str) -> int:
         # Phase 1 — testssl.sh (P2). The whole point of v1 — clears the
         # stranded backlog so the note-127 auto-closer can reconcile.
         run_testssl_phase(ctx, work_dir)
+
+        # httpx — HTTP-layer fingerprint (ADDITIVE, non-fatal). One phase fn +
+        # this call are the entire "add a tool" surface; the writer + close_out
+        # are tool-agnostic. Runs after testssl has proven reachability.
+        run_httpx_phase(ctx, work_dir)
 
         # Phase 2 — naabu / fingerprintx port + service depth (P4 —
         # FOLLOW-UP commit). Mark explicitly as skipped so the
