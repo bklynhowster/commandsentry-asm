@@ -1,0 +1,28 @@
+-- 20260710c_add_httpx_finding_source.sql
+-- Register 'httpx' in finding_source_t so heavy's new httpx phase can persist its
+-- FindingEvent (source='httpx'). The httpx add (2026-07-10, run_heavy.py) was
+-- pushed with source='httpx', but that label was never in the enum — so EVERY
+-- heavy scan died at the persist step with:
+--   InvalidTextRepresentation: invalid input value for enum finding_source_t: "httpx"
+-- The httpx tool itself ran fine (parsed a clean FindingEvent); only the insert
+-- failed. This registers the label.
+--
+-- Single ALTER (no do-block, so the comment/`;`-aware SQL splitter can't shred
+-- it). Idempotent via IF NOT EXISTS. The label is NOT used in this migration —
+-- Postgres 55P04 forbids using a freshly-added enum value in the same
+-- transaction, and the applier wraps this + the ledger insert in one tx; first
+-- USE is a later scan in a separate transaction, so this is safe. Identical on
+-- both scanner repos.
+--
+-- MIGRATION-META:
+-- idempotent: true
+-- transactional: true
+-- safe_auto_apply: true
+-- requires_backup: false
+-- estimated_duration_ms: 50
+-- notes: Additive enum label — finding_source_t += 'httpx'. IF NOT EXISTS makes
+--   it idempotent; label unused in-migration (55P04-safe). Byte-identical on
+--   commandsentry-asm and prodexsentry-asm.
+-- END-META
+
+alter type public.finding_source_t add value if not exists 'httpx';
