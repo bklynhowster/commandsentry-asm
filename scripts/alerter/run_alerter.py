@@ -81,13 +81,22 @@ SQL_LAST_WINDOW_END = """
 SELECT alerter_last_window_end(%s)
 """
 
+# DISTINCT ON (finding_id) — one row per finding per window (same observation-log
+# fan-out as SQL_REGRESSED: a re-scanned asset would otherwise emit N identical
+# CONFIRMED rows). Inner picks most-recent event; outer applies severity order.
 SQL_NEW_CONFIRMED = """
 SELECT finding_id, asset_id, title, severity, current_status, source,
        scan_id, event_at, alert_kind
-FROM v_alerter_changes
-WHERE event_at > %s
-  AND event_at <= %s
-  AND alert_kind IN ('CONFIRMED', 'CONFIRMED_HIGH')
+FROM (
+  SELECT DISTINCT ON (finding_id)
+         finding_id, asset_id, title, severity, current_status, source,
+         scan_id, event_at, alert_kind
+  FROM v_alerter_changes
+  WHERE event_at > %s
+    AND event_at <= %s
+    AND alert_kind IN ('CONFIRMED', 'CONFIRMED_HIGH')
+  ORDER BY finding_id, event_at DESC
+) d
 ORDER BY
   CASE severity
     WHEN 'CRITICAL'      THEN 1
@@ -100,13 +109,27 @@ ORDER BY
   asset_id, finding_id;
 """
 
+# DISTINCT ON (finding_id) — collapse to ONE row per finding per window.
+# v_alerter_changes derives from finding_history, which is an OBSERVATION log
+# (one row per scan per finding), so an asset scanned N times in a window emits
+# N identical REGRESSED rows. The 2026-07-11 digest showed the same
+# unimacgraphics.com OCSP_stapling finding 4x (4 heavy re-scans overnight).
+# Dedup keeps the most-recent event per finding; outer query preserves display
+# order. NOTE: does NOT fix the upstream "regressed re-stamped every scan"
+# mislabel (see spec/backlog) — that's an alerter-semantics change for 4.7.
 SQL_REGRESSED = """
 SELECT finding_id, asset_id, title, severity, current_status, source,
        scan_id, event_at, alert_kind
-FROM v_alerter_changes
-WHERE event_at > %s
-  AND event_at <= %s
-  AND alert_kind = 'REGRESSED'
+FROM (
+  SELECT DISTINCT ON (finding_id)
+         finding_id, asset_id, title, severity, current_status, source,
+         scan_id, event_at, alert_kind
+  FROM v_alerter_changes
+  WHERE event_at > %s
+    AND event_at <= %s
+    AND alert_kind = 'REGRESSED'
+  ORDER BY finding_id, event_at DESC
+) d
 ORDER BY asset_id, finding_id;
 """
 
