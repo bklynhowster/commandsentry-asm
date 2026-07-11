@@ -1546,6 +1546,20 @@ def import_one(
             a_row = cur.fetchone()
             if a_row and a_row[1]:
                 assets_inserted += 1
+
+            # Asset lifecycle P1 (ASSET_LIFECYCLE_SPEC.md v2): stamp last_alive_at on
+            # every confirmed_live observation — the clock the future R2 went-dark
+            # dwell (D) measures against. GREATEST ignores NULL, so the first stamp =
+            # this sweep's last_seen and later stamps only bump forward (never
+            # regress). Scoped to confirmed_live: dns_only/ct_ghost never had a live
+            # service, so they can't "go dark". No demotion writer exists yet (P2).
+            if disc == "confirmed_live":
+                cur.execute(
+                    "UPDATE public.assets "
+                    "SET last_alive_at = GREATEST(last_alive_at, %s) "
+                    "WHERE asset_id = %s",
+                    (bucket_lifecycle["last_seen"], bucket_id),
+                )
             # 2b. cloud_drift audit (4.7 E7): the UPSERT flags cloud_drift=true when a
             #     sticky manual flag disagreed with the fresh derived value. Record the
             #     temporal trail (the boolean column drives the portal chip).
