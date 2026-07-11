@@ -1212,6 +1212,29 @@ def run(descriptor_path: str, dsn: str) -> int:
         # the UPSERT in write_event_findings_and_artifacts) to
         # identify what this scan actually re-emitted, and writes
         # one admin_audit_log row per flip.
+        # Alerter regressed-semantics fix (spec 2026-07-11, 4.7 Q3): settle
+        # prior-scan regressions BEFORE the regress loop, per source. Heavy has
+        # no delta_close (the note-127 autocloser is its remediation engine), so
+        # settle is the first close-out flip. A finding regressed on a PRIOR scan
+        # that this scan re-observed settles regressed→confirmed ('regressed' is a
+        # one-scan transition state, not sticky).
+        _settle_sources = sorted({ev.source for ev in ctx.findings})
+        total_settled = 0
+        for src in _settle_sources:
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "SELECT settle_regressed_for_scan_run(%s, %s) AS n_settled",
+                    (ctx.scan_run_id, src),
+                )
+                _st_row = cur.fetchone()
+                total_settled += (_st_row["n_settled"] if _st_row else 0) or 0
+            finally:
+                cur.close()
+        if total_settled:
+            log(f"settle-regressed: {total_settled} prior-regressed finding(s) "
+                f"re-observed → flipped back to 'confirmed'")
+
         distinct_sources = sorted({ev.source for ev in ctx.findings})
         total_regressed = 0
         for src in distinct_sources:
@@ -1234,6 +1257,21 @@ def run(descriptor_path: str, dsn: str) -> int:
         if total_regressed == 0 and distinct_sources:
             log(f"regress-on-observed: 0 flipped across sources "
                 f"{distinct_sources} (no returned remediated findings)")
+
+        # Alerter regressed-semantics fix (spec 2026-07-11, 4.7 Q4): stamp
+        # last_regressed_at for findings THIS scan just flipped to 'regressed',
+        # per source, so the "was regressed" signal survives a later settle.
+        for src in distinct_sources:
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "UPDATE public.findings SET last_regressed_at = now() "
+                    "WHERE current_status = 'regressed' AND last_regressed_at IS NULL "
+                    "AND source::text = %s AND last_seen_scan_run = %s",
+                    (src, ctx.scan_run_id),
+                )
+            finally:
+                cur.close()
 
         # Note 129 round 7 — finding_history per re-emitted finding.
         # Runs AFTER the per-source regress loop so the recorded

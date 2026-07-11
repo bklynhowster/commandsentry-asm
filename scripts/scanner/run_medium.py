@@ -3560,6 +3560,22 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
             else:
                 log("delta-close: 0 closed (nothing went stale this scan)")
 
+            # Alerter regressed-semantics fix (spec 2026-07-11, 4.7 Q3): settle
+            # BEFORE regress_observed. A finding regressed on a PRIOR scan that is
+            # re-observed now settles regressed→confirmed ('regressed' is a one-scan
+            # transition state, not sticky). Safe here because this scan hasn't
+            # produced any fresh regressions yet, so every 'regressed' row is prior.
+            # Same source token + clean-path gate as the close/regress around it.
+            cur.execute(
+                "SELECT settle_regressed_for_scan_run(%s, %s) AS n_settled",
+                (ctx.scan_run_id, f"commandsentry_{ctx.intensity}"),
+            )
+            _st_row = cur.fetchone()
+            n_settled = (_st_row["n_settled"] if _st_row else 0) or 0
+            if n_settled:
+                log(f"settle-regressed: {n_settled} prior-regressed finding(s) "
+                    f"re-observed → flipped back to 'confirmed'")
+
             # Note 129 round 6 — sibling reopen path. delta_close handles
             # "open + not seen → remediated"; regress_observed_for_scan_run
             # handles the inverse "remediated + seen → regressed" (notes
@@ -3580,6 +3596,18 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
                     f"remediated_at cleared (audit rows in admin_audit_log)")
             else:
                 log("regress-on-observed: 0 flipped (no returned remediated findings)")
+
+            # Alerter regressed-semantics fix (spec 2026-07-11, 4.7 Q4): stamp
+            # last_regressed_at for findings THIS scan just flipped to 'regressed',
+            # so the "was regressed" signal survives a later settle→confirmed. Only
+            # sets it where unset. (risk/posture are open-set-neutral to the flip;
+            # this is purely the portal display signal.)
+            cur.execute(
+                "UPDATE public.findings SET last_regressed_at = now() "
+                "WHERE current_status = 'regressed' AND last_regressed_at IS NULL "
+                "AND source::text = %s AND last_seen_scan_run = %s",
+                (f"commandsentry_{ctx.intensity}", ctx.scan_run_id),
+            )
 
             # Note 129 round 7 — finding_history per re-emitted finding.
             # Runs AFTER delta_close + regress so the recorded status is
