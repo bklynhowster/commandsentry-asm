@@ -1,0 +1,24 @@
+-- 20260712b_assets_is_cloud_endpoint_parity.sql
+-- P2 demotion-writer parity fix. The writer's sweep-health gate excludes cloud endpoints
+-- from the non-cloud fraction denominator (Q_FRACTION: "... AND NOT is_cloud_endpoint").
+-- assets.is_cloud_endpoint was added by the cloud classifier (20260707b), which is
+-- COMMAND-ONLY — so on Prodex the column is absent and the writer no-ops every run
+-- (UndefinedColumn, caught by demotion_writer.py's resilience guard → warning, not a red job).
+--
+-- This adds the column (default false) so the gate query runs on BOTH instances:
+--   * Command — column already present via 20260707b → add-if-not-exists is a clean no-op.
+--   * Prodex  — column added; Prodex has no cloud classifier, so every asset is correctly
+--               is_cloud_endpoint=false and all confirmed_live count toward the denominator.
+--
+-- Additive, idempotent, splitter-safe (single ALTER). Byte-identical both repos.
+--
+-- MIGRATION-META:
+-- idempotent: true
+-- transactional: true
+-- safe_auto_apply: true
+-- requires_backup: false
+-- estimated_duration_ms: 50
+-- notes: Adds assets.is_cloud_endpoint boolean not null default false for P2 demotion-writer sweep-gate parity. No-op on Command (already present via 20260707b cloud classifier); adds the column on Prodex (classifier is Command-only). Additive single ALTER, splitter-safe. Byte-identical both repos.
+-- END-META
+
+alter table public.assets add column if not exists is_cloud_endpoint boolean not null default false;
