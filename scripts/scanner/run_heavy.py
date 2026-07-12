@@ -820,6 +820,174 @@ def run_httpx_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
 
 
 # ============================================================================
+# Heavy Phase 1 — net depth (naabu port discovery + fingerprintx service ID)
+# Spec: HEAVY_PHASE1_NETDEPTH_SPEC v2 + HEAVY_PHASE1_BUILD_DELTA (4.7 D1-D5).
+#
+# These two phases are a PAIR. run() credits tools_run with BOTH 'naabu' AND
+# 'fingerprintx' ONLY when both pass their four-gate (4.7 D1 all-or-nothing
+# autoclose credit) — so, UNLIKE run_httpx_phase, they do NOT self-register in
+# tools_run / tool_status; run() does it after the pair returns. If either
+# degrades, findings still emit (observations recorded) but neither name enters
+# tools_run, so the note-127 autocloser never false-closes the OTHER tool's
+# commandsentry_heavy findings on a partial scan.
+#
+# Findings-only (4.7 D3): heavy MUST NOT write asset_surface — the discovery
+# importer owns asset_surface.service_count, which the P2 went-dark writer reads;
+# a heavy dual-writer could feed a false zero-service into that lifecycle.
+# source='commandsentry_heavy' ALWAYS (NEVER 'naabu'/'fingerprintx' — those are
+# not finding_source_t labels; emitting them fails the insert). Identity excludes
+# the service (4.7 D4): finding_id is stable per (asset, source, port, proto); the
+# service is mutable TITLE metadata so a fingerprintx flap re-observes, not churns.
+# ============================================================================
+
+NAABU_RATE = int(os.environ.get("NAABU_RATE", "250"))        # 4.7 D5 pilot rate; ratchet -> 500 after clean single-asset runs
+NAABU_TOP_PORTS = int(os.environ.get("NAABU_TOP_PORTS", "1000"))
+FPX_SKIP_PORTS = {80, 443}                                   # 4.7 D5: WAF L7 exposure + already covered by httpx / medium
+
+
+def _parse_naabu_ports(stdout: str) -> list[dict]:
+    """naabu -json emits one JSON object per open port: {host, ip, port, protocol}."""
+    out = []
+    for line in stdout.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        port = rec.get("port")
+        if not isinstance(port, int):
+            continue
+        out.append({"port": port,
+                    "proto": (rec.get("protocol") or "tcp").lower(),
+                    "ip": rec.get("ip") or rec.get("host")})
+    return out
+
+
+def _parse_fingerprintx(stdout: str) -> dict:
+    """fingerprintx --json emits one object per probed port. Return {(port, proto): service}."""
+    svc = {}
+    for line in stdout.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        port = rec.get("port")
+        if not isinstance(port, int):
+            continue
+        proto = (rec.get("transport") or "tcp").lower()
+        service = (rec.get("protocol") or rec.get("service") or "unknown").lower()
+        svc[(port, proto)] = service
+    return svc
+
+
+def run_naabu_phase(ctx: HeavyScanContext, work_dir: Path) -> tuple[bool, list[dict]]:
+    """naabu CONNECT top-ports port discovery. Returns (naabu_ok, open_ports).
+
+    Does NOT self-register in tools_run / tool_status — run() credits the
+    net-depth PAIR (4.7 D1). Emits one INFO 'Service inventory: <port>/<proto>
+    open' FindingEvent per open port (source='commandsentry_heavy'; finding_id
+    stable per (asset, source, port, proto)).
+
+    FOUR-GATE (4.7 D5/Q5, conservative for findings-only Phase 1a):
+      naabu_ok = target_proven_reachable (testssl already completed a handshake =
+      the real-egress proof) AND rc==0 AND non-empty ports.
+    Empty/failed -> ok=False, NOT credited by run() -> the autocloser can never
+    false-close prior port findings on a silent naabu failure (absence-of-evidence
+    != evidence-of-absence). CONNECT scan: no raw sockets over the WireGuard tunnel.
+    """
+    if not ctx.target_proven_reachable:
+        log("  naabu SKIP — testssl did not prove reachability (no egress proof); not credited")
+        return False, []
+
+    rc, stdout, stderr = run_cmd(
+        ["naabu", "-host", ctx.hostname, "-top-ports", str(NAABU_TOP_PORTS),
+         "-rate", str(NAABU_RATE), "-scan-type", "CONNECT", "-silent", "-json"],
+        timeout=300,
+    )
+    if stdout.strip():
+        ctx.artifacts.append(("naabu", "json", stdout))
+    _log_stderr_tail(stderr, label="naabu")
+
+    if rc != 0:
+        log(f"  naabu DEGRADED (not credited, absence-of-evidence): rc={rc}")
+        return False, []
+    open_ports = _parse_naabu_ports(stdout)
+    if not open_ports:
+        log("  naabu: rc=0 but zero open ports — NOT credited (4.7 Q5 absence-of-evidence)")
+        return False, []
+
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for p in open_ports:
+        port, proto = p["port"], p["proto"]
+        mid = f"{ctx.hostname}:{port}/{proto}"
+        ctx.findings.append(FindingEvent(
+            finding_id=stable_finding_id(ctx.asset_id, "commandsentry_heavy",
+                                         f"naabu-open-port-{port}-{proto}", mid),
+            asset_id=ctx.asset_id, scan_id=ctx.scan_run_id, source="commandsentry_heavy",
+            title=f"Service inventory: {port}/{proto} open",
+            severity="INFO", category="recon", observed_at=now_iso, matched_at=mid,
+            description=(f"naabu observed {port}/{proto} open on {ctx.hostname} at scan time "
+                         f"(CONNECT, top-{NAABU_TOP_PORTS}, rate {NAABU_RATE})."),
+            subdomain=ctx.hostname, port=port, protocol=proto,
+        ))
+    log(f"  naabu OK: {len(open_ports)} open port(s) -> {len(open_ports)} INFO finding(s)")
+    return True, open_ports
+
+
+def run_fingerprintx_phase(ctx: HeavyScanContext, work_dir: Path,
+                           open_ports: list[dict]) -> bool:
+    """fingerprintx service ID on naabu's open ports. Returns fpx_ok.
+
+    Skips 80/443 (4.7 D5 — WAF L7 exposure; already covered by httpx / medium).
+    Does NOT self-register (run() credits the pair). Emits one INFO
+    'Service inventory: <port>/<proto>/<service>' FindingEvent per identified
+    service; finding_id stable per (asset, source, port, proto) with the service
+    in the mutable TITLE (4.7 D4 — a fingerprintx flap re-observes, never churns).
+    NOTE: the service-change WATCH alert (4.7 D4 correction) is a persist-time diff
+    (needs the prior title) — tracked as the immediate follow, not dropped.
+
+    Four-gate: rc==0 AND non-empty output (matches asm-discover K2 fpx.ok).
+    """
+    targets = [p for p in open_ports if p["port"] not in FPX_SKIP_PORTS]
+    if not targets:
+        log("  fingerprintx: no eligible ports after 80/443 skip — nothing to probe (ok)")
+        return True
+
+    stdin = "\n".join(f"{ctx.hostname}:{p['port']}" for p in targets) + "\n"
+    rc, stdout, stderr = run_cmd(["fingerprintx", "--json"], timeout=600, input_str=stdin)
+    if stdout.strip():
+        ctx.artifacts.append(("fingerprintx", "json", stdout))
+    _log_stderr_tail(stderr, label="fingerprintx")
+
+    if rc != 0 or not stdout.strip():
+        log(f"  fingerprintx DEGRADED (not credited): rc={rc} empty={not stdout.strip()}")
+        return False
+
+    svc = _parse_fingerprintx(stdout)
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for (port, proto), service in svc.items():
+        mid = f"{ctx.hostname}:{port}/{proto}"
+        ctx.findings.append(FindingEvent(
+            finding_id=stable_finding_id(ctx.asset_id, "commandsentry_heavy",
+                                         f"fingerprintx-service-{port}-{proto}", mid),
+            asset_id=ctx.asset_id, scan_id=ctx.scan_run_id, source="commandsentry_heavy",
+            title=f"Service inventory: {port}/{proto}/{service}",
+            severity="INFO", category="recon", observed_at=now_iso, matched_at=mid,
+            description=(f"fingerprintx identified '{service}' on {port}/{proto} at "
+                         f"{ctx.hostname} at scan time. Service is mutable metadata; "
+                         f"finding identity is the port, not the service."),
+            subdomain=ctx.hostname, port=port, protocol=proto,
+        ))
+    log(f"  fingerprintx OK: {len(svc)} service(s) -> {len(svc)} INFO finding(s)")
+    return True
+
+
+# ============================================================================
 # FindingEvent-aware writer (the load-bearing P2 adapter)
 # ============================================================================
 
@@ -1185,13 +1353,25 @@ def run(descriptor_path: str, dsn: str) -> int:
         # are tool-agnostic. Runs after testssl has proven reachability.
         run_httpx_phase(ctx, work_dir)
 
-        # Phase 2 — naabu / fingerprintx port + service depth (P4 —
-        # FOLLOW-UP commit). Mark explicitly as skipped so the
-        # set-equality invariant in close_out_heavy holds. When P4 lands,
-        # replace these skip-marks with real invocations.
-        for net_tool in ("naabu", "fingerprintx"):
-            ctx.tools_run.append(net_tool)
-            mark_tool_skipped(ctx, net_tool, "v1_p4_pending")
+        # Phase 2 — naabu + fingerprintx net depth (Heavy Phase 1). PAIR with
+        # all-or-nothing tools_run credit (4.7 D1): both names enter tools_run
+        # (crediting the note-127 autocloser for source=commandsentry_heavy) ONLY
+        # when BOTH pass their four-gate. If either degrades, findings still emit
+        # but NEITHER is credited — so a partial net-depth scan cannot false-close
+        # the other tool's findings. tool_status is set to match tools_run so the
+        # close_out_heavy set-equality invariant holds either way (net tools are
+        # in BOTH or NEITHER). Additive: a net-depth failure never fails the tier
+        # (testssl is the reachability proof).
+        naabu_ok, open_ports = run_naabu_phase(ctx, work_dir)
+        fpx_ok = run_fingerprintx_phase(ctx, work_dir, open_ports) if naabu_ok else False
+        if naabu_ok and fpx_ok:
+            ctx.tools_run.append("naabu")
+            ctx.tools_run.append("fingerprintx")
+            mark_tool_ok(ctx, "naabu")
+            mark_tool_ok(ctx, "fingerprintx")
+        else:
+            log(f"  net-depth PARTIAL (naabu_ok={naabu_ok} fpx_ok={fpx_ok}) — findings "
+                f"emitted, tools_run NOT credited (4.7 D1 all-or-nothing autoclose guard)")
         flush_progress(ctx)
 
         # ─── Persist + close ────────────────────────────────────────────
