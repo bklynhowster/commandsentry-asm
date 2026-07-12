@@ -353,6 +353,25 @@ jobs:
           python3 -m pip install --break-system-packages --quiet 'psycopg[binary]==3.3.4' pyyaml
           python3 scripts/db/import_asm_to_surface.py --source-tag asm_cron
 
+      - name: P2 demotion writer (DRY-RUN — no asset writes)
+        # Went-dark demotion writer in DRY-RUN mode: --write-enable is intentionally
+        # OMITTED, so this changes NO asset state — it only inserts observation rows into
+        # public.p2_demotion_dryrun (would_demote + hold_reason + gate_state) for the
+        # ~2026-07-25 soak review. Runs AFTER the importer so last_alive_at is fresh.
+        # Spec: P2_DEMOTION_WRITER_BUILD_SPEC.md. Do NOT add --write-enable until the
+        # 14-day clean soak clears and the flip is signed off.
+        if: success() && steps.targets.outputs.mode != 'skipped'
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          if [[ -z "${SUPABASE_DSN}" ]]; then
+            echo "::warning::SUPABASE_DSN secret not set — skipping demotion writer (dry-run)."
+            exit 0
+          fi
+          python3 -m pip install --break-system-packages --quiet 'psycopg[binary]==3.3.4'
+          # DRY-RUN: --write-enable intentionally omitted. Logs only; no asset writes.
+          python3 scripts/db/demotion_writer.py --run-tag "${GITHUB_RUN_ID}"
+
       - name: Trigger Netlify deploy (chain past GITHUB_TOKEN anti-recursion)
         if: success() && steps.targets.outputs.mode != 'skipped'
         env:
