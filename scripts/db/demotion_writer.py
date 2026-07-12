@@ -124,10 +124,19 @@ def aggregate_probes(reasons: list[str], last_alive_moved: bool) -> dict:
 
 def evaluate_gate(bumped: int, denom: int, prev_healthy: bool | None,
                   prev_age_hours: float | None) -> dict:
-    """Strengthened sweep-health gate (4.7 Q2). Returns dict(ok, reason, state).
-    Requires: >=50% non-cloud fleet bumped AND 2 consecutive healthy sweeps
-    (prev healthy & recent) AND min-fleet 100% when denom<10 AND not in the
-    50-60% near-threshold human-review band.
+    """Strengthened sweep-health gate (4.7 Q2). Returns dict(ok, coverage_ok, reason, state).
+
+    Two separate signals so the gate can BOOTSTRAP (else it deadlocks):
+      - coverage_ok  = THIS sweep's coverage is good: >=50% non-cloud fleet bumped,
+                       min-fleet 100% when denom<10, and not in the 50-60% review band.
+                       This is what gets recorded in the __sweep__ marker's sweep_healthy,
+                       so the NEXT run has a meaningful prior to compare against.
+      - ok (may demote) = coverage_ok AND the PREVIOUS sweep was coverage-healthy AND recent
+                       (the "2 consecutive healthy sweeps" rule). prev_healthy is the prior
+                       row's coverage_ok. On the first-ever run prev is None -> not consecutive
+                       -> ok False (demote nothing) but coverage_ok True (marker records healthy),
+                       so run 2 can pass. Without this split, sweep_healthy would echo ok and
+                       nothing would ever go healthy.
     """
     frac = (bumped / denom) if denom else 0.0
     state = {
@@ -135,22 +144,29 @@ def evaluate_gate(bumped: int, denom: int, prev_healthy: bool | None,
         "prev_healthy": prev_healthy, "prev_age_hours": prev_age_hours,
         "window_hours": SWEEP_WINDOW_HOURS,
     }
+    # ── per-sweep coverage (independent of history) ──
+    coverage_ok, reason = True, "healthy"
     if denom == 0:
-        return {"ok": False, "reason": "sweep_unhealthy_no_fleet", "state": state}
-    if denom < MIN_FLEET:
+        coverage_ok, reason = False, "sweep_unhealthy_no_fleet"
+    elif denom < MIN_FLEET:
         state["min_fleet_100_required"] = True
         if frac < 1.0:
-            return {"ok": False, "reason": "sweep_unhealthy_min_fleet", "state": state}
-    if frac < FRACTION_MIN:
-        return {"ok": False, "reason": "sweep_unhealthy_low_fraction", "state": state}
-    if FRACTION_MIN <= frac < NEAR_THRESHOLD_HI:
+            coverage_ok, reason = False, "sweep_unhealthy_min_fleet"
+    if coverage_ok and frac < FRACTION_MIN:
+        coverage_ok, reason = False, "sweep_unhealthy_low_fraction"
+    if coverage_ok and FRACTION_MIN <= frac < NEAR_THRESHOLD_HI:
         state["near_threshold"] = True
-        return {"ok": False, "reason": "near_threshold_human_review", "state": state}
-    consecutive = bool(prev_healthy) and prev_age_hours is not None and prev_age_hours <= PREV_SWEEP_MAX_AGE_H
+        coverage_ok, reason = False, "near_threshold_human_review"
+    state["coverage_ok"] = coverage_ok
+    # ── consecutive-healthy (this coverage AND a recent healthy prior) ──
+    consecutive = (coverage_ok and bool(prev_healthy)
+                   and prev_age_hours is not None and prev_age_hours <= PREV_SWEEP_MAX_AGE_H)
     state["consecutive_healthy"] = consecutive
+    if not coverage_ok:
+        return {"ok": False, "coverage_ok": False, "reason": reason, "state": state}
     if not consecutive:
-        return {"ok": False, "reason": "no_consecutive_healthy_sweep", "state": state}
-    return {"ok": True, "reason": "healthy", "state": state}
+        return {"ok": False, "coverage_ok": True, "reason": "no_consecutive_healthy_sweep", "state": state}
+    return {"ok": True, "coverage_ok": True, "reason": "healthy", "state": state}
 
 
 def flip_at(last_alive: datetime, reason: str, override_days: int | None) -> datetime | None:
@@ -345,8 +361,10 @@ def log_dryrun(conn, run_tag, sweep_healthy, asset_id, disc, last_alive, reason,
 
 def run(conn, write_enabled: bool, run_tag: str) -> int:
     gate = sweep_health(conn)
-    # Per-run gate marker row (drives the next run's consecutive-healthy check).
-    log_dryrun(conn, run_tag, gate["ok"], SWEEP_MARKER, None, None, None, None,
+    # Per-run gate marker row. Record THIS sweep's coverage_ok (not the final gate
+    # decision) so the next run's consecutive-healthy check has a real prior to read —
+    # recording gate["ok"] here would deadlock the gate (it can never bootstrap).
+    log_dryrun(conn, run_tag, gate["coverage_ok"], SWEEP_MARKER, None, None, None, None,
                None, False, gate["reason"], gate["state"], write_enabled)
     conn.commit()
     if not gate["ok"]:

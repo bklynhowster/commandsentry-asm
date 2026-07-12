@@ -55,10 +55,17 @@ def test_gate_healthy():
     g = dw.evaluate_gate(bumped=80, denom=100, prev_healthy=True, prev_age_hours=6.0)
     assert g["ok"] and g["reason"] == "healthy"
 
+def test_gate_first_run_bootstraps():
+    # First-ever sweep: no prior marker -> not consecutive -> ok False, but coverage_ok
+    # True so the __sweep__ marker records healthy and run 2 can pass. Guards the deadlock
+    # where sweep_healthy echoed the final gate decision and nothing ever went healthy.
+    g = dw.evaluate_gate(bumped=80, denom=100, prev_healthy=None, prev_age_hours=None)
+    assert not g["ok"] and g["coverage_ok"] and g["reason"] == "no_consecutive_healthy_sweep"
+
 def test_gate_partial_outage_blocks():
     # 30% observed -> low fraction -> demote nothing (the failure the >=1-bump gate missed)
     g = dw.evaluate_gate(bumped=30, denom=100, prev_healthy=True, prev_age_hours=6.0)
-    assert not g["ok"] and g["reason"] == "sweep_unhealthy_low_fraction"
+    assert not g["ok"] and not g["coverage_ok"] and g["reason"] == "sweep_unhealthy_low_fraction"
 
 def test_gate_near_threshold_human_review():
     g = dw.evaluate_gate(bumped=55, denom=100, prev_healthy=True, prev_age_hours=6.0)
