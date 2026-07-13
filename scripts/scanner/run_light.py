@@ -57,6 +57,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Shared scanner utils (same dir — resolved when run as a script or imported by
+# run_heavy; both are pure-Python, no psycopg, so run_light's lazy-psycopg
+# pattern is preserved). finding_history_writer = the per-scan history writer
+# (4.7 H4); delta_close_eligible = the clean-vs-degraded gate (4.7 H3) — a
+# degraded light scan must NOT stamp history.
+from degradation import delta_close_eligible
+from finding_history_writer import write_finding_history_for_scan_run
+
 
 # ─── Lazy import psycopg ────────────────────────────────────────────────
 def _import_deps() -> Any:
@@ -1953,14 +1961,16 @@ INSERT INTO public.findings (
     finding_id, asset_id, title, severity, category, description,
     cwe, cve, normalized_key, "references", current_status, first_detected_at,
     last_observed_at, source, tags,
-    validation_status, scanner_version, validated_at
+    validation_status, scanner_version, validated_at,
+    last_seen_scan_run
 )
 VALUES (%(finding_id)s, %(asset_id)s, %(title)s, %(severity)s, %(category)s,
         %(description)s, %(cwe)s, %(cve)s, %(normalized_key)s,
         %(references)s, 'detected',
         now(), now(), %(source)s, %(tags)s,
         %(validation_status)s, %(scanner_version)s,
-        CASE WHEN %(validation_status)s = 'validated' THEN now() ELSE NULL END)
+        CASE WHEN %(validation_status)s = 'validated' THEN now() ELSE NULL END,
+        %(scan_run_id)s)
 ON CONFLICT (finding_id) DO UPDATE SET
     title             = EXCLUDED.title,
     category          = EXCLUDED.category,
@@ -2020,7 +2030,13 @@ ON CONFLICT (finding_id) DO UPDATE SET
        AND findings.validation_status <> 'validated'
         THEN now()
       ELSE findings.validated_at
-    END
+    END,
+    -- #35 (4.7 H2, LIGHT_SCAN_FINDING_HISTORY_SPEC): stamp the observing
+    -- scan_run on EVERY observation (EXCLUDED, NOT COALESCE — a finding not
+    -- re-stamped by the current run wasn't re-observed). This is the signal
+    -- finding_history_writer keys on (WHERE last_seen_scan_run = scan_run_id);
+    -- without the bump on the conflict path, re-observations write no history.
+    last_seen_scan_run = EXCLUDED.last_seen_scan_run
 RETURNING (xmax = 0) as inserted;
 """
 
@@ -2136,6 +2152,10 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 # ADR-001 validated-SHA key — see top-of-file derive_validation_status.
                 "validation_status": validation_status,
                 "scanner_version":   scanner_version,
+                # 4.7 H2 — the observing scan_run, stamped onto last_seen_scan_run
+                # so the finding_history writer (gated in close_out) can select the
+                # findings this scan re-emitted.
+                "scan_run_id":       ctx.scan_run_id,
             }
             cur.execute(UPSERT_FINDING_SQL, params)
             row = cur.fetchone()
@@ -2179,6 +2199,25 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
         }
         cur.execute(CLOSE_SCAN_RUN_SQL, params)
         cur.execute(CLOSE_SCAN_QUEUE_SQL, params)
+
+        # 4.7 H2/H3 (LIGHT_SCAN_FINDING_HISTORY_SPEC) — per-finding observation
+        # history. Runs AFTER the scan_run is marked complete (completed_at set)
+        # and in the SAME txn (committed together by the caller). GATED on
+        # delta_close_eligible: EVERY tool must have run 'ok'. run_light has NO
+        # degraded_out — a degraded scan still reaches close_out — so without this
+        # gate a partial scan would stamp observations we can't trust (some tools
+        # ran, some didn't; we can't tell which "observations" are real). All-or-
+        # nothing at the scan_run level, mirroring run_medium.
+        if delta_close_eligible(ctx.tool_status):
+            n_history = write_finding_history_for_scan_run(
+                conn, ctx.scan_run_id,
+                notes=f"observed by run_light scan_run {ctx.scan_run_id}",
+            )
+            log(f"finding-history: {n_history} observation row(s) written "
+                f"(scan_id={ctx.scan_run_id})")
+        else:
+            log("finding-history: skipped — scan not delta_close_eligible "
+                "(degraded/partial tool_status); observations not trustworthy")
 
 
 def fail_out(conn, ctx: ScanContext, error: str) -> None:

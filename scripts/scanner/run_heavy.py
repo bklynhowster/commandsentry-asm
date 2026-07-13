@@ -121,8 +121,8 @@ from run_medium import (
     STAMP_FINDINGS_DEGRADED_SQL,
     flush_artifacts_to_db,
     reconcile_tool_status_invariant,
-    write_finding_history_for_scan_run,
 )
+from finding_history_writer import write_finding_history_for_scan_run
 from run_light import derive_hostname
 
 # Degradation primitives (SPEC_SCANNER_DEGRADATION_HARDENING.md).
