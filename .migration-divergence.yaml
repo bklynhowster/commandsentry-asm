@@ -14,8 +14,8 @@ intentional_divergence:
   command_only:
     "20260701_grant_v_alerter_changes.sql": "alerter view grant — Command-only"
     "20260707a_portal_characterization_cols.sql": "portal characterization cols — Command-only"
-    "20260707b_cloud_endpoint_cols.sql": "cloud endpoint classifier — Command-first (not yet ported to Prodex)"
-    "20260707c_cloud_drift_col.sql": "cloud classifier drift column — Command-first"
+    "20260707b_cloud_endpoint_cols.sql": "cloud endpoint classifier cols — Command-first migration file; Prodex reached column-parity via 20260713c_cloud_cols_prodex_parity (2026-07-13). Type divergence: Command cloud_provider = cloud_provider_t enum, Prodex = text (idempotent enum needs a do-block the migration splitter can't parse)."
+    "20260707c_cloud_drift_col.sql": "cloud classifier drift column — Command-first migration file; Prodex reached column-parity via 20260713c (2026-07-13)."
   prodex_only:
     "20260705a_asset_kind_add_redirect_dead.sql": "host characterization: asset_kind redirect/dead — Prodex-first"
     "20260705b_asset_kind_characterization_cols.sql": "host characterization columns — Prodex-first"
