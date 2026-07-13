@@ -1,0 +1,46 @@
+name: Device-class classify
+
+# One-click device-class classifier runner (4.7 D2/D3/D4 + E1-E6).
+#   dry-run (default): writes device_class_dryrun audit rows ONLY — the 14-day
+#                      soak instrument. Change nothing about assets or scanning.
+#   write:            ALSO stamps assets.device_class + confidence + evidence +
+#                      vendor_product — CLASSIFY-ONLY, changes NO routing (D4 Phase A).
+#
+# Ungated on purpose (unlike Migrate): classify-only, no DDL, no routing/scan-behavior
+# change, reversible metadata — so soak re-runs are frictionless. Uses THIS instance's
+# SUPABASE_DSN (same secret as Migrate); the workflow in each repo hits its own DB.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dry-run = audit rows only (soak) | write = also stamp device_class (classify-only)'
+        type: choice
+        options: [dry-run, write]
+        default: dry-run
+      soak_generation:
+        description: 'Soak generation — bump after a soak-clock reset (4.7 E3)'
+        type: string
+        default: '1'
+
+concurrency:
+  group: device-class-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install --quiet 'psycopg[binary]' pyyaml
+      - name: Run device-class classifier
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          ARGS="--soak-generation ${{ github.event.inputs.soak_generation }}"
+          if [ "${{ github.event.inputs.mode }}" = "write" ]; then ARGS="$ARGS --write"; fi
+          echo "::notice::device_class_runner.py $ARGS"
+          python scripts/db/device_class_runner.py $ARGS
