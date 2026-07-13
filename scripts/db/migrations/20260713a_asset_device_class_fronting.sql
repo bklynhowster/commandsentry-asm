@@ -35,6 +35,10 @@
 -- idempotent: true
 -- transactional: true
 -- safe_auto_apply: true
+-- requires_backup: false
+-- estimated_duration_ms: 150
+-- notes: Additive device-class (assets.device_class text+CHECK + confidence + evidence jsonb + vendor_product) + asset_fronting (many-to-many, TEXT FKs) + scan_run.origin_direct + finding_source_t += waf_efficacy (unused in-migration, 55P04-safe). Splitter-safe, idempotent, byte-identical both repos.
+-- END-META
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
