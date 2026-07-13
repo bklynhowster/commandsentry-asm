@@ -194,8 +194,22 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
     tally = {"STAMP": 0, "CHANGE": 0, "TRANSITION_UPGRADE": 0, "TRANSITION_DOWNGRADE": 0}
     unknown = cloud = conf_subset = conf_full = 0
     with conn.cursor() as cur:
-        cur.execute("select asset_id, is_cloud_endpoint, cloud_provider, device_class, "
-                    "device_class_confidence from public.assets order by asset_id")
+        # Resilience guard (instance divergence): the cloud classifier's
+        # `cloud_provider` (20260707b) is Command-only; `is_cloud_endpoint`
+        # (20260712b) is on both. Build the SELECT from whichever cloud columns
+        # actually exist so the runner works on either schema — a missing column
+        # reads as false/null (same lesson as demotion_writer's Prodex no-op).
+        cur.execute("select column_name from information_schema.columns "
+                    "where table_name='assets' "
+                    "and column_name in ('is_cloud_endpoint','cloud_provider')")
+        have = {r["column_name"] for r in cur.fetchall()}
+        cols = [
+            "asset_id",
+            "is_cloud_endpoint" if "is_cloud_endpoint" in have else "false as is_cloud_endpoint",
+            "cloud_provider" if "cloud_provider" in have else "null::text as cloud_provider",
+            "device_class", "device_class_confidence",
+        ]
+        cur.execute(f"select {', '.join(cols)} from public.assets order by asset_id")
         assets = cur.fetchall()
         print(f"{'ASSET':38.38s} {'FROM':18s} {'-> TO':18s} EVENT")
         for a in assets:
