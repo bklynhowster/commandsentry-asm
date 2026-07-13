@@ -112,3 +112,15 @@ fingerprints:
   # Cloudflare acts as CDN (-> cloud_endpoint via the cloud classifier) AND a WAF;
   # add a waf-role row here only to distinguish its WAF from its CDN. Likewise
   # F5 BIG-IP (adc_lb), Palo Alto (edge_firewall), Imperva (waf) as they appear.
+
+# ── Nuclei Fortinet template allowlist (4.7 E5) ───────────────────────────
+# The nuclei_fortinet_hit signal fires ONLY on findings whose nuclei template-id
+# starts with one of these prefixes — NOT a substring 'forti', which false-fires
+# on 'fortify-*' (Fortify SCA, a different vendor). Precision > coverage.
+nuclei_fortinet_templates:
+  prefixes: [fortinet-, fortios-, fortiweb-, fortiadc-, fortisiem-, fortimail-]
+  exclude:  [fortify-]
+
+# NOTE: signal weights (which fingerprint satisfies which high/medium/low signal)
+# are 4.7-ratified per D3. Changing a weight or threshold requires re-review
+# before the soak clock resets — same discipline as classifier_thresholds.yaml.
