@@ -108,7 +108,7 @@ def classify(sub: dict, registry: dict) -> dict | None:
     overrides = registry.get("rotating_cname_overrides") or []
     sig = _signals(sub)
 
-    for tier in (_cname_match, _asn_match, _ip_match):
+    for tier_name, tier in (("cname", _cname_match), ("asn", _asn_match), ("ip", _ip_match)):
         if tier is _cname_match:
             hits = [pid for pid, p in providers.items() if _cname_match(sig["cname"], p)]
         elif tier is _asn_match:
@@ -122,7 +122,9 @@ def classify(sub: dict, registry: dict) -> dict | None:
             # CloudFront / Azure-CDN etc. rotate even inside a static-cloud provider
             if not rotating and any(sig["cname"].endswith(o) for o in overrides):
                 rotating = True
-            return {"cloud_provider": pid, "is_cloud_endpoint": rotating}
+            # match_tier (4.7 F4): drives device-class cloud confidence downstream —
+            # cname/asn = confirmed, ip = suspected. Additive; importer ignores it.
+            return {"cloud_provider": pid, "is_cloud_endpoint": rotating, "match_tier": tier_name}
     return None
 
 

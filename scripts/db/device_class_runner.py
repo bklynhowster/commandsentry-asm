@@ -2,14 +2,22 @@
 """
 device_class_runner.py — device-class classifier RUNNER (4.7 D2/D3/D4 + E1-E6).
 
-Dry-run-first. For every asset:
-  1. is_cloud_endpoint=true -> INHERIT device_class='cloud_endpoint' with PROVENANCE
-     recorded in evidence (4.7 E2). Re-derived every run (no caching), so a
-     cloud->non-cloud flip propagates. The cloud classifier owns AWS/GCP/Azure/CF-CDN.
-  2. else gather FRESH (< evidence_freshness_days, D3) fingerprint signals from the
-     DB — SSH banner (fingerprintx artifact), cert issuer/subject (testssl artifact),
-     nuclei-Fortinet hit (E5: template-id PREFIX allowlist, not substring 'forti') —
-     and run derive_device_class.classify().
+Dry-run-first. For every asset (4.7 F1-F4 corrected ordering, 2026-07-13):
+  1. FINGERPRINT FIRST (F3): gather FRESH (< evidence_freshness_days, D3) signals
+     from the DB — SSH banner (fingerprintx), cert issuer/subject (testssl),
+     nuclei-Fortinet hit (E5 template-id PREFIX allowlist) — and run
+     derive_device_class.classify(). ANY non-unknown result (confirmed OR suspected
+     appliance/waf/edge/adc_lb/cdn) WINS. "A WAF hosted on GCP is still a WAF"; a
+     suspected fingerprint is real appliance evidence and BLOCKS the cloud fallback
+     (F3) — never silently overwritten by a cloud class.
+  2. CLOUD FALLBACK (F1/F2/F4) — only when fingerprints say unknown: re-derive the
+     cloud classification from the asset's surface_data (E2 re-derive-every-run, no
+     caching, no schema change). Topology keys on cloud_provider, NOT is_cloud_endpoint
+     (that flag is a rotating-pool churn signal — D6-F5, not a topology signal).
+     cloud_provider present -> is_cloud_endpoint True = rotating edge -> 'cdn';
+     False = static compute -> 'cloud_endpoint'. Confidence by classifier tier (F4):
+     cname/asn = confirmed, ip-only = suspected; surface older than the freshness
+     window caps at suspected.
   3. Decide the event vs the current row: STAMP / CHANGE / TRANSITION_UPGRADE /
      TRANSITION_DOWNGRADE (E6c). A DOWNGRADE (incl. -> unknown) is a red flag that
      resets the soak clock.
@@ -19,11 +27,11 @@ Dry-run-first. For every asset:
      evidence + vendor_product — CLASSIFY-ONLY, changes NO routing (D4 Phase A).
 
 Everything keys on asset_id (the hostname PK scan_run/findings reference).
-v1 signals: SSH banner + cert + nuclei-Fortinet. DEFERRED to v1.1: wafw00f vendor
-(run_medium computes ctx.waf_kind but nothing persists it) and the IP-range signal
-(needs a clean asset_id-keyed IP source). Until wafw00f lands, WAF/edge assets top
-out at 'suspected' (below the routing bar) — E1: fine for the soak; each
-wafw00f-confirmed WAF then gets its own 7-day mini-soak.
+Fingerprint signals: SSH banner + cert + nuclei-Fortinet. DEFERRED to v1.1: wafw00f
+vendor (run_medium computes ctx.waf_kind but nothing persists it) and the IP-range
+signal. Until wafw00f lands, appliance/WAF/edge assets top out at 'suspected' (below
+the routing bar) — E1: fine for the soak; each wafw00f-confirmed WAF then gets its
+own 7-day mini-soak.
 
 TODO (post-Phase-B, 4.7 E4): replace regex-over-artifact extraction with structured
 parsing (more robust to testssl/fingerprintx version bumps).
@@ -41,13 +49,20 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "normalize"))
 from derive_device_class import (  # noqa: E402
     FINGERPRINTS_PATH, classify, load_fingerprints, load_thresholds,
 )
+try:  # cloud fallback re-derives from surface_data (4.7 F1/F4; E2 re-derive-every-run)
+    from derive_cloud_endpoint import (  # noqa: E402
+        classify as classify_cloud, load_registry as load_cloud_registry,
+    )
+except Exception:  # pragma: no cover
+    classify_cloud = None
+    load_cloud_registry = None
 
 try:
     import psycopg
@@ -167,16 +182,83 @@ def _latest_scan_run(cur, asset_id: str):
     return r["scan_run_id"] if r else None
 
 
-def classify_asset(cur, a: dict, fps, th, fresh_days, nuclei_re) -> tuple[dict, bool]:
-    """(result, inherited). E2: cloud inheritance carries provenance in evidence."""
-    if a["is_cloud_endpoint"]:
-        ev = {"signals": [], "inherited_from": "is_cloud_endpoint",
-              "inherited_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-              "cloud_classifier_confidence": "confirmed",
-              "cloud_provider_at_inheritance": a.get("cloud_provider")}
-        return ({"device_class": "cloud_endpoint", "confidence": "confirmed",
-                 "evidence": ev, "vendor_product": {"cloud_provider": a.get("cloud_provider")}}, True)
-    return (classify(gather_observations(cur, a["asset_id"], fresh_days, nuclei_re), fps, th), False)
+# ── F2/F4 cloud-fallback mapping (pure; unit-tested, no DB) ──────────────
+def _cloud_class_and_conf(cloud_result: dict, stale: bool) -> tuple[str, str]:
+    """(classify_cloud() result, stale) -> (device_class, confidence).
+    F2: rotating edge (is_cloud_endpoint=true) -> 'cdn'; static compute -> 'cloud_endpoint'.
+    F4: cname/asn tier -> confirmed, ip-only -> suspected; stale surface caps at suspected."""
+    device_class = "cdn" if cloud_result.get("is_cloud_endpoint") else "cloud_endpoint"
+    confidence = "confirmed" if cloud_result.get("match_tier") in ("cname", "asn") else "suspected"
+    if stale and confidence == "confirmed":
+        confidence = "suspected"
+    return device_class, confidence
+
+
+# ── F3 ordering (pure; unit-tested, no DB) ───────────────────────────────
+def _resolve(fp_result: dict, cloud_result: dict | None) -> tuple[dict, bool]:
+    """Fingerprint-first (F3): ANY non-unknown fingerprint (confirmed OR suspected)
+    WINS and BLOCKS cloud — a suspected WAF on GCP stays a suspected WAF, never a
+    silent cloud_endpoint. Cloud is fallback ONLY when fingerprint == unknown.
+    Returns (result, from_cloud)."""
+    if fp_result["device_class"] != "unknown":
+        return (fp_result, False)
+    if cloud_result is not None:
+        return (cloud_result, True)
+    return (fp_result, False)
+
+
+def _is_stale(last_seen, fresh_days: int) -> bool:
+    """F4 freshness gate: surface with no/old last_seen can't hold 'confirmed'."""
+    if last_seen is None:
+        return True
+    return last_seen < datetime.now(timezone.utc) - timedelta(days=int(fresh_days))
+
+
+def _cloud_fallback(cur, asset_id: str, cloud_reg, fresh_days: int) -> dict | None:
+    """F1/F2/F4: re-derive cloud classification from the persisted surface_data
+    (E2 re-derive-every-run; no schema change). Topology keys on cloud_provider,
+    NOT is_cloud_endpoint (rotating-pool churn flag, D6-F5). Returns a
+    classify()-shaped result dict, or None (no cloud_provider / unavailable)."""
+    if classify_cloud is None or cloud_reg is None:
+        return None
+    cur.execute("select surface_data, last_seen from public.asset_surface where asset_id=%s", (asset_id,))
+    row = cur.fetchone()
+    if not row or not row.get("surface_data"):
+        return None
+    surface = row["surface_data"]
+    if isinstance(surface, str):
+        try:
+            surface = json.loads(surface)
+        except Exception:
+            return None
+    cr = None
+    for sub in (surface.get("subdomains") if isinstance(surface, dict) else None) or []:
+        cr = classify_cloud(sub, cloud_reg)
+        if cr:
+            break
+    if not cr:
+        return None
+    stale = _is_stale(row.get("last_seen"), fresh_days)
+    device_class, confidence = _cloud_class_and_conf(cr, stale)
+    ev = {"signals": [], "inherited_from": "cloud_provider",
+          "cloud_provider": cr.get("cloud_provider"),
+          "cloud_match_tier": cr.get("match_tier"),
+          "is_cloud_endpoint": bool(cr.get("is_cloud_endpoint")),
+          "surface_stale": stale,
+          "inherited_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    return {"device_class": device_class, "confidence": confidence,
+            "evidence": ev, "vendor_product": {"cloud_provider": cr.get("cloud_provider")}}
+
+
+def classify_asset(cur, a: dict, fps, th, fresh_days, nuclei_re, cloud_reg) -> tuple[dict, bool]:
+    """(result, from_cloud). F3: fingerprint FIRST — any non-unknown result (confirmed
+    OR suspected) wins and blocks the cloud fallback. Cloud fallback (F1/F2/F4) only
+    when fingerprints are unknown. NOTE: assets.is_cloud_endpoint is a rotating-pool
+    churn flag (D6-F5), NOT a topology signal — cloud topology keys on cloud_provider,
+    re-derived from surface_data here (F1)."""
+    fp = classify(gather_observations(cur, a["asset_id"], fresh_days, nuclei_re), fps, th)
+    cloud = _cloud_fallback(cur, a["asset_id"], cloud_reg, fresh_days) if fp["device_class"] == "unknown" else None
+    return _resolve(fp, cloud)
 
 
 def _has_wafw00f(evidence) -> bool:
@@ -188,37 +270,36 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
     fps, th = load_fingerprints(), load_thresholds()
     fresh_days = th["evidence_freshness_days"]
     nuclei_re = load_nuclei_fortinet_regex()
+    cloud_reg = None
+    if load_cloud_registry is not None:
+        try:
+            cloud_reg = load_cloud_registry()
+        except Exception as e:  # pragma: no cover
+            print(f"  ! cloud registry unavailable ({e}) — cloud fallback disabled", file=sys.stderr)
     conn = psycopg.connect(dsn, row_factory=dict_row, connect_timeout=15)
     conn.autocommit = False
 
     tally = {"STAMP": 0, "CHANGE": 0, "TRANSITION_UPGRADE": 0, "TRANSITION_DOWNGRADE": 0}
-    unknown = cloud = conf_subset = conf_full = 0
+    unknown = cloud_endpoint_ct = cdn_ct = conf_subset = conf_full = 0
     with conn.cursor() as cur:
-        # Resilience guard (instance divergence): the cloud classifier's
-        # `cloud_provider` (20260707b) is Command-only; `is_cloud_endpoint`
-        # (20260712b) is on both. Build the SELECT from whichever cloud columns
-        # actually exist so the runner works on either schema — a missing column
-        # reads as false/null (same lesson as demotion_writer's Prodex no-op).
-        cur.execute("select column_name from information_schema.columns "
-                    "where table_name='assets' "
-                    "and column_name in ('is_cloud_endpoint','cloud_provider')")
-        have = {r["column_name"] for r in cur.fetchall()}
-        cols = [
-            "asset_id",
-            "is_cloud_endpoint" if "is_cloud_endpoint" in have else "false as is_cloud_endpoint",
-            "cloud_provider" if "cloud_provider" in have else "null::text as cloud_provider",
-            "device_class", "device_class_confidence",
-        ]
-        cur.execute(f"select {', '.join(cols)} from public.assets order by asset_id")
+        # F1/F3: classification no longer reads assets.is_cloud_endpoint/cloud_provider
+        # (is_cloud_endpoint was the wrong topology key — see classify_asset). The cloud
+        # fallback RE-DERIVES from surface_data every run (E2 re-derive, no caching), so
+        # we only need each asset's CURRENT class to compute the transition event.
+        cur.execute("select asset_id, device_class, device_class_confidence "
+                    "from public.assets order by asset_id")
         assets = cur.fetchall()
         print(f"{'ASSET':38.38s} {'FROM':18s} {'-> TO':18s} EVENT")
         for a in assets:
-            res, inherited = classify_asset(cur, a, fps, th, fresh_days, nuclei_re)
+            res, from_cloud = classify_asset(cur, a, fps, th, fresh_days, nuclei_re, cloud_reg)
             nc, ncf = res["device_class"], res["confidence"]
             if nc == "unknown":
                 unknown += 1
-            if inherited:
-                cloud += 1
+            if from_cloud:
+                if nc == "cdn":
+                    cdn_ct += 1
+                else:
+                    cloud_endpoint_ct += 1
             elif ncf == "confirmed":
                 if _has_wafw00f(res["evidence"]):
                     conf_full += 1
@@ -259,7 +340,9 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
     print(f"\n{'WROTE' if write else 'DRY-RUN'} (soak_generation={soak_generation}, audit rows committed):")
     print(f"  events: STAMP={tally['STAMP']} CHANGE={tally['CHANGE']} "
           f"UPGRADE={tally['TRANSITION_UPGRADE']} DOWNGRADE={tally['TRANSITION_DOWNGRADE']}")
-    print(f"  confirmed: cloud_inherited={cloud} via_subset={conf_subset} via_full_signals={conf_full}")
+    print(f"  cloud fallback (F1/F2, re-derived from surface_data): "
+          f"cloud_endpoint={cloud_endpoint_ct} cdn={cdn_ct}")
+    print(f"  fingerprint confirmed: via_subset={conf_subset} via_full_signals={conf_full}")
     print(f"  unknown={unknown}/{total} ({unk_pct}%)  "
           + ("<-- investigate coverage (E4 >70%)" if unk_pct > 70 else ""))
     print("  NOTE: wafw00f (HIGH) + IP-range signals not wired in v1 — WAF/edge assets "
@@ -294,6 +377,34 @@ def _selftest() -> int:
         got = event_for(*args)
         ok &= got == want
         print(f"  event_for{args[:2]}->{args[2:]} = {got} (want {want})")
+    # F2/F4 cloud-fallback mapping (pure): class by rotating flag, confidence by tier + freshness
+    cloud_cases = [
+        ({"cloud_provider": "gcp",    "is_cloud_endpoint": False, "match_tier": "asn"},   False, ("cloud_endpoint", "confirmed")),
+        ({"cloud_provider": "gcp",    "is_cloud_endpoint": False, "match_tier": "asn"},   True,  ("cloud_endpoint", "suspected")),  # F4 freshness cap
+        ({"cloud_provider": "aws",    "is_cloud_endpoint": False, "match_tier": "cname"}, False, ("cloud_endpoint", "confirmed")),
+        ({"cloud_provider": "azure",  "is_cloud_endpoint": True,  "match_tier": "cname"}, False, ("cdn",            "confirmed")),  # Azure Front Door
+        ({"cloud_provider": "akamai", "is_cloud_endpoint": True,  "match_tier": "asn"},   False, ("cdn",            "confirmed")),  # Akamai edge
+        ({"cloud_provider": "gcp",    "is_cloud_endpoint": False, "match_tier": "ip"},    False, ("cloud_endpoint", "suspected")), # F4 ip-only = suspected
+    ]
+    for cr, stale, want in cloud_cases:
+        got = _cloud_class_and_conf(cr, stale)
+        ok &= got == want
+        print(f"  cloud {cr['cloud_provider']}/{cr['match_tier']}/stale={stale} = {got} (want {want})")
+    # F3 ordering: fingerprint-first; suspected fingerprint BLOCKS cloud fallback
+    waf_conf = {"device_class": "waf", "confidence": "confirmed", "evidence": [], "vendor_product": {}}
+    waf_susp = {"device_class": "waf", "confidence": "suspected", "evidence": [], "vendor_product": {}}
+    unk = {"device_class": "unknown", "confidence": "unknown", "evidence": [], "vendor_product": {}}
+    cloud_ce = {"device_class": "cloud_endpoint", "confidence": "confirmed", "evidence": {}, "vendor_product": {}}
+    f3 = [
+        (_resolve(waf_conf, cloud_ce), (waf_conf, False)),   # confirmed fingerprint wins over cloud
+        (_resolve(waf_susp, cloud_ce), (waf_susp, False)),   # suspected fingerprint BLOCKS cloud (F3)
+        (_resolve(unk, cloud_ce),      (cloud_ce, True)),    # unknown fingerprint -> cloud fallback
+        (_resolve(unk, None),          (unk, False)),        # nothing -> unknown
+    ]
+    for got, want in f3:
+        ok &= got == want
+    print(f"  F3 ordering (conf-wins / susp-blocks-cloud / unk->cloud / none->unknown): "
+          f"{'ok' if all(g == w for g, w in f3) else 'FAIL'}")
     print(f"  ssh={extract_ssh_banner(fpx)!r}  cert={c}  nuclei_re={rx!r}")
     print("SELFTEST:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
