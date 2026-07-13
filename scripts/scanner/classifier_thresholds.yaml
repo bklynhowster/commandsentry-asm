@@ -1,0 +1,40 @@
+# ============================================================================
+# Device-class classifier thresholds — 4.7 D3 (2026-07-13)
+# ============================================================================
+# PR-REVIEWED CONFIG. NOT runtime-modifiable. The classifier READS this and
+# never writes it; changing any weight or threshold requires a reviewed commit.
+# Anchoring the bar here (not in code constants a caller can tweak) is the guard
+# against "lower confirmed to 1-signal for more coverage" drift (4.7 risk #1).
+#
+# Only a CONFIRMED device_class may change scan routing (4.7 D3/D4). suspected
+# renders in the portal for review but never reroutes. A class assignment built
+# only from stale evidence (older than evidence_freshness_days) does not clear
+# the bar — forcing periodic reclassification.
+version: 1
+
+# --- Signals, by independent strength --------------------------------------
+signals:
+  high:
+    - ssh_banner_appliance_match       # SSH banner matches a known appliance fingerprint (e.g. "8.1.0.0_openssh SCI")
+    - product_http_header              # distinct product header (Server: FortiADC, X-FortiGate-Firmware, ...)
+    - fwbbot_check_challenge           # fwbbot_check probe returns a FortiWeb challenge response
+    - wafw00f_high_confidence          # wafw00f positive identification at high confidence
+  medium:
+    - cert_issuer_subject_pattern      # e.g. a GoDaddy wildcard cert on a random IP inside the corp range
+    - ip_in_vendor_mgmt_range          # IP within a published vendor management-plane range
+    - fortinet_cve_detection_response  # response to a Fortinet-specific CVE-detection template (detection, not exploit)
+  low:
+    - port_pattern                     # appliance-like port set (weak alone)
+    - tcp_timing_fingerprint           # response timing / TCP fingerprint
+
+# --- Confidence bar (4.7 D3) -----------------------------------------------
+# Evaluated over signals no older than evidence_freshness_days.
+thresholds:
+  confirmed: ">=2 high  OR  (>=1 high AND >=2 medium)"
+  suspected: "1 high  OR  >=2 medium"
+  unknown:   "0 signals, or low-weight only"
+
+# --- Freshness + drift guards ----------------------------------------------
+evidence_freshness_days: 30          # signals older than this do not count toward the bar
+class_transition_alert: true         # any scan-over-scan change of a CONFIRMED class fires a WATCH alert (4.7 D3)
+routing_requires: confirmed          # only this confidence level may change scan routing (4.7 D4)
