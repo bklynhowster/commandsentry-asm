@@ -18,6 +18,29 @@
 # device-class runner INHERITS device_class='cloud_endpoint' when is_cloud_endpoint
 # is true, instead of re-detecting them. This registry covers the appliance +
 # managed-hosting edges the cloud classifier does NOT catch.
+#
+# ── EMPIRICAL EVIDENCE ONLY (Howie, 2026-07-18) ───────────────────────────────
+# "Discard the entire concept of insider information. It is the most unreliable
+#  piece of artifact or evidence that we have ... everything that we put on the
+#  site needs to be derived from empirical evidence that we determine on our own."
+#
+# We scan from OUTSIDE. Anything we 'know' because we once operated the box is
+# inadmissible here: it cannot be re-verified, and it goes stale SILENTLY (swap
+# the appliance for another vendor and nothing in this pipeline would notice).
+# Every row must therefore clear one of two bars:
+#
+#   VENDOR-IDENTIFYING -> may set {vendor, product}. The device identified
+#     ITSELF: banner text naming it, its own challenge endpoint (fwbbot_check),
+#     a wafw00f verdict, a vendor-named header, a cert CN naming the vendor,
+#     a vendor-specific CVE/detection response.
+#   PRESENCE-ONLY -> device_class only, `vendor_product: {}`. We can prove
+#     something is in front of the asset but nothing names it. The portal then
+#     renders "Behind a WAF", which is the whole truth and nothing more.
+#
+# NEVER encode a brand we merely infer. `family: *_suspected` was exactly that
+# and is gone: it published a live "BEHIND FORTINET" badge off an SSH banner
+# whose only actual content was the string "SCI". Presence-only is not a
+# weaker answer, it is the correct one.
 version: 1
 
 # Each fingerprint:
@@ -27,7 +50,12 @@ version: 1
 #                   nuclei_fortinet_hit)
 #   match_*       — substrings (case-insensitive) / regex / ip_prefixes to test
 #   device_class  — the topology role this evidence implies
-#   vendor_product— optional {vendor, product, ...}; merged into assets.vendor_product
+#   vendor_product— optional {vendor, product, ...}. NOT merged: device_class_runner
+#                   REPLACES assets.vendor_product wholesale on each --write pass
+#                   (plain `vendor_product=%s::jsonb` assignment), so a key removed
+#                   from a row here drains from the DB on the next write — no
+#                   backfill needed. Verified 2026-07-18; the old "merged" wording
+#                   here was wrong and implied a manual cleanup that isn't required.
 fingerprints:
 
   # ── SSH management banner (HIGH) ─────────────────────────────────────────
@@ -35,7 +63,14 @@ fingerprints:
     observation: ssh_banner
     match_substrings: ["_openssh sci", "8.1.0.0_openssh"]   # SCI-managed appliance firmware (.76 pilot)
     device_class: edge_firewall
-    vendor_product: {managed_by: SCI, family: fortinet_suspected}
+    # PRESENCE-ONLY + operator. The banner ("SSH-2.0-8.1.0.0_openssh SCI")
+    # empirically proves a customized, SCI-managed appliance firmware — the
+    # string "SCI" is right there. It does NOT name a hardware vendor.
+    # `family: fortinet_suspected` used to live here; it was insider knowledge,
+    # not observation, and it rendered "BEHIND FORTINET" on ftp.sciimage.com.
+    # Removed 2026-07-18. Re-earn the vendor only via a vendor-identifying
+    # signal (JARM/TLS fingerprint, block page, cookie name, favicon hash).
+    vendor_product: {managed_by: SCI}
   - signal: ssh_banner_appliance_match
     observation: ssh_banner
     match_regex: "fortissh|fortios|fortigate"
@@ -77,11 +112,22 @@ fingerprints:
     vendor_product: {}
 
   # ── IP in a known vendor edge/mgmt range (MEDIUM) ────────────────────────
+  # 2026-07-18: vendor attribution REMOVED. This row previously asserted
+  # {vendor: Fortinet, product: FortiWeb} and cited, as its source, a note
+  # recording what we knew from having operated the pair. That is textbook
+  # insider information: externally, an IP range attributes a NETBLOCK OWNER
+  # via whois/ASN — never an appliance brand. Kept as presence-only so the
+  # topology signal survives while the false brand claim does not.
+  #
+  # OPEN, for 4.7: the row's PREMISE ("this range is a WAF") is itself
+  # insider-derived, so arguably the whole row should go. Deleting it changes
+  # classification behavior, which D3 gates behind review — hence neutered now,
+  # adjudicated next. Same question applies to the signal type generally.
   - signal: ip_in_vendor_mgmt_range
     observation: ips
-    ip_prefixes: ["52.119.65."]                             # Command FortiWeb pair range (reference_fortiweb_command_ips)
+    ip_prefixes: ["52.119.65."]
     device_class: waf
-    vendor_product: {vendor: Fortinet, product: FortiWeb}
+    vendor_product: {}
 
   # ── Fortinet-specific CVE detection response (MEDIUM) ────────────────────
   - signal: fortinet_cve_detection_response
