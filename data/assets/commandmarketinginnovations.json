@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-07-19T14:43:54Z_f9162c67",
-    "started_at": "2026-07-19T14:43:54Z",
-    "completed_at": "2026-07-19T14:46:38Z",
-    "duration_seconds": 164,
+    "id": "scan_2026-07-19T19:30:40Z_80ceb994",
+    "started_at": "2026-07-19T19:30:40Z",
+    "completed_at": "2026-07-19T19:34:01Z",
+    "duration_seconds": 201,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -32,7 +32,7 @@
     "live_subdomain_count": 2,
     "host_count": 2,
     "service_count": 8,
-    "newest_cert_expiry_days": 83,
+    "newest_cert_expiry_days": 82,
     "top_hosting_org": "Automattic, Inc",
     "platforms": [
       "WordPress on wp.cloud (Pressable)"
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-07-19T14:46:38Z",
-      "last_seen": "2026-07-19T14:46:38Z",
+      "first_discovered": "2026-07-19T19:34:01Z",
+      "last_seen": "2026-07-19T19:34:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -154,7 +154,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 83
+            "days_to_expiry": 82
           }
         },
         {
@@ -225,7 +225,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 83
+            "days_to_expiry": 82
           }
         }
       ],
@@ -360,8 +360,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-19T14:46:38Z",
-      "last_seen": "2026-07-19T14:46:38Z",
+      "first_discovered": "2026-07-19T19:34:01Z",
+      "last_seen": "2026-07-19T19:34:01Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -470,7 +470,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 83
+            "days_to_expiry": 82
           }
         },
         {
@@ -541,7 +541,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 83
+            "days_to_expiry": 82
           }
         }
       ],
@@ -558,8 +558,8 @@
           "ns18.domaincontrol.com"
         ],
         "txt": [
-          "",
-          "ca3-109f68bf8eb24748b4c4aaa123b93e17"
+          "ca3-109f68bf8eb24748b4c4aaa123b93e17",
+          ""
         ],
         "spf": null,
         "dnssec": false
@@ -672,9 +672,12 @@
       }
     }
   ],
-  "phantom_subdomains": [],
+  "phantom_subdomains": [
+    "app3.commandmarketinginnovations.com",
+    "kafka.commandmarketinginnovations.com"
+  ],
   "deltas": {
-    "since_scan": "scan_2026-07-19T13:53:10Z_c103a350",
+    "since_scan": "scan_2026-07-19T14:43:54Z_f9162c67",
     "added": {
       "subdomains": [],
       "services": [],
@@ -692,50 +695,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-06-22T05:24:37Z_0b70c47f",
-      "started_at": "2026-06-22T05:24:37Z",
-      "completed_at": "2026-06-22T05:27:36Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 2,
-      "service_count": 8,
-      "subdomain_names": [
-        "commandmarketinginnovations.com",
-        "www.commandmarketinginnovations.com"
-      ],
-      "ports_by_sub": {
-        "commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        },
-        "www.commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.0",
-        "Mailcheck": "1.1.2",
-        "Slider Revolution": "6.7.56",
-        "WPMU DEV Smush": "4.1.1",
-        "Yoast SEO": "27.8",
-        "jQuery Migrate": "3.4.1",
-        "punycode": "1.0.0"
-      }
-    },
     {
       "scan_id": "scan_2026-06-22T12:31:15Z_a2a8c527",
       "started_at": "2026-06-22T12:31:15Z",
@@ -5946,6 +5905,50 @@
       "scan_id": "scan_2026-07-19T14:43:54Z_f9162c67",
       "started_at": "2026-07-19T14:43:54Z",
       "completed_at": "2026-07-19T14:46:38Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.7.58",
+        "WPMU DEV Smush": "4.2.0",
+        "Yoast SEO": "28.0",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-07-19T19:30:40Z_80ceb994",
+      "started_at": "2026-07-19T19:30:40Z",
+      "completed_at": "2026-07-19T19:34:01Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 2,

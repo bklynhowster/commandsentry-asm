@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-07-19T14:31:03Z_e4e4c824",
-    "started_at": "2026-07-19T14:31:03Z",
-    "completed_at": "2026-07-19T14:34:03Z",
-    "duration_seconds": 180,
+    "id": "scan_2026-07-19T19:16:14Z_c0a84376",
+    "started_at": "2026-07-19T19:16:14Z",
+    "completed_at": "2026-07-19T19:20:17Z",
+    "duration_seconds": 243,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -30,8 +30,8 @@
   "summary": {
     "subdomain_count": 3,
     "live_subdomain_count": 3,
-    "host_count": 20,
-    "service_count": 40,
+    "host_count": 33,
+    "service_count": 72,
     "newest_cert_expiry_days": 31,
     "top_hosting_org": "Microsoft Corporation",
     "platforms": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-07-19T14:34:03Z",
-      "last_seen": "2026-07-19T14:34:03Z",
+      "first_discovered": "2026-07-19T19:20:17Z",
+      "last_seen": "2026-07-19T19:20:17Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -141,8 +141,8 @@
         ],
         "txt": [
           "MS=ms93622757",
-          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
           "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
@@ -156,6 +156,11 @@
             "name": "Bootstrap",
             "version": "5.1.3",
             "category": "frontend"
+          },
+          {
+            "name": "Complianz",
+            "version": null,
+            "category": null
           },
           {
             "name": "Font Awesome",
@@ -250,8 +255,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-19T14:34:03Z",
-      "last_seen": "2026-07-19T14:34:03Z",
+      "first_discovered": "2026-07-19T19:20:17Z",
+      "last_seen": "2026-07-19T19:20:17Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -271,189 +276,319 @@
       },
       "hosts": [
         {
-          "ip": "2603:1036:207:2000::2",
+          "ip": "2603:1036:30c:818::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:207:455::2",
+          "ip": "2603:1036:30c:84d::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:207:456::2",
+          "ip": "2603:1036:30c:900::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:207:45c::2",
+          "ip": "2603:1036:30c:901::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:302:4155::2",
+          "ip": "2603:1036:30c:902::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:302:505f::2",
+          "ip": "2603:1036:30c:90b::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "40.104.46.34",
+          "ip": "2603:1036:30c:90e::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "40.104.46.66",
+          "ip": "2603:1036:30c:910::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "40.104.47.98",
+          "ip": "2603:1036:30c:c76::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "40.99.232.210",
+          "ip": "2603:1036:30c:c80::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "52.96.109.162",
+          "ip": "2603:1036:30c:c82::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "52.96.109.210",
+          "ip": "2603:1036:30c:c93::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "52.96.109.242",
+          "ip": "2603:1036:30c:c95::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "52.96.111.2",
+          "ip": "2603:1036:30c:c96::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "52.96.179.226",
+          "ip": "2603:1036:30c:e::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "52.96.242.18",
+          "ip": "40.104.2.34",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "52.96.88.34",
+          "ip": "40.104.23.146",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "52.96.88.50",
+          "ip": "40.99.181.130",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
+          "region": "Arizona",
+          "city": "Phoenix",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "40.99.229.210",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Arizona",
+          "city": "Phoenix",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "40.99.229.242",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Arizona",
+          "city": "Phoenix",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.104.226",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Arizona",
+          "city": "Phoenix",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.110.50",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.110.66",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.156.34",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Arizona",
+          "city": "Phoenix",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.165.66",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.166.130",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.166.146",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.166.18",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.166.226",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.188.130",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "California",
+          "city": "San Jose",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.97.104.66",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         }
       ],
       "services": [
         {
-          "ip": "40.104.46.34",
+          "ip": "40.104.2.34",
           "port": 25,
           "protocol": "tcp",
           "service": "smtp",
@@ -461,7 +596,7 @@
           "tls": false
         },
         {
-          "ip": "40.104.46.34",
+          "ip": "40.104.2.34",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -469,7 +604,7 @@
           "tls": false
         },
         {
-          "ip": "40.104.46.34",
+          "ip": "40.104.2.34",
           "port": 110,
           "protocol": "tcp",
           "service": "pop3",
@@ -477,7 +612,7 @@
           "tls": false
         },
         {
-          "ip": "40.104.46.34",
+          "ip": "40.104.2.34",
           "port": 143,
           "protocol": "tcp",
           "service": "imap",
@@ -485,7 +620,7 @@
           "tls": false
         },
         {
-          "ip": "40.104.46.34",
+          "ip": "40.104.2.34",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
@@ -523,7 +658,7 @@
           }
         },
         {
-          "ip": "40.104.46.34",
+          "ip": "40.104.2.34",
           "port": 587,
           "protocol": "tcp",
           "service": "submission",
@@ -531,7 +666,7 @@
           "tls": false
         },
         {
-          "ip": "40.104.46.34",
+          "ip": "40.104.2.34",
           "port": 993,
           "protocol": "tcp",
           "service": "imaps",
@@ -539,7 +674,7 @@
           "tls": true
         },
         {
-          "ip": "40.104.46.34",
+          "ip": "40.104.2.34",
           "port": 995,
           "protocol": "tcp",
           "service": "pop3s",
@@ -547,7 +682,7 @@
           "tls": true
         },
         {
-          "ip": "40.104.47.98",
+          "ip": "40.104.23.146",
           "port": 25,
           "protocol": "tcp",
           "service": "smtp",
@@ -555,7 +690,7 @@
           "tls": false
         },
         {
-          "ip": "40.104.47.98",
+          "ip": "40.104.23.146",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -563,7 +698,7 @@
           "tls": false
         },
         {
-          "ip": "40.104.47.98",
+          "ip": "40.104.23.146",
           "port": 110,
           "protocol": "tcp",
           "service": "pop3",
@@ -571,7 +706,7 @@
           "tls": false
         },
         {
-          "ip": "40.104.47.98",
+          "ip": "40.104.23.146",
           "port": 143,
           "protocol": "tcp",
           "service": "imap",
@@ -579,7 +714,7 @@
           "tls": false
         },
         {
-          "ip": "40.104.47.98",
+          "ip": "40.104.23.146",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
@@ -617,7 +752,7 @@
           }
         },
         {
-          "ip": "40.104.47.98",
+          "ip": "40.104.23.146",
           "port": 587,
           "protocol": "tcp",
           "service": "submission",
@@ -625,7 +760,7 @@
           "tls": false
         },
         {
-          "ip": "40.104.47.98",
+          "ip": "40.104.23.146",
           "port": 993,
           "protocol": "tcp",
           "service": "imaps",
@@ -633,7 +768,7 @@
           "tls": true
         },
         {
-          "ip": "40.104.47.98",
+          "ip": "40.104.23.146",
           "port": 995,
           "protocol": "tcp",
           "service": "pop3s",
@@ -641,7 +776,7 @@
           "tls": true
         },
         {
-          "ip": "52.96.109.210",
+          "ip": "40.99.181.130",
           "port": 25,
           "protocol": "tcp",
           "service": "smtp",
@@ -649,7 +784,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.109.210",
+          "ip": "40.99.181.130",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -657,7 +792,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.109.210",
+          "ip": "40.99.181.130",
           "port": 110,
           "protocol": "tcp",
           "service": "pop3",
@@ -665,7 +800,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.109.210",
+          "ip": "40.99.181.130",
           "port": 143,
           "protocol": "tcp",
           "service": "imap",
@@ -673,7 +808,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.109.210",
+          "ip": "40.99.181.130",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
@@ -711,7 +846,7 @@
           }
         },
         {
-          "ip": "52.96.109.210",
+          "ip": "40.99.181.130",
           "port": 587,
           "protocol": "tcp",
           "service": "submission",
@@ -719,7 +854,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.109.210",
+          "ip": "40.99.181.130",
           "port": 993,
           "protocol": "tcp",
           "service": "imaps",
@@ -727,7 +862,7 @@
           "tls": true
         },
         {
-          "ip": "52.96.109.210",
+          "ip": "40.99.181.130",
           "port": 995,
           "protocol": "tcp",
           "service": "pop3s",
@@ -735,7 +870,7 @@
           "tls": true
         },
         {
-          "ip": "52.96.88.50",
+          "ip": "40.99.229.210",
           "port": 25,
           "protocol": "tcp",
           "service": "smtp",
@@ -743,7 +878,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.88.50",
+          "ip": "40.99.229.210",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -751,7 +886,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.88.50",
+          "ip": "40.99.229.210",
           "port": 110,
           "protocol": "tcp",
           "service": "pop3",
@@ -759,7 +894,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.88.50",
+          "ip": "40.99.229.210",
           "port": 143,
           "protocol": "tcp",
           "service": "imap",
@@ -767,7 +902,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.88.50",
+          "ip": "40.99.229.210",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
@@ -805,7 +940,7 @@
           }
         },
         {
-          "ip": "52.96.88.50",
+          "ip": "40.99.229.210",
           "port": 587,
           "protocol": "tcp",
           "service": "submission",
@@ -813,7 +948,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.88.50",
+          "ip": "40.99.229.210",
           "port": 993,
           "protocol": "tcp",
           "service": "imaps",
@@ -821,7 +956,383 @@
           "tls": true
         },
         {
-          "ip": "52.96.88.50",
+          "ip": "40.99.229.210",
+          "port": 995,
+          "protocol": "tcp",
+          "service": "pop3s",
+          "banner": null,
+          "tls": true
+        },
+        {
+          "ip": "40.99.229.242",
+          "port": 25,
+          "protocol": "tcp",
+          "service": "smtp",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "40.99.229.242",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "40.99.229.242",
+          "port": 110,
+          "protocol": "tcp",
+          "service": "pop3",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "40.99.229.242",
+          "port": 143,
+          "protocol": "tcp",
+          "service": "imap",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "40.99.229.242",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=outlook.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
+            "san": [
+              "outlook.com",
+              "*.hotmail.com",
+              "*.internal.outlook.com",
+              "*.live.com",
+              "*.office.com",
+              "*.office365.com",
+              "*.outlook.com",
+              "*.outlook.office365.com",
+              "attachment.outlook.live.net",
+              "attachment.outlook.office.net",
+              "attachment.outlook.officeppe.net",
+              "attachments.office.net",
+              "attachments-sdf.office.net",
+              "ccs.login.microsoftonline.com",
+              "hotmail.com",
+              "mail.services.live.com",
+              "office365.com",
+              "outlook.office.com",
+              "substrate.office.com",
+              "substrate-sdf.office.com"
+            ],
+            "not_before": "2026-06-26T00:00:00Z",
+            "not_after": "2027-01-10T23:59:59Z",
+            "self_signed": false,
+            "days_to_expiry": 175
+          }
+        },
+        {
+          "ip": "40.99.229.242",
+          "port": 587,
+          "protocol": "tcp",
+          "service": "submission",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "40.99.229.242",
+          "port": 993,
+          "protocol": "tcp",
+          "service": "imaps",
+          "banner": null,
+          "tls": true
+        },
+        {
+          "ip": "40.99.229.242",
+          "port": 995,
+          "protocol": "tcp",
+          "service": "pop3s",
+          "banner": null,
+          "tls": true
+        },
+        {
+          "ip": "52.96.104.226",
+          "port": 25,
+          "protocol": "tcp",
+          "service": "smtp",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.104.226",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.104.226",
+          "port": 110,
+          "protocol": "tcp",
+          "service": "pop3",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.104.226",
+          "port": 143,
+          "protocol": "tcp",
+          "service": "imap",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.104.226",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=outlook.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
+            "san": [
+              "outlook.com",
+              "*.hotmail.com",
+              "*.internal.outlook.com",
+              "*.live.com",
+              "*.office.com",
+              "*.office365.com",
+              "*.outlook.com",
+              "*.outlook.office365.com",
+              "attachment.outlook.live.net",
+              "attachment.outlook.office.net",
+              "attachment.outlook.officeppe.net",
+              "attachments.office.net",
+              "attachments-sdf.office.net",
+              "ccs.login.microsoftonline.com",
+              "hotmail.com",
+              "mail.services.live.com",
+              "office365.com",
+              "outlook.office.com",
+              "substrate.office.com",
+              "substrate-sdf.office.com"
+            ],
+            "not_before": "2026-06-26T00:00:00Z",
+            "not_after": "2027-01-10T23:59:59Z",
+            "self_signed": false,
+            "days_to_expiry": 175
+          }
+        },
+        {
+          "ip": "52.96.104.226",
+          "port": 587,
+          "protocol": "tcp",
+          "service": "submission",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.104.226",
+          "port": 993,
+          "protocol": "tcp",
+          "service": "imaps",
+          "banner": null,
+          "tls": true
+        },
+        {
+          "ip": "52.96.104.226",
+          "port": 995,
+          "protocol": "tcp",
+          "service": "pop3s",
+          "banner": null,
+          "tls": true
+        },
+        {
+          "ip": "52.96.156.34",
+          "port": 25,
+          "protocol": "tcp",
+          "service": "smtp",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.156.34",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.156.34",
+          "port": 110,
+          "protocol": "tcp",
+          "service": "pop3",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.156.34",
+          "port": 143,
+          "protocol": "tcp",
+          "service": "imap",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.156.34",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=outlook.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
+            "san": [
+              "outlook.com",
+              "*.hotmail.com",
+              "*.internal.outlook.com",
+              "*.live.com",
+              "*.office.com",
+              "*.office365.com",
+              "*.outlook.com",
+              "*.outlook.office365.com",
+              "attachment.outlook.live.net",
+              "attachment.outlook.office.net",
+              "attachment.outlook.officeppe.net",
+              "attachments.office.net",
+              "attachments-sdf.office.net",
+              "ccs.login.microsoftonline.com",
+              "hotmail.com",
+              "mail.services.live.com",
+              "office365.com",
+              "outlook.office.com",
+              "substrate.office.com",
+              "substrate-sdf.office.com"
+            ],
+            "not_before": "2026-06-26T00:00:00Z",
+            "not_after": "2027-01-10T23:59:59Z",
+            "self_signed": false,
+            "days_to_expiry": 175
+          }
+        },
+        {
+          "ip": "52.96.156.34",
+          "port": 587,
+          "protocol": "tcp",
+          "service": "submission",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.96.156.34",
+          "port": 993,
+          "protocol": "tcp",
+          "service": "imaps",
+          "banner": null,
+          "tls": true
+        },
+        {
+          "ip": "52.96.156.34",
+          "port": 995,
+          "protocol": "tcp",
+          "service": "pop3s",
+          "banner": null,
+          "tls": true
+        },
+        {
+          "ip": "52.97.104.66",
+          "port": 25,
+          "protocol": "tcp",
+          "service": "smtp",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.97.104.66",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.97.104.66",
+          "port": 110,
+          "protocol": "tcp",
+          "service": "pop3",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.97.104.66",
+          "port": 143,
+          "protocol": "tcp",
+          "service": "imap",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.97.104.66",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=outlook.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
+            "san": [
+              "outlook.com",
+              "*.hotmail.com",
+              "*.internal.outlook.com",
+              "*.live.com",
+              "*.office.com",
+              "*.office365.com",
+              "*.outlook.com",
+              "*.outlook.office365.com",
+              "attachment.outlook.live.net",
+              "attachment.outlook.office.net",
+              "attachment.outlook.officeppe.net",
+              "attachments.office.net",
+              "attachments-sdf.office.net",
+              "ccs.login.microsoftonline.com",
+              "hotmail.com",
+              "mail.services.live.com",
+              "office365.com",
+              "outlook.office.com",
+              "substrate.office.com",
+              "substrate-sdf.office.com"
+            ],
+            "not_before": "2026-06-26T00:00:00Z",
+            "not_after": "2027-01-10T23:59:59Z",
+            "self_signed": false,
+            "days_to_expiry": 175
+          }
+        },
+        {
+          "ip": "52.97.104.66",
+          "port": 587,
+          "protocol": "tcp",
+          "service": "submission",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "52.97.104.66",
+          "port": 993,
+          "protocol": "tcp",
+          "service": "imaps",
+          "banner": null,
+          "tls": true
+        },
+        {
+          "ip": "52.97.104.66",
           "port": 995,
           "protocol": "tcp",
           "service": "pop3s",
@@ -831,20 +1342,24 @@
       ],
       "dns": {
         "a": [
-          "40.99.232.210",
-          "40.104.46.66",
-          "52.96.88.34",
-          "52.96.109.162",
-          "52.96.109.242",
-          "52.96.111.2",
-          "52.96.179.226",
-          "52.96.242.18"
+          "52.96.110.50",
+          "52.96.110.66",
+          "52.96.165.66",
+          "52.96.166.18",
+          "52.96.166.130",
+          "52.96.166.146",
+          "52.96.166.226",
+          "52.96.188.130"
         ],
         "aaaa": [
-          "2603:1036:302:4155::2",
-          "2603:1036:207:2000::2",
-          "2603:1036:207:455::2",
-          "2603:1036:207:45c::2"
+          "2603:1036:30c:e::2",
+          "2603:1036:30c:90b::2",
+          "2603:1036:30c:900::2",
+          "2603:1036:30c:902::2",
+          "2603:1036:30c:901::2",
+          "2603:1036:30c:818::2",
+          "2603:1036:30c:c93::2",
+          "2603:1036:30c:c82::2"
         ],
         "cname": "outlook.office365.com",
         "mx": [],
@@ -881,7 +1396,7 @@
       },
       "waf": {
         "detected": true,
-        "vendor": "None",
+        "vendor": "Generic",
         "confidence": "high"
       }
     },
@@ -890,8 +1405,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-19T14:34:04Z",
-      "last_seen": "2026-07-19T14:34:04Z",
+      "first_discovered": "2026-07-19T19:20:20Z",
+      "last_seen": "2026-07-19T19:20:20Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1054,10 +1569,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
+          "apple-domain-verification=cWkfjNKuM61a3EZ6",
           "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "MS=ms93622757",
-          "apple-domain-verification=cWkfjNKuM61a3EZ6"
+          "MS=ms93622757"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -1070,6 +1585,11 @@
             "name": "Bootstrap",
             "version": "5.1.3",
             "category": "frontend"
+          },
+          {
+            "name": "Complianz",
+            "version": null,
+            "category": null
           },
           {
             "name": "Font Awesome",
@@ -1162,8 +1682,523 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-07-19T13:40:02Z_323250b3",
+    "since_scan": "scan_2026-07-19T14:31:03Z_e4e4c824",
     "added": {
+      "subdomains": [],
+      "services": [
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.2.34",
+          "port": 25,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.2.34",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.2.34",
+          "port": 110,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.2.34",
+          "port": 143,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.2.34",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.2.34",
+          "port": 587,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.2.34",
+          "port": 993,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.2.34",
+          "port": 995,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.23.146",
+          "port": 25,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.23.146",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.23.146",
+          "port": 110,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.23.146",
+          "port": 143,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.23.146",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.23.146",
+          "port": 587,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.23.146",
+          "port": 993,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.23.146",
+          "port": 995,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.181.130",
+          "port": 25,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.181.130",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.181.130",
+          "port": 110,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.181.130",
+          "port": 143,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.181.130",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.181.130",
+          "port": 587,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.181.130",
+          "port": 993,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.181.130",
+          "port": 995,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.210",
+          "port": 25,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.210",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.210",
+          "port": 110,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.210",
+          "port": 143,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.210",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.210",
+          "port": 587,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.210",
+          "port": 993,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.210",
+          "port": 995,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.242",
+          "port": 25,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.242",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.242",
+          "port": 110,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.242",
+          "port": 143,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.242",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.242",
+          "port": 587,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.242",
+          "port": 993,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.242",
+          "port": 995,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.104.226",
+          "port": 25,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.104.226",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.104.226",
+          "port": 110,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.104.226",
+          "port": 143,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.104.226",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.104.226",
+          "port": 587,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.104.226",
+          "port": 993,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.104.226",
+          "port": 995,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.156.34",
+          "port": 25,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.156.34",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.156.34",
+          "port": 110,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.156.34",
+          "port": 143,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.156.34",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.156.34",
+          "port": 587,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.156.34",
+          "port": 993,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.156.34",
+          "port": 995,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.97.104.66",
+          "port": 25,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.97.104.66",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.97.104.66",
+          "port": 110,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.97.104.66",
+          "port": 143,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.97.104.66",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.97.104.66",
+          "port": 587,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.97.104.66",
+          "port": 993,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.97.104.66",
+          "port": 995,
+          "protocol": "tcp"
+        }
+      ],
+      "hosts": [
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:818::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:84d::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:900::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:901::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:902::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:90b::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:90e::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:910::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:c76::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:c80::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:c82::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:c93::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:c95::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:c96::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:e::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.2.34"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.23.146"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.181.130"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.210"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.242"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.104.226"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.110.50"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.110.66"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.156.34"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.165.66"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.166.130"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.166.146"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.166.18"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.166.226"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.188.130"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.97.104.66"
+        }
+      ]
+    },
+    "removed": {
       "subdomains": [],
       "services": [
         {
@@ -1410,6 +2445,10 @@
         },
         {
           "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.109.242"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
           "ip": "52.96.111.2"
         },
         {
@@ -1430,293 +2469,6 @@
         }
       ]
     },
-    "removed": {
-      "subdomains": [],
-      "services": [
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.130",
-          "port": 25,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.130",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.130",
-          "port": 110,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.130",
-          "port": 143,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.130",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.130",
-          "port": 587,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.130",
-          "port": 993,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.130",
-          "port": 995,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.194",
-          "port": 25,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.194",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.194",
-          "port": 110,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.194",
-          "port": 143,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.194",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.194",
-          "port": 587,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.194",
-          "port": 993,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.194",
-          "port": 995,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.210",
-          "port": 25,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.210",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.210",
-          "port": 110,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.210",
-          "port": 143,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.210",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.210",
-          "port": 587,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.210",
-          "port": 993,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.210",
-          "port": 995,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.186.162",
-          "port": 25,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.186.162",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.186.162",
-          "port": 110,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.186.162",
-          "port": 143,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.186.162",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.186.162",
-          "port": 587,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.186.162",
-          "port": 993,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.186.162",
-          "port": 995,
-          "protocol": "tcp"
-        }
-      ],
-      "hosts": [
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:303:3802::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:303:3c01::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:303:3c07::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:303:3c0e::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:303:3c1c::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:303:3c28::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:303:3c30::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:303:3c32::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:303:3c37::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:303:3c38::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:303:7::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.47.194"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.109.178"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.109.226"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.111.66"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.130"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.194"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.165.210"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.181.34"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.186.162"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.87.210"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.88.2"
-        }
-      ]
-    },
     "changed": {
       "fingerprint": [],
       "cert": [],
@@ -1724,47 +2476,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-06-22T05:12:38Z_8c26fd08",
-      "started_at": "2026-06-22T05:12:38Z",
-      "completed_at": "2026-06-22T05:15:52Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 2,
-      "service_count": 8,
-      "subdomain_names": [
-        "commandcompanies.com",
-        "www.commandcompanies.com"
-      ],
-      "ports_by_sub": {
-        "commandcompanies.com": {
-          "199.16.172.42": [
-            80,
-            443
-          ],
-          "199.16.173.153": [
-            80,
-            443
-          ]
-        },
-        "www.commandcompanies.com": {
-          "199.16.172.42": [
-            80,
-            443
-          ],
-          "199.16.173.153": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.3",
-        "Slider Revolution": "6.7.57",
-        "Yoast SEO": "27.8",
-        "jQuery Migrate": "3.4.1"
-      }
-    },
     {
       "scan_id": "scan_2026-06-22T12:19:41Z_1dc64000",
       "started_at": "2026-06-22T12:19:41Z",
@@ -10450,6 +11161,131 @@
             995
           ],
           "52.96.88.50": [
+            25,
+            80,
+            110,
+            143,
+            443,
+            587,
+            993,
+            995
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.42": [
+            80,
+            443
+          ],
+          "199.16.173.153": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.3",
+        "Slider Revolution": "6.7.58",
+        "Yoast SEO": "28.0",
+        "jQuery Migrate": "3.4.1",
+        "Microsoft HTTPAPI": "2.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-07-19T19:16:14Z_c0a84376",
+      "started_at": "2026-07-19T19:16:14Z",
+      "completed_at": "2026-07-19T19:20:17Z",
+      "subdomain_count": 3,
+      "live_subdomain_count": 3,
+      "host_count": 33,
+      "service_count": 72,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "email.commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.42": [
+            80,
+            443
+          ],
+          "199.16.173.153": [
+            80,
+            443
+          ]
+        },
+        "email.commandcompanies.com": {
+          "40.104.2.34": [
+            25,
+            80,
+            110,
+            143,
+            443,
+            587,
+            993,
+            995
+          ],
+          "40.104.23.146": [
+            25,
+            80,
+            110,
+            143,
+            443,
+            587,
+            993,
+            995
+          ],
+          "40.99.181.130": [
+            25,
+            80,
+            110,
+            143,
+            443,
+            587,
+            993,
+            995
+          ],
+          "40.99.229.210": [
+            25,
+            80,
+            110,
+            143,
+            443,
+            587,
+            993,
+            995
+          ],
+          "40.99.229.242": [
+            25,
+            80,
+            110,
+            143,
+            443,
+            587,
+            993,
+            995
+          ],
+          "52.96.104.226": [
+            25,
+            80,
+            110,
+            143,
+            443,
+            587,
+            993,
+            995
+          ],
+          "52.96.156.34": [
+            25,
+            80,
+            110,
+            143,
+            443,
+            587,
+            993,
+            995
+          ],
+          "52.97.104.66": [
             25,
             80,
             110,
