@@ -45,12 +45,80 @@ THRESHOLDS_PATH = _HERE / "scanner" / "classifier_thresholds.yaml"
 
 DEFAULT_CLASS = "unknown"
 
+# ── 4.7 R6 machine enforcement (2026-07-18) ─────────────────────────────────
+# Topology roles a fingerprint row may assert (D2 enum minus the runtime-only
+# 'unknown' default — a row must commit to a real role).
+ROW_DEVICE_CLASSES = {
+    "edge_firewall", "waf", "adc_lb", "cdn", "cloud_endpoint", "origin_host",
+}
+# The two-bar test, made machine-checkable. Every row MUST declare which one it
+# clears, and the declaration MUST match its vendor_product (see validate_*).
+EVIDENCE_CLASSES = {"vendor_identifying", "presence_only"}
+
+
+class RegistryValidationError(ValueError):
+    """A device_fingerprints.yaml row violates the R6 evidence-class schema.
+    Raised at classifier startup so a bad row makes the classifier REFUSE to
+    start rather than silently mislabel an asset (4.7 R6, risk #2)."""
+
+
+def validate_fingerprints(fingerprints: list[dict], weight_map: dict | None = None) -> list[str]:
+    """Return a list of human-readable errors (empty == valid). This is the
+    guard that stops an inferred brand (the family:fortinet_suspected class of
+    bug) ever going back in by hand.
+
+    Rules (4.7 R6):
+      1. evidence_class present and in EVIDENCE_CLASSES
+      2. presence_only  -> vendor_product carries NO 'vendor'/'product'
+                           (operator metadata like managed_by IS allowed)
+      3. vendor_identifying -> vendor_product carries a non-empty 'vendor'
+      4. device_class in ROW_DEVICE_CLASSES
+      5. signal present; observation present
+      6. (only when weight_map given) signal is a ratified weight — i.e. it
+         appears in classifier_thresholds.yaml, not silently defaulted to 'low'
+    """
+    errs: list[str] = []
+    for i, fp in enumerate(fingerprints):
+        sig = fp.get("signal")
+        tag = f"row[{i}] signal={sig!r}"
+        if not sig:
+            errs.append(f"{tag}: missing 'signal'")
+        if not fp.get("observation"):
+            errs.append(f"{tag}: missing 'observation'")
+        dc = fp.get("device_class")
+        if dc not in ROW_DEVICE_CLASSES:
+            errs.append(f"{tag}: device_class {dc!r} not in {sorted(ROW_DEVICE_CLASSES)}")
+        vp = fp.get("vendor_product") or {}
+        has_vendor = bool(vp.get("vendor"))
+        has_product = bool(vp.get("product"))
+        ec = fp.get("evidence_class")
+        if ec not in EVIDENCE_CLASSES:
+            errs.append(f"{tag}: evidence_class {ec!r} must be one of {sorted(EVIDENCE_CLASSES)}")
+        elif ec == "presence_only" and (has_vendor or has_product):
+            errs.append(f"{tag}: presence_only forbids vendor/product in vendor_product "
+                        f"(got {vp}); operator metadata like managed_by is fine")
+        elif ec == "vendor_identifying" and not has_vendor:
+            errs.append(f"{tag}: vendor_identifying requires a non-empty 'vendor' "
+                        f"in vendor_product (got {vp})")
+        if weight_map is not None and sig and sig not in weight_map:
+            errs.append(f"{tag}: signal not a ratified weight in classifier_thresholds.yaml")
+    return errs
+
 
 def load_fingerprints(path: Path = FINGERPRINTS_PATH) -> list[dict]:
     if yaml is None:
         raise RuntimeError("PyYAML required to read device_fingerprints.yaml")
     data = yaml.safe_load(path.read_text()) or {}
-    return list(data.get("fingerprints") or [])
+    fps = list(data.get("fingerprints") or [])
+    # Load-time enforcement (4.7 R6): structural rules 1-5 need no thresholds, so
+    # they fire on EVERY load path — runner, CLI, selftest, tests. Rule 6 (weight
+    # membership) runs where thresholds are loaded (validate_registry / runner).
+    errs = validate_fingerprints(fps)
+    if errs:
+        raise RegistryValidationError(
+            f"{path.name} failed evidence-class validation — classifier refuses to start:\n  - "
+            + "\n  - ".join(errs))
+    return fps
 
 
 def load_thresholds(path: Path = THRESHOLDS_PATH) -> dict:
@@ -67,6 +135,17 @@ def load_thresholds(path: Path = THRESHOLDS_PATH) -> dict:
         "routing_requires": data.get("routing_requires", "confirmed"),
         "evidence_freshness_days": int(data.get("evidence_freshness_days", 30)),
     }
+
+
+def validate_registry(fp_path: Path = FINGERPRINTS_PATH,
+                      th_path: Path = THRESHOLDS_PATH) -> list[str]:
+    """Full check for CI + classifier startup: structural rules (via
+    load_fingerprints, which RAISES RegistryValidationError) plus rule 6
+    weight-membership (needs thresholds). Returns the residual weight errors;
+    structural violations raise before we get here."""
+    fps = load_fingerprints(fp_path)          # raises on rules 1-5
+    th = load_thresholds(th_path)
+    return validate_fingerprints(fps, th["weight"])   # + rule 6
 
 
 def _as_list(v) -> list[str]:
@@ -189,21 +268,26 @@ def _selftest() -> int:
         "cert_issuer": "Go Daddy Secure Certificate Authority - G2",
         "ips": ["24.157.51.76"],
     }
-    # 2) A FortiWeb-fronted asset: bot challenge (high) + wafw00f (high) + range
-    #    (medium). Expect waf / CONFIRMED (2 high) — would be routing-eligible.
-    waf = {"fwbbot_check": True, "waf_vendor": "FortiWeb", "ips": ["52.119.65.5"]}
+    # 2) A FortiWeb-fronted asset: bot challenge (high) + wafw00f (high). Expect
+    #    waf / CONFIRMED (2 high) — would be routing-eligible. (Neither observation
+    #    is gathered in prod yet — E1 — but the pure SCORER is what's under test.)
+    waf = {"fwbbot_check": True, "waf_vendor": "FortiWeb"}
     # 3) A plain host, stock OpenSSH, nothing distinctive. Expect UNKNOWN — never
     #    presume origin on absence of evidence (D2).
     bare = {"ssh_banner": "SSH-2.0-OpenSSH_9.3"}
-    # 4) A NON-Fortinet edge — Pressable/Automattic (Unimac). Cert CN + IP range,
-    #    two mediums. Expect cdn / SUSPECTED. Proves the classifier isn't Forti-only.
-    pressable = {"cert_subject": "tls.automattic.com", "ips": ["199.16.172.68"]}
+    # 4) A NON-Fortinet edge — Automattic (Unimac/CMI). In PRODUCTION only the cert
+    #    CN is gathered (there is no `ips` observation), so this is a SINGLE medium
+    #    -> below the >=2-medium bar -> unknown. The old fixture faked a 2nd medium
+    #    with an ip-range row (deleted 4.7 R1) to force 'suspected'; that was never
+    #    the real production outcome. Honest expectation: unknown. (Promote the
+    #    cert CN to a vendor-identifying HIGH signal to lift Automattic to the bar.)
+    pressable = {"cert_subject": "tls.automattic.com"}
 
     expected = {
         "ftp": ("edge_firewall", "suspected"),
         "waf": ("waf", "confirmed"),
         "bare": ("unknown", "unknown"),
-        "pressable": ("cdn", "suspected"),
+        "pressable": ("unknown", "unknown"),
     }
     results = {"ftp": classify(ftp, fps, th), "waf": classify(waf, fps, th),
                "bare": classify(bare, fps, th),
@@ -215,9 +299,41 @@ def _selftest() -> int:
         ok &= got == expected[k]
         print(f"  {flag}{k:5s} -> class={r['device_class']:<13s} conf={r['confidence']:<9s} "
               f"vendor={r['vendor_product']}  (want {expected[k]})")
+
+    # 4.7 R6 — the live registry must satisfy the evidence-class schema, and the
+    # validator must REJECT violations (both directions, or it isn't a guard).
+    reg_errs = validate_fingerprints(fps, th["weight"])
+    bad_rows = [
+        {"signal": "a", "observation": "o", "device_class": "waf",            # presence_only w/ vendor
+         "evidence_class": "presence_only", "vendor_product": {"vendor": "Fortinet"}},
+        {"signal": "b", "observation": "o", "device_class": "waf",            # vendor_identifying, no vendor
+         "evidence_class": "vendor_identifying", "vendor_product": {}},
+        {"signal": "c", "observation": "o", "device_class": "waf"},           # missing evidence_class
+    ]
+    rejects = validate_fingerprints(bad_rows)
+    ok &= (reg_errs == [])
+    ok &= (len(rejects) >= 3)
+    print(f"  {'OK ' if reg_errs == [] else 'XX '}registry evidence_class valid "
+          f"({len(reg_errs)} error(s))")
+    print(f"  {'OK ' if len(rejects) >= 3 else 'XX '}validator rejects bad rows "
+          f"({len(rejects)} caught, want >=3)")
+
     print("\nSELFTEST:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
 
 if __name__ == "__main__":
+    # `--validate` = the CI entrypoint (4.7 R6): exits non-zero on any bad row so
+    # a PR that reintroduces an inferred brand fails to merge. Bare = selftest.
+    if "--validate" in sys.argv:
+        try:
+            errs = validate_registry()
+        except RegistryValidationError as e:
+            print(str(e))
+            sys.exit(1)
+        if errs:
+            print("REGISTRY INVALID (weight rule):\n  - " + "\n  - ".join(errs))
+            sys.exit(1)
+        print("device_fingerprints.yaml: evidence-class schema valid")
+        sys.exit(0)
     sys.exit(_selftest())

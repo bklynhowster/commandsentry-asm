@@ -46,113 +46,139 @@ version: 1
 # Each fingerprint:
 #   signal        — MUST be a signal name in classifier_thresholds.yaml (sets its weight)
 #   observation   — which raw observation kind the runner feeds (ssh_banner,
-#                   waf_vendor, http_headers, cert_issuer, fwbbot_check, ips,
-#                   nuclei_fortinet_hit)
-#   match_*       — substrings (case-insensitive) / regex / ip_prefixes to test
+#                   waf_vendor, http_headers, cert_issuer, cert_subject,
+#                   fwbbot_check, nuclei_fortinet_hit)
+#   evidence_class— REQUIRED (4.7 R6, 2026-07-18). One of:
+#                     vendor_identifying — the artifact NAMES the vendor; may set
+#                                          vendor_product.{vendor[,product]}.
+#                     presence_only      — proves something is there but names no
+#                                          vendor; vendor_product must carry NO
+#                                          vendor/product (operator metadata such
+#                                          as managed_by IS allowed).
+#                   Enforced at classifier startup AND in CI by
+#                   derive_device_class.validate_fingerprints() — a row that sets
+#                   a vendor without vendor_identifying, or claims
+#                   vendor_identifying with no vendor, makes the classifier refuse
+#                   to start. This is the machine guard that stops an inferred
+#                   brand ever going back in by hand (the family:fortinet_suspected
+#                   class of bug).
+#   match_*       — substrings (case-insensitive) / regex to test
 #   device_class  — the topology role this evidence implies
-#   vendor_product— optional {vendor, product, ...}. NOT merged: device_class_runner
-#                   REPLACES assets.vendor_product wholesale on each --write pass
-#                   (plain `vendor_product=%s::jsonb` assignment), so a key removed
-#                   from a row here drains from the DB on the next write — no
-#                   backfill needed. Verified 2026-07-18; the old "merged" wording
-#                   here was wrong and implied a manual cleanup that isn't required.
+#   vendor_product— optional {vendor, product, managed_by, ...}. NOT merged:
+#                   device_class_runner REPLACES assets.vendor_product wholesale on
+#                   each --write pass (plain `vendor_product=%s::jsonb`), so a key
+#                   removed from a row here drains from the DB on the next write —
+#                   no backfill needed (verified 2026-07-18).
+#
+# NOTE (2026-07-18): the `ips`/ip_prefixes observation was REMOVED. An IP range
+# attributes a NETBLOCK OWNER (whois/ASN), never an appliance brand or role — the
+# F1–F7 cloud_provider path already owns ASN/CNAME ownership, authoritatively. The
+# two ip_in_vendor_mgmt_range rows that lived here (52.119.65 "FortiWeb pair";
+# 199.16.172/173 Pressable) were also DEAD: gather_observations never emitted an
+# `ips` key, so they matched zero assets. Deleted under 4.7 R1/R2.
 fingerprints:
 
   # ── SSH management banner (HIGH) ─────────────────────────────────────────
   - signal: ssh_banner_appliance_match
     observation: ssh_banner
-    match_substrings: ["_openssh sci", "8.1.0.0_openssh"]   # SCI-managed appliance firmware (.76 pilot)
+    match_substrings: ["_openssh sci", "8.1.0.0_openssh"]   # SCI = Command's own legacy name (see below)
     device_class: edge_firewall
-    # PRESENCE-ONLY + operator. The banner ("SSH-2.0-8.1.0.0_openssh SCI")
-    # empirically proves a customized, SCI-managed appliance firmware — the
-    # string "SCI" is right there. It does NOT name a hardware vendor.
+    evidence_class: presence_only
+    # PRESENCE-ONLY, first-party. The banner ("SSH-2.0-8.1.0.0_openssh SCI")
+    # empirically proves a customized appliance firmware whose banner echoes the
+    # string "SCI". SCI (Strategic Content Imaging) is Command's OWN decades-old
+    # company name — SCI *is* Command Companies/Command Digital, the asset owner,
+    # NOT a vendor and NOT a third-party manager. So this is the owner naming
+    # itself: first-party self-identification, the most trustworthy external
+    # evidence there is — and precisely why there is no vendor to name.
     # `family: fortinet_suspected` used to live here; it was insider knowledge,
     # not observation, and it rendered "BEHIND FORTINET" on ftp.sciimage.com.
-    # Removed 2026-07-18. Re-earn the vendor only via a vendor-identifying
-    # signal (JARM/TLS fingerprint, block page, cookie name, favicon hash).
+    # Removed 2026-07-18. Re-earn a *vendor* only via a vendor-identifying signal
+    # (JARM/TLS fingerprint, block page, cookie name, favicon hash). managed_by
+    # stays as operator metadata (allowed under presence_only); it is NOT a vendor.
     vendor_product: {managed_by: SCI}
   - signal: ssh_banner_appliance_match
     observation: ssh_banner
-    match_regex: "fortissh|fortios|fortigate"
+    match_regex: "fortissh|fortios|fortigate"                # banner literally names FortiOS/FortiGate
     device_class: edge_firewall
+    evidence_class: vendor_identifying
     vendor_product: {vendor: Fortinet, product: FortiGate}
 
   # ── WAF behavioral (HIGH) ────────────────────────────────────────────────
+  # NOTE (2026-07-18): the fwbbot_check + waf_vendor observations are not yet
+  # emitted by gather_observations (run_medium computes ctx.waf_kind but nothing
+  # persists it — the E1 gap), so these rows are DORMANT today. They are kept,
+  # not deleted, because they ARE empirical/vendor-identifying (the device names
+  # itself) — they light up the moment E1 wires the observation. This is the
+  # opposite of the ip_range rows, which were deleted: those could never be
+  # anything but insider inference.
   - signal: fwbbot_check_challenge
     observation: fwbbot_check
-    match_bool: true                                        # FortiWeb bot challenge (fwb = FortiWeb)
+    match_bool: true                                        # FortiWeb's OWN bot challenge endpoint (fwb = FortiWeb)
     device_class: waf
+    evidence_class: vendor_identifying
     vendor_product: {vendor: Fortinet, product: FortiWeb}
   - signal: wafw00f_high_confidence
     observation: waf_vendor
-    match_substrings: ["fortiweb", "fortinet"]
+    match_substrings: ["fortiweb", "fortinet"]              # wafw00f positively fingerprints the vendor
     device_class: waf
+    evidence_class: vendor_identifying
     vendor_product: {vendor: Fortinet, product: FortiWeb}
   - signal: wafw00f_high_confidence
     observation: waf_vendor
     match_substrings: ["cloudflare"]
     device_class: waf
+    evidence_class: vendor_identifying
     vendor_product: {vendor: Cloudflare, product: Cloudflare}
 
   # ── Product HTTP header (HIGH) ───────────────────────────────────────────
   - signal: product_http_header
     observation: http_headers
-    match_regex: "x-fortigate|fortiweb|fortiadc|server:\\s*forti"
+    match_regex: "x-fortigate|fortiweb|fortiadc|server:\\s*forti"   # vendor-named response header
     device_class: edge_firewall
+    evidence_class: vendor_identifying
     vendor_product: {vendor: Fortinet}
 
   # ── Cert issuer/subject pattern (MEDIUM) ─────────────────────────────────
-  # A corp wildcard cert (e.g. GoDaddy *.sciimage.com) presented on an IP in the
-  # corp range is consistent with a VIP / SSL-offload edge — a supporting, not
-  # decisive, signal (it is equally consistent with a real origin).
+  # A corp wildcard cert (e.g. GoDaddy *.sciimage.com) is consistent with a VIP /
+  # SSL-offload edge — a supporting, not decisive, signal (equally consistent with
+  # a real origin), and it names no vendor -> presence_only.
   - signal: cert_issuer_subject_pattern
     observation: cert_issuer
     match_substrings: ["go daddy", "godaddy"]
     device_class: edge_firewall
-    vendor_product: {}
-
-  # ── IP in a known vendor edge/mgmt range (MEDIUM) ────────────────────────
-  # 2026-07-18: vendor attribution REMOVED. This row previously asserted
-  # {vendor: Fortinet, product: FortiWeb} and cited, as its source, a note
-  # recording what we knew from having operated the pair. That is textbook
-  # insider information: externally, an IP range attributes a NETBLOCK OWNER
-  # via whois/ASN — never an appliance brand. Kept as presence-only so the
-  # topology signal survives while the false brand claim does not.
-  #
-  # OPEN, for 4.7: the row's PREMISE ("this range is a WAF") is itself
-  # insider-derived, so arguably the whole row should go. Deleting it changes
-  # classification behavior, which D3 gates behind review — hence neutered now,
-  # adjudicated next. Same question applies to the signal type generally.
-  - signal: ip_in_vendor_mgmt_range
-    observation: ips
-    ip_prefixes: ["52.119.65."]
-    device_class: waf
+    evidence_class: presence_only
     vendor_product: {}
 
   # ── Fortinet-specific CVE detection response (MEDIUM) ────────────────────
   - signal: fortinet_cve_detection_response
     observation: nuclei_fortinet_hit
-    match_bool: true
+    match_bool: true                                        # response to a Fortinet-specific detection template
     device_class: edge_firewall
+    evidence_class: vendor_identifying
     vendor_product: {vendor: Fortinet}
 
-  # ── Pressable / Automattic managed WP hosting edge (MEDIUM) ───────────────
-  # NON-Fortinet edge (Howie 2026-07-13). Automattic fronts the WP origin; the
-  # public surface is their edge (nginx + rate-based filtering — "Pressable
-  # silently 403-filters"). Not an AWS/GCP/CF cloud endpoint, so it needs its own
-  # rows here. cert-CN + IP range from the Unimac assessment. Two mediums = a
-  # 'suspected' cdn today; promote the vendor-owned cert CN to a HIGH signal when
-  # we want Pressable to reach 'confirmed'.
+  # ── Automattic managed WP hosting edge (MEDIUM) ───────────────────────────
+  # NON-Fortinet edge. Automattic fronts the WP origin; the public surface is
+  # their edge (nginx + rate-based filtering — "Pressable silently 403-filters").
+  # Not an AWS/GCP/CF cloud endpoint, so it needs its own row.
+  #
+  # R3 (4.7, 2026-07-18): vendor=Automattic ONLY, product DROPPED. The cert CN
+  # "tls.automattic.com" empirically names Automattic (the ORG that owns the
+  # edge) — admissible, vendor-identifying. It does NOT name which Automattic
+  # product (Pressable / WordPress.com / WooCommerce / Jetpack) serves the asset,
+  # so "Pressable" was an inference and is gone. Re-earn product only via a
+  # product-specific signal (e.g. an "X-Cache-Group: pressable" header).
+  # Single medium today -> stays below the 'suspected' bar in production
+  # (>=2 medium required); promote the cert CN to a vendor-identifying HIGH
+  # signal, or add a 2nd Automattic medium, to reach the bar. Weight change =
+  # D3 re-review + soak reset, deferred.
   - signal: cert_issuer_subject_pattern
     observation: cert_subject
-    match_substrings: ["tls.automattic.com"]              # Pressable shared-hosting cert CN
+    match_substrings: ["tls.automattic.com"]              # Automattic-owned shared-hosting cert CN
     device_class: cdn
-    vendor_product: {vendor: Automattic, product: Pressable}
-  - signal: ip_in_vendor_mgmt_range
-    observation: ips
-    ip_prefixes: ["199.16.172.", "199.16.173."]           # Pressable shared-hosting range
-    device_class: cdn
-    vendor_product: {vendor: Automattic, product: Pressable}
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Automattic}
 
   # ── Slots to characterize as the fleet is swept ──────────────────────────
   # Cloudflare acts as CDN (-> cloud_endpoint via the cloud classifier) AND a WAF;

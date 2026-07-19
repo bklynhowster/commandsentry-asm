@@ -55,6 +55,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "normalize"))
 from derive_device_class import (  # noqa: E402
     FINGERPRINTS_PATH, classify, load_fingerprints, load_thresholds,
+    validate_fingerprints, RegistryValidationError,  # noqa: F401  (R6 startup guard)
 )
 try:  # cloud fallback re-derives from surface_data (4.7 F1/F4; E2 re-derive-every-run)
     from derive_cloud_endpoint import (  # noqa: E402
@@ -267,7 +268,16 @@ def _has_wafw00f(evidence) -> bool:
 
 
 def run(dsn: str, write: bool, soak_generation: int) -> int:
+    # R6 startup guard: load_fingerprints() already RAISES on structural rules
+    # (evidence_class present/consistent, device_class enum). Here we also enforce
+    # rule 6 (every signal is a ratified weight) now that thresholds are loaded —
+    # a registry edited directly on a runner, bypassing CI, still can't run bad.
     fps, th = load_fingerprints(), load_thresholds()
+    _werrs = validate_fingerprints(fps, th["weight"])
+    if _werrs:
+        raise RegistryValidationError(
+            "device_fingerprints.yaml weight-rule violation — classifier refuses to run:\n  - "
+            + "\n  - ".join(_werrs))
     fresh_days = th["evidence_freshness_days"]
     nuclei_re = load_nuclei_fortinet_regex()
     cloud_reg = None
