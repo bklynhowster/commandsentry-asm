@@ -820,6 +820,144 @@ def run_httpx_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
 
 
 # ============================================================================
+# Security-stack identification — P0 passive collectors (Obsidian 146; 4.7 R1/R2)
+# ============================================================================
+# PERSIST-ONLY. Collects the passive stack-id signals available from tools already
+# in heavy — the TLS cert O/CN and the asset's response headers + Set-Cookie NAMES
+# — and stores them RAW as one `stack_id_passive` scan_run artifact. It does NOT
+# feed the classifier: P1 will read this artifact (via gather_observations, exactly
+# like the fingerprint/testssl artifacts) and wire the signals into device_class /
+# vendor_product under a SINGLE soak reset. That collect-vs-wire separation is what
+# keeps P0 additive / no-reset (4.7 R2).
+#
+# DELIBERATELY NOT a "tool": this phase does NOT append to tools_run / tool_status
+# and emits NO findings — it only appends an artifact. So it cannot perturb
+# close_out's tool-completeness invariant or the note-127 autocloser, and a total
+# failure just yields an artifact with no signals (zero blast radius).
+#
+# Set-Cookie: NAMES only, never values — the name (cookiesession1 = FortiWeb,
+# incap_ses = Imperva, ak_bm = Akamai, AWSALB = AWS ELB, ...) is the vendor
+# fingerprint; the value is session material we do not persist.
+#
+# NOT here (deliberate scope): JARM (needs pyjarm baked into the scanner image —
+# 4.7 ruling 8, phase P0b) and the wafw00f verdict (runs in run_medium, not heavy
+# — rides with E1). httpx -irh field name is validated on the first real runner
+# scan; until then the non-fatal try/except just yields cert-only signals.
+
+def _parse_cert_dn(dn: str) -> dict:
+    """Best-effort {o, cn} from an openssl DN string. No regex (run_heavy has no
+    `import re`). Comma-split is imperfect for quoted values containing commas
+    (e.g. issuer O="GoDaddy.com, Inc.") — that's why the caller ALSO stores the
+    raw DN text; this parse is convenience, the raw is ground truth for P1."""
+    out: dict = {}
+    for chunk in dn.replace("/", ",").split(","):
+        if "=" not in chunk:
+            continue
+        k, v = chunk.split("=", 1)
+        k = k.strip().upper()
+        v = v.strip().strip('"')
+        if k in ("O", "CN") and v:
+            out[k.lower()] = v
+    return out
+
+
+def _parse_cert_subject_issuer(openssl_out: str) -> dict:
+    """Parse `openssl x509 -noout -subject -issuer` into
+    {subject_o, subject_cn, issuer_o, issuer_cn} (best-effort)."""
+    out: dict = {}
+    for line in openssl_out.splitlines():
+        s = line.strip()
+        low = s.lower()
+        if low.startswith("subject=") or low.startswith("issuer="):
+            prefix = "subject" if low.startswith("subject=") else "issuer"
+            for k, v in _parse_cert_dn(s.split("=", 1)[1]).items():
+                out[f"{prefix}_{k}"] = v
+    return out
+
+
+def _extract_set_cookie_names(header_obj) -> list:
+    """Distinct Set-Cookie NAMES (token before '='), never values. httpx -irh
+    puts response headers under 'header' (dict; a Set-Cookie may be str or list);
+    also handles a raw header block (str)."""
+    raw: list = []
+    if isinstance(header_obj, dict):
+        for k, v in header_obj.items():
+            if k.lower() == "set-cookie":
+                raw.extend(v if isinstance(v, list) else [v])
+    elif isinstance(header_obj, str):
+        for line in header_obj.splitlines():
+            if line.lower().startswith("set-cookie:"):
+                raw.append(line.split(":", 1)[1])
+    names: list = []
+    for c in raw:
+        name = str(c).split("=", 1)[0].strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _vendor_header_subset(header_obj) -> dict:
+    """Small, value-free header view for vendor fingerprinting: the Server value
+    (truncated) + presence booleans for via / x-* headers. Keeps the artifact
+    lean and avoids persisting arbitrary response-header values."""
+    if not isinstance(header_obj, dict):
+        return {}
+    keep: dict = {}
+    for k, v in header_obj.items():
+        lk = k.lower()
+        val = v[0] if isinstance(v, list) and v else v
+        if lk == "server":
+            keep["server"] = str(val)[:80]
+        elif lk == "via" or lk == "x-powered-by" or lk.startswith("x-"):
+            keep[lk] = True
+    return keep
+
+
+def run_stack_id_passive_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
+    """P0 passive stack-id collector (Obsidian 146). ADDITIVE + NON-FATAL; never
+    aborts the tier. Appends one `stack_id_passive` artifact; touches no tool
+    machinery and no classifier state."""
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    signals: dict = {"schema": 1, "collected_at": now_iso, "hostname": ctx.hostname}
+
+    # TLS cert O/CN — openssl already present in heavy (first-party O + vendor CN)
+    rc, out, _ = run_cmd(
+        ["bash", "-c",
+         f"echo | openssl s_client -connect {ctx.hostname}:443 "
+         f"-servername {ctx.hostname} 2>/dev/null | openssl x509 -noout -subject -issuer"],
+        timeout=30,
+    )
+    if rc == 0 and out.strip():
+        signals["cert_raw"] = out.strip()
+        cert = _parse_cert_subject_issuer(out)
+        if cert:
+            signals["cert"] = cert
+
+    # Response headers + Set-Cookie NAMES — httpx with response headers (-irh)
+    rc2, out2, _ = run_cmd(
+        ["httpx", "-u", f"https://{ctx.hostname}", "-irh", "-silent", "-json", "-timeout", "15"],
+        timeout=45,
+    )
+    if rc2 == 0 and out2.strip():
+        try:
+            rec = json.loads(out2.strip().splitlines()[0])
+            hdrs = rec.get("header") or rec.get("response_header") or rec.get("raw_header") or {}
+            names = _extract_set_cookie_names(hdrs)
+            if names:
+                signals["set_cookie_names"] = names
+            vh = _vendor_header_subset(hdrs)
+            if vh:
+                signals["headers"] = vh
+        except (ValueError, IndexError):
+            pass
+
+    ctx.artifacts.append(("stack_id_passive", "json", json.dumps(signals)))
+    got = [k for k in ("cert", "set_cookie_names", "headers") if k in signals]
+    log(f"  stack_id_passive (persist-only): collected {got or 'nothing'} "
+        f"(cookies={len(signals.get('set_cookie_names', []))})")
+
+
+# ============================================================================
 # Heavy Phase 1 — net depth (naabu port discovery + fingerprintx service ID)
 # Spec: HEAVY_PHASE1_NETDEPTH_SPEC v2 + HEAVY_PHASE1_BUILD_DELTA (4.7 D1-D5).
 #
@@ -1352,6 +1490,12 @@ def run(descriptor_path: str, dsn: str) -> int:
         # this call are the entire "add a tool" surface; the writer + close_out
         # are tool-agnostic. Runs after testssl has proven reachability.
         run_httpx_phase(ctx, work_dir)
+
+        # Security-stack identification P0 — passive collectors (Obsidian 146).
+        # ADDITIVE, persist-only: appends a `stack_id_passive` artifact and
+        # touches no findings/tool machinery. P1 wires these signals into the
+        # classifier (with its own single soak reset).
+        run_stack_id_passive_phase(ctx, work_dir)
 
         # Phase 2 — naabu + fingerprintx net depth (Heavy Phase 1). PAIR with
         # all-or-nothing tools_run credit (4.7 D1): both names enter tools_run
