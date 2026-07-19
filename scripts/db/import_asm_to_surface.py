@@ -1227,7 +1227,7 @@ INSERT INTO public.assets
    is_cloud_endpoint, cloud_provider, cloud_source, cloud_endpoint_classified_at)
 VALUES (%(asset_id)s, %(name)s, %(type)s, %(organization)s,
         %(ownership)s, %(discovery_status)s,
-        %(first_observed)s, %(last_observed)s,
+        COALESCE(%(first_observed)s, now()), %(last_observed)s,
         %(is_cloud_endpoint)s, %(cloud_provider)s, 'derived', now())
 ON CONFLICT (asset_id) DO UPDATE SET
   last_observed = GREATEST(public.assets.last_observed, EXCLUDED.last_observed),
@@ -1285,7 +1285,7 @@ VALUES
   (%(asset_id)s, %(asset_id)s, 'single_host', %(organization)s,
    %(kind)s, %(apex_domain)s,
    %(ownership)s, %(discovery_status)s,
-   %(first_observed)s, %(last_observed)s,
+   COALESCE(%(first_observed)s, now()), %(last_observed)s,
    %(is_cloud_endpoint)s, %(cloud_provider)s, 'derived', now())
 ON CONFLICT (asset_id) DO UPDATE SET
   last_observed = GREATEST(public.assets.last_observed, EXCLUDED.last_observed),
