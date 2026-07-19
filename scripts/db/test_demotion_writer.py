@@ -111,6 +111,21 @@ def test_dwell_matches_sql_migration():
     assert dw.DWELL_DAYS["unreachable"] is None and unreachable_days == 0
 
 
+def test_first_observed_none_guard_present():
+    """Regression: ASM Discover #369/#370 (2026-07-19). A freshly-discovered asset
+    (e.g. the new perimeter-IP assets) has first_observed=NULL; run() MUST short-
+    circuit None before `now() - first_observed`, or the whole job dies with
+    `TypeError: unsupported operand type(s) for -: 'datetime.datetime' and 'NoneType'`.
+    Source-level check because the eligibility math is inline in run() and run()
+    needs a live DB (same static-test convention as the rest of this file)."""
+    import inspect
+    src = inspect.getsource(dw.run)
+    assert "first_observed is None" in src, (
+        "run() must guard first_observed=None before subtracting it — "
+        "removing this guard reintroduces the #369/#370 crash."
+    )
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

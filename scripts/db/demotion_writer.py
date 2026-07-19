@@ -410,7 +410,13 @@ def run(conn, write_enabled: bool, run_tag: str) -> int:
         if fa is not None and now() < fa:
             emit(reason, days_rem, fa, False, "within_dwell")
             continue
-        if (now() - first_observed).days < MIN_LIVE_DAYS:
+        # first_observed is NULL for a freshly-discovered asset (e.g. the new
+        # perimeter-IP assets 24-38-70-x / 52-119-65-x). Unknown age = we cannot
+        # prove it has lived >= MIN_LIVE_DAYS, so it is NOT demotion-eligible —
+        # same bucket as the <7d guard, and the conservative choice (never demote
+        # on unknown age). This None-guard also prevents `now() - None`, the
+        # TypeError that failed ASM Discover #369/#370 (2026-07-19).
+        if first_observed is None or (now() - first_observed).days < MIN_LIVE_DAYS:
             emit(reason, days_rem, fa, False, "not_eligible_7d")
             continue
         if demoted >= RATE_LIMIT:
