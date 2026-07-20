@@ -27,11 +27,15 @@ Dry-run-first. For every asset (4.7 F1-F4 corrected ordering, 2026-07-13):
      evidence + vendor_product — CLASSIFY-ONLY, changes NO routing (D4 Phase A).
 
 Everything keys on asset_id (the hostname PK scan_run/findings reference).
-Fingerprint signals: SSH banner + cert + nuclei-Fortinet. DEFERRED to v1.1: wafw00f
-vendor (run_medium computes ctx.waf_kind but nothing persists it) and the IP-range
-signal. Until wafw00f lands, appliance/WAF/edge assets top out at 'suspected' (below
-the routing bar) — E1: fine for the soak; each wafw00f-confirmed WAF then gets its
-own 7-day mini-soak.
+Fingerprint signals: SSH banner + cert + nuclei-Fortinet + (P1, Obsidian 146) the
+two persisted stack-id artifacts — stack_id_wafw00f -> waf_vendor and
+stack_id_passive -> http_headers — which light up the ratified-but-dormant
+wafw00f_high_confidence and product_http_header rows. The IP-range signal is GONE
+(4.7 R1: a netblock names an owner, never an appliance brand). P1 also persists the
+R5 vendor_product_confidence bar (vendor_identifying signals only) alongside the
+existing device_class_confidence; routing still gates ONLY on device_class_confidence.
+The set_cookie_names artifact field (e.g. FortiWeb 'cookiesession1') is collected but
+NOT yet a signal — a new vendor-identifying row for it is a 4.7 fast-follow.
 
 TODO (post-Phase-B, 4.7 E4): replace regex-over-artifact extraction with structured
 parsing (more robust to testssl/fingerprintx version bumps).
@@ -111,6 +115,40 @@ def extract_cert(testssl_raw: str | None) -> dict:
     return out
 
 
+# ── P1 (Obsidian 146): the two persisted stack-id artifacts -> observations ───
+# These light up rows that were RATIFIED-BUT-DORMANT in device_fingerprints.yaml
+# (wafw00f_high_confidence on waf_vendor; product_http_header on http_headers) —
+# no new signal, no weight change. The runner stays "dumb": it emits the raw
+# observation and lets the registry decide what (if anything) it names. A generic
+# wafw00f verdict emits 'generic', which matches no vendor row -> no false brand.
+def waf_vendor_from_wafw00f(verdict: dict | None) -> str | None:
+    """E1's stack_id_wafw00f artifact {wafw00f_detected, wafw00f_kind} -> the
+    waf_vendor observation string, or None. Only when wafw00f actually detected a
+    WAF and named a kind; the registry's vendor_identifying rows decide if that
+    kind (fortiweb/cloudflare/...) names a vendor."""
+    if not isinstance(verdict, dict) or not verdict.get("wafw00f_detected"):
+        return None
+    kind = verdict.get("wafw00f_kind")
+    return kind if isinstance(kind, str) and kind else None
+
+
+def http_headers_from_passive(passive: dict | None) -> str | None:
+    """P0's stack_id_passive artifact -> a 'name: value' header blob for the
+    http_headers observation (product_http_header regex scans it, e.g.
+    'server:\\s*forti'). passive['headers'] is the vendor-header SUBSET dict P0
+    already filtered; serialize it so values (not just keys) are scannable."""
+    if not isinstance(passive, dict):
+        return None
+    hdrs = passive.get("headers")
+    if not isinstance(hdrs, dict) or not hdrs:
+        return None
+    lines = []
+    for k, v in hdrs.items():
+        val = ", ".join(str(x) for x in v) if isinstance(v, list) else str(v)
+        lines.append(f"{k}: {val}")
+    return "\n".join(lines) if lines else None
+
+
 # ── E5: nuclei Fortinet template-id prefix allowlist ─────────────────────
 def load_nuclei_fortinet_regex(path=FINGERPRINTS_PATH) -> str:
     """A precise template-id-prefix regex (NOT substring 'forti'). Never fortify-*."""
@@ -173,6 +211,32 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
                and last_observed_at > {fresh} limit 1""", (asset_id, nuclei_re))
     if cur.fetchone():
         obs["nuclei_fortinet_hit"] = True
+
+    # P1 (Obsidian 146): the two persisted stack-id artifacts. Both are json-typed
+    # scan_run_artifacts (content_jsonb holds the parsed object); read the freshest
+    # per asset and feed the ratified dormant rows.
+    def _fresh_json(tool_like: str) -> dict | None:
+        cur.execute(
+            f"""select a.content_jsonb::text as blob
+                  from scan_run_artifacts a join scan_run r on r.scan_run_id = a.scan_run_id
+                 where r.asset_id = %s and a.tool_name ilike %s
+                   and r.completed_at > {fresh}
+                 order by r.completed_at desc limit 1""", (asset_id, tool_like))
+        row = cur.fetchone()
+        if not row or not row.get("blob"):
+            return None
+        try:
+            obj = json.loads(row["blob"])
+        except Exception:
+            return None
+        return obj if isinstance(obj, dict) else None
+
+    waf_vendor = waf_vendor_from_wafw00f(_fresh_json("stack_id_wafw00f"))
+    if waf_vendor:
+        obs["waf_vendor"] = waf_vendor          # -> wafw00f_high_confidence row(s)
+    http_headers = http_headers_from_passive(_fresh_json("stack_id_passive"))
+    if http_headers:
+        obs["http_headers"] = http_headers      # -> product_http_header row
     return obs
 
 
@@ -303,6 +367,9 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
         for a in assets:
             res, from_cloud = classify_asset(cur, a, fps, th, fresh_days, nuclei_re, cloud_reg)
             nc, ncf = res["device_class"], res["confidence"]
+            # R5 vendor bar (P1). Cloud-fallback results have no vendor_product_confidence
+            # (cloud_provider is not a security-stack vendor) -> default 'unknown'.
+            vpc = res.get("vendor_product_confidence", "unknown")
             if nc == "unknown":
                 unknown += 1
             if from_cloud:
@@ -330,9 +397,10 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
             # 4.7 E3 — persistent audit row, EVERY pass (dry-run and write)
             cur.execute(
                 "insert into public.device_class_dryrun (asset_id, event_type, device_class, "
-                "confidence, evidence, vendor_product, prior_state, would_reroute, "
-                "scan_run_id, soak_generation) values (%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s)",
-                (a["asset_id"], ev, nc, ncf, json.dumps(res["evidence"]),
+                "confidence, vendor_product_confidence, evidence, vendor_product, prior_state, "
+                "would_reroute, scan_run_id, soak_generation) "
+                "values (%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s)",
+                (a["asset_id"], ev, nc, ncf, vpc, json.dumps(res["evidence"]),
                  json.dumps(res["vendor_product"]),
                  json.dumps({"device_class": a["device_class"], "confidence": a["device_class_confidence"]}),
                  would_reroute, _latest_scan_run(cur, a["asset_id"]), soak_generation))
@@ -340,8 +408,10 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
             if write:
                 cur.execute(
                     "update public.assets set device_class=%s, device_class_confidence=%s, "
-                    "device_class_evidence=%s::jsonb, vendor_product=%s::jsonb where asset_id=%s",
-                    (nc, ncf, json.dumps(res["evidence"]), json.dumps(res["vendor_product"]), a["asset_id"]))
+                    "vendor_product_confidence=%s, device_class_evidence=%s::jsonb, "
+                    "vendor_product=%s::jsonb where asset_id=%s",
+                    (nc, ncf, vpc, json.dumps(res["evidence"]),
+                     json.dumps(res["vendor_product"]), a["asset_id"]))
     conn.commit()
     conn.close()
 
