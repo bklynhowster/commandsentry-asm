@@ -113,6 +113,11 @@ on:
         required: false
         default: false
         type: boolean
+      active_probe_live:
+        description: 'GO-LIVE for the fwbbot_check active probe (Phase D). true = a heavy scan on an OPTED-IN asset (assets.active_probe_authorized=true) fires ONE detect-only bot-shaped GET to elicit FortiWeb /fwbbot_check. Default false = dry-run (fires nothing). Egress is per-asset (assets.active_probe_egress, default vpn). Unauthenticated, non-destructive, single request. Cron/workflow_run runs never set this -> always dry-run there.'
+        required: false
+        default: false
+        type: boolean
       crawl_first_mode:
         description: 'STEP 2 of the two-step diagnostic (use only if STEP 1 with stealth_ua=true bans). Runs katana FIRST to crawl the target, then nuclei against the discovered URL list ONLY — skips template-driven path enumeration entirely so the scanner never requests /wp-login, /admin, /.env, etc. unless the crawl found them. Mirrors what the Mac stringent scan actually does (Pass 1 against 529 crawled URLs). Composable with stealth_ua.'
         required: false
@@ -550,8 +555,12 @@ jobs:
           # assets still finish in 6-9 min. Well under the 120-min job timeout.
           # Tune alongside the portal concurrency guard (PORTAL_HEAVY_PROMOTION_SPEC.md Q2).
           TESTSSL_WALL_S: "1800"
-        run: |
-          python scripts/scanner/run_heavy.py /tmp/scan_descriptor.json
+          # Phase D go-live flag (4.7 Q1-Q8). Default false -> run_heavy ships DRY-RUN
+          # (the fwbbot_check probe fires nothing). Only a manual dispatch with
+          # active_probe_live=true arms the probe, and ONLY for assets opted in via
+          # assets.active_probe_authorized. Cron/workflow_run triggers carry no input
+          # (empty -> 'false' -> dry-run), so scheduled scans are unchanged.
+          ACTIVE_PROBE_LIVE: ${{ github.event.inputs.active_probe_live || 'false' }}
 
       # ─── Tear down VPN (always, if we brought it up) ───────────────
       # Runs even when the scan failed so we never leave a connection
