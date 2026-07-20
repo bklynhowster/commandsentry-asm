@@ -989,6 +989,122 @@ def run_stack_id_passive_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
         f"(cookies={len(signals.get('set_cookie_names', []))})")
 
 
+# ── Active-probe tier: FortiWeb /fwbbot_check challenge (4.7 Q3/Q4/Q7, Obsidian 146) ─
+# The program's FIRST active probe. P3 active-tier guardrails applied INLINE:
+#   * per-asset opt-in (assets.active_probe_authorized) = the gate AND kill switch
+#   * a single, DETECT-ONLY request (never solves/bypasses the challenge)
+#   * DRY-RUN by default (env ACTIVE_PROBE_LIVE unset) — logs + audits, fires nothing
+#   * one active_probe_audit row per evaluation (authorized?, dry_run?, observed?)
+#   * corroborating context to assert (Q7): /fwbbot_check path AND a WAF-challenge
+#     shape (redirect TO it) — never path-alone
+# Persist-only, self-registers NO tool (like the passive phase). gather_observations
+# does NOT read the artifact yet — that wiring + the gen-4 reset are Phase D.
+_ACTIVE_PROBE_LIVE = os.environ.get("ACTIVE_PROBE_LIVE", "").strip().lower() in ("1", "true", "yes")
+# Egress vantage is a deliberate A/B for the Phase C soak (Howie 2026-07-20): VPN
+# Mullvad — which ccc is KNOWN to ban — vs a direct datacenter IP; both bot-like
+# enough to plausibly elicit /fwbbot_check, and the ban risk differs. Recorded per
+# probe so the soak attributes each observation to a vantage. 'direct' binds curl to
+# PROBE_EGRESS_INTERFACE to bypass the tunnel when heavy has VPN up (interface name
+# determined in Phase C); without it, 'direct' records intent and uses default egress
+# (no faked bypass — the audit's egress_ip is the ground truth either way).
+_ACTIVE_PROBE_EGRESS = (os.environ.get("ACTIVE_PROBE_EGRESS", "vpn").strip().lower() or "vpn")
+_PROBE_EGRESS_INTERFACE = os.environ.get("PROBE_EGRESS_INTERFACE", "").strip()
+
+
+def _read_active_probe_authorized(ctx: HeavyScanContext) -> bool:
+    """Per-asset opt-in read. Missing dsn / any error -> NOT authorized (fail closed)."""
+    if not ctx.dsn:
+        return False
+    try:
+        with psycopg.connect(ctx.dsn, autocommit=True, connect_timeout=10) as c:
+            with c.cursor(row_factory=dict_row) as cur:
+                cur.execute("select active_probe_authorized from public.assets where asset_id=%s",
+                            (ctx.asset_id,))
+                r = cur.fetchone()
+        return bool(r and r.get("active_probe_authorized"))
+    except Exception as e:  # non-fatal: unknown authorization -> treat as NOT authorized
+        log(f"  fwbbot_check probe: authorization read failed ({e}) — treating as unauthorized")
+        return False
+
+
+def _write_active_probe_audit(ctx: HeavyScanContext, v: dict) -> None:
+    """One audit row per evaluation (4.7 Q3/Q8). Non-fatal on any error."""
+    if not ctx.dsn:
+        return
+    try:
+        with psycopg.connect(ctx.dsn, autocommit=True, connect_timeout=10) as c:
+            with c.cursor() as cur:
+                cur.execute(
+                    "insert into public.active_probe_audit (asset_id, probe_class, authorized, "
+                    "dry_run, egress_ip, observed, corroborated, scan_run_id, details) "
+                    "values (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)",
+                    (ctx.asset_id, v["probe_class"], v["authorized"], v["dry_run"],
+                     ctx.egress_ip_initial, v["observed"], v["corroborated"],
+                     ctx.scan_run_id, json.dumps(v.get("details") or {})))
+    except Exception as e:  # pragma: no cover
+        log(f"  fwbbot_check probe: audit write failed ({e}) — non-fatal")
+
+
+def _detect_fwbbot_from_headers(raw_headers: str) -> tuple[bool, bool, dict]:
+    """Pure detector (unit-tested, no I/O). (observed, corroborated, details).
+    observed = /fwbbot_check referenced anywhere in the response headers.
+    corroborated (4.7 Q7) = a redirect whose Location IS the /fwbbot_check challenge
+    (a WAF-challenge shape) — path-alone is observed but NOT corroborated, which stops
+    honeypot/coincidental-collision false positives from asserting the vendor."""
+    hdrs = raw_headers or ""
+    loc = ""
+    for line in hdrs.splitlines():
+        if line.lower().startswith("location:"):
+            loc = line.split(":", 1)[1].strip()
+            break
+    observed = "fwbbot_check" in hdrs.lower()
+    corroborated = bool(loc) and "/fwbbot_check" in loc.lower()
+    return observed, corroborated, {"location": loc[:200], "request_class": "head_browser_ua"}
+
+
+def _probe_curl_args(hostname: str, egress_mode: str, interface: str) -> list[str]:
+    """Pure argv builder (unit-tested). One detect-only browser-UA HEAD. 'direct'
+    egress binds curl to `interface` (bypass the VPN tunnel) when an interface is set;
+    otherwise default egress. NOTE: request SHAPE (bot-like enough to elicit the
+    challenge) is calibrate-later (Phase D) — this is a sensible first pass."""
+    args = ["curl", "-sSIk", "-A", _BROWSER_UA, "--max-time", "15"]
+    if egress_mode == "direct" and interface:
+        args += ["--interface", interface]
+    args.append(f"https://{hostname}/")
+    return args
+
+
+def _fire_fwbbot_check_probe(ctx: HeavyScanContext) -> tuple[bool, bool, dict]:
+    """ONE detect-only request via the chosen egress, then the pure detector. Detect
+    the /fwbbot_check challenge PRESENCE — never execute its JS, never solve it."""
+    args = _probe_curl_args(ctx.hostname, _ACTIVE_PROBE_EGRESS, _PROBE_EGRESS_INTERFACE)
+    _rc, out, _ = run_cmd(args, timeout=25)
+    observed, corroborated, det = _detect_fwbbot_from_headers(out or "")
+    det["egress_mode"] = _ACTIVE_PROBE_EGRESS
+    det["egress_interface"] = _PROBE_EGRESS_INTERFACE or None
+    return observed, corroborated, det
+
+
+def run_fwbbot_check_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
+    authorized = _read_active_probe_authorized(ctx)
+    fire = authorized and _ACTIVE_PROBE_LIVE
+    observed = corroborated = None
+    details: dict = {"live_flag": _ACTIVE_PROBE_LIVE, "egress_mode": _ACTIVE_PROBE_EGRESS}
+    if not authorized:
+        log("  fwbbot_check probe: SKIP — asset not active_probe_authorized (opt-in false / kill switch)")
+    elif not _ACTIVE_PROBE_LIVE:
+        log("  fwbbot_check probe: authorized but DRY-RUN (ACTIVE_PROBE_LIVE unset) — would probe, firing nothing")
+    else:
+        observed, corroborated, pd = _fire_fwbbot_check_probe(ctx)
+        details.update(pd)
+        log(f"  fwbbot_check probe: LIVE detect-only — observed={observed} corroborated={corroborated}")
+    verdict = {"schema": 1, "probe_class": "fwbbot_check_elicit", "authorized": authorized,
+               "dry_run": not fire, "observed": observed, "corroborated": corroborated,
+               "details": details}
+    ctx.artifacts.append(("stack_id_fwbbot_check", "json", json.dumps(verdict)))
+    _write_active_probe_audit(ctx, verdict)
+
+
 # ============================================================================
 # Heavy Phase 1 — net depth (naabu port discovery + fingerprintx service ID)
 # Spec: HEAVY_PHASE1_NETDEPTH_SPEC v2 + HEAVY_PHASE1_BUILD_DELTA (4.7 D1-D5).
@@ -1528,6 +1644,12 @@ def run(descriptor_path: str, dsn: str) -> int:
         # touches no findings/tool machinery. P1 wires these signals into the
         # classifier (with its own single soak reset).
         run_stack_id_passive_phase(ctx, work_dir)
+
+        # Active-probe tier — FortiWeb /fwbbot_check challenge (4.7 Q3, Obsidian 146).
+        # DRY-RUN by default (fires nothing); gated on assets.active_probe_authorized
+        # (opt-in + kill switch); persist-only + audited to active_probe_audit.
+        # gather_observations reads the artifact only in Phase D (with the gen-4 reset).
+        run_fwbbot_check_probe_phase(ctx, work_dir)
 
         # Phase 2 — naabu + fingerprintx net depth (Heavy Phase 1). PAIR with
         # all-or-nothing tools_run credit (4.7 D1): both names enter tools_run
