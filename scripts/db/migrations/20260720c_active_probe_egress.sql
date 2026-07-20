@@ -34,20 +34,15 @@
 -- END-META
 -- ============================================================================
 
+-- Column + value constraint in ONE idempotent statement. NOTE: intentionally NO
+-- PL/pgSQL do-block with dollar quoting — the migrate runner cannot parse that, and a
+-- mid-block split on the statement separator is what failed the first apply of this
+-- file. `add column if not exists` with an inline CHECK is idempotent on its own: a
+-- re-run skips the whole statement (the column already present), so the constraint
+-- never double-adds.
 alter table public.assets
-  add column if not exists active_probe_egress text not null default 'vpn';
-
--- Constrain to the two known vantages. Guarded so re-run is a no-op.
-do $$
-begin
-  if not exists (
-    select 1 from pg_constraint where conname = 'assets_active_probe_egress_chk'
-  ) then
-    alter table public.assets
-      add constraint assets_active_probe_egress_chk
-      check (active_probe_egress in ('vpn', 'direct'));
-  end if;
-end $$;
+  add column if not exists active_probe_egress text not null default 'vpn'
+  check (active_probe_egress in ('vpn', 'direct'));
 
 alter table public.assets
   add column if not exists active_probe_egress_reason text;
