@@ -1,0 +1,90 @@
+# ============================================================================
+# Artifact → vendor citation corpus (4.7 Q5, Obsidian 146) — generalizes the
+# former cookie_signatures.yaml. R4 provenance discipline.
+# ============================================================================
+# Every device_fingerprints.yaml row that attributes a vendor from a NAMED
+# artifact in this corpus (a Set-Cookie name, a challenge-endpoint path, …) MUST
+# have a cited entry here, or the classifier REFUSES to start
+# (derive_device_class.validate_artifact_citations). This is the machine guard
+# that stops a "this-artifact-means-this-vendor" mapping shipping on our say-so —
+# the discipline that caught "cookiesession1 = wafw00f's FortiWeb signature" (it
+# is NOT; wafw00f keys on FORTIWAFSID).
+#
+# Self-naming signals (wafw00f's own verdict, an SSH banner literally saying
+# 'fortios', a cert CN) are NOT listed here — the artifact names the vendor
+# directly. This corpus is only for artifacts whose vendor meaning is a CLAIM
+# needing an external source.
+#
+# artifact_type: set_cookie_name | challenge_endpoint_path | (extend as added)
+# Citation preference: vendor_primary_documentation > research_tool_source.
+version: 1
+
+artifact_signatures:
+  # ── FortiWeb: cookiesession1 Set-Cookie (PRIMARY vendor doc) ───────────────
+  - name: cookiesession1
+    artifact_type: set_cookie_name
+    vendor: Fortinet
+    product: FortiWeb
+    vendor_unique: true
+    # vendor_unique inference: (a) Fortinet documents FortiWeb emitting it, plus
+    # (b) no conflicting attribution in known-vendor cookie inventories. Revise if
+    # a future observation shows a non-FortiWeb product emitting cookiesession1.
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://help.fortinet.com/fweb/582/Content/FortiWeb/fortiweb-admin/http_sessions_security.htm
+      quote: "FortiWeb embeds a cookie in the response's Set-Cookie field in the HTTP header, which is named cookiesession1"
+      snapshot_url: http://web.archive.org/web/20250608172301/https://help.fortinet.com/fweb/582/Content/FortiWeb/fortiweb-admin/http_sessions_security.htm
+      corroboration:
+        - https://community.fortinet.com/t5/FortiWeb/Technical-Tip-Enable-session-based-cookie-for-cookiesession1/ta-p/339895
+        - https://docs.fortinet.com/document/fortiweb/7.6.0/administration-guide/415041/faq
+      cited_at: 2026-07-20
+      quote_provenance: "surfaced from the Fortinet FortiWeb admin guide via web search 2026-07-20; live page is JS-rendered (not machine-fetchable), snapshot_url is the durable copy"
+
+  # ── FortiWeb: /fwbbot_check challenge endpoint (PRIMARY vendor doc) ─────────
+  # FortiWeb's Real-Browser-Enforcement / ML-bot-detection challenge. FortiWeb
+  # INJECTS this path — the backend origin does not serve it — so its presence is
+  # a FortiWeb-specific artifact. INDEPENDENT of cookiesession1 (a cookie) AND of
+  # wafw00f's FortiWeb signatures (^FORTIWAFSID= + .fgd_icon + block page) — see
+  # independence_dependencies. Detected NOT solved (4.7 Q1).
+  - name: fwbbot_check
+    artifact_type: challenge_endpoint_path
+    vendor: Fortinet
+    product: FortiWeb
+    vendor_unique: true
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://community.fortinet.com/t5/FortiWeb/Technical-Tip-Explaining-the-logs-to-fwbbot-check-URL/ta-p/341873
+      quote: "the /fwbbot_check URL is related to the [FortiWeb] Real Browser Enforcement / ML Bot detection verification, even though the backend server does not have this path"
+      corroboration:
+        - https://docs.fortinet.com/document/fortiweb/7.6.1/administration-guide/881142/bot-mitigation
+      snapshot_url: http://web.archive.org/web/20250502101052/https://docs.fortinet.com/document/fortiweb/7.6.1/administration-guide/881142/bot-mitigation
+      cited_at: 2026-07-20
+      quote_provenance: "Fortinet Community technical tip titled 'Explaining the logs to fwbbot_check URL' (FortiWeb board) + FortiWeb Bot Mitigation admin guide (snapshot above, 2025-05-02); surfaced via web search 2026-07-20"
+    # 4.7 Q2/Q8c — independence rests on wafw00f NOT probing /fwbbot_check. Re-check
+    # monthly; if a future wafw00f adds it, fwbbot_check + wafw00f-kind=fortiweb
+    # would share an artifact → re-evaluate 2-vs-3 independent signals.
+    independence_dependencies:
+      wafw00f_fortiweb_plugin_does_not_probe_fwbbot_check: true
+      wafw00f_source_url: https://raw.githubusercontent.com/EnableSecurity/wafw00f/master/wafw00f/plugins/fortiweb.py
+      verified_signatures: "^FORTIWAFSID= cookie + .fgd_icon + 'Web Page Blocked' template — NO /fwbbot_check reference"
+      verified_at: 2026-07-20
+      recheck: monthly
+
+  # ── FortiWeb: FORTIWAFSID Set-Cookie (research-tool source) — READY, NOT wired ─
+  # wafw00f's own FortiWeb signature cookie. Ready entry, deliberately NOT given a
+  # device_fingerprints row: no observed asset serves it, and wafw00f's verdict
+  # already keys on ^FORTIWAFSID= → same artifact as wafw00f_high_confidence
+  # (4.7 same-artifact dedupe). Wire under the wafw00f signal name when first observed.
+  - name: FORTIWAFSID
+    artifact_type: set_cookie_name
+    vendor: Fortinet
+    product: FortiWeb
+    vendor_unique: true
+    wired: false
+    dedupe_with_signal: wafw00f_high_confidence
+    citation:
+      source_type: research_tool_source
+      url: https://github.com/EnableSecurity/wafw00f/blob/master/wafw00f/plugins/fortiweb.py
+      quote: "self.matchCookie(r'^FORTIWAFSID=')"
+      cited_at: 2026-07-20
+      note: "wafw00f is the source establishing FORTIWAFSID → FortiWeb; upgrade to a Fortinet primary-doc citation when located."

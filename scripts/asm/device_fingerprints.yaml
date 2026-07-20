@@ -112,9 +112,13 @@ fingerprints:
   # itself) — they light up the moment E1 wires the observation. This is the
   # opposite of the ip_range rows, which were deleted: those could never be
   # anything but insider inference.
-  - signal: fwbbot_check_challenge
+  # 4.7 Q1 rename 2026-07-20 (vendor + artifact explicit in the name). Cited in
+  # artifact_signatures.yaml (challenge_endpoint_path). DORMANT until the
+  # active-probe `fwbbot_check` observation is wired (Phase B/D); corroborating
+  # context required at wire time (4.7 Q7). Detect the challenge, never solve it.
+  - signal: fortiweb_challenge_endpoint_fwbbot_check
     observation: fwbbot_check
-    match_bool: true                                        # FortiWeb's OWN bot challenge endpoint (fwb = FortiWeb)
+    match_bool: true                                        # FortiWeb Real-Browser-Enforcement challenge path — FortiWeb INJECTS /fwbbot_check; origin lacks it
     device_class: waf
     evidence_class: vendor_identifying
     vendor_product: {vendor: Fortinet, product: FortiWeb}
@@ -148,7 +152,7 @@ fingerprints:
 
   # ── FortiWeb cookiesession1 (HIGH, vendor-identifying) — 4.7 Q2/R4 ────────
   # Fortinet's OWN docs document FortiWeb emitting the cookiesession1 Set-Cookie
-  # (see cookie_signatures.yaml — vendor_primary_documentation; the classifier
+  # (see artifact_signatures.yaml — vendor_primary_documentation; the classifier
   # refuses to start if that citation is missing). EXACT match (4.7 Q8e): a
   # cookie name is a discrete token — substring would false-match cookiesession1234.
   # INDEPENDENT of wafw00f (4.7 R4-revised): wafw00f keys on FORTIWAFSID + the

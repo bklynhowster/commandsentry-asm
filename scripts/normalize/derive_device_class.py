@@ -47,7 +47,7 @@ except ImportError:  # pragma: no cover
 _HERE = Path(__file__).resolve().parent.parent
 FINGERPRINTS_PATH = _HERE / "asm" / "device_fingerprints.yaml"
 THRESHOLDS_PATH = _HERE / "scanner" / "classifier_thresholds.yaml"
-COOKIE_SIGNATURES_PATH = _HERE / "asm" / "cookie_signatures.yaml"
+ARTIFACT_SIGNATURES_PATH = _HERE / "asm" / "artifact_signatures.yaml"
 
 DEFAULT_CLASS = "unknown"
 
@@ -111,46 +111,62 @@ def validate_fingerprints(fingerprints: list[dict], weight_map: dict | None = No
     return errs
 
 
-def load_cookie_signatures(path: Path = COOKIE_SIGNATURES_PATH) -> dict:
-    """cookie_name (lowercased) -> corpus entry. The R4 provenance store for
-    cookie->vendor attribution (4.7 Q2/Q8b). A missing file yields {} — a cookie
-    vendor row will then fail validate_cookie_citations, which is the intent."""
+def load_artifact_signatures(path: Path = ARTIFACT_SIGNATURES_PATH) -> dict:
+    """artifact name (lowercased) -> corpus entry. The R4 provenance store for
+    artifact->vendor attribution (4.7 Q5 — generalizes the former cookie corpus).
+    A missing file yields {} — an artifact-backed vendor row then fails
+    validate_artifact_citations, which is the intent."""
     if yaml is None or not path.exists():
         return {}
     data = yaml.safe_load(path.read_text()) or {}
     out: dict = {}
-    for e in (data.get("cookie_signatures") or []):
-        name = e.get("cookie_name")
+    for e in (data.get("artifact_signatures") or []):
+        name = e.get("name")
         if name:
             out[str(name).lower()] = e
     return out
 
 
-def validate_cookie_citations(fingerprints: list[dict],
-                              cookie_sigs: dict | None = None) -> list[str]:
-    """4.7 R4 ship-blocker: every vendor_identifying row that matches on
-    `set_cookie_names` must map each cookie value to a cookie_signatures.yaml entry
-    carrying a citation (url + quote) whose vendor matches the row. This is the
-    machine guard that stops a cookie->vendor mapping shipping on our say-so — the
-    exact failure the 'cookiesession1 = wafw00f signature' correction caught."""
-    sigs = load_cookie_signatures() if cookie_sigs is None else cookie_sigs
+# observation -> how to derive the corpus artifact name(s) that need a citation.
+# 'match_values' = each match value is an artifact name (e.g. cookie names in
+# set_cookie_names); 'observation' = the observation itself IS the artifact (a
+# boolean probe like the fwbbot_check challenge-endpoint presence).
+_ARTIFACT_CITED_OBS = {
+    "set_cookie_names": "match_values",
+    "fwbbot_check": "observation",
+}
+
+
+def validate_artifact_citations(fingerprints: list[dict],
+                                sigs: dict | None = None) -> list[str]:
+    """4.7 R4 ship-blocker (generalized, Q5): every vendor_identifying row that
+    attributes a vendor from a NAMED corpus artifact (a Set-Cookie name, a
+    challenge-endpoint path, …) must map that artifact to an artifact_signatures.yaml
+    entry with a citation (url + quote) whose vendor matches the row. Stops an
+    artifact->vendor mapping shipping on our say-so — the failure the 'cookiesession1
+    = wafw00f signature' correction caught. Self-naming signals (wafw00f's own
+    verdict, an SSH banner, a cert CN) are NOT corpus artifacts and are not checked."""
+    sigs = load_artifact_signatures() if sigs is None else sigs
     errs: list[str] = []
     for i, fp in enumerate(fingerprints):
-        if fp.get("observation") != "set_cookie_names" or fp.get("evidence_class") != "vendor_identifying":
+        how = _ARTIFACT_CITED_OBS.get(fp.get("observation"))
+        if how is None or fp.get("evidence_class") != "vendor_identifying":
             continue
         vp = fp.get("vendor_product") or {}
         row_vendor = str(vp.get("vendor") or "").lower()
         tag = f"row[{i}] signal={fp.get('signal')!r}"
-        for v in (fp.get("match_values") or fp.get("match_substrings") or []):
-            entry = sigs.get(str(v).lower())
+        names = ((fp.get("match_values") or fp.get("match_substrings") or [])
+                 if how == "match_values" else [fp.get("observation")])
+        for nm in names:
+            entry = sigs.get(str(nm).lower())
             if not entry:
-                errs.append(f"{tag}: cookie {v!r} has no cookie_signatures.yaml entry (R4 citation required)")
+                errs.append(f"{tag}: artifact {nm!r} has no artifact_signatures.yaml entry (R4 citation required)")
                 continue
             cit = entry.get("citation") or {}
             if not (cit.get("url") and cit.get("quote")):
-                errs.append(f"{tag}: cookie {v!r} citation missing url/quote (R4)")
+                errs.append(f"{tag}: artifact {nm!r} citation missing url/quote (R4)")
             if row_vendor and str(entry.get("vendor") or "").lower() != row_vendor:
-                errs.append(f"{tag}: cookie {v!r} corpus vendor {entry.get('vendor')!r} != row vendor {vp.get('vendor')!r}")
+                errs.append(f"{tag}: artifact {nm!r} corpus vendor {entry.get('vendor')!r} != row vendor {vp.get('vendor')!r}")
     return errs
 
 
@@ -162,9 +178,10 @@ def load_fingerprints(path: Path = FINGERPRINTS_PATH) -> list[dict]:
     # Load-time enforcement (4.7 R6): structural rules 1-5 need no thresholds, so
     # they fire on EVERY load path — runner, CLI, selftest, tests. Rule 6 (weight
     # membership) runs where thresholds are loaded (validate_registry / runner).
-    # R4 (4.7 Q2/Q8b): cookie->vendor rows must carry a cited source, enforced here
-    # so every load path (runner, CLI, tests) refuses a say-so cookie attribution.
-    errs = validate_fingerprints(fps) + validate_cookie_citations(fps)
+    # R4 (4.7 Q2/Q5/Q8b): artifact->vendor rows (cookie names, challenge-endpoint
+    # paths, …) must carry a cited source, enforced here so every load path (runner,
+    # CLI, tests) refuses a say-so artifact attribution.
+    errs = validate_fingerprints(fps) + validate_artifact_citations(fps)
     if errs:
         raise RegistryValidationError(
             f"{path.name} failed evidence-class validation — classifier refuses to start:\n  - "
