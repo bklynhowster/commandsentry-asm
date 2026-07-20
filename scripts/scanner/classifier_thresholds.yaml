@@ -18,7 +18,9 @@ signals:
     - ssh_banner_appliance_match       # SSH banner matches a known appliance fingerprint (e.g. "8.1.0.0_openssh SCI")
     - product_http_header              # distinct product header (Server: FortiADC, X-FortiGate-Firmware, ...)
     - fwbbot_check_challenge           # fwbbot_check probe returns a FortiWeb challenge response
-    - wafw00f_high_confidence          # wafw00f positive identification at high confidence
+    - wafw00f_high_confidence          # wafw00f positively NAMES a vendor (fortiweb/cloudflare) at high confidence
+    - waf_present_wafw00f              # 4.7 Q1: wafw00f detected a WAF but named no vendor — presence-only "Behind a WAF"
+    - fortiweb_cookiesession1          # 4.7 Q2: FortiWeb cookiesession1 Set-Cookie (Fortinet primary-doc cited), independent of wafw00f
   medium:
     - cert_issuer_subject_pattern      # e.g. a GoDaddy wildcard cert, or a vendor-named cert CN
     # ip_in_vendor_mgmt_range DELETED 2026-07-18 (4.7 R1): an IP range attributes a

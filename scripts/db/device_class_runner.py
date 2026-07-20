@@ -231,12 +231,22 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
             return None
         return obj if isinstance(obj, dict) else None
 
-    waf_vendor = waf_vendor_from_wafw00f(_fresh_json("stack_id_wafw00f"))
-    if waf_vendor:
-        obs["waf_vendor"] = waf_vendor          # -> wafw00f_high_confidence row(s)
-    http_headers = http_headers_from_passive(_fresh_json("stack_id_passive"))
+    verdict = _fresh_json("stack_id_wafw00f")
+    kind = waf_vendor_from_wafw00f(verdict)      # kind string if detected & named, else None
+    if kind and kind != "generic":
+        obs["waf_vendor"] = kind                 # named vendor -> wafw00f_high_confidence
+    elif verdict and verdict.get("wafw00f_detected"):
+        # detected but named no vendor -> presence-only signal. Emitted ONLY here
+        # (not alongside waf_vendor) so it never double-counts the same wafw00f run
+        # against a vendor row (4.7 same-artifact test, Obsidian 146).
+        obs["waf_present"] = True                # -> waf_present_wafw00f
+    passive = _fresh_json("stack_id_passive")
+    http_headers = http_headers_from_passive(passive)
     if http_headers:
-        obs["http_headers"] = http_headers      # -> product_http_header row
+        obs["http_headers"] = http_headers       # -> product_http_header row
+    cookie_names = passive.get("set_cookie_names") if isinstance(passive, dict) else None
+    if isinstance(cookie_names, list) and cookie_names:
+        obs["set_cookie_names"] = cookie_names   # -> fortiweb_cookiesession1 (exact match)
     return obs
 
 
@@ -327,8 +337,10 @@ def classify_asset(cur, a: dict, fps, th, fresh_days, nuclei_re, cloud_reg) -> t
 
 
 def _has_wafw00f(evidence) -> bool:
+    # any wafw00f-sourced signal — named vendor OR the generic presence signal —
+    # for the conf_full vs conf_subset soak tally.
     return isinstance(evidence, list) and any(
-        s.get("signal") == "wafw00f_high_confidence" for s in evidence)
+        s.get("signal") in ("wafw00f_high_confidence", "waf_present_wafw00f") for s in evidence)
 
 
 def run(dsn: str, write: bool, soak_generation: int) -> int:

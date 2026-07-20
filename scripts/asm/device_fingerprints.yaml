@@ -131,6 +131,38 @@ fingerprints:
     evidence_class: vendor_identifying
     vendor_product: {vendor: Cloudflare, product: Cloudflare}
 
+  # ── wafw00f WAF presence (HIGH, presence-only) — 4.7 Q1 (Obsidian 146) ────
+  # wafw00f (a 150-signature purpose-built WAF detector) fired but named no
+  # vendor: a WAF is present, nothing more. PRESENCE-ONLY — the honest "Behind a
+  # WAF" answer. Fed by gather_observations obs `waf_present`, which is emitted
+  # ONLY when wafw00f detected==true AND named no vendor kind — so it never
+  # double-counts the same wafw00f run against a wafw00f_high_confidence vendor
+  # row (4.7 same-artifact test). This is what lifts a generic-WAF asset off
+  # 'unknown'.
+  - signal: waf_present_wafw00f
+    observation: waf_present
+    match_bool: true
+    device_class: waf
+    evidence_class: presence_only
+    vendor_product: {}
+
+  # ── FortiWeb cookiesession1 (HIGH, vendor-identifying) — 4.7 Q2/R4 ────────
+  # Fortinet's OWN docs document FortiWeb emitting the cookiesession1 Set-Cookie
+  # (see cookie_signatures.yaml — vendor_primary_documentation; the classifier
+  # refuses to start if that citation is missing). EXACT match (4.7 Q8e): a
+  # cookie name is a discrete token — substring would false-match cookiesession1234.
+  # INDEPENDENT of wafw00f (4.7 R4-revised): wafw00f keys on FORTIWAFSID + the
+  # block page, NEVER cookiesession1, so cookiesession1 + a wafw00f kind=fortiweb
+  # verdict are two independent tells that reach 'confirmed'. Fed by obs
+  # `set_cookie_names` (from the browser-UA passive collector).
+  - signal: fortiweb_cookiesession1
+    observation: set_cookie_names
+    match_semantic: exact
+    match_values: ["cookiesession1"]
+    device_class: waf
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Fortinet, product: FortiWeb}
+
   # ── Product HTTP header (HIGH) ───────────────────────────────────────────
   - signal: product_http_header
     observation: http_headers

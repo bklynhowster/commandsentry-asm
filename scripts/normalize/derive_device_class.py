@@ -47,6 +47,7 @@ except ImportError:  # pragma: no cover
 _HERE = Path(__file__).resolve().parent.parent
 FINGERPRINTS_PATH = _HERE / "asm" / "device_fingerprints.yaml"
 THRESHOLDS_PATH = _HERE / "scanner" / "classifier_thresholds.yaml"
+COOKIE_SIGNATURES_PATH = _HERE / "asm" / "cookie_signatures.yaml"
 
 DEFAULT_CLASS = "unknown"
 
@@ -110,6 +111,49 @@ def validate_fingerprints(fingerprints: list[dict], weight_map: dict | None = No
     return errs
 
 
+def load_cookie_signatures(path: Path = COOKIE_SIGNATURES_PATH) -> dict:
+    """cookie_name (lowercased) -> corpus entry. The R4 provenance store for
+    cookie->vendor attribution (4.7 Q2/Q8b). A missing file yields {} — a cookie
+    vendor row will then fail validate_cookie_citations, which is the intent."""
+    if yaml is None or not path.exists():
+        return {}
+    data = yaml.safe_load(path.read_text()) or {}
+    out: dict = {}
+    for e in (data.get("cookie_signatures") or []):
+        name = e.get("cookie_name")
+        if name:
+            out[str(name).lower()] = e
+    return out
+
+
+def validate_cookie_citations(fingerprints: list[dict],
+                              cookie_sigs: dict | None = None) -> list[str]:
+    """4.7 R4 ship-blocker: every vendor_identifying row that matches on
+    `set_cookie_names` must map each cookie value to a cookie_signatures.yaml entry
+    carrying a citation (url + quote) whose vendor matches the row. This is the
+    machine guard that stops a cookie->vendor mapping shipping on our say-so — the
+    exact failure the 'cookiesession1 = wafw00f signature' correction caught."""
+    sigs = load_cookie_signatures() if cookie_sigs is None else cookie_sigs
+    errs: list[str] = []
+    for i, fp in enumerate(fingerprints):
+        if fp.get("observation") != "set_cookie_names" or fp.get("evidence_class") != "vendor_identifying":
+            continue
+        vp = fp.get("vendor_product") or {}
+        row_vendor = str(vp.get("vendor") or "").lower()
+        tag = f"row[{i}] signal={fp.get('signal')!r}"
+        for v in (fp.get("match_values") or fp.get("match_substrings") or []):
+            entry = sigs.get(str(v).lower())
+            if not entry:
+                errs.append(f"{tag}: cookie {v!r} has no cookie_signatures.yaml entry (R4 citation required)")
+                continue
+            cit = entry.get("citation") or {}
+            if not (cit.get("url") and cit.get("quote")):
+                errs.append(f"{tag}: cookie {v!r} citation missing url/quote (R4)")
+            if row_vendor and str(entry.get("vendor") or "").lower() != row_vendor:
+                errs.append(f"{tag}: cookie {v!r} corpus vendor {entry.get('vendor')!r} != row vendor {vp.get('vendor')!r}")
+    return errs
+
+
 def load_fingerprints(path: Path = FINGERPRINTS_PATH) -> list[dict]:
     if yaml is None:
         raise RuntimeError("PyYAML required to read device_fingerprints.yaml")
@@ -118,7 +162,9 @@ def load_fingerprints(path: Path = FINGERPRINTS_PATH) -> list[dict]:
     # Load-time enforcement (4.7 R6): structural rules 1-5 need no thresholds, so
     # they fire on EVERY load path — runner, CLI, selftest, tests. Rule 6 (weight
     # membership) runs where thresholds are loaded (validate_registry / runner).
-    errs = validate_fingerprints(fps)
+    # R4 (4.7 Q2/Q8b): cookie->vendor rows must carry a cited source, enforced here
+    # so every load path (runner, CLI, tests) refuses a say-so cookie attribution.
+    errs = validate_fingerprints(fps) + validate_cookie_citations(fps)
     if errs:
         raise RegistryValidationError(
             f"{path.name} failed evidence-class validation — classifier refuses to start:\n  - "
@@ -177,6 +223,19 @@ def _fp_matches(fp: dict, observations: dict):
                 return ip
         return None
 
+    # exact / prefix token matching (4.7 Q8e, Obsidian 146) — for LIST observations
+    # of discrete tokens like set_cookie_names, where substring would false-match
+    # (cookiesession1 must NOT match cookiesession1234). Element-wise, case-insensitive.
+    ms = fp.get("match_semantic")
+    if ms in ("exact", "prefix"):
+        items = [str(x).lower() for x in _as_list(obs)]
+        for v in (fp.get("match_values") or []):
+            vl = str(v).lower()
+            for it in items:
+                if (it == vl) if ms == "exact" else it.startswith(vl):
+                    return str(v)
+        return None
+
     # text observations (ssh_banner, waf_vendor, http_headers, cert_issuer)
     hay = " ".join(_as_list(obs)).lower()
     for sub in (fp.get("match_substrings") or []):
@@ -190,6 +249,22 @@ def _fp_matches(fp: dict, observations: dict):
     return None
 
 
+# ── SIGNAL INDEPENDENCE (4.7 R4-revised, Obsidian 146) ───────────────────────
+# The bar tallies DISTINCT signal NAMES, so signal naming IS the independence
+# decision. The test is "different ARTIFACT", NOT "same vendor conclusion":
+#   INDEPENDENT (separate names, count separately) — different tools reading
+#     different artifacts, or one tool reading different artifacts across probes.
+#     e.g. cookiesession1 (passive Set-Cookie, Fortinet-doc-cited) vs a wafw00f
+#     kind=fortiweb verdict (wafw00f keys on FORTIWAFSID + block page, NEVER
+#     cookiesession1) -> two independent FortiWeb tells -> together 'confirmed'.
+#   DEPENDENT (share one signal NAME so they count once) — signals reading the
+#     SAME underlying artifact via different paths. e.g. a direct FORTIWAFSID
+#     observation and wafw00f's verdict (which itself matches ^FORTIWAFSID=); or
+#     wafw00f detected==true and wafw00f kind (one wafw00f run) — which is why
+#     gather_observations emits `waf_present` ONLY when wafw00f names no vendor.
+# Two signals both concluding "FortiWeb" are NOT automatically dependent —
+# corroboration by independent artifacts IS the confirmation pathway. Dedupe only
+# on shared artifact, never on shared conclusion.
 def match_signals(observations: dict, fingerprints: list[dict], thresholds: dict) -> list[dict]:
     """Every fingerprint that matches -> one evidence record."""
     weight = thresholds["weight"]
