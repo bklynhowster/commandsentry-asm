@@ -10,9 +10,14 @@ confident we are, using:
   * scripts/asm/device_fingerprints.yaml       — observation -> (class, vendor) rows
   * scripts/scanner/classifier_thresholds.yaml — signal weights + the D3 bar
 
-Returns {device_class, confidence, evidence, vendor_product}:
+Returns {device_class, confidence, device_class_confidence,
+vendor_product_confidence, evidence, vendor_product}:
   * device_class default 'unknown' (4.7 D2 — never presume origin on no evidence)
   * confidence in {confirmed, suspected, unknown} per the D3 multi-signal bar,
+    == device_class_confidence (kept as 'confidence' for the routing path).
+  * vendor_product_confidence (R5, Obsidian 146): same scale, scored over
+    vendor_identifying signals ONLY — presence_only confirms the CLASS but never
+    earns the right to name a vendor. P2 gates CVE attribution on this == confirmed.
     computed over the DISTINCT signal names supporting the winning class:
       confirmed = >=2 high  OR  (>=1 high AND >=2 medium)
       suspected = 1 high    OR  >=2 medium
@@ -199,6 +204,9 @@ def match_signals(observations: dict, fingerprints: list[dict], thresholds: dict
             "weight": weight.get(sig, "low"),
             "device_class": fp.get("device_class"),
             "vendor_product": fp.get("vendor_product") or {},
+            # R5 (Obsidian 146): carry evidence_class onto each record so classify()
+            # can score vendor_product_confidence from vendor_identifying signals ONLY.
+            "evidence_class": fp.get("evidence_class"),
             "matched": ev,
             "observation": fp.get("observation"),
         })
@@ -218,23 +226,37 @@ def classify(observations: dict,
              thresholds: dict | None = None) -> dict:
     """Pure classifier. observations keys: ssh_banner, waf_vendor, http_headers,
     cert_issuer, fwbbot_check, ips, nuclei_fortinet_hit. Returns
-    {device_class, confidence, evidence, vendor_product}."""
+    {device_class, confidence, device_class_confidence,
+    vendor_product_confidence, evidence, vendor_product}."""
     fingerprints = fingerprints if fingerprints is not None else load_fingerprints()
     thresholds = thresholds if thresholds is not None else load_thresholds()
 
     matched = match_signals(observations, fingerprints, thresholds)
     if not matched:
         return {"device_class": DEFAULT_CLASS, "confidence": "unknown",
+                "device_class_confidence": "unknown",
+                "vendor_product_confidence": "unknown",
                 "evidence": [], "vendor_product": {}}
 
     # Winning class = the device_class with the strongest support: most distinct
     # high-weight signal NAMES, then medium, then low. Distinct names so two
     # fingerprint rows for the same signal can't double-count the bar.
+    #
+    # R5 (Obsidian 146) two-bar split: the SAME per-class buckets also track the
+    # vendor_identifying-only signal names (vi_high/vi_medium). device_class_confidence
+    # scores over ALL signals — presence_only can confirm "a WAF is present"; but
+    # vendor_product_confidence scores over vendor_identifying signals ONLY, so a
+    # presence-only-confirmed asset never earns the right to NAME a vendor. This is
+    # the load-bearing gate P2 reads before firing any CVE-attribution finding.
     by_class: dict[str, dict] = {}
     for m in matched:
-        slot = by_class.setdefault(m["device_class"],
-                                   {"high": set(), "medium": set(), "low": set(), "vendor": {}})
+        slot = by_class.setdefault(
+            m["device_class"],
+            {"high": set(), "medium": set(), "low": set(),
+             "vi_high": set(), "vi_medium": set(), "vendor": {}})
         slot[m["weight"]].add(m["signal"])
+        if m.get("evidence_class") == "vendor_identifying" and m["weight"] in ("high", "medium"):
+            slot["vi_" + m["weight"]].add(m["signal"])
         slot["vendor"].update(m["vendor_product"])
 
     win_class, win = max(
@@ -242,16 +264,24 @@ def classify(observations: dict,
         key=lambda kv: (len(kv[1]["high"]), len(kv[1]["medium"]), len(kv[1]["low"])),
     )
     conf = _confidence(len(win["high"]), len(win["medium"]))
+    vp_conf = _confidence(len(win["vi_high"]), len(win["vi_medium"]))
 
     # If even the strongest class can't clear 'suspected' (only low-weight or
     # nothing decisive), stay unknown — 4.7 D2/D3.
     if conf == "unknown":
         return {"device_class": DEFAULT_CLASS, "confidence": "unknown",
+                "device_class_confidence": "unknown",
+                "vendor_product_confidence": "unknown",
                 "evidence": matched, "vendor_product": {}}
 
     return {
         "device_class": win_class,
+        # 'confidence' unchanged (== device_class_confidence): the routing/write
+        # path (device_class_runner) reads this key — keeping it identical means no
+        # asset's routing changes, so this is additive with NO soak reset (146 §110).
         "confidence": conf,
+        "device_class_confidence": conf,
+        "vendor_product_confidence": vp_conf,
         "evidence": matched,           # all matched signals — audit + transition diff
         "vendor_product": win["vendor"],
     }
