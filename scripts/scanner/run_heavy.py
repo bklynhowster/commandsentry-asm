@@ -1016,6 +1016,7 @@ def _read_active_probe_authorized(ctx: HeavyScanContext) -> bool:
     if not ctx.dsn:
         return False
     try:
+        psycopg, dict_row, _ = _import_deps()   # lazy deps — module-level import is intentionally absent (matches run())
         with psycopg.connect(ctx.dsn, autocommit=True, connect_timeout=10) as c:
             with c.cursor(row_factory=dict_row) as cur:
                 cur.execute("select active_probe_authorized from public.assets where asset_id=%s",
@@ -1032,6 +1033,7 @@ def _write_active_probe_audit(ctx: HeavyScanContext, v: dict) -> None:
     if not ctx.dsn:
         return
     try:
+        psycopg, _dict_row, _Json = _import_deps()   # lazy deps — module-level import is intentionally absent
         with psycopg.connect(ctx.dsn, autocommit=True, connect_timeout=10) as c:
             with c.cursor() as cur:
                 cur.execute(

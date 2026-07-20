@@ -55,3 +55,44 @@ def test_egress_direct_without_interface_falls_back_to_default():
 
 def test_egress_default_is_vpn():
     assert h._ACTIVE_PROBE_EGRESS == "vpn"
+
+
+# ── regression: DB helpers must get psycopg via _import_deps() (no module-level
+# psycopg — the NameError that silently killed the auth read + audit write) ──────
+import types
+
+
+def _fake_deps(fetch_row, calls):
+    class _Cur:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params=None): calls.append((sql, params))
+        def fetchone(self): return fetch_row
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def cursor(self, **kw): return _Cur()
+    psy = types.SimpleNamespace(connect=lambda *a, **k: _Conn())
+    return lambda: (psy, dict, None)
+
+
+def test_read_authorized_reaches_db_via_import_deps(monkeypatch):
+    calls = []
+    monkeypatch.setattr(h, "_import_deps", _fake_deps({"active_probe_authorized": True}, calls))
+    ctx = types.SimpleNamespace(dsn="x", asset_id="ccc")
+    assert h._read_active_probe_authorized(ctx) is True     # False before the fix (NameError swallowed)
+    assert calls and "active_probe_authorized" in calls[0][0]
+
+
+def test_audit_write_reaches_insert_via_import_deps(monkeypatch):
+    calls = []
+    monkeypatch.setattr(h, "_import_deps", _fake_deps(None, calls))
+    ctx = types.SimpleNamespace(dsn="x", asset_id="ccc", egress_ip_initial=None, scan_run_id="s")
+    v = {"probe_class": "fwbbot_check_elicit", "authorized": False, "dry_run": True,
+         "observed": None, "corroborated": None, "details": {}}
+    h._write_active_probe_audit(ctx, v)
+    assert calls and "insert into public.active_probe_audit" in calls[0][0]   # execute reached (no NameError)
+
+
+def test_read_no_dsn_is_false():
+    assert h._read_active_probe_authorized(types.SimpleNamespace(dsn=None, asset_id="x")) is False
