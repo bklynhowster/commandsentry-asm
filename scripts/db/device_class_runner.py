@@ -183,6 +183,18 @@ def event_for(prior_class, prior_conf, new_class, new_conf) -> str | None:
     return "CHANGE"
 
 
+# ── fwbbot_check corroboration gate (4.7 Q5; pure, hardcoded, anchor-tested) ──
+def _fwbbot_corroborated(probe: dict | None) -> bool:
+    """The ONLY path that may enable the fwbbot_check signal. Fires TRUE only when the
+    probe artifact recorded a CORROBORATED challenge (a redirect whose Location IS
+    /fwbbot_check). Everything else — observed-without-corroboration (path-mention),
+    banned, no-challenge, dry-run (corroborated null) — returns False. This is the
+    honeypot/coincidence guard (4.7 Q7) and the empirical no-fabrication bar (4.7 Q4):
+    no "close enough" fallback, no caching. `is True` is deliberate — a truthy non-bool
+    must not slip the gate."""
+    return isinstance(probe, dict) and probe.get("corroborated") is True
+
+
 # ── DB signal gather (fresh signals for one asset) ───────────────────────
 def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str) -> dict:
     obs: dict = {}
@@ -247,6 +259,14 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
     cookie_names = passive.get("set_cookie_names") if isinstance(passive, dict) else None
     if isinstance(cookie_names, list) and cookie_names:
         obs["set_cookie_names"] = cookie_names   # -> fortiweb_cookiesession1 (exact match)
+
+    # Phase D (4.7 Q5): the active-probe /fwbbot_check challenge. Freshest artifact per
+    # asset, gated through _fwbbot_corroborated — emits ONLY on a corroborated challenge
+    # (redirect-to-/fwbbot_check). observed-not-corroborated / banned / no-challenge /
+    # dry-run all leave it dormant. -> fortiweb_challenge_endpoint_fwbbot_check.
+    probe = _fresh_json("stack_id_fwbbot_check")
+    if _fwbbot_corroborated(probe):
+        obs["fwbbot_check"] = True
     return obs
 
 

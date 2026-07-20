@@ -94,3 +94,37 @@ def test_generic_wafw00f_names_no_vendor_end_to_end():
     assert res["device_class"] == "unknown"        # no row matched 'generic'
     assert res["vendor_product"] == {}
     assert res["vendor_product_confidence"] == "unknown"
+
+
+# ── Phase D (4.7 Q5): fwbbot_check corroboration gate + the confirm payoff ────
+def test_fwbbot_signal_requires_corroboration():
+    # 4.7 Q5 ANCHOR: the ONLY thing that may enable the fwbbot_check signal is a
+    # CORROBORATED probe (redirect-to-/fwbbot_check). If this gate ever loosens
+    # ("we saw the path, just not as redirect, count it"), CI fails HERE. This test
+    # is the tripwire on the fabrication class (4.7 Q4/Q7).
+    assert r._fwbbot_corroborated({"observed": True, "corroborated": True}) is True
+    assert r._fwbbot_corroborated({"observed": True, "corroborated": False}) is False   # path-mention / banned
+    assert r._fwbbot_corroborated({"observed": True, "corroborated": None}) is False    # dry-run (fired nothing)
+    assert r._fwbbot_corroborated({"observed": False, "corroborated": False}) is False  # no-challenge
+    assert r._fwbbot_corroborated({"corroborated": 1}) is False   # truthy non-bool must NOT slip the gate
+    assert r._fwbbot_corroborated(None) is False
+    assert r._fwbbot_corroborated("nope") is False
+
+
+def test_corroborated_fwbbot_fires_challenge_row():
+    # emitted fwbbot_check observation lights up the (formerly dormant) challenge row.
+    fps, th = load_fingerprints(), load_thresholds()
+    res = classify({"fwbbot_check": True}, fps, th)
+    assert res["vendor_product"].get("vendor") == "Fortinet"
+    # single vendor_identifying HIGH tell -> vendor bar 'suspected' (needs a 2nd tell).
+    assert res["vendor_product_confidence"] == "suspected"
+
+
+def test_cookiesession1_plus_fwbbot_confirms_fortiweb():
+    # THE Phase D payoff: two INDEPENDENT vendor_identifying FortiWeb tells — passive
+    # cookiesession1 + active /fwbbot_check challenge — promote the vendor bar to
+    # CONFIRMED. This is the gen-4 outcome we want on ccc.
+    fps, th = load_fingerprints(), load_thresholds()
+    res = classify({"set_cookie_names": ["cookiesession1"], "fwbbot_check": True}, fps, th)
+    assert res["vendor_product"].get("vendor") == "Fortinet"
+    assert res["vendor_product_confidence"] == "confirmed"
