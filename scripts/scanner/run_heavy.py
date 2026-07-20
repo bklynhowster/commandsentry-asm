@@ -903,19 +903,37 @@ def _extract_set_cookie_names(header_obj) -> list:
     return names
 
 
+# Cloud-edge / CDN marker headers captured as VALUE-FREE presence (4.7 cloud-edge Q6).
+# NAME-only: the fact that the header is present is the vendor tell; the value is not
+# persisted (lean artifact, no arbitrary-value leakage). `server` + `via` keep their
+# values because that's where GFE / "via: 1.1 google" / AkamaiGHost name themselves.
+_EDGE_MARKER_HEADERS = frozenset({
+    "cf-ray", "cf-cache-status",          # Cloudflare (cf- prefix — missed by the x- catch-all)
+    "x-amz-cf-id",                        # AWS CloudFront
+    "x-azure-ref", "x-azure-fdid",        # Azure Front Door
+    "x-served-by", "x-timer",             # Fastly
+    "x-akamai-transformed", "x-akamai-request-id",  # Akamai
+    "x-goog-generation",                  # Google (GCS/edge)
+    "x-cache", "age", "cache-control",    # caching evidence -> CDN vs LB tie-break (Q2)
+})
+
+
 def _vendor_header_subset(header_obj) -> dict:
-    """Small, value-free header view for vendor fingerprinting: the Server value
-    (truncated) + presence booleans for via / x-* headers. Keeps the artifact
-    lean and avoids persisting arbitrary response-header values."""
+    """Small, value-free header view for vendor fingerprinting (4.7 cloud-edge Q1/Q6):
+    the Server + Via VALUES (the edge names itself there — GFE, 'via: 1.1 google',
+    AkamaiGHost) + PRESENCE booleans for a curated set of cloud-edge / CDN marker headers
+    (cf-ray, x-amz-cf-id, x-azure-ref, x-served-by, ... + caching headers for the CDN
+    tie-break) and any other x-* header. Marker values are NOT persisted — name-presence
+    is the tell — keeping the artifact lean and avoiding arbitrary-value leakage."""
     if not isinstance(header_obj, dict):
         return {}
     keep: dict = {}
     for k, v in header_obj.items():
         lk = k.lower()
         val = v[0] if isinstance(v, list) and v else v
-        if lk == "server":
-            keep["server"] = str(val)[:80]
-        elif lk == "via" or lk == "x-powered-by" or lk.startswith("x-"):
+        if lk in ("server", "via"):
+            keep[lk] = str(val)[:80]
+        elif lk in _EDGE_MARKER_HEADERS or lk == "x-powered-by" or lk.startswith("x-"):
             keep[lk] = True
     return keep
 

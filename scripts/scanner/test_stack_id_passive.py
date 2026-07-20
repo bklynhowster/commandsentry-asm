@@ -43,10 +43,14 @@ def test_set_cookie_names_raw_header_block():
 def test_vendor_header_subset_server_value_plus_presence():
     hh = h._vendor_header_subset(
         {"Server": ["Microsoft-IIS/10.0"], "X-Powered-By": "ASP.NET",
-         "Via": "1.1 google", "Content-Type": "text/html"})
+         "Via": "1.1 google", "Content-Type": "text/html",
+         "CF-Ray": "abc123-SJC", "X-Amz-Cf-Id": "opaque", "Cache-Control": "max-age=0"})
     assert hh["server"] == "Microsoft-IIS/10.0"
-    assert hh["x-powered-by"] is True and hh["via"] is True      # presence-only
-    assert "content-type" not in hh                              # non-vendor header dropped
+    assert hh["via"] == "1.1 google"                             # 4.7 cloud-edge: Via VALUE kept (Google edge tell)
+    assert hh["x-powered-by"] is True                           # generic x- header -> presence-only
+    assert hh["cf-ray"] is True and hh["x-amz-cf-id"] is True    # cloud-edge markers captured (value-free presence)
+    assert hh["cache-control"] is True                          # caching evidence -> CDN tie-break
+    assert "content-type" not in hh                             # non-vendor header still dropped
 
 
 def test_all_parsers_none_safe():

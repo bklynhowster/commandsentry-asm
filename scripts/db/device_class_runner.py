@@ -345,14 +345,34 @@ def _cloud_fallback(cur, asset_id: str, cloud_reg, fresh_days: int) -> dict | No
             "evidence": ev, "vendor_product": {"cloud_provider": cr.get("cloud_provider")}}
 
 
+def _merge_cloud_provider(fp: dict, cloud: dict | None) -> None:
+    """4.7 cloud-edge Q3: fold the hosting cloud_provider into a WINNING fingerprint's
+    vendor_product so the display can COMPOSE 'Fronted by <edge> · on <cloud>'. Hosting is
+    a persistent attribute, NOT a fallback — a named edge must not erase where the asset
+    runs. device_class + the two-bar confidences are untouched: cloud_provider is derived
+    from ASN/CNAME (inferred), never a vendor-identifying signal, so it never enters the
+    tally — it rides the existing vendor_product JSON (no schema change)."""
+    if not cloud:
+        return
+    cp = (cloud.get("vendor_product") or {}).get("cloud_provider")
+    vp = fp.get("vendor_product")
+    if cp and isinstance(vp, dict) and not vp.get("cloud_provider"):
+        vp["cloud_provider"] = cp
+
+
 def classify_asset(cur, a: dict, fps, th, fresh_days, nuclei_re, cloud_reg) -> tuple[dict, bool]:
-    """(result, from_cloud). F3: fingerprint FIRST — any non-unknown result (confirmed
-    OR suspected) wins and blocks the cloud fallback. Cloud fallback (F1/F2/F4) only
-    when fingerprints are unknown. NOTE: assets.is_cloud_endpoint is a rotating-pool
-    churn flag (D6-F5), NOT a topology signal — cloud topology keys on cloud_provider,
-    re-derived from surface_data here (F1)."""
+    """(result, from_cloud). F3: fingerprint FIRST — any non-unknown result (confirmed OR
+    suspected) wins the CLASS and blocks the cloud fallback from BECOMING the class. But
+    cloud_provider (hosting) is now derived ALWAYS and composed onto a winning fingerprint
+    (4.7 cloud-edge Q3): edge and hosting are different, often co-true facts — 'Fronted by
+    Google Cloud CDN · on Google Cloud'. The cloud fallback still BECOMES the result only
+    when fingerprints are unknown. NOTE: assets.is_cloud_endpoint is a rotating-pool churn
+    flag (D6-F5), NOT a topology signal — cloud topology keys on cloud_provider (F1)."""
     fp = classify(gather_observations(cur, a["asset_id"], fresh_days, nuclei_re), fps, th)
-    cloud = _cloud_fallback(cur, a["asset_id"], cloud_reg, fresh_days) if fp["device_class"] == "unknown" else None
+    cloud = _cloud_fallback(cur, a["asset_id"], cloud_reg, fresh_days)
+    if fp["device_class"] != "unknown":
+        _merge_cloud_provider(fp, cloud)
+        return (fp, False)
     return _resolve(fp, cloud)
 
 

@@ -128,3 +128,34 @@ def test_cookiesession1_plus_fwbbot_confirms_fortiweb():
     res = classify({"set_cookie_names": ["cookiesession1"], "fwbbot_check": True}, fps, th)
     assert res["vendor_product"].get("vendor") == "Fortinet"
     assert res["vendor_product_confidence"] == "confirmed"
+
+
+# ── Cloud-native edges (4.7 cloud-edge phase — safe-alone header tells) ───────
+def test_cloud_edge_header_tells_fire_at_suspected():
+    fps, th = load_fingerprints(), load_thresholds()
+    cases = [
+        ("server: Google Frontend", "adc_lb", "Google"),
+        ("cf-ray: True", "cdn", "Cloudflare"),
+        ("x-amz-cf-id: True", "cdn", "Amazon"),
+        ("x-azure-ref: True", "cdn", "Microsoft"),
+    ]
+    for hdr, klass, vendor in cases:
+        res = classify({"http_headers": hdr}, fps, th)
+        assert res["device_class"] == klass, (hdr, res["device_class"])
+        assert (res["vendor_product"] or {}).get("vendor") == vendor, hdr
+        # one self-naming header = one tell = suspected (4.7 Q4); never confirmed off a single tell.
+        assert res["vendor_product_confidence"] == "suspected", hdr
+
+
+def test_cloud_edge_no_false_fire_on_generic_server():
+    # a bare origin Server string must NOT name a cloud edge — the empirical bar.
+    fps, th = load_fingerprints(), load_thresholds()
+    res = classify({"http_headers": "server: nginx"}, fps, th)
+    assert res["device_class"] == "unknown" and res["vendor_product"] == {}
+
+
+def test_cloud_edge_rows_are_r4_cited():
+    # http_headers is now R4-enforced: every cloud-edge row must map to an
+    # artifact_signatures.yaml citation, or the classifier refuses to start.
+    from derive_device_class import validate_artifact_citations
+    assert validate_artifact_citations(load_fingerprints()) == []

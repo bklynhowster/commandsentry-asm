@@ -216,9 +216,51 @@ fingerprints:
     evidence_class: vendor_identifying
     vendor_product: {vendor: Automattic}
 
+  # ── Cloud-native edges (4.7 cloud-edge phase — SAFE-ALONE header tells) ────
+  # Each edge NAMES ITSELF in its own response header (vendor_identifying — same
+  # class as cookiesession1 / fwbbot_check: the appliance self-identifies, we
+  # observed it directly, it's citable to a specific HTTP response header). ONE
+  # header = 1 high = 'suspected' (4.7 Q4: a Server/marker header is theoretically
+  # spoofable, so a SECOND independent header tell is required for 'confirmed' —
+  # deferred with AND-matching). These assert an edge / load-balancer / CDN ONLY,
+  # NOT that a cloud WAF (Cloud Armor / Azure Front Door WAF / AWS WAF) is
+  # enforcing (4.7 Q5 — cloud-WAF detection is a separate later active-probe pass;
+  # never render these as "Protected by"). adc_lb -> "Behind <vendor>"; cdn ->
+  # "Fronted by <vendor>". cloud_provider (hosting) composes ALONGSIDE in the
+  # portal — the edge does not erase where the asset runs (4.7 Q3). Tech-detection
+  # (Wappalyzer-style "Cloud CDN detected") is deliberately NOT a source here —
+  # that's a tool's inference, not the asset self-identifying (4.7 Q1). Every row
+  # cited in artifact_signatures.yaml (http_headers is now R4-enforced).
+  - signal: google_frontend_server_header
+    observation: http_headers
+    match_substrings: ["google frontend"]                 # Server: Google Frontend — GFE edge/LB tier
+    device_class: adc_lb
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Google, product: Frontend}   # display: "Behind Google Frontend"
+  - signal: cloudflare_cf_ray_header
+    observation: http_headers
+    match_substrings: ["cf-ray"]                           # CF-RAY — Cloudflare per-request ray id
+    device_class: cdn
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Cloudflare}                   # display: "Fronted by Cloudflare"
+  - signal: cloudfront_amz_cf_id_header
+    observation: http_headers
+    match_substrings: ["x-amz-cf-id"]                      # X-Amz-Cf-Id — AWS CloudFront edge request id
+    device_class: cdn
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Amazon, product: CloudFront}
+  - signal: azure_frontdoor_ref_header
+    observation: http_headers
+    match_substrings: ["x-azure-ref"]                      # X-Azure-Ref — Azure Front Door reference id
+    device_class: cdn
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Microsoft, product: Azure Front Door}
+
   # ── Slots to characterize as the fleet is swept ──────────────────────────
-  # Cloudflare acts as CDN (-> cloud_endpoint via the cloud classifier) AND a WAF;
-  # add a waf-role row here only to distinguish its WAF from its CDN. Likewise
+  # DEFERRED (need a citation and/or AND-matching, added when first observed):
+  # Akamai (Server: AkamaiGHost — needs a primary-doc quote); the AND-condition
+  # tells (Cloudflare Server-alone, AWS ALB `awselb`, Fastly, and the Google
+  # Cloud-CDN-vs-Load-Balancer caching tie-break) need multi-header AND-matching.
   # F5 BIG-IP (adc_lb), Palo Alto (edge_firewall), Imperva (waf) as they appear.
 
 # ── Nuclei Fortinet template allowlist (4.7 E5) ───────────────────────────

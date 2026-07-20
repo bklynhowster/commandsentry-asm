@@ -134,6 +134,11 @@ def load_artifact_signatures(path: Path = ARTIFACT_SIGNATURES_PATH) -> dict:
 _ARTIFACT_CITED_OBS = {
     "set_cookie_names": "match_values",
     "fwbbot_check": "observation",
+    # 4.7 cloud-edge: a vendor-identifying http_headers row attributes a vendor from a
+    # named header token (each match_substring) — that mapping needs a cited entry. The
+    # existing Fortinet product_http_header row uses match_regex (no match_substrings), so
+    # it derives no artifact names and is not checked; only substring rows are enforced.
+    "http_headers": "match_values",
 }
 
 

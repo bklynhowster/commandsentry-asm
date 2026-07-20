@@ -68,6 +68,57 @@ artifact_signatures:
       wafw00f_source_url: https://raw.githubusercontent.com/EnableSecurity/wafw00f/master/wafw00f/plugins/fortiweb.py
       verified_signatures: "^FORTIWAFSID= cookie + .fgd_icon + 'Web Page Blocked' template — NO /fwbbot_check reference"
       verified_at: 2026-07-20
+
+  # ── Cloud-native edges (4.7 cloud-edge phase) ─────────────────────────────
+  # Each edge NAMES ITSELF in a response header it sets; the artifact is that
+  # header token (presence = the tell; values not persisted, 4.7 Q6). One header
+  # = 'suspected' (4.7 Q4). vendor_primary docs.
+  - name: google frontend
+    artifact_type: response_header_token
+    vendor: Google
+    product: Google Frontend
+    vendor_unique: true
+    # "Server: Google Frontend" = Google Front End (GFE), Google's own edge tier that
+    # terminates client TLS in front of GCP-hosted services (adc_lb).
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://cloud.google.com/docs/security/infrastructure/design
+      quote: "an infrastructure service called the Google Front End (GFE). The GFE ensures that all TLS connections are terminated with correct certificates"
+      cited_at: 2026-07-20
+      quote_provenance: "Google infrastructure security design overview (cloud.google.com/docs/security/infrastructure/design), fetched verbatim 2026-07-20"
+  - name: cf-ray
+    artifact_type: response_header_token
+    vendor: Cloudflare
+    product: Cloudflare
+    vendor_unique: true
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://developers.cloudflare.com/fundamentals/reference/cloudflare-ray-id/
+      quote: "A Cloudflare Ray ID is an identifier given to every request that goes through Cloudflare"
+      cited_at: 2026-07-20
+      quote_provenance: "Cloudflare Fundamentals — Cloudflare Ray ID reference; surfaced via web search 2026-07-20"
+  - name: x-amz-cf-id
+    artifact_type: response_header_token
+    vendor: Amazon
+    product: CloudFront
+    vendor_unique: true
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/RequestAndResponseBehaviorCustomOrigin.html
+      quote: "The X-Amz-Cf-Id header contains a value with the CloudFront unique identifier for the request, which you can use when troubleshooting issues with Support"
+      cited_at: 2026-07-20
+      quote_provenance: "Amazon CloudFront Developer Guide — request/response behavior for custom origins; surfaced via web search 2026-07-20"
+  - name: x-azure-ref
+    artifact_type: response_header_token
+    vendor: Microsoft
+    product: Azure Front Door
+    vendor_unique: true
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://learn.microsoft.com/en-us/azure/frontdoor/front-door-http-headers-protocol
+      quote: "Every Front Door request carries an X-Azure-Ref header"
+      cited_at: 2026-07-20
+      quote_provenance: "Microsoft Learn — Azure Front Door HTTP headers / Reference String troubleshooting; surfaced via web search 2026-07-20"
       recheck: monthly
 
   # ── FortiWeb: FORTIWAFSID Set-Cookie (research-tool source) — READY, NOT wired ─
