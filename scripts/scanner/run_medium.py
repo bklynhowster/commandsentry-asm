@@ -1732,6 +1732,32 @@ def detect_waf(ctx: ScanContext) -> None:
     log("no WAF detected by wafw00f")
 
 
+def persist_stack_id_wafw00f(ctx: ScanContext) -> None:
+    """E1 (Obsidian 146): persist the ALREADY-PARSED wafw00f verdict as a
+    structured `stack_id_wafw00f` artifact so P1 reads a clean field instead of
+    re-parsing wafw00f's raw text — the parse lives once, in detect_waf(). The raw
+    wafw00f output is already captured separately as the `wafw00f` artifact; this
+    is the structured verdict.
+
+    PERSIST-ONLY: no classifier wiring (that is P1, with the soak reset), no
+    findings, and NOT registered as a tool — so it cannot perturb close_out's
+    tool-completeness invariant or the autocloser. Additive / no-reset.
+
+    Always emitted, including the negative case (detected=False, kind=None) —
+    "wafw00f ran and found no WAF" is itself a signal. evidence_class is applied
+    downstream (P1): named verdicts (fortiweb, cloudflare, ...) are
+    vendor-identifying; 'generic' is presence-only. Here we only record what
+    wafw00f concluded."""
+    verdict = {
+        "schema": 1,
+        "wafw00f_detected": bool(ctx.waf_detected),
+        "wafw00f_kind": ctx.waf_kind,   # 'fortiweb'/'cloudflare'/'generic'/None
+    }
+    ctx.artifacts.append(("stack_id_wafw00f", "json", json.dumps(verdict)))
+    log(f"  stack_id_wafw00f (persist-only): detected={verdict['wafw00f_detected']} "
+        f"kind={verdict['wafw00f_kind']!r}")
+
+
 # ─── Tech stack detection (P2.5) ───────────────────────────────────────
 def detect_tech_stack(ctx: ScanContext) -> None:
     """Run httpx -td against the target, populate ctx.tech_stack.
@@ -3986,6 +4012,9 @@ def run(descriptor_path: str, dsn: str) -> int:
         # ─── Phase 1: WAF detection ─────────────────────────────────
         log("→ detect_waf")
         detect_waf(ctx)
+        # E1 (Obsidian 146): persist the parsed wafw00f verdict as a structured
+        # stack_id_wafw00f artifact for P1. Persist-only, additive, no reset.
+        persist_stack_id_wafw00f(ctx)
         log("→ detect_tech_stack")
         detect_tech_stack(ctx)
 
