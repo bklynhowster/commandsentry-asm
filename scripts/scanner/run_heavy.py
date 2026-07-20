@@ -841,8 +841,15 @@ def run_httpx_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
 #
 # NOT here (deliberate scope): JARM (needs pyjarm baked into the scanner image —
 # 4.7 ruling 8, phase P0b) and the wafw00f verdict (runs in run_medium, not heavy
-# — rides with E1). httpx -irh field name is validated on the first real runner
-# scan; until then the non-fatal try/except just yields cert-only signals.
+# — rides with E1). Header/cookie collection uses a browser-UA `curl -sSI` (the
+# method proven to capture cookiesession1) after httpx's default GET returned
+# cookies=0 on WAF'd assets in P0 validation (heavy #1061, 2026-07-19).
+
+# Browser UA so WAF'd origins serve the same Set-Cookie a real browser gets
+# (validated: cookiesession1 only surfaced under a browser-like request).
+_BROWSER_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+
 
 def _parse_cert_dn(dn: str) -> dict:
     """Best-effort {o, cn} from an openssl DN string. No regex (run_heavy has no
@@ -913,6 +920,31 @@ def _vendor_header_subset(header_obj) -> dict:
     return keep
 
 
+def _parse_raw_headers(text: str) -> dict:
+    """Raw HTTP header block (curl -sSI output) -> {lower-name: value | [values]}.
+    Resets on each `HTTP/` status line so we keep the LAST response block; repeated
+    same-name headers (Set-Cookie) collect into a list."""
+    hdrs: dict = {}
+    for line in text.splitlines():
+        line = line.rstrip("\r")
+        if line.upper().startswith("HTTP/"):
+            hdrs = {}
+            continue
+        if ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        k = k.strip().lower()
+        v = v.strip()
+        if not k:
+            continue
+        if k in hdrs:
+            prev = hdrs[k]
+            hdrs[k] = (prev if isinstance(prev, list) else [prev]) + [v]
+        else:
+            hdrs[k] = v
+    return hdrs
+
+
 def run_stack_id_passive_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     """P0 passive stack-id collector (Obsidian 146). ADDITIVE + NON-FATAL; never
     aborts the tier. Appends one `stack_id_passive` artifact; touches no tool
@@ -933,23 +965,23 @@ def run_stack_id_passive_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
         if cert:
             signals["cert"] = cert
 
-    # Response headers + Set-Cookie NAMES — httpx with response headers (-irh)
+    # Response headers + Set-Cookie NAMES — curl HEAD with a browser UA.
+    # P0-validation finding (heavy #1061, 2026-07-19): httpx's default GET returned
+    # cookies=0 on WAF'd commandcommcentral.com even though cookiesession1 IS served
+    # — a browser-UA `curl -sSI` is the method that provably captured it, and its
+    # raw-header output is a format we fully control (vs guessing httpx's -irh JSON).
     rc2, out2, _ = run_cmd(
-        ["httpx", "-u", f"https://{ctx.hostname}", "-irh", "-silent", "-json", "-timeout", "15"],
-        timeout=45,
+        ["curl", "-sSIk", "-A", _BROWSER_UA, "--max-time", "15", f"https://{ctx.hostname}/"],
+        timeout=25,
     )
     if rc2 == 0 and out2.strip():
-        try:
-            rec = json.loads(out2.strip().splitlines()[0])
-            hdrs = rec.get("header") or rec.get("response_header") or rec.get("raw_header") or {}
-            names = _extract_set_cookie_names(hdrs)
-            if names:
-                signals["set_cookie_names"] = names
-            vh = _vendor_header_subset(hdrs)
-            if vh:
-                signals["headers"] = vh
-        except (ValueError, IndexError):
-            pass
+        hdrs = _parse_raw_headers(out2)
+        names = _extract_set_cookie_names(hdrs)
+        if names:
+            signals["set_cookie_names"] = names
+        vh = _vendor_header_subset(hdrs)
+        if vh:
+            signals["headers"] = vh
 
     ctx.artifacts.append(("stack_id_passive", "json", json.dumps(signals)))
     got = [k for k in ("cert", "set_cookie_names", "headers") if k in signals]

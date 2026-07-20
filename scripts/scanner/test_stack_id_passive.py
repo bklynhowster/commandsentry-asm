@@ -54,3 +54,40 @@ def test_all_parsers_none_safe():
     assert h._extract_set_cookie_names({}) == []
     assert h._extract_set_cookie_names(None) == []
     assert h._vendor_header_subset(None) == {}
+
+
+# --- curl -sSI raw-header path (the P0-validation fix, heavy #1061) ------------
+# Fixture mirrors the real commandcommcentral.com HEAD response we captured: a
+# blank Server (WAF strip), several Set-Cookie incl. the FortiWeb cookiesession1.
+_CURL_HEAD = (
+    "HTTP/1.1 200 OK\r\n"
+    "Cache-Control: no-cache,no-store\r\n"
+    "Content-Type: text/html; charset=utf-8\r\n"
+    "Server: \r\n"
+    "Set-Cookie: .AspNetCore.Antiforgery.1vbe=CfDJ8x; path=/; secure; httponly\r\n"
+    "Set-Cookie: .SCI.Session=CfDJ8y; path=/; secure; httponly\r\n"
+    "X-Frame-Options: DENY\r\n"
+    "Set-Cookie: CCC=rs2|alwil; path=/; HttpOnly; Secure\r\n"
+    "Set-Cookie: cookiesession1=678A3E0DA665D8473E81B59D15A638BF;Path=/;Secure;HttpOnly\r\n"
+)
+
+
+def test_parse_raw_headers_collects_multi_set_cookie():
+    hd = h._parse_raw_headers(_CURL_HEAD)
+    assert isinstance(hd["set-cookie"], list) and len(hd["set-cookie"]) == 4
+    assert hd.get("x-frame-options") == "DENY"
+
+
+def test_curl_path_captures_fortiweb_cookie_name():
+    # The whole point of the fix: cookiesession1 (FortiWeb) must now be captured
+    # (heavy #1061 got cookies=0 via httpx; curl -sSI is the proven method).
+    names = h._extract_set_cookie_names(h._parse_raw_headers(_CURL_HEAD))
+    assert "cookiesession1" in names
+    assert names == [".AspNetCore.Antiforgery.1vbe", ".SCI.Session", "CCC", "cookiesession1"]
+    assert not any(("678A3E" in n or "CfDJ8" in n) for n in names)   # names only, no values
+
+
+def test_parse_raw_headers_keeps_last_response_block():
+    hd = h._parse_raw_headers(
+        "HTTP/1.1 301 Moved\r\nLocation: https://x/\r\n\r\nHTTP/1.1 200 OK\r\nServer: IIS\r\n")
+    assert hd.get("server") == "IIS" and "location" not in hd
