@@ -561,6 +561,8 @@ jobs:
           # assets.active_probe_authorized. Cron/workflow_run triggers carry no input
           # (empty -> 'false' -> dry-run), so scheduled scans are unchanged.
           ACTIVE_PROBE_LIVE: ${{ github.event.inputs.active_probe_live || 'false' }}
+        run: |
+          python scripts/scanner/run_heavy.py /tmp/scan_descriptor.json
 
       # ─── Tear down VPN (always, if we brought it up) ───────────────
       # Runs even when the scan failed so we never leave a connection
