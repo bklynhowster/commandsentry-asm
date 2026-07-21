@@ -160,7 +160,31 @@ FFUF_WORDS_PER_CHUNK = 25
 # Mid-scan ban-detection / rewind tuning.
 REWIND_SECONDS = 30             # rewind window for soft-ban paranoia
 MAX_REQUESTS_TOTAL = 8000        # hard ceiling across all tools
-BAN_HTTP_CODES = {403, 429, 503, 521, 522, 523}  # WAF/CDN ban signals
+BAN_HTTP_CODES = {403, 429, 503, 521, 522, 523}  # WAF/CDN ban signals (status-only)
+
+# ─── Cloud Armor block detection (2026-07-06) ───────────────────────────
+# GCP Cloud Armor blocks with HTTP 400 + a generic Google body, NOT 403 — so a
+# status-only set can't see it. Verified on prosalud: <script>/<img onerror>/
+# single-encoded traversal all came back 400 (not 403). A bare 400 is a normal
+# bad-request, so the tell is 400 AND the body signature TOGETHER — never status
+# alone (that would false-positive on legit malformed requests). This is the
+# detection primitive the P2 no-VPN gate + WAF-block accounting consume; pure.
+ARMOR_BLOCK_SIGNATURE = "your client has issued a malformed or illegal request"
+
+
+def is_armor_block(status_code: int, body: str | None) -> bool:
+    """True iff a response is a Google Cloud Armor block: HTTP 400 AND the Google
+    'malformed or illegal request' body. Status alone is NOT enough — Armor's 400
+    is indistinguishable from a legit 400 without the body. Pure — tested."""
+    return status_code == 400 and ARMOR_BLOCK_SIGNATURE in (body or "").lower()
+
+
+def response_is_waf_blocked(status_code: int, body: str | None = None) -> bool:
+    """Canonical 'did a WAF block this response?' predicate. True for the classic
+    ban codes (BAN_HTTP_CODES) OR a Cloud Armor 400+signature block. Body is
+    optional — omit it and only the status-code signals fire (Armor cannot be
+    detected without the body, by design). Pure — tested."""
+    return status_code in BAN_HTTP_CODES or is_armor_block(status_code, body)
 
 
 # ─── ADR-001 — Validated-SHA key (convergent edition) ───────────────────
@@ -620,6 +644,12 @@ class ScanContext:
     # (a real signal that survives a blanket-deny host). None = no catch-all
     # status detected → suppression is a no-op, per-path emission unchanged.
     ffuf_catchall_status: int | None = None
+    # Size/hash refinement (edit #2, 2026-07-06): the STABLE body size of the
+    # catch-all soft-404 (both random calibration probes agreed). When set,
+    # status-suppression also requires the result's body size to match — so a
+    # real same-status/different-size route survives. None = size can't
+    # discriminate (path-variable body) → status-only suppression, no regression.
+    ffuf_catchall_size: int | None = None
     # Count of per-path ffuf findings suppressed because their status matched
     # ffuf_catchall_status. Drives the collapsed status summary finding at
     # end of run_ffuf_chunked.
@@ -1332,7 +1362,8 @@ def should_suppress_ffuf_redirect(
 
 
 def should_suppress_ffuf_status(
-    status: int, baseline: int | None, redirect_to: str
+    status: int, baseline: int | None, redirect_to: str,
+    result_size: int | None = None, baseline_size: int | None = None,
 ) -> bool:
     """S3 Part 1 (2026-06-18) suppression predicate. True iff this ffuf
     result's status matches the calibrated catch-all status EXACTLY and the
@@ -1358,7 +1389,16 @@ def should_suppress_ffuf_status(
         return False
     if redirect_to:
         return False
-    return status == baseline
+    if status != baseline:
+        return False
+    # Size refinement (edit #2, 2026-07-06): the status matches the catch-all.
+    # With a STABLE baseline body size, require the result's size to match too —
+    # else it's a real same-status/different-size route (e.g. /health 200/8B vs
+    # the 200/870B soft-404) and MUST emit. No baseline size (path-variable body)
+    # → status-only, unchanged from pre-edit behavior. Still EXACT-equality.
+    if baseline_size is not None:
+        return result_size == baseline_size
+    return True
 
 
 def emit_ffuf_catchall_status_summary(ctx: ScanContext) -> None:
@@ -1420,6 +1460,13 @@ def emit_ffuf_catchall_summary(ctx: ScanContext) -> None:
     """
     if ctx.ffuf_catchall_count <= 0 or not ctx.ffuf_catchall_redirect:
         return
+    # Human-readable form of the baseline: the path-preserving host-rewrite
+    # case is stored as "HOSTREWRITE:<base>"; show "<base>/* (host-preserving
+    # redirect)" instead of leaking the internal marker into a finding.
+    if ctx.ffuf_catchall_redirect.startswith("HOSTREWRITE:"):
+        redir_display = ctx.ffuf_catchall_redirect[len("HOSTREWRITE:"):] + "/* (host-preserving redirect)"
+    else:
+        redir_display = ctx.ffuf_catchall_redirect
     # Slug derived from the redirect URL for stable finding_id semantics
     # — same finding re-emerges across re-scans with the same redirect,
     # so the row matches on re-detect rather than fragmenting into new
@@ -1430,7 +1477,7 @@ def emit_ffuf_catchall_summary(ctx: ScanContext) -> None:
     ctx.findings.append(MediumFinding(
         check_name=f"ffuf-catchall-redirect-{slug}",
         title=(
-            f"Catch-all redirect → {ctx.ffuf_catchall_redirect} "
+            f"Catch-all redirect → {redir_display} "
             f"({ctx.ffuf_catchall_count} paths)"
         ),
         severity="INFO",
@@ -1438,9 +1485,9 @@ def emit_ffuf_catchall_summary(ctx: ScanContext) -> None:
         description=(
             f"{ctx.ffuf_catchall_count} wordlist paths on "
             f"{ctx.hostname} uniformly redirect to "
-            f"{ctx.ffuf_catchall_redirect} regardless of existence — "
+            f"{redir_display} regardless of existence — "
             f"directory discovery is not meaningful on this host "
-            f"(likely a self-hosted login/auth gate). Per-path "
+            f"(e.g. an apex→www or login/auth redirect). Per-path "
             f"results suppressed as non-discriminating. Distinct "
             f"redirects and 200/204/401/403 responses still emit "
             f"individually."
@@ -1448,18 +1495,62 @@ def emit_ffuf_catchall_summary(ctx: ScanContext) -> None:
         tags=["ffuf", "directory", "discovery", "catchall_redirect"],
         raw_excerpt=(
             f"Calibration probe: random path → "
-            f"{ctx.ffuf_catchall_redirect}\n"
+            f"{redir_display}\n"
             f"Suppressed per-path matches: {ctx.ffuf_catchall_count}"
         ),
     ))
 
 
-def _probe_calibration_path(ctx: ScanContext) -> tuple[int, str | None]:
-    """Single calibration probe — fetch a known-random path and return
-    (status_code, redirect_location). Helper for detect_ffuf_catchall.
+def _normalize_hostrewrite_redirect(redirect_to: str | None, path: str) -> str | None:
+    """Collapse a path-preserving host-rewrite redirect to a stable baseline.
 
-    Returns (0, None) on any failure (rc != 0, no stdout, JSON parse error)
-    so callers can treat failure as "no catch-all detected" without raising.
+    Apex→www (and scheme/host-only) redirects preserve the requested path:
+    /<path> -> https://www.host/<path>. Each random calibration path then
+    yields a DIFFERENT Location, so detect_ffuf_catchall's redirect1==redirect2
+    check never fires and every ffuf path leaks a false "Path exists (301)"
+    finding (95 of them on prodexlabs.com, 2026-07-04). When the Location just
+    rewrites the host and keeps our path, fold it to "HOSTREWRITE:<base>".
+    Applied identically to the probe baseline AND each emitted finding, so the
+    EXACT-equality contract in should_suppress_ffuf_redirect is preserved —
+    both sides normalize to the same marker. Non-path-preserving redirects
+    (a fixed target for every path) are untouched.
+    """
+    if not redirect_to or not path:
+        return redirect_to
+    suffix = "/" + path.lstrip("/")
+    if redirect_to.endswith(suffix):
+        return "HOSTREWRITE:" + redirect_to[: -len(suffix)]
+    return redirect_to
+
+
+# 4.7 hole 5 / ruling 3 (2026-07-05): retry the calibration probe so a single
+# transient httpx miss (common through the VPN under load) does not silently
+# disable catch-all detection — that silent fallthrough IS the prosalud/uat bug.
+CALIB_PROBE_ATTEMPTS = 3
+CALIB_PROBE_DELAY_S = 2
+
+
+def _probe_calibration_path(ctx: ScanContext) -> tuple[int, str | None, int | None]:
+    """Calibration probe WITH retry (CALIB_PROBE_ATTEMPTS x CALIB_PROBE_DELAY_S).
+    Returns the first probe that lands (status != 0) as (status, loc, body_size),
+    or (0, None, None) only after ALL retries fail — which detect_ffuf_catchall
+    treats as calibration FAILURE (fail-closed), never as 'no catch-all'."""
+    import time as _time
+    for attempt in range(CALIB_PROBE_ATTEMPTS):
+        status, loc, size = _probe_calibration_path_once(ctx)
+        if status != 0:
+            return status, loc, size
+        if attempt < CALIB_PROBE_ATTEMPTS - 1:
+            _time.sleep(CALIB_PROBE_DELAY_S)
+    return 0, None, None
+
+
+def _probe_calibration_path_once(ctx: ScanContext) -> tuple[int, str | None, int | None]:
+    """Single calibration probe — fetch a known-random path and return
+    (status_code, redirect_location, body_size). body_size (edit #2) enables
+    size/hash catch-all calibration. Helper for _probe_calibration_path.
+
+    Returns (0, None, None) on any failure (rc != 0, no stdout, JSON parse error).
     Same httpx invocation as the pre-S3 detect_ffuf_catchall_redirect.
     """
     import uuid as _uuid
@@ -1473,27 +1564,36 @@ def _probe_calibration_path(ctx: ScanContext) -> tuple[int, str | None]:
         timeout=15,
     )
     if rc != 0:
-        return 0, None
+        return 0, None, None
     line = stdout.strip().splitlines()[0] if stdout.strip() else ""
     if not line:
-        return 0, None
+        return 0, None, None
     try:
         data = json.loads(line)
     except Exception:
-        return 0, None
+        return 0, None, None
     status_code = int(data.get("status_code", 0) or 0)
+    # Body size for size/hash catch-all calibration (edit #2, 2026-07-06). httpx
+    # content_length = Content-Length bytes = ffuf's result "length" for a static
+    # page. <=0 (chunked / header absent) → None → suppression falls back to
+    # status-only, no regression.
+    _cl = data.get("content_length")
+    body_size = int(_cl) if isinstance(_cl, int) and _cl >= 0 else None
     # httpx field names for redirect Location vary slightly across versions.
     # Try the most likely candidates. "location" is the canonical Location
     # header (relative or absolute). "final_url" is set with -follow-redirects
     # (we don't use it, but defensive). Anything truthy wins.
     location = data.get("location") or data.get("final_url")
     location_str = str(location).strip() if location else None
-    return status_code, (location_str or None)
+    # Fold path-preserving host-rewrite redirects so two random probes agree.
+    if location_str and status_code in (301, 302, 307):
+        location_str = _normalize_hostrewrite_redirect(location_str, random_path)
+    return status_code, (location_str or None), body_size
 
 
 def detect_ffuf_catchall(
     ctx: ScanContext,
-) -> tuple[str | None, int | None]:
+) -> tuple[str | None, int | None, int | None, bool]:
     """S3 Part 1 (2026-06-18) ffuf catch-all calibration. Generalizes #33's
     redirect-only catch-all to also detect a uniform non-discriminating
     STATUS (403/401/200/etc) that ffuf would otherwise mint N findings for.
@@ -1519,21 +1619,26 @@ def detect_ffuf_catchall(
     or the trust-layer invariant. Calibration is auxiliary emit-time state;
     its success/failure has no bearing on scan_quality.
     """
-    status1, redirect1 = _probe_calibration_path(ctx)
+    # Third return element is calib_ok: False iff a probe exhausted its retries
+    # (status 0) — the caller FAILS CLOSED (skips ffuf) rather than treating it
+    # as "no catch-all" and emitting per-path (that silent fallthrough is Bug B,
+    # 4.7 hole 5). True = probes landed; classification below is trustworthy.
+    status1, redirect1, size1 = _probe_calibration_path(ctx)
     if status1 == 0:
-        return None, None
-    status2, redirect2 = _probe_calibration_path(ctx)
+        return None, None, None, False
+    status2, redirect2, size2 = _probe_calibration_path(ctx)
     if status2 == 0:
-        return None, None
+        return None, None, None, False
 
     # Redirect catch-all (#33 path): both probes 30x AND same Location.
+    # (Body size is irrelevant here — the Location is the discriminator.)
     if (
         status1 in (301, 302, 307)
         and status2 in (301, 302, 307)
         and redirect1
         and redirect1 == redirect2
     ):
-        return redirect1, None
+        return redirect1, None, None, True
 
     # Status catch-all (S3 Part 1): both probes same non-404 non-redirect
     # status. 404 is the expected response to a random path, so it indicates
@@ -1543,11 +1648,19 @@ def detect_ffuf_catchall(
         and status1 != 404
         and status1 not in (301, 302, 307)
     ):
-        return None, status1
+        # Size/hash refinement (edit #2, 2026-07-06): a STABLE baseline size
+        # exists only if BOTH random probes agree on body size (a static
+        # soft-404). If they differ (path-variable body), size can't
+        # discriminate → None → suppression falls back to status-only (no
+        # regression). A stable size lets a real same-status/different-size
+        # route (/health 200/8B vs the 200/870B soft-404) survive.
+        baseline_size = size1 if (size1 is not None and size1 == size2) else None
+        return None, status1, baseline_size, True
 
     # Otherwise: discrimination present (different responses across probes,
-    # or 404 = real not-found behavior). No catch-all.
-    return None, None
+    # or 404 = real not-found behavior). No catch-all — but calibration DID
+    # run cleanly, so calib_ok=True (do not fail-closed).
+    return None, None, None, True
 
 
 def detect_ffuf_catchall_redirect(ctx: ScanContext) -> str | None:
@@ -1555,7 +1668,7 @@ def detect_ffuf_catchall_redirect(ctx: ScanContext) -> str | None:
     Returns only the redirect Location, dropping the status component.
     Preserved for any external/test caller still using the old name.
     """
-    redirect, _ = detect_ffuf_catchall(ctx)
+    redirect, _, _, _ = detect_ffuf_catchall(ctx)
     return redirect
 
 
@@ -2870,7 +2983,11 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str],
         # but don't emit a per-path finding; the collapsed summary at
         # end-of-chunked-loop emits ONE INFO covering all of them.
         # EXACT-equality semantic is locked in should_suppress_ffuf_redirect.
-        if should_suppress_ffuf_redirect(redirect_to, ctx.ffuf_catchall_redirect):
+        redirect_to_norm = (
+            _normalize_hostrewrite_redirect(redirect_to, word)
+            if status in (301, 302, 307) else redirect_to
+        )
+        if should_suppress_ffuf_redirect(redirect_to_norm, ctx.ffuf_catchall_redirect):
             ctx.ffuf_catchall_count += 1
             continue
 
@@ -2883,7 +3000,8 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str],
         # (LOW for 403/401, INFO for 200/302). Locked in
         # should_suppress_ffuf_status.
         if should_suppress_ffuf_status(
-            status, ctx.ffuf_catchall_status, redirect_to
+            status, ctx.ffuf_catchall_status, redirect_to,
+            result_size=r.get("length"), baseline_size=ctx.ffuf_catchall_size,
         ):
             ctx.ffuf_catchall_status_count += 1
             continue
@@ -3000,9 +3118,22 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
     # 59ad6a13 regression (blanket -fc/-fs/-fr filter that hid real
     # /admin/swagger). Both suppression paths use EXACT-equality, never
     # blanket filtering — distinct statuses (real signal) always survive.
-    ctx.ffuf_catchall_redirect, ctx.ffuf_catchall_status = (
+    ctx.ffuf_catchall_redirect, ctx.ffuf_catchall_status, ctx.ffuf_catchall_size, _calib_ok = (
         detect_ffuf_catchall(ctx)
     )
+    if not _calib_ok:
+        # 4.7 hole 5 — calibration probes exhausted their retries (transient or
+        # dead target). FAIL CLOSED: skip ffuf entirely rather than emit per-path
+        # against an UNDETECTED catch-all (that is Bug B — up to 96 phantom
+        # findings/host). Mirror the auth_gated skip so set-equality holds.
+        log("  ⊘ skip ffuf (all chunks) — catch-all calibration probes failed "
+            "after retries (fail-closed, 4.7 hole 5); per-path emit would risk "
+            "phantom findings")
+        for i, words in enumerate(chunks):
+            chunk_name = f"ffuf[{len(words)}w]#{i+1}"
+            ctx.tools_run.append(chunk_name)
+            mark_tool_skipped(ctx, chunk_name, "catchall_calibration_failed")
+        return
     if ctx.ffuf_catchall_redirect:
         log(f"  ffuf catch-all calibration: host redirects random paths "
             f"→ {ctx.ffuf_catchall_redirect} (per-path matches will be "
