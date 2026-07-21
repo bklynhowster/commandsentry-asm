@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-07-21T14:21:36Z_9e4358b3",
-    "started_at": "2026-07-21T14:21:36Z",
-    "completed_at": "2026-07-21T14:24:21Z",
-    "duration_seconds": 165,
+    "id": "scan_2026-07-21T19:55:06Z_c439a005",
+    "started_at": "2026-07-21T19:55:06Z",
+    "completed_at": "2026-07-21T19:57:53Z",
+    "duration_seconds": 167,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -32,7 +32,7 @@
     "live_subdomain_count": 2,
     "host_count": 2,
     "service_count": 8,
-    "newest_cert_expiry_days": 81,
+    "newest_cert_expiry_days": 80,
     "top_hosting_org": "Automattic, Inc",
     "platforms": [
       "WordPress on wp.cloud (Pressable)"
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-07-21T14:24:21Z",
-      "last_seen": "2026-07-21T14:24:21Z",
+      "first_discovered": "2026-07-21T19:57:53Z",
+      "last_seen": "2026-07-21T19:57:53Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -154,7 +154,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 81
+            "days_to_expiry": 80
           }
         },
         {
@@ -225,7 +225,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 81
+            "days_to_expiry": 80
           }
         }
       ],
@@ -309,7 +309,7 @@
           },
           {
             "name": "Yoast SEO",
-            "version": "28.0",
+            "version": "28.1",
             "category": "wp-plugin"
           },
           {
@@ -360,8 +360,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-21T14:24:21Z",
-      "last_seen": "2026-07-21T14:24:21Z",
+      "first_discovered": "2026-07-21T19:57:54Z",
+      "last_seen": "2026-07-21T19:57:54Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -470,7 +470,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 81
+            "days_to_expiry": 80
           }
         },
         {
@@ -541,7 +541,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 81
+            "days_to_expiry": 80
           }
         }
       ],
@@ -625,7 +625,7 @@
           },
           {
             "name": "Yoast SEO",
-            "version": "28.0",
+            "version": "28.1",
             "category": "wp-plugin"
           },
           {
@@ -674,7 +674,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-07-21T08:57:09Z_90a73a7a",
+    "since_scan": "scan_2026-07-21T14:21:36Z_9e4358b3",
     "added": {
       "subdomains": [],
       "services": [],
@@ -686,56 +686,25 @@
       "hosts": []
     },
     "changed": {
-      "fingerprint": [],
+      "fingerprint": [
+        {
+          "subdomain": "commandmarketinginnovations.com",
+          "name": "Yoast SEO",
+          "from": "28.0",
+          "to": "28.1"
+        },
+        {
+          "subdomain": "www.commandmarketinginnovations.com",
+          "name": "Yoast SEO",
+          "from": "28.0",
+          "to": "28.1"
+        }
+      ],
       "cert": [],
       "reachability": []
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-06-24T09:55:40Z_767e63b3",
-      "started_at": "2026-06-24T09:55:40Z",
-      "completed_at": "2026-06-24T09:57:57Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 2,
-      "service_count": 8,
-      "subdomain_names": [
-        "commandmarketinginnovations.com",
-        "www.commandmarketinginnovations.com"
-      ],
-      "ports_by_sub": {
-        "commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        },
-        "www.commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.0",
-        "Mailcheck": "1.1.2",
-        "Slider Revolution": "6.7.56",
-        "WPMU DEV Smush": "4.1.1",
-        "Yoast SEO": "27.8",
-        "jQuery Migrate": "3.4.1",
-        "punycode": "1.0.0"
-      }
-    },
     {
       "scan_id": "scan_2026-06-24T14:59:20Z_46acde19",
       "started_at": "2026-06-24T14:59:20Z",
@@ -5968,6 +5937,50 @@
         "Slider Revolution": "6.7.58",
         "WPMU DEV Smush": "4.2.0",
         "Yoast SEO": "28.0",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-07-21T19:55:06Z_c439a005",
+      "started_at": "2026-07-21T19:55:06Z",
+      "completed_at": "2026-07-21T19:57:53Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.7.58",
+        "WPMU DEV Smush": "4.2.0",
+        "Yoast SEO": "28.1",
         "jQuery Migrate": "3.4.1",
         "punycode": "1.0.0"
       }
