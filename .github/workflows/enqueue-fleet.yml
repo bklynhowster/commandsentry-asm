@@ -1,0 +1,76 @@
+name: Enqueue Fleet
+
+# The missing "scan the whole fleet" button. The Scanner drains public.scan_queue,
+# but its ad-hoc dispatch only queues ONE asset. This bulk-enqueues every owned +
+# confirmed-live asset at a chosen intensity so the Scanner sweeps the fleet — which
+# populates the stack-id passive observations the Device-class classifier needs to
+# stamp device_class + confidence (the portal's confidence pips). Without a fleet
+# sweep, most assets stay device_class=unknown -> no badge, no dots.
+#
+# Owned-only (the authorized set: discovery_status='confirmed_live' AND
+# ownership='owned') — same guardrail the alerter uses, and the same owned-only bar
+# we hold for any active scanning. DRY-RUN by default. Byte-identical both repos.
+#
+# Drain: after rows are queued, the Scanner cron / its dispatch backstop claims them,
+# multiple runners in parallel (scan_queue_one_running_per_asset prevents dup work).
+#
+# COST / BAN: heavy is ~5-25 min/asset -> a full fleet at heavy is HOURS of runtime +
+# GH minutes, and aggressive scans can trip WAF bans (FortiGate-fronted assets). Ramp
+# with batch_limit and/or start at medium. Repeated batch_limit runs walk the fleet
+# (already-queued/running assets are skipped by the NOT EXISTS guard).
+
+on:
+  workflow_dispatch:
+    inputs:
+      intensity:
+        description: 'Scan tier to enqueue for each asset (heavy = full stack-id passive -> device-class dots).'
+        type: choice
+        options: [light, medium, heavy]
+        default: medium
+      batch_limit:
+        description: 'Max assets to enqueue this run (0 = whole fleet). Ramp up from a small batch.'
+        type: string
+        default: '25'
+      dry_run:
+        description: 'true = count only, write nothing. Flip to false to actually enqueue.'
+        type: boolean
+        default: true
+
+concurrency:
+  group: enqueue-fleet-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  enqueue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bulk-enqueue owned confirmed-live assets
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          INTENSITY: ${{ github.event.inputs.intensity }}
+          BATCH_LIMIT: ${{ github.event.inputs.batch_limit }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -e
+          LIMIT_SQL=""
+          if [ "${BATCH_LIMIT:-0}" != "0" ]; then LIMIT_SQL="limit ${BATCH_LIMIT}"; fi
+          # eligible = owned + confirmed-live + not already queued/running (dup guard).
+          CTE="with eligible as (
+                 select a.asset_id from public.assets a
+                  where a.discovery_status = 'confirmed_live'
+                    and a.ownership = 'owned'
+                    and not exists (select 1 from public.scan_queue q
+                                     where q.asset_id = a.asset_id
+                                       and q.status in ('queued','running'))
+                  order by a.asset_id ${LIMIT_SQL})"
+          COUNT=$(psql "$SUPABASE_DSN" -t -A -v ON_ERROR_STOP=1 -c "${CTE} select count(*) from eligible;")
+          echo "::notice::Eligible to enqueue at '${INTENSITY}' (batch_limit=${BATCH_LIMIT:-0}): ${COUNT} assets."
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "DRY-RUN — nothing written. Would enqueue ${COUNT} assets at ${INTENSITY}."
+            exit 0
+          fi
+          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "${CTE}
+            insert into public.scan_queue (asset_id, intensity, authenticated, source, notes)
+            select e.asset_id, '${INTENSITY}', false, 'workflow_dispatch', 'Fleet enqueue (enqueue-fleet.yml)'
+              from eligible e;"
+          echo "ENQUEUED ${COUNT} assets at ${INTENSITY}. The Scanner will drain the queue."
