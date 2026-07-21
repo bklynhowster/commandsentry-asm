@@ -133,6 +133,9 @@ from run_light import derive_hostname
 # collector below does the HTTP (benign baseline + payload GETs) and hands the
 # captured responses to the classifier. Same-dir module, imported like run_medium.
 from waf_differential import classify_waf_differential, INDEPENDENT_CLASSES
+# Pure safe proof-of-exploitation logic (4.7 rulings, Obsidian 150 §6; build-order #2.1).
+# No I/O — run_safe_exploit_phase does the HTTP + guardrails, hands captured responses here.
+import safe_exploit as se
 
 # Degradation primitives (SPEC_SCANNER_DEGRADATION_HARDENING.md).
 from degradation import (
@@ -1396,6 +1399,222 @@ def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> N
 
 
 # ============================================================================
+# Active probe — safe proof-of-exploitation (4.7 rulings, Obsidian 150 §6; #2.1)
+#
+# Per EXISTING finding, attempt a NON-DESTRUCTIVE proof of exploitability and STOP at
+# the proof (never the damage). Pure per-class verdicts live in safe_exploit.py; this
+# collector does the HTTP + the guardrails: a SEPARATE per-asset gate
+# (assets.exploit_authorized, distinct from active_probe_authorized — 4.7 Q5) AND a
+# SEPARATE EXPLOIT_LIVE env, owned-only, DRY-RUN default (fires NOTHING until BOTH are
+# set), the rate ceiling (Q5), the two-tier kill-switch (Q8), capture-time redaction
+# (A), attribution headers (B), and one exploit_attempts row per attempt (Q3).
+#
+# #2.1 wires ONE class live — sensitive-path (finding-driven, needs no param) — scaffolding
+# general for all five. Finding-driven + EXISTING-findings-only keeps the
+# exploit_attempts.finding_id FK satisfied (the finding row already exists); we prove
+# weaknesses the scanner already recorded, we never invent one. SSRF/redirect/CORS/traversal
+# come online as the finding->param mapping lands; SQLi/XSS are #2.2.
+# ============================================================================
+
+_EXPLOIT_LIVE = os.environ.get("EXPLOIT_LIVE", "").strip().lower() in ("1", "true", "yes")
+_EXPLOIT_RATE_CEILING = int(os.environ.get("EXPLOIT_RATE_CEILING", "10") or "10")   # 4.7 Q5: attempts/asset/24h
+_EXPLOIT_CONTACT = os.environ.get("EXPLOIT_CONTACT", "").strip()   # 4.7 B: instance-appropriate (Command=Dave, Prodex=Howie)
+
+
+def _read_exploit_policy(ctx: HeavyScanContext) -> tuple[bool, str]:
+    """Per-asset exploit gate (4.7 Q5) — SEPARATE from active_probe_authorized. Returns
+    (authorized, egress); reuses active_probe_egress for the vantage. Fail-closed on any error."""
+    if not ctx.dsn:
+        return False, _ACTIVE_PROBE_EGRESS
+    try:
+        psycopg, dict_row, _ = _import_deps()
+        with psycopg.connect(ctx.dsn, autocommit=True, connect_timeout=10) as c:
+            with c.cursor(row_factory=dict_row) as cur:
+                cur.execute("select exploit_authorized, active_probe_egress "
+                            "from public.assets where asset_id=%s", (ctx.asset_id,))
+                r = cur.fetchone()
+        if not r:
+            return False, _ACTIVE_PROBE_EGRESS
+        egress = (r.get("active_probe_egress") or _ACTIVE_PROBE_EGRESS).strip().lower()
+        return bool(r.get("exploit_authorized")), (egress if egress in ("vpn", "direct") else _ACTIVE_PROBE_EGRESS)
+    except Exception as e:
+        log(f"  safe-exploit: policy read failed ({e}) — treating as unauthorized")
+        return False, _ACTIVE_PROBE_EGRESS
+
+
+def _exploit_recent_count(ctx: HeavyScanContext) -> int:
+    """4.7 Q5 rate ceiling: exploit attempts against this asset's findings in the last 24h.
+    Fail-closed (return the ceiling) if we can't count, so an unknown count never lets a probe fire."""
+    if not ctx.dsn:
+        return 0
+    try:
+        psycopg, _dict_row, _ = _import_deps()
+        with psycopg.connect(ctx.dsn, autocommit=True, connect_timeout=10) as c:
+            with c.cursor() as cur:
+                cur.execute("select count(*) from public.exploit_attempts "
+                            "where attempted_at > now() - interval '24 hours' "
+                            "and finding_id in (select finding_id from public.findings where asset_id=%s)",
+                            (ctx.asset_id,))
+                return int((cur.fetchone() or [0])[0])
+    except Exception as e:
+        log(f"  safe-exploit: rate-count read failed ({e}) — treating as ceiling reached (fail-closed)")
+        return _EXPLOIT_RATE_CEILING
+
+
+def _select_exploit_findings(ctx: HeavyScanContext) -> list:
+    """Existing OPEN findings for this asset (finding-driven, existing-only -> FK-safe), each with
+    its latest finding_history.matched_at, for the safe_exploit selector. Open set is the canonical
+    ('detected','confirmed','open','regressed') (schema.sql / 20260528c). Class-agnostic read;
+    #2.1 filters to sensitive-path downstream."""
+    if not ctx.dsn:
+        return []
+    try:
+        psycopg, dict_row, _ = _import_deps()
+        with psycopg.connect(ctx.dsn, autocommit=True, connect_timeout=10) as c:
+            with c.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "select f.finding_id, f.title, "
+                    "  (select fh.matched_at from public.finding_history fh "
+                    "     where fh.finding_id = f.finding_id and fh.matched_at is not null "
+                    "     order by fh.observed_at desc nulls last limit 1) as matched_at "
+                    "from public.findings f "
+                    "where f.asset_id = %s "
+                    "  and f.current_status in ('detected','confirmed','open','regressed')",
+                    (ctx.asset_id,))
+                return [dict(r) for r in (cur.fetchall() or [])]
+    except Exception as e:
+        log(f"  safe-exploit: finding read failed ({e}) — nothing to attempt")
+        return []
+
+
+def _write_exploit_attempt(ctx: HeavyScanContext, finding_id: str, exploit_class: str,
+                           status: str, reason: str, poc, probe_shape: dict) -> None:
+    """One exploit_attempts row per attempt (4.7 Q3). Non-fatal on any error. `poc` is already
+    redacted (4.7 A — capture-time); `probe_shape` carries NO raw body (only class/path/probe-id)."""
+    if not ctx.dsn:
+        return
+    try:
+        psycopg, _dict_row, _ = _import_deps()
+        with psycopg.connect(ctx.dsn, autocommit=True, connect_timeout=10) as c:
+            with c.cursor() as cur:
+                cur.execute(
+                    "insert into public.exploit_attempts (finding_id, scan_run_id, exploit_class, "
+                    "status, status_reason, poc, egress_ip, probe_shape) "
+                    "values (%s,%s,%s,%s,%s,%s::jsonb,%s,%s::jsonb)",
+                    (finding_id, ctx.scan_run_id, exploit_class, status, (reason or "")[:500],
+                     json.dumps(poc) if poc is not None else None,
+                     ctx.egress_ip_initial, json.dumps(probe_shape or {})))
+    except Exception as e:
+        log(f"  safe-exploit: attempt write failed ({e}) — non-fatal")
+
+
+def _fire_exploit_get(ctx: HeavyScanContext, work_dir: Path, url: str, probe_id: str, egress: str) -> dict:
+    """ONE detect-only GET, attribution-headed (4.7 B), body captured for classification. Returns the
+    safe_exploit captured shape {status, headers, body, time, size}. 4.7 A — the body is REDACTED at
+    capture; the raw body is never persisted (only classify's redacted PoC reaches the DB)."""
+    sink = work_dir / f"exploit_{probe_id}.body"
+    args = (["curl", "-sSk", "-o", str(sink), "-D", "-",
+             "-w", "\nCS_STATUS:%{http_code} CS_SIZE:%{size_download} CS_TIME:%{time_total}",
+             "--max-time", "15", "-A", _PROBE_BOT_UA]
+            + se.exploit_headers(probe_id, _EXPLOIT_CONTACT))
+    if egress == "direct" and _PROBE_EGRESS_INTERFACE:
+        args += ["--interface", _PROBE_EGRESS_INTERFACE]
+    args.append(url)
+    _rc, out, _ = run_cmd(args, timeout=25)
+    body_raw = ""
+    try:
+        body_raw = sink.read_text(errors="replace")
+    except Exception:
+        pass
+    status, size, ttime = 0, len(body_raw), 0.0
+    m = re.search(r"CS_STATUS:(\d+) CS_SIZE:(\d+) CS_TIME:([\d.]+)", out or "")
+    if m:
+        status, size, ttime = int(m.group(1)), int(m.group(2)), float(m.group(3))
+    headers: dict = {}
+    for line in (out or "").splitlines():
+        s = line.strip()
+        if not s or s.upper().startswith("HTTP/") or s.startswith("CS_STATUS"):
+            continue
+        if ":" in s:
+            k, _sep, val = s.partition(":")
+            headers[k.strip().lower()] = val.strip()
+    return {"status": status, "headers": headers, "body": se.redact(body_raw), "time": ttime, "size": size}
+
+
+def _run_sensitive_path_live(ctx: HeavyScanContext, work_dir: Path, targets: list,
+                             egress: str, recent: int, details: dict) -> None:
+    """LIVE sensitive-path proof loop with the 4.7 Q8 two-tier kill-switch + Q5 rate budget.
+    GLOBAL abort (whole phase) on a dead/unhealthy baseline, any 5xx, oversized body, or >10s."""
+    # dead-baseline global trigger (Q8): if the benign root is unhealthy, prove nothing.
+    base = _fire_exploit_get(ctx, work_dir, f"https://{ctx.hostname}/", "cse-baseline", egress)
+    ga = se.global_abort_reason(base) or (None if 0 < base["status"] < 500 else f"baseline status {base['status']}")
+    if ga:
+        log(f"  safe-exploit: GLOBAL ABORT before firing — baseline unhealthy ({ga})")
+        details["global_abort"] = f"baseline: {ga}"
+        return
+    budget = max(0, _EXPLOIT_RATE_CEILING - recent)
+    fired = proven = blocked = 0
+    for t in targets:
+        if fired >= budget:
+            log(f"  safe-exploit: remaining 24h budget exhausted ({budget}) — deferring rest to next scan")
+            break
+        probe_id = "cse-" + secrets.token_hex(6)
+        url = t["url"] or f"https://{ctx.hostname}{t['path']}"
+        probe = _fire_exploit_get(ctx, work_dir, url, probe_id, egress)
+        # 4.7 Q8 GLOBAL kill-switch: 5xx / oversized / >10s on the target -> abort the WHOLE phase.
+        ga = se.global_abort_reason(probe) or (f"response time {probe['time']}s > 10s" if probe["time"] > 10.0 else None)
+        if ga:
+            log(f"  safe-exploit: GLOBAL ABORT — {ga}")
+            details["global_abort"] = ga
+            _write_exploit_attempt(ctx, t["finding_id"], "sensitive-path", se.NOT_ATTEMPTED,
+                                   f"global abort: {ga}", None, {"path": t["path"], "probe_id": probe_id})
+            break
+        bogus = _fire_exploit_get(ctx, work_dir,
+                                  f"https://{ctx.hostname}/{secrets.token_hex(8)}.cs-nope",
+                                  probe_id + "b", egress)
+        verdict = se.classify("sensitive-path", {"probe": probe, "bogus": bogus, "path": t["path"]})
+        _write_exploit_attempt(ctx, t["finding_id"], "sensitive-path", verdict["exploit_status"],
+                               verdict["reason"], verdict["poc"],
+                               {"path": t["path"], "url": url, "probe_id": probe_id})
+        fired += 1
+        proven += verdict["exploit_status"] == se.PROVEN
+        blocked += verdict["exploit_status"] == se.BLOCKED
+        time.sleep(_WAF_PROBE_PACING_S)     # reuse the presence-probe pacing between attempts
+    details.update({"fired": fired, "proven": proven, "attempted_blocked": blocked})
+    log(f"  safe-exploit: LIVE sensitive-path — fired={fired} proven={proven} attempted_blocked={blocked}")
+
+
+def run_safe_exploit_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
+    """Safe proof-of-exploitation phase (4.7 rulings, Obsidian 150 §6; #2.1). Gated on
+    assets.exploit_authorized (SEPARATE from active_probe_authorized, Q5) AND EXPLOIT_LIVE
+    (SEPARATE env), owned-only, DRY-RUN default (fires nothing until BOTH). #2.1 attempts
+    sensitive-path only (finding-driven, existing-findings-only -> FK-safe). Persist-only:
+    exploit_attempts rows + a summary artifact; two-tier kill-switch (Q8); rate ceiling (Q5);
+    capture-time redaction (A); attribution headers (B)."""
+    authorized, egress = _read_exploit_policy(ctx)
+    fire = authorized and _EXPLOIT_LIVE
+    targets = se.select_sensitive_path_targets(_select_exploit_findings(ctx))   # #2.1: sensitive-path only
+    details: dict = {"live_flag": _EXPLOIT_LIVE, "egress": egress, "candidates": len(targets)}
+
+    if not authorized:
+        log("  safe-exploit: SKIP — asset not exploit_authorized (opt-in false / kill switch)")
+    elif not _EXPLOIT_LIVE:
+        log(f"  safe-exploit: authorized but DRY-RUN (EXPLOIT_LIVE unset), egress={egress} — "
+            f"would attempt {len(targets)} sensitive-path finding(s), firing nothing")
+    else:
+        recent = _exploit_recent_count(ctx)
+        if se.rate_ceiling_exceeded(recent, _EXPLOIT_RATE_CEILING):
+            log(f"  safe-exploit: rate ceiling reached ({recent}/{_EXPLOIT_RATE_CEILING} in 24h) — deferring")
+            details["deferred_rate_ceiling"] = recent
+        else:
+            _run_sensitive_path_live(ctx, work_dir, targets, egress, recent, details)
+
+    ctx.artifacts.append(("exploit_phase_summary", "json", json.dumps({
+        "schema": 1, "class_increment": "2.1", "authorized": authorized,
+        "dry_run": not fire, "details": details})))
+
+
+# ============================================================================
 # Heavy Phase 1 — net depth (naabu port discovery + fingerprintx service ID)
 # Spec: HEAVY_PHASE1_NETDEPTH_SPEC v2 + HEAVY_PHASE1_BUILD_DELTA (4.7 D1-D5).
 #
@@ -1946,6 +2165,12 @@ def run(descriptor_path: str, dsn: str) -> int:
         # Benign baseline vs >=2 independent payload classes -> "Behind a WAF" (presence
         # only). gather_observations wiring (obs waf_present_differential) is the follow-up.
         run_waf_differential_probe_phase(ctx, work_dir)
+
+        # Active-probe tier — safe proof-of-exploitation (4.7 rulings, Obsidian 150 §6; #2.1).
+        # SEPARATE exploit_authorized gate + EXPLOIT_LIVE env, owned-only, DRY-RUN default (fires
+        # nothing). Finding-driven (existing findings only). Persist-only exploit_attempts +
+        # summary artifact; two-tier kill-switch, rate ceiling, capture-time redaction, attribution.
+        run_safe_exploit_phase(ctx, work_dir)
 
         # Phase 2 — naabu + fingerprintx net depth (Heavy Phase 1). PAIR with
         # all-or-nothing tools_run credit (4.7 D1): both names enter tools_run

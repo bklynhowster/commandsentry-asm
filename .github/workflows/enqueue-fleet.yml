@@ -52,6 +52,25 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
           set -e
+
+          # ── Batch-0 heavy guard (2026-07-21) ────────────────────────────────────
+          # A single heavy dispatch must NOT be able to dump the whole fleet. Heavy is
+          # 5-25 min/asset + VPN bring-up; over-enqueuing strands the queue (07-21: a
+          # whole-fleet heavy enqueue stranded 43, the alerter fired). So for heavy we
+          # FAIL CLOSED on a whole-fleet (batch_limit=0) or oversized batch and force a
+          # ramp. Repeated small runs walk the fleet — the NOT EXISTS dup-guard below
+          # skips assets already queued/running. light/medium are unaffected (fast, and
+          # they don't strand). Tune HEAVY_MAX_BATCH if drain capacity changes.
+          HEAVY_MAX_BATCH=10
+          BL="${BATCH_LIMIT:-0}"
+          case "$BL" in
+            ''|*[!0-9]*) echo "::error::batch_limit must be a non-negative integer (got '${BATCH_LIMIT}')."; exit 1 ;;
+          esac
+          if [ "${INTENSITY}" = "heavy" ] && { [ "$BL" = "0" ] || [ "$BL" -gt "$HEAVY_MAX_BATCH" ]; }; then
+            echo "::error::Refusing heavy fleet enqueue with batch_limit=${BL}. Heavy is capped at ${HEAVY_MAX_BATCH} per dispatch to avoid stranding the queue (07-21: 43 heavy stranded). Re-run with batch_limit between 1 and ${HEAVY_MAX_BATCH}; repeated runs walk the fleet (already-queued/running assets are skipped)."
+            exit 1
+          fi
+
           LIMIT_SQL=""
           if [ "${BATCH_LIMIT:-0}" != "0" ]; then LIMIT_SQL="limit ${BATCH_LIMIT}"; fi
           # eligible = owned + confirmed-live + not already queued/running (dup guard).
