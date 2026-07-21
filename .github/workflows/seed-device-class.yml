@@ -1,0 +1,88 @@
+name: Seed Device-Class
+
+# Auto-walks the confirmed-live, owned assets that still have device_class='unknown',
+# enqueuing a small HEAVY batch each run so the device-class classifier can seed
+# WAF / edge-protection attribution fleet-wide (the "is this behind a WAF / Fortinet /
+# Cloud Armor / anything" question). Purpose-built companion to enqueue-fleet.yml.
+#
+# SAFE BY DESIGN:
+#  - Ramped: at most 10 heavy per run (mirrors the enqueue-fleet batch-0 guard — a
+#    whole-fleet heavy enqueue stranded 43 on 2026-07-21).
+#  - Self-pacing: SKIPS a run if a heavy backlog is still draining (>=10 queued/running
+#    heavy), so batches never pile up and re-strand the queue.
+#  - Self-terminating in effect: once no unclassified live assets remain, each run
+#    enqueues 0 (a harmless no-op). Remove the schedule when the fleet is fully seeded.
+#  - Only ever WRITES to scan_queue (enqueue). Owned + confirmed-live only.
+#
+# Byte-identical both repos (Command + Prodex).
+
+on:
+  schedule:
+    - cron: '17 */3 * * *'        # every 3 hours (offset :17 to dodge top-of-hour congestion)
+  workflow_dispatch:
+    inputs:
+      batch_limit:
+        description: 'Max unclassified live assets to enqueue this run (heavy; hard-capped at 10).'
+        type: string
+        default: '10'
+      dry_run:
+        description: 'true = count only, write nothing.'
+        type: boolean
+        default: false
+
+concurrency:
+  group: seed-device-class
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enqueue next heavy batch of unclassified live assets
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          BATCH_LIMIT: ${{ github.event.inputs.batch_limit || '10' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -e
+          # Heavy ramp cap: never more than 10/run (mirrors enqueue-fleet batch-0 guard).
+          BL="${BATCH_LIMIT:-10}"
+          case "$BL" in ''|*[!0-9]*) echo "::error::batch_limit must be a non-negative integer (got '${BATCH_LIMIT}')."; exit 1 ;; esac
+          if [ "$BL" -gt 10 ]; then BL=10; echo "::notice::clamped batch_limit to 10 (heavy ramp cap)"; fi
+
+          # Self-pacing: don't add onto a still-draining heavy backlog (anti-stranding).
+          BACKLOG=$(psql "$SUPABASE_DSN" -t -A -v ON_ERROR_STOP=1 \
+            -c "select count(*) from public.scan_queue where status in ('queued','running') and intensity='heavy';")
+          BACKLOG="${BACKLOG:-0}"
+          if [ "$BACKLOG" -ge 10 ]; then
+            echo "::notice::heavy backlog=${BACKLOG} still draining — skipping this run (self-pacing)"
+            exit 0
+          fi
+
+          # eligible = owned + confirmed-live + device_class unknown + not already queued/running.
+          CTE="with eligible as (
+                 select a.asset_id from public.assets a
+                  where a.discovery_status = 'confirmed_live'
+                    and a.ownership = 'owned'
+                    and coalesce(a.device_class, 'unknown') = 'unknown'
+                    and not exists (select 1 from public.scan_queue q
+                                     where q.asset_id = a.asset_id
+                                       and q.status in ('queued','running'))
+                  order by a.asset_id limit ${BL})"
+          COUNT=$(psql "$SUPABASE_DSN" -t -A -v ON_ERROR_STOP=1 -c "${CTE} select count(*) from eligible;")
+          echo "::notice::Unclassified live assets to enqueue this run: ${COUNT} (heavy backlog=${BACKLOG})"
+
+          if [ "${COUNT}" = "0" ]; then
+            echo "No unclassified live assets remain — device-class seed is COMPLETE (no-op). Safe to remove the schedule."
+            exit 0
+          fi
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "DRY-RUN — would enqueue ${COUNT} asset(s) at heavy."
+            exit 0
+          fi
+
+          psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "${CTE}
+            insert into public.scan_queue (asset_id, intensity, authenticated, source, notes)
+            select e.asset_id, 'heavy', false, 'workflow_dispatch', 'Device-class seed (seed-device-class.yml)'
+              from eligible e;"
+          echo "ENQUEUED ${COUNT} asset(s) at heavy. The Scanner will drain the queue."
