@@ -20,11 +20,13 @@ signals:
     - fortiweb_challenge_endpoint_fwbbot_check   # 4.7 Q1: active-probe observes FortiWeb's /fwbbot_check challenge (dormant until Phase B/D)
     - wafw00f_high_confidence          # wafw00f positively NAMES a vendor (fortiweb/cloudflare) at high confidence
     - waf_present_wafw00f              # 4.7 Q1: wafw00f detected a WAF but named no vendor — presence-only "Behind a WAF"
+    - waf_present_differential         # 4.7 Cloud Armor: differential probe (>=2 payload classes block, benign passes) proves WAF presence; presence-only, NO vendor (DORMANT until Phase-B collector)
     - fortiweb_cookiesession1          # 4.7 Q2: FortiWeb cookiesession1 Set-Cookie (Fortinet primary-doc cited), independent of wafw00f
     # Cloud-native edges (4.7 cloud-edge phase, safe-alone) — each is one self-naming
     # response header = 1 high = 'suspected'; a 2nd independent header tell (deferred,
     # AND-matching) is required for 'confirmed'. All cited in artifact_signatures.yaml.
-    - google_frontend_server_header    # Server: Google Frontend -> Google GFE (adc_lb)
+    # google_frontend_server_header REMOVED 2026-07-20 (Howie): GFE = GCP's own front
+    # door, not a discretionary edge; naming it just restates cloud_provider=GCP.
     - cloudflare_cf_ray_header         # CF-RAY -> Cloudflare (cdn)
     - cloudfront_amz_cf_id_header      # X-Amz-Cf-Id -> AWS CloudFront (cdn)
     - azure_frontdoor_ref_header       # X-Azure-Ref -> Azure Front Door (cdn)

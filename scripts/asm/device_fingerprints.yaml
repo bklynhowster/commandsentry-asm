@@ -150,6 +150,31 @@ fingerprints:
     evidence_class: presence_only
     vendor_product: {}
 
+  # ── Differential WAF-presence probe (HIGH, presence-only) — 4.7 Cloud Armor ─
+  # DORMANT until the Phase-B collector ships (like fwbbot was). An active differential
+  # probe: baseline benign GET passes, but the SAME request carrying INDEPENDENT
+  # attack-payload classes (SQLi + XSS + LFI) is denied by a generic edge error. That
+  # delta proves a payload-inspecting WAF is in front — presence, nothing more.
+  # The 4.7 gates live in the COLLECTOR (run_waf_differential_probe), which emits
+  # `waf_present_differential=true` ONLY when ALL hold (Q1/Q2): benign passes on the
+  # identical path; >=2 of 3 INDEPENDENT payload classes block (a single class is an
+  # app-native input-validator FP, NOT a WAF); each deny is a generic edge error
+  # (<~500B, no app-context tokens or app-specific headers seen in the benign response).
+  # VENDOR CEILING (4.7 Q3/Q8 — the GFE lesson applied forward): this signal asserts WAF
+  # PRESENCE ONLY. It contributes to device_class_confidence and ZERO to
+  # vendor_product_confidence. Do NOT name a vendor from it — NOT EVEN "Cloud Armor" on a
+  # GCP-hosted asset. Cloud Armor emits no self-naming tell (a block is a generic,
+  # operator-configurable-code 403 per Google docs), so behavior + hosting = INFERENCE,
+  # which we never assert. Vendor attribution requires a separate self-naming tell
+  # (Server header / vendor cookie / vendor challenge endpoint) under R4 citation
+  # discipline. Applies identically to Azure Front Door WAF / AWS WAF.
+  - signal: waf_present_differential
+    observation: waf_present_differential
+    match_bool: true
+    device_class: waf
+    evidence_class: presence_only
+    vendor_product: {}
+
   # ── FortiWeb cookiesession1 (HIGH, vendor-identifying) — 4.7 Q2/R4 ────────
   # Fortinet's OWN docs document FortiWeb emitting the cookiesession1 Set-Cookie
   # (see artifact_signatures.yaml — vendor_primary_documentation; the classifier
@@ -231,12 +256,16 @@ fingerprints:
   # (Wappalyzer-style "Cloud CDN detected") is deliberately NOT a source here —
   # that's a tool's inference, not the asset self-identifying (4.7 Q1). Every row
   # cited in artifact_signatures.yaml (http_headers is now R4-enforced).
-  - signal: google_frontend_server_header
-    observation: http_headers
-    match_substrings: ["google frontend"]                 # Server: Google Frontend — GFE edge/LB tier
-    device_class: adc_lb
-    evidence_class: vendor_identifying
-    vendor_product: {vendor: Google, product: Frontend}   # display: "Behind Google Frontend"
+  # GFE (Server: Google Frontend) DELIBERATELY EXCLUDED 2026-07-20 (Howie): the GFE
+  # is Google's own front door that fronts EVERY GCP managed-service tenant (App
+  # Engine / Cloud Run / GCLB) — it is NOT a discretionary edge someone put in front
+  # of an origin. Naming it "Behind Google Frontend" only restates cloud_provider=GCP,
+  # which the F1/F2 cloud path already derives from ASN/CNAME — a hosting fact dressed
+  # as an edge device. The real GCP security device is Cloud Armor (Google's WAF at the
+  # load balancer), which self-reveals only on a block — a separate active-probe pass,
+  # never a friendly header. The three rows below STAY: cf-ray/CloudFront/Azure-FD are
+  # discretionary CDN edges a customer chose to front their origin with (cdn tier,
+  # "Fronted by" — NOT "Protected by"; CDN presence != WAF enabled).
   - signal: cloudflare_cf_ray_header
     observation: http_headers
     match_substrings: ["cf-ray"]                           # CF-RAY — Cloudflare per-request ray id

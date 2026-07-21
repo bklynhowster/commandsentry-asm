@@ -73,19 +73,10 @@ artifact_signatures:
   # Each edge NAMES ITSELF in a response header it sets; the artifact is that
   # header token (presence = the tell; values not persisted, 4.7 Q6). One header
   # = 'suspected' (4.7 Q4). vendor_primary docs.
-  - name: google frontend
-    artifact_type: response_header_token
-    vendor: Google
-    product: Google Frontend
-    vendor_unique: true
-    # "Server: Google Frontend" = Google Front End (GFE), Google's own edge tier that
-    # terminates client TLS in front of GCP-hosted services (adc_lb).
-    citation:
-      source_type: vendor_primary_documentation
-      url: https://cloud.google.com/docs/security/infrastructure/design
-      quote: "an infrastructure service called the Google Front End (GFE). The GFE ensures that all TLS connections are terminated with correct certificates"
-      cited_at: 2026-07-20
-      quote_provenance: "Google infrastructure security design overview (cloud.google.com/docs/security/infrastructure/design), fetched verbatim 2026-07-20"
+  # "google frontend" REMOVED 2026-07-20 (Howie): GFE is GCP's universal front door,
+  # not a discretionary edge — naming it restates cloud_provider=GCP. See the
+  # exclusion note in device_fingerprints.yaml. Real GCP security device = Cloud Armor
+  # (block-page/403 behavior on an active probe), scoped as a separate pass.
   - name: cf-ray
     artifact_type: response_header_token
     vendor: Cloudflare
