@@ -45,6 +45,7 @@ EXIT CODES:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -52,6 +53,8 @@ import socket
 import ssl
 import subprocess
 import sys
+import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -536,42 +539,303 @@ def check_headers(ctx: ScanContext) -> None:
     mark_tool_ok(ctx, "headers_check")
 
 
+# ── Sensitive-path content verification + catch-all control probe ──────────
+# 4.7 rulings 2026-07-05 (CATCHALL_FP_FIX_SPEC.md). A bare HTTP 200 on /.env is
+# NOT a secret leak on a catch-all / SPA host that serves its index page for
+# every path. Two layered defenses, ordered VERIFY-THEN-SUPPRESS (ruling 4;
+# anchor commit 59ad6a13): the per-file marker check runs on HIGH paths
+# UNCONDITIONALLY — even when the host is a catch-all — so a REAL /.env is never
+# silently suppressed. Catch-all baseline alone drives suppression only for
+# non-HIGH paths. Kept INDEPENDENT of run_medium.detect_ffuf_catchall by design
+# (ruling 2): same SEMANTIC (random-path 2xx with a content-matching baseline),
+# different tool (curl vs httpx) and surface (fixed list vs ffuf wordlist).
+_STATUS_MARKER = "__CS_HTTP_STATUS__"
+_MAX_BODY = 262144  # 256 KB cap for hashing / marker scan (hole 3)
+
+
+def _env_marker(b: str) -> bool:
+    # >= 2 non-comment assignment lines (hole 4): a single `foo=bar` false-
+    # positives on random HTML/JS; lowercase keys DO occur in real .env files.
+    lines = [l for l in b.splitlines()
+             if not l.lstrip().startswith("#")
+             and re.match(r"^\s*[A-Za-z_][A-Za-z0-9_]*=", l)]
+    return len(lines) >= 2
+
+
+# Per-HIGH-path secret markers (holes 4, 6): the body must carry the real
+# secret's shape, not just be a 200. wp-config requires DB_* (a bare <?php is
+# table-stakes on any PHP host and would false-positive).
+_HIGH_SECRET_MARKERS = {
+    "/.env":              _env_marker,
+    "/.git/config":       lambda b: "[core]" in b,
+    "/.git/HEAD":         lambda b: bool(re.search(r"(?m)^ref:\s", b)
+                                         or re.search(r"\b[0-9a-f]{40}\b", b)),
+    "/wp-config.php.bak": lambda b: ("DB_PASSWORD" in b or "DB_NAME" in b),
+}
+
+
+# ── Content-Type discriminator (4.7 rulings 2026-07-21, Obsidian 152) ──────
+# FP class: an SPA / error-page catch-all serves index.html for EVERY path,
+# /.env included, so a bare 200 + a content-marker match wrongly fired HIGH
+# (observed live on tour.prodexlabs.com — GET /.env -> 200, Content-Type
+# text/html, byte-identical to a random path). Discriminator (ruling 1): a real
+# dotfile secret is served text/plain / octet-stream, NEVER as app HTML — so a
+# text/html body IS the app page, not the secret. TWO-SIGNAL (ruling 1
+# correction, LOAD-BEARING): Content-Type is app-markup AND the body opens with
+# an HTML token. A misconfigured server serving a real .env as text/html fails
+# the body-shape half -> stays a confirmed secret (still HIGH). Never drop the
+# body check — a delete-that-test PR must never merge.
+VERIFY_NO_MATCH = "no-match"        # body lacks the per-file secret marker
+VERIFY_APP_HTML = "app-html"        # marker matched but body is app-rendered HTML
+VERIFY_SECRET   = "secret-confirmed"  # marker matched + real secret content -> HIGH
+
+# Reject side (ruling 3): app-markup content-types. Only these + an HTML-shaped
+# body downgrade a marker match.
+_APP_HTML_CONTENT_TYPES = frozenset({
+    "text/html", "application/xhtml+xml", "application/xml", "text/xml",
+})
+# Accept side (ruling 3 — ALLOW-LIST, not deny-list): content-types a real
+# secret file legitimately carries. application/json STAYS here (firebase.json /
+# .aws-style leaks) — do NOT move it to the reject set. Anything in NEITHER set
+# is unknown -> NOT suppressed (evidence-noted for operator review).
+_SECRET_CONTENT_TYPES = frozenset({
+    "text/plain", "application/octet-stream", "application/x-yaml",
+    "text/x-yaml", "application/json", "text/json", "",
+})
+_HTML_BODY_MARKERS = ("<!doctype", "<html", "<head", "<body", "<meta")
+
+
+def _normalize_ctype(content_type: str | None) -> str | None:
+    """Lowercase + strip parameters ('text/html; charset=utf-8' -> 'text/html').
+    None stays None (server sent no Content-Type header) — kept distinct from ''
+    (present-but-empty) per constraint A."""
+    if content_type is None:
+        return None
+    return content_type.split(";")[0].strip().lower()
+
+
+def _is_app_html(content_type: str | None, body: str) -> bool:
+    """True iff the response is app-rendered HTML (ruling 1, TWO-SIGNAL): the
+    Content-Type is an app-markup type AND the body opens with an HTML token.
+    A real secret served with a wrong text/html Content-Type (misconfigured
+    server) fails the body-shape half and is NOT treated as app HTML — it stays
+    a confirmed secret. Pure — tested in test_catchall_fp.py."""
+    if _normalize_ctype(content_type) not in _APP_HTML_CONTENT_TYPES:
+        return False
+    head = body[:200].lstrip().lower()
+    return any(head.startswith(m) for m in _HTML_BODY_MARKERS)
+
+
+def _is_known_secret_ctype(content_type: str | None) -> bool:
+    """True iff the (normalized) Content-Type is a recognized secret-file type
+    (ruling 3 allow-list). Used only to flag UNKNOWN types in finding evidence —
+    never to gate the disposition."""
+    ct = _normalize_ctype(content_type)
+    return ct is None or ct in _SECRET_CONTENT_TYPES
+
+
+def verify_secret_content(path: str, body: str,
+                          content_type: str | None = None) -> str:
+    """Classify a 2xx sensitive-path response for `path` (4.7 ruling 2 — the
+    Content-Type gate lives HERE, the 'is this really a secret?' chokepoint).
+    Returns one of VERIFY_NO_MATCH | VERIFY_APP_HTML | VERIFY_SECRET:
+
+      NO_MATCH  — body lacks the per-file secret marker (or path has none).
+      APP_HTML  — marker matched BUT the body is app-rendered HTML (ruling 1
+                  two-signal): the catch-all / error page, not a leak. Caller
+                  downgrades to INFO (ruling 5), never silent-suppress.
+      SECRET    — marker matched and the body is real secret content (text/plain
+                  etc., OR a text/html misconfig whose body is NOT HTML-shaped).
+                  A real leak — stays HIGH. This is the 59ad6a13 invariant: a
+                  real secret is never eaten.
+
+    content_type defaults to None so a 2-arg call degrades safely (never
+    APP_HTML). Pure — tested in test_catchall_fp.py."""
+    m = _HIGH_SECRET_MARKERS.get(path)
+    if not (m and body and m(body)):
+        return VERIFY_NO_MATCH
+    if _is_app_html(content_type, body):
+        return VERIFY_APP_HTML
+    return VERIFY_SECRET
+
+
+def _body_sha(body: str) -> str:
+    return hashlib.sha256(body[:_MAX_BODY].encode("utf-8", "replace")).hexdigest()
+
+
+def _probe_path_body(ctx: ScanContext, path: str) -> tuple[int, str, str | None]:
+    """GET a path, capturing (status, body, content_type). Accept-Encoding:
+    identity dodges the gzip-hash trap (hole 3). content_type is the raw
+    Content-Type header, normalized (lowercased, params stripped), or None when
+    the server sent none (constraint A — distinct from '' present-but-empty).
+    Returns (0, '', None) on transport failure. The status/content_type ride out
+    on one curl -w line, tab-separated (Content-Type never contains a tab)."""
+    rc, stdout, _ = run_cmd(
+        ["curl", "-sS", "--max-time", "10",
+         "-H", "Accept-Encoding: identity",
+         "-H", "User-Agent: Mozilla/5.0 (compatible; COMMANDsentry/1.0)",
+         "-w", f"\n{_STATUS_MARKER}%{{http_code}}\t%{{content_type}}",
+         f"https://{ctx.hostname}{path}"],
+        timeout=15,
+    )
+    if rc != 0 or _STATUS_MARKER not in stdout:
+        return 0, "", None
+    body, _, tail = stdout.rpartition(_STATUS_MARKER)
+    if body.endswith("\n"):
+        body = body[:-1]
+    code_str, _, ctype_str = tail.strip().partition("\t")
+    try:
+        code = int(code_str.strip()[:3])
+    except ValueError:
+        code = 0
+    ctype = _normalize_ctype(ctype_str) if ctype_str.strip() else None
+    return code, body[:_MAX_BODY], ctype
+
+
+_CATCHALL_2XX = (200, 204, 206)
+
+
+def _is_catchall(codes: tuple[int, int], hashes: tuple[str, str]) -> bool:
+    """Pure catch-all decision (hole 2). True iff BOTH control probes returned
+    2xx AND their body hashes are identical — the host serves one page for any
+    path. Tested in test_catchall_fp.py."""
+    return (codes[0] in _CATCHALL_2XX and codes[1] in _CATCHALL_2XX
+            and hashes[0] == hashes[1])
+
+
+def detect_light_catchall(ctx: ScanContext) -> str | None:
+    """TWO random nonsense probes (hole 2 — a single control probe has the same
+    fragility as the Bug it guards). Catch-all baseline = the shared body hash
+    iff _is_catchall (both 2xx AND hash-match). None otherwise."""
+    c1, b1, _ = _probe_path_body(ctx, "/cs-ctl-" + uuid.uuid4().hex[:16])
+    c2, b2, _ = _probe_path_body(ctx, "/" + uuid.uuid4().hex[:20] + "-notreal")
+    h1, h2 = _body_sha(b1), _body_sha(b2)
+    return h1 if _is_catchall((c1, c2), (h1, h2)) else None
+
+
+def resolve_path_disposition(severity: str, verify_verdict: str,
+                             matches_baseline: bool) -> str:
+    """Pure VERIFY-THEN-SUPPRESS decision (4.7 ruling 4; anchor commit
+    59ad6a13). Returns 'HIGH' | 'INFO_APP_HTML' | 'INFO' | 'SUPPRESS' | 'EMIT'.
+
+    `verify_verdict` is verify_secret_content's output on HIGH paths
+    (VERIFY_SECRET | VERIFY_APP_HTML | VERIFY_NO_MATCH); non-HIGH paths pass
+    VERIFY_NO_MATCH (verify isn't run there).
+
+    HIGH severity:
+      - a CONFIRMED secret ALWAYS wins -> 'HIGH', even on a catch-all host, so a
+        real secret is never suppressed (the load-bearing 59ad6a13 invariant);
+      - an APP_HTML verdict (marker matched but the body is the app page) ->
+        'INFO_APP_HTML' (ruling 5 — auditable downgrade, never silent);
+      - no marker: catch-all baseline suppresses ('SUPPRESS'); else a
+        2xx-but-not-secret body is 'INFO' (manual review).
+    Non-HIGH: baseline match -> 'SUPPRESS'; else 'EMIT' at declared severity.
+
+    Inverting verify/suppress reintroduces the 59ad6a13 regression class —
+    pinned by test_resolve_disposition_high_marker_wins_over_catchall."""
+    if severity == "HIGH":
+        if verify_verdict == VERIFY_SECRET:
+            return "HIGH"
+        if verify_verdict == VERIFY_APP_HTML:
+            return "INFO_APP_HTML"
+        if matches_baseline:
+            return "SUPPRESS"
+        return "INFO"
+    if matches_baseline:
+        return "SUPPRESS"
+    return "EMIT"
+
+
+def _emit_exposed_path(ctx: ScanContext, path: str, severity: str, why: str,
+                       code: int, content_type: str | None = None) -> None:
+    slug = path.lstrip("/").replace("/", "-").replace(".", "")
+    ct = content_type or "none"
+    ctx.findings.append(LightFinding(
+        check_name=f"exposed-path-{slug}",
+        title=f"Exposed path: {path} (HTTP {code})",
+        severity=severity,
+        category="info_disclosure",  # enum remap: 'paths' isn't a valid finding_category_t
+        description=f"The path {path} on {ctx.hostname} returned HTTP {code} "
+                    f"(Content-Type: {ct}). {why}.",
+        tags=["paths", "exposure"],
+        cwe=[538],
+        raw_excerpt=f"GET {path} -> HTTP {code} (Content-Type: {ct})",
+    ))
+
+
 def check_common_paths(ctx: ScanContext) -> None:
-    """HEAD-probe a list of common leak paths. 200/204/206 = exposed."""
+    """Probe well-known leak paths. VERIFY-THEN-SUPPRESS (4.7 ruling 4; anchor
+    commit 59ad6a13): HIGH paths get a content-marker check UNCONDITIONALLY — a
+    marker match wins over catch-all suppression, so a real /.env is never
+    silently eaten. Non-HIGH paths are suppressed on the catch-all baseline
+    alone. DO NOT let a refactor skip the HIGH marker check on catch-all hosts."""
     ctx.tools_run.append("common_paths")
     results = []
     successful_probes = 0
+    baseline = detect_light_catchall(ctx)   # 2-probe control (hole 2)
+    suppressed = 0
     for path, severity, why in COMMON_PATHS:
-        rc, stdout, stderr = run_cmd(
-            ["curl", "-s", "-o", "/dev/null",
-             "-w", "%{http_code}",
-             "--max-time", "10",
-             "-H", "User-Agent: Mozilla/5.0 (compatible; COMMANDsentry/1.0)",
-             f"https://{ctx.hostname}{path}"],
-            timeout=15,
-        )
-        code = stdout.strip() if rc == 0 else "err"
-        if rc == 0:
+        code, body, ctype = _probe_path_body(ctx, path)
+        if code != 0:
             successful_probes += 1
-        results.append({"path": path, "status": code})
-        if code in ("200", "204", "206"):
-            slug = path.lstrip("/").replace("/", "-").replace(".", "")
-            ctx.findings.append(LightFinding(
-                check_name=f"exposed-path-{slug}",
-                title=f"Exposed path: {path} (HTTP {code})",
-                severity=severity,
-                category="info_disclosure",  # enum remap: 'paths' isn't a valid finding_category_t
-                description=f"The path {path} on {ctx.hostname} returned HTTP {code}. {why}.",
-                tags=["paths", "exposure"],
-                cwe=[538],
-                raw_excerpt=f"GET {path} -> HTTP {code}",
-            ))
+        results.append({"path": path, "status": code or "err", "ctype": ctype})
+        time.sleep(0.25)                     # inter-probe hygiene (hole 7)
+        if code not in (200, 204, 206):
+            continue
+        # 59ad6a13 ANCHOR — VERIFY (HIGH content marker + Content-Type gate) THEN
+        # SUPPRESS (catch-all baseline), never the reverse: a CONFIRMED secret
+        # wins so a REAL /.env is never eaten on a catch-all host. The app-html
+        # downgrade (marker matched but body is the app page) is INFO, not
+        # silent. Ordering + downgrade pinned in test_catchall_fp.py.
+        verdict = (verify_secret_content(path, body, ctype)
+                   if severity == "HIGH" else VERIFY_NO_MATCH)
+        matches_baseline = bool(baseline and _body_sha(body) == baseline)
+        disp = resolve_path_disposition(severity, verdict, matches_baseline)
+        if disp == "HIGH":                                              # real secret
+            note = why
+            if not _is_known_secret_ctype(ctype):
+                note = (f"{why}. NOTE: unusual Content-Type '{ctype}' for a "
+                        f"secret file — verify the body is a real leak")
+            _emit_exposed_path(ctx, path, "HIGH", note, code, ctype)
+        elif disp == "INFO_APP_HTML":                                   # catch-all/app page
+            _emit_exposed_path(ctx, path, "INFO",
+                f"returned HTTP {code} with an app-rendered HTML body "
+                f"(Content-Type {ctype or 'none'}) — this is the site's "
+                f"catch-all / error page, not the secret file (downgrade "
+                f"reason: content_type_gate)", code, ctype)
+        elif disp == "INFO":
+            _emit_exposed_path(ctx, path, "INFO",
+                "returned 2xx but the body is not the expected secret "
+                "content — manual review", code, ctype)
+        elif disp == "EMIT":
+            _emit_exposed_path(ctx, path, severity, why, code, ctype)
+        else:  # SUPPRESS
+            suppressed += 1                                             # catch-all page
 
-    ctx.artifacts.append(("common_paths", "json", json.dumps({"probes": results})))
+    if suppressed > 0:
+        ctx.findings.append(LightFinding(
+            check_name="catchall-suppressed-paths",
+            title=(f"Host serves 2xx to arbitrary paths (catch-all) — "
+                   f"{suppressed} sensitive-path probe(s) suppressed"),
+            severity="INFO",
+            category="info_disclosure",
+            description=(f"{ctx.hostname} returns the same 2xx body to random "
+                         f"nonexistent paths, so path-existence probing is not "
+                         f"meaningful. {suppressed} probe(s) matching the catch-all "
+                         f"baseline were collapsed here instead of emitted per-path. "
+                         f"HIGH secret paths were content-verified regardless, so a "
+                         f"real leak still surfaces."),
+            tags=["paths", "catch-all", "suppressed"],
+            cwe=[],
+            raw_excerpt=f"catch-all baseline body sha256={baseline}",
+        ))
 
-    # If every single probe failed (rc != 0 for all paths), the target
-    # is unreachable — mark degraded. If at least one succeeded, the
-    # check did its job, regardless of whether any path was exposed.
+    ctx.artifacts.append(("common_paths", "json",
+                          json.dumps({"probes": results, "catchall_baseline": baseline})))
+
+    # If every single probe failed (rc != 0 for all paths), the target is
+    # unreachable — mark degraded. If at least one succeeded, the check did its
+    # job, regardless of whether any path was exposed.
     degraded, reason = common_paths_is_degraded(successful_probes, len(COMMON_PATHS))
     if degraded:
         mark_tool_degraded(ctx, "common_paths", reason)
