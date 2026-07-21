@@ -33,20 +33,26 @@ name: Scanner
 # Spec: Obsidian / COMMANDsentry / 48 - Phase 4a Spec and Context Handoff.md
 
 on:
-  # ─── INTERNAL 10-min CRON DISABLED 2026-06-10 ─────────────────────
-  # Retired in favor of conditional dispatch via commandsentry-portal
-  # /api/scan-tick — cron-job.org → portal → portal only fires this
-  # workflow when scan_queue actually has queued work. Empty cycles
-  # → zero Actions minutes (GitHub rounds every run UP to 1 billed
-  # minute regardless of duration, so empty pokes were the cost
-  # driver). Part of Force7 Initiative 2 #1.
+  # ─── INTERNAL 10-min CRON — RE-ENABLED 2026-07-21 ─────────────────
+  # Originally disabled 2026-06-10 to save Actions minutes (GitHub bills
+  # every run UP to 1 min, so empty ticks cost) in favor of the
+  # commandsentry-portal /api/scan-tick heartbeat (cron-job.org → portal,
+  # fires only when scan_queue has work).
   #
-  # The cron-job.org Job #1 + the deeper workflow_run-after-ASM-
-  # Discover chain below still guarantee a poke within ≤10 min /
-  # ≤6h respectively.
-  #
-  # schedule:
-  #   - cron: '7-57/10 * * * *'
+  # RE-ENABLED because:
+  #   (a) the repo is now PUBLIC → Actions minutes are FREE/unlimited, so
+  #       the empty-tick cost reason that justified disabling it is VOID; and
+  #   (b) the external heartbeat is a single point of failure — it went dark
+  #       ~11:52 AM 2026-07-21 and the queue silently stopped draining for
+  #       hours (device-class seed + a fleet sweep stranded, undetected).
+  # A GitHub-native cron has no external dependency: empty ticks poll_queue,
+  # find no work, and exit in seconds (free on a public repo). The portal
+  # heartbeat may remain as a redundant poke; the workflow_run-after-ASM-
+  # Discover chain below stays the deeper ≤6h backstop. GH scheduled cron is
+  # best-effort (can lag under load), but on a public + active repo it is a
+  # far more reliable PRIMARY than a dead external poke.
+  schedule:
+    - cron: '7-57/10 * * * *'
 
   # Chain after every successful ASM Discover run — guarantees a queue
   # drain pass at least every 6 hours (the ASM Discover cadence) even
