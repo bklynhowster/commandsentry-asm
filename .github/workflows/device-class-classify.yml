@@ -11,6 +11,13 @@ name: Device-class classify
 # SUPABASE_DSN (same secret as Migrate); the workflow in each repo hits its own DB.
 
 on:
+  # 4.7 (Obsidian 154, 2026-07-22): scheduled DRY-RUN soak of the cron path. Every
+  # 6h, DRY-RUN ONLY — a schedule trigger sends no `mode` input, so the write gate
+  # below stays false (154-Q1: do NOT flip write on the schedule until soak-end
+  # ~07-27; manual write dispatches continue in the meantime). Offset per instance
+  # to avoid the two DBs contending simultaneously (154-Q2): Command @:15, Prodex @:45.
+  schedule:
+    - cron: '15 */6 * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -40,7 +47,7 @@ jobs:
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
         run: |
-          ARGS="--soak-generation ${{ github.event.inputs.soak_generation }}"
+          ARGS="--soak-generation ${{ github.event.inputs.soak_generation || '1' }}"
           if [ "${{ github.event.inputs.mode }}" = "write" ]; then ARGS="$ARGS --write"; fi
           echo "::notice::device_class_runner.py $ARGS"
           python scripts/db/device_class_runner.py $ARGS
