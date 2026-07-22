@@ -241,6 +241,23 @@ fingerprints:
     evidence_class: vendor_identifying
     vendor_product: {vendor: Automattic}
 
+  # ── Automattic x-ac edge-cache header (4.7 2026-07-22, Obsidian 153) ───────
+  # A SECOND, INDEPENDENT Automattic tell — the x-ac response header Pressable's
+  # Edge Cache emits (cited to Pressable's KB, a DIFFERENT artifact than the cert
+  # row above → R4-independent). On these flagships the cert is Google-issued so
+  # the row above doesn't fire; x-ac is the sole Automattic signal -> 'suspected'.
+  # Colon-anchored token "x-ac:" — NOT a bare "x-ac" substring — so it cannot
+  # false-fire on x-accel-*/x-account-* (4.7 Q5). vendor-only: x-ac rides the
+  # shared Atomic platform (Pressable + WordPress.com), naming the vendor not a
+  # product (R3 / 4.7 constraint A). Fleet-audited 2026-07-22: only the 2 known
+  # Pressable flagships present it, zero non-Automattic assets.
+  - signal: automattic_x_ac_edge_cache_header
+    observation: http_headers
+    match_substrings: ["x-ac:"]                            # X-AC — Automattic (Pressable/Atomic) edge cache
+    device_class: cdn
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Automattic}                   # display: "Fronted by Automattic"
+
   # ── Cloud-native edges (4.7 cloud-edge phase — SAFE-ALONE header tells) ────
   # Each edge NAMES ITSELF in its own response header (vendor_identifying — same
   # class as cookiesession1 / fwbbot_check: the appliance self-identifies, we

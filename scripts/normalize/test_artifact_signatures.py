@@ -117,3 +117,35 @@ def test_corpus_fwbbot_check_cited_with_independence_dependency():
     assert "fortinet.com" in e["citation"]["url"] and e["citation"]["quote"]
     # 4.7 Q2/Q8c: independence on wafw00f NOT probing /fwbbot_check is recorded.
     assert e["independence_dependencies"]["wafw00f_fortiweb_plugin_does_not_probe_fwbbot_check"] is True
+
+
+# ── Automattic x-ac edge-cache header (4.7 2026-07-22, Obsidian 153) ─────────
+def test_x_ac_header_fires_automattic_suspected():
+    # Pressable/Automattic edge-cache header. One vendor_identifying high -> suspected.
+    r = _classify({"http_headers": "x-ac: True\nserver: nginx"})
+    assert r["device_class"] == "cdn"
+    assert r["vendor_product"].get("vendor") == "Automattic"
+    assert r["vendor_product_confidence"] == "suspected"
+
+
+def test_x_ac_is_colon_anchored_not_x_accel():
+    # LOAD-BEARING (4.7 Q5): the cited token is "x-ac:" — a bare "x-ac" substring
+    # would false-match nginx's x-accel-* headers. If someone drops the colon
+    # anchor, this test catches it. A delete-this-test PR must never merge.
+    r = _classify({"http_headers": "x-accel-buffering: True\nserver: nginx"})
+    assert r["device_class"] == "unknown"
+    assert r["vendor_product"] == {}
+
+
+def test_x_ac_does_not_fire_on_x_account():
+    r = _classify({"http_headers": "x-account-id: 42\nserver: nginx"})
+    assert r["vendor_product"] == {}
+
+
+def test_corpus_x_ac_is_vendor_primary_cited():
+    sigs = d.load_artifact_signatures()
+    e = sigs["x-ac:"]
+    assert e["artifact_type"] == "response_header_token"
+    assert e["vendor"] == "Automattic"
+    assert e["citation"]["source_type"] == "vendor_primary_documentation"
+    assert "pressable.com" in e["citation"]["url"] and e["citation"]["quote"]

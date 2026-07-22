@@ -112,6 +112,26 @@ artifact_signatures:
       quote_provenance: "Microsoft Learn — Azure Front Door HTTP headers / Reference String troubleshooting; surfaced via web search 2026-07-20"
       recheck: monthly
 
+  # ── Automattic / Pressable: x-ac Edge Cache response header (PRIMARY vendor doc) ─
+  # Pressable ("An Automattic hosting lab") documents x-ac as its Edge Cache status
+  # header. WordPress VIP uses x-cache (NOT x-ac), so x-ac is Automattic/Pressable-
+  # specific. Fleet-audited 2026-07-22: only the 2 Pressable flagships present it.
+  # The cited name carries the trailing ":" because the device_fingerprints row
+  # matches the colon-anchored token "x-ac:" (avoids x-accel-*/x-account-* — 4.7 Q5).
+  - name: "x-ac:"
+    artifact_type: response_header_token
+    vendor: Automattic
+    vendor_unique: true
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://pressable.com/knowledgebase/edge-cache/
+      quote: "You can monitor the status of Edge Cache by checking for the x-ac response header in your browser's developer tools"
+      snapshot_url: http://web.archive.org/web/20260310134711/https://pressable.com/knowledgebase/edge-cache/
+      corroboration:
+        - https://docs.wpvip.com/caching/page-cache/http-headers/added-by-vip/
+      cited_at: 2026-07-22
+      quote_provenance: "Pressable KB (Pressable = an Automattic hosting lab); VIP docs use x-cache not x-ac, confirming x-ac is Automattic/Pressable-specific. Surfaced via web search 2026-07-22."
+
   # ── FortiWeb: FORTIWAFSID Set-Cookie (research-tool source) — READY, NOT wired ─
   # wafw00f's own FortiWeb signature cookie. Ready entry, deliberately NOT given a
   # device_fingerprints row: no observed asset serves it, and wafw00f's verdict

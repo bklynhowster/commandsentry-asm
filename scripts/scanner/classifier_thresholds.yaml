@@ -30,6 +30,7 @@ signals:
     - cloudflare_cf_ray_header         # CF-RAY -> Cloudflare (cdn)
     - cloudfront_amz_cf_id_header      # X-Amz-Cf-Id -> AWS CloudFront (cdn)
     - azure_frontdoor_ref_header       # X-Azure-Ref -> Azure Front Door (cdn)
+    - automattic_x_ac_edge_cache_header  # X-AC -> Automattic/Pressable edge cache (cdn); Pressable-KB cited (Obsidian 153, 2026-07-22)
   medium:
     - cert_issuer_subject_pattern      # e.g. a GoDaddy wildcard cert, or a vendor-named cert CN
     # ip_in_vendor_mgmt_range DELETED 2026-07-18 (4.7 R1): an IP range attributes a
