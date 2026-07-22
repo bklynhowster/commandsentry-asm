@@ -59,16 +59,35 @@ jobs:
             exit 0
           fi
 
-          # eligible = owned + confirmed-live + device_class unknown + not already queued/running.
+          # Bug fix (Obsidian 155, 2026-07-22, 4.7 Q5/Q6): gate on ABSENCE OF A
+          # stack_id_passive ARTIFACT, not device_class='unknown'. The old gate let
+          # permanently-unclassifiable assets that DO have artifacts (bare IPs with
+          # no vendor tell — 24.157.51.x, the FortiWEB IP pair) monopolize the
+          # ORDER BY asset_id window forever (digits sort first), starving 18 assets
+          # that genuinely lack stack-ID data (incl. test.commandcommcentral.com,
+          # whose only heavies predate the 07-19 collector). The passive collector
+          # ALWAYS writes a stack_id_passive artifact on a heavy run (even with zero
+          # signals — verified run_heavy.py), so "no artifact" cleanly means "never
+          # had a post-collector heavy." Ordering = least-recently-heavy first
+          # (NULLS FIRST => never-heavy assets first), so no permanently-stuck asset
+          # can head-of-line jam the walker; 4.7 wants this shipped now so a future
+          # stale-refresh scope needs no ordering re-reasoning.
           CTE="with eligible as (
                  select a.asset_id from public.assets a
                   where a.discovery_status = 'confirmed_live'
                     and a.ownership = 'owned'
-                    and coalesce(a.device_class, 'unknown') = 'unknown'
+                    and not exists (select 1 from public.scan_run_artifacts art
+                                      join public.scan_run r on r.scan_run_id = art.scan_run_id
+                                     where r.asset_id = a.asset_id
+                                       and art.tool_name ilike 'stack_id_passive%')
                     and not exists (select 1 from public.scan_queue q
                                      where q.asset_id = a.asset_id
                                        and q.status in ('queued','running'))
-                  order by a.asset_id limit ${BL})"
+                  order by (select max(r.completed_at) from public.scan_run r
+                             where r.asset_id = a.asset_id
+                               and r.intensity = 'heavy' and r.status = 'complete') asc nulls first,
+                           a.asset_id
+                  limit ${BL})"
           COUNT=$(psql "$SUPABASE_DSN" -t -A -v ON_ERROR_STOP=1 -c "${CTE} select count(*) from eligible;")
           echo "::notice::Unclassified live assets to enqueue this run: ${COUNT} (heavy backlog=${BACKLOG})"
 
