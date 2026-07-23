@@ -312,10 +312,12 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
     d_detected, d_vendor = _discovery_waf(cur, asset_id)
     if d_detected:
         dv = str(d_vendor or "").strip().lower()
+        # NAMED vendor ONLY. A generic/None discovery verdict fires NOTHING (157 dry-run,
+        # 4.7 2026-07-23): discovery generic wafw00f false-positived 19 assets and (via F3)
+        # downgraded 9 CONFIRMED cloud classes, so we never publish a generic discovery WAF —
+        # discovery wafw00f names a vendor or stays silent. Heavy generic presence is separate.
         if dv and dv not in ("none", "generic"):
             obs["waf_vendor_discovery"] = d_vendor       # -> wafw00f_discovery_confidence
-        else:
-            obs["waf_present_discovery"] = True          # -> waf_present_discovery_wafw00f
     return obs
 
 
@@ -476,7 +478,7 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
             # asking "why not confirmed?" has the answer in the run log.
             if nc == "waf" and ncf == "suspected":
                 _sigs = {e.get("signal") for e in res["evidence"]}
-                if ({"wafw00f_discovery_confidence", "waf_present_discovery_wafw00f"} & _sigs) \
+                if "wafw00f_discovery_confidence" in _sigs \
                         and "wafw00f_high_confidence" not in _sigs:
                     print(f"  · {a['asset_id']}: capped at suspected: "
                           f"source=discovery_wafw00f, heavy_wafw00f_absent=true")

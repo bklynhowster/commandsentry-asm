@@ -30,7 +30,8 @@ signals:
     # via dedupe_key: wafw00f_detection so heavy+discovery count ONCE (4.7 Q2). Lifts the
     # FortiWeb estate off 'unknown' with no per-host heavy scan (4.7 Q1).
     - wafw00f_discovery_confidence     # discovery wafw00f NAMES a vendor (fortiweb/cloudflare) — high, dedupes w/ heavy
-    - waf_present_discovery_wafw00f    # discovery wafw00f detected a WAF but named no vendor — presence-only
+    # waf_present_discovery_wafw00f REMOVED (157 dry-run, 4.7 2026-07-23): discovery GENERIC
+    # wafw00f false-positived 19 assets + downgraded 9 confirmed cloud classes. Named-vendor only.
     # Cloud-native edges (4.7 cloud-edge phase, safe-alone) — each is one self-naming
     # response header = 1 high = 'suspected'; a 2nd independent header tell (deferred,
     # AND-matching) is required for 'confirmed'. All cited in artifact_signatures.yaml.

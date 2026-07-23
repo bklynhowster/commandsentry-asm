@@ -438,7 +438,7 @@ def _selftest() -> int:
               "waf_vendor_discovery": "FortiWeb"}                #   dedupe_key -> ONE signal -> suspected
     corrob = {"waf_vendor_discovery": "FortiWeb",               # discovery wafw00f + an INDEPENDENT
               "set_cookie_names": ["cookiesession1"]}            #   tell (cookiesession1) -> confirmed
-    disc_generic = {"waf_present_discovery": True}               # discovery WAF, no vendor -> presence suspected
+    disc_generic = {"waf_present_discovery": True}               # 157: generic discovery now fires NOTHING (removed)
 
     expected = {
         "ftp": ("edge_firewall", "suspected"),
@@ -448,7 +448,7 @@ def _selftest() -> int:
         "disc": ("waf", "suspected"),
         "dedupe": ("waf", "suspected"),
         "corrob": ("waf", "confirmed"),
-        "disc_generic": ("waf", "suspected"),
+        "disc_generic": ("unknown", "unknown"),
     }
     results = {"ftp": classify(ftp, fps, th), "waf": classify(waf, fps, th),
                "bare": classify(bare, fps, th),
@@ -473,12 +473,14 @@ def _selftest() -> int:
     ok &= dd_ok
     print(f"  {'OK ' if dd_ok else 'XX '}157 dedupe: 2 wafw00f rows match but tally ONCE "
           f"-> vp_conf={dd['vendor_product_confidence']} (want suspected, not confirmed)")
-    # discovery-only names a vendor at 'suspected'; presence-only discovery names none.
+    # 157 (4.7 dry-run correction): discovery NAMES a vendor at 'suspected'; a GENERIC
+    # discovery verdict must publish NOTHING — removed after it false-positived 19 assets +
+    # downgraded 9 confirmed cloud classes on live data.
     disc_ok = (results["disc"]["vendor_product_confidence"] == "suspected"
-               and results["disc_generic"]["vendor_product_confidence"] == "unknown")
+               and results["disc_generic"]["device_class"] == "unknown")
     ok &= disc_ok
-    print(f"  {'OK ' if disc_ok else 'XX '}157 discovery vendor bar: named={results['disc']['vendor_product_confidence']} "
-          f"presence-only={results['disc_generic']['vendor_product_confidence']} (want suspected / unknown)")
+    print(f"  {'OK ' if disc_ok else 'XX '}157 discovery: named-vendor={results['disc']['vendor_product_confidence']} "
+          f"generic->{results['disc_generic']['device_class']} (want suspected / unknown)")
 
     # 4.7 R6 — the live registry must satisfy the evidence-class schema, and the
     # validator must REJECT violations (both directions, or it isn't a guard).

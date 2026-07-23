@@ -141,7 +141,8 @@ fingerprints:
   # The SAME wafw00f detection, but from the LIGHT/discovery scan — its verdict is
   # persisted in asset_surface.surface_data.subdomains[].waf {detected, vendor} (the
   # ASM import stores it; the classifier already loads this blob for the cloud fallback).
-  # gather_observations now also emits it as waf_vendor_discovery / waf_present_discovery.
+  # gather_observations now also emits it as waf_vendor_discovery (NAMED vendor only —
+  # a generic discovery verdict is deliberately dropped; see the removal note below).
   # dedupe_key = wafw00f_detection: shared with the heavy rows above, so heavy + discovery
   # wafw00f count as ONE signal (4.7 Q2 — "same underlying detection, not same row").
   # A single high signal = 'suspected' (4.7 Q1 cap); a 2nd INDEPENDENT tell (cookiesession1,
@@ -176,16 +177,16 @@ fingerprints:
     device_class: waf
     evidence_class: presence_only
     vendor_product: {}
-    dedupe_key: wafw00f_detection                           # 157: dedupe against discovery wafw00f presence
-  # Discovery-tier wafw00f presence (Obsidian 157): wafw00f detected a WAF in the light
-  # scan but named no vendor. Presence-only "Behind a WAF" @ suspected. Same dedupe_key.
-  - signal: waf_present_discovery_wafw00f
-    observation: waf_present_discovery
-    match_bool: true
-    device_class: waf
-    evidence_class: presence_only
-    vendor_product: {}
-    dedupe_key: wafw00f_detection
+    dedupe_key: wafw00f_detection                           # 157: dedupe w/ named discovery wafw00f
+  # NOTE (157, 4.7 2026-07-23 DRY-RUN FINDING): a discovery-tier GENERIC wafw00f presence
+  # signal was built, tested against live data, and REMOVED. It false-positived "Behind a
+  # WAF" on 19 assets (insite.sciimage.com, the Pressable-parked unimac hosts, ftp, bare
+  # IPs) AND — via F3 fingerprint-first — DOWNGRADED 9 CONFIRMED cloud_endpoint/cdn classes
+  # (every Azure app + the O365 mail host) to waf/suspected. wafw00f's GENERIC verdict at
+  # the discovery operating envelope is too noisy to publish. Discovery wafw00f now
+  # contributes ONLY when it NAMES a vendor (the two rows above). Heavy-scan generic
+  # presence (waf_present_wafw00f, deeper multi-pass probing) is retained; discovery
+  # generic is not — the operating-envelope distinction 4.7 Q1 anticipated, made concrete.
 
   # ── Differential WAF-presence probe (HIGH, presence-only) — 4.7 Cloud Armor ─
   # DORMANT until the Phase-B collector ships (like fwbbot was). An active differential
