@@ -128,12 +128,39 @@ fingerprints:
     device_class: waf
     evidence_class: vendor_identifying
     vendor_product: {vendor: Fortinet, product: FortiWeb}
+    dedupe_key: wafw00f_detection                           # 157: heavy+discovery wafw00f = one detection
   - signal: wafw00f_high_confidence
     observation: waf_vendor
     match_substrings: ["cloudflare"]
     device_class: waf
     evidence_class: vendor_identifying
     vendor_product: {vendor: Cloudflare, product: Cloudflare}
+    dedupe_key: wafw00f_detection
+
+  # ── Discovery-tier wafw00f (Obsidian 157, 4.7 2026-07-23) ─────────────────
+  # The SAME wafw00f detection, but from the LIGHT/discovery scan — its verdict is
+  # persisted in asset_surface.surface_data.subdomains[].waf {detected, vendor} (the
+  # ASM import stores it; the classifier already loads this blob for the cloud fallback).
+  # gather_observations now also emits it as waf_vendor_discovery / waf_present_discovery.
+  # dedupe_key = wafw00f_detection: shared with the heavy rows above, so heavy + discovery
+  # wafw00f count as ONE signal (4.7 Q2 — "same underlying detection, not same row").
+  # A single high signal = 'suspected' (4.7 Q1 cap); a 2nd INDEPENDENT tell (cookiesession1,
+  # fwbbot_check) still reaches 'confirmed'. wafw00f's verdict is self-naming → no R4
+  # artifact citation required (same as the heavy wafw00f rows).
+  - signal: wafw00f_discovery_confidence
+    observation: waf_vendor_discovery
+    match_substrings: ["fortiweb", "fortinet"]
+    device_class: waf
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Fortinet, product: FortiWeb}
+    dedupe_key: wafw00f_detection
+  - signal: wafw00f_discovery_confidence
+    observation: waf_vendor_discovery
+    match_substrings: ["cloudflare"]
+    device_class: waf
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Cloudflare, product: Cloudflare}
+    dedupe_key: wafw00f_detection
 
   # ── wafw00f WAF presence (HIGH, presence-only) — 4.7 Q1 (Obsidian 146) ────
   # wafw00f (a 150-signature purpose-built WAF detector) fired but named no
@@ -149,6 +176,16 @@ fingerprints:
     device_class: waf
     evidence_class: presence_only
     vendor_product: {}
+    dedupe_key: wafw00f_detection                           # 157: dedupe against discovery wafw00f presence
+  # Discovery-tier wafw00f presence (Obsidian 157): wafw00f detected a WAF in the light
+  # scan but named no vendor. Presence-only "Behind a WAF" @ suspected. Same dedupe_key.
+  - signal: waf_present_discovery_wafw00f
+    observation: waf_present_discovery
+    match_bool: true
+    device_class: waf
+    evidence_class: presence_only
+    vendor_product: {}
+    dedupe_key: wafw00f_detection
 
   # ── Differential WAF-presence probe (HIGH, presence-only) — 4.7 Cloud Armor ─
   # DORMANT until the Phase-B collector ships (like fwbbot was). An active differential

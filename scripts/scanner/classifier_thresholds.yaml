@@ -22,6 +22,15 @@ signals:
     - waf_present_wafw00f              # 4.7 Q1: wafw00f detected a WAF but named no vendor — presence-only "Behind a WAF"
     - waf_present_differential         # 4.7 Cloud Armor: differential probe (>=2 payload classes block, benign passes) proves WAF presence; presence-only, NO vendor (DORMANT until Phase-B collector)
     - fortiweb_cookiesession1          # 4.7 Q2: FortiWeb cookiesession1 Set-Cookie (Fortinet primary-doc cited), independent of wafw00f
+    # ── Discovery-tier wafw00f (Obsidian 157, 4.7 2026-07-23) ──────────────────
+    # WAF verdict from the LIGHT/discovery scan (asset_surface.surface_data.subdomains[].waf),
+    # NOT the heavy stack_id_wafw00f artifact. Same tool, lower operating envelope (reduced
+    # rate/depth, unauth, single-pass). Capped at 'suspected' naturally: one high signal =
+    # suspected (needs a 2nd INDEPENDENT tell for confirmed). Deduped against heavy wafw00f
+    # via dedupe_key: wafw00f_detection so heavy+discovery count ONCE (4.7 Q2). Lifts the
+    # FortiWeb estate off 'unknown' with no per-host heavy scan (4.7 Q1).
+    - wafw00f_discovery_confidence     # discovery wafw00f NAMES a vendor (fortiweb/cloudflare) — high, dedupes w/ heavy
+    - waf_present_discovery_wafw00f    # discovery wafw00f detected a WAF but named no vendor — presence-only
     # Cloud-native edges (4.7 cloud-edge phase, safe-alone) — each is one self-naming
     # response header = 1 high = 'suspected'; a 2nd independent header tell (deferred,
     # AND-matching) is required for 'confirmed'. All cited in artifact_signatures.yaml.

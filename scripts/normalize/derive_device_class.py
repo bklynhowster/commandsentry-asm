@@ -304,6 +304,10 @@ def match_signals(observations: dict, fingerprints: list[dict], thresholds: dict
             # R5 (Obsidian 146): carry evidence_class onto each record so classify()
             # can score vendor_product_confidence from vendor_identifying signals ONLY.
             "evidence_class": fp.get("evidence_class"),
+            # 157 (4.7 Q2): dedupe_key groups signals reading the SAME underlying
+            # detection (e.g. heavy + discovery wafw00f) so they tally ONCE. Defaults
+            # to the signal name → every existing row is unchanged (its key == its name).
+            "dedupe_key": fp.get("dedupe_key") or sig,
             "matched": ev,
             "observation": fp.get("observation"),
         })
@@ -345,16 +349,35 @@ def classify(observations: dict,
     # vendor_product_confidence scores over vendor_identifying signals ONLY, so a
     # presence-only-confirmed asset never earns the right to NAME a vendor. This is
     # the load-bearing gate P2 reads before firing any CVE-attribution finding.
-    by_class: dict[str, dict] = {}
+    # 157 (4.7 Q2) — DEDUPE by shared underlying detection BEFORE tallying. Signals
+    # sharing a dedupe_key (e.g. heavy + discovery wafw00f) collapse to ONE group that
+    # takes the MAX weight among its rows ("resolved confidence = HIGHER of the two"),
+    # and whose vendor_identifying strength is the max weight among its vendor_identifying
+    # rows. dedupe_key defaults to the signal name (match_signals), so every non-shared
+    # signal is its own singleton group == the prior distinct-signal-name tally: existing
+    # classifications are byte-identical (additive, no soak reset — 4.7 Q4).
+    _RANK = {"low": 1, "medium": 2, "high": 3}
+    groups: dict[tuple, dict] = {}
     for m in matched:
+        g = groups.setdefault(
+            (m["device_class"], m["dedupe_key"]),
+            {"weight": "low", "vi_weight": None, "vendor": {}})
+        if _RANK[m["weight"]] > _RANK[g["weight"]]:
+            g["weight"] = m["weight"]
+        if m.get("evidence_class") == "vendor_identifying" and (
+                g["vi_weight"] is None or _RANK[m["weight"]] > _RANK[g["vi_weight"]]):
+            g["vi_weight"] = m["weight"]
+        g["vendor"].update(m["vendor_product"])
+
+    by_class: dict[str, dict] = {}
+    for (dc, key), g in groups.items():
         slot = by_class.setdefault(
-            m["device_class"],
-            {"high": set(), "medium": set(), "low": set(),
-             "vi_high": set(), "vi_medium": set(), "vendor": {}})
-        slot[m["weight"]].add(m["signal"])
-        if m.get("evidence_class") == "vendor_identifying" and m["weight"] in ("high", "medium"):
-            slot["vi_" + m["weight"]].add(m["signal"])
-        slot["vendor"].update(m["vendor_product"])
+            dc, {"high": set(), "medium": set(), "low": set(),
+                 "vi_high": set(), "vi_medium": set(), "vendor": {}})
+        slot[g["weight"]].add(key)
+        if g["vi_weight"] in ("high", "medium"):
+            slot["vi_" + g["vi_weight"]].add(key)
+        slot["vendor"].update(g["vendor"])
 
     win_class, win = max(
         by_class.items(),
@@ -409,16 +432,30 @@ def _selftest() -> int:
     #    the real production outcome. Honest expectation: unknown. (Promote the
     #    cert CN to a vendor-identifying HIGH signal to lift Automattic to the bar.)
     pressable = {"cert_subject": "tls.automattic.com"}
+    # 5-8) 157 (4.7 Q1/Q2) — discovery-tier wafw00f from asset_surface.
+    disc = {"waf_vendor_discovery": "FortiWeb"}                  # discovery-only -> suspected (cap)
+    dedupe = {"waf_vendor": "FortiWeb",                          # heavy+discovery wafw00f share
+              "waf_vendor_discovery": "FortiWeb"}                #   dedupe_key -> ONE signal -> suspected
+    corrob = {"waf_vendor_discovery": "FortiWeb",               # discovery wafw00f + an INDEPENDENT
+              "set_cookie_names": ["cookiesession1"]}            #   tell (cookiesession1) -> confirmed
+    disc_generic = {"waf_present_discovery": True}               # discovery WAF, no vendor -> presence suspected
 
     expected = {
         "ftp": ("edge_firewall", "suspected"),
         "waf": ("waf", "confirmed"),
         "bare": ("unknown", "unknown"),
         "pressable": ("unknown", "unknown"),
+        "disc": ("waf", "suspected"),
+        "dedupe": ("waf", "suspected"),
+        "corrob": ("waf", "confirmed"),
+        "disc_generic": ("waf", "suspected"),
     }
     results = {"ftp": classify(ftp, fps, th), "waf": classify(waf, fps, th),
                "bare": classify(bare, fps, th),
-               "pressable": classify(pressable, fps, th)}
+               "pressable": classify(pressable, fps, th),
+               "disc": classify(disc, fps, th), "dedupe": classify(dedupe, fps, th),
+               "corrob": classify(corrob, fps, th),
+               "disc_generic": classify(disc_generic, fps, th)}
     ok = True
     for k, r in results.items():
         got = (r["device_class"], r["confidence"])
@@ -426,6 +463,22 @@ def _selftest() -> int:
         ok &= got == expected[k]
         print(f"  {flag}{k:5s} -> class={r['device_class']:<13s} conf={r['confidence']:<9s} "
               f"vendor={r['vendor_product']}  (want {expected[k]})")
+
+    # 157 dedupe (4.7 Q2 biggest risk) — heavy+discovery wafw00f must NOT double-count:
+    # the vendor bar stays 'suspected' (ONE increment), not 'confirmed'.
+    dd = results["dedupe"]
+    dd_ok = (dd["vendor_product_confidence"] == "suspected"
+             and dd["vendor_product"].get("vendor") == "Fortinet"
+             and len([e for e in dd["evidence"] if e["dedupe_key"] == "wafw00f_detection"]) == 2)
+    ok &= dd_ok
+    print(f"  {'OK ' if dd_ok else 'XX '}157 dedupe: 2 wafw00f rows match but tally ONCE "
+          f"-> vp_conf={dd['vendor_product_confidence']} (want suspected, not confirmed)")
+    # discovery-only names a vendor at 'suspected'; presence-only discovery names none.
+    disc_ok = (results["disc"]["vendor_product_confidence"] == "suspected"
+               and results["disc_generic"]["vendor_product_confidence"] == "unknown")
+    ok &= disc_ok
+    print(f"  {'OK ' if disc_ok else 'XX '}157 discovery vendor bar: named={results['disc']['vendor_product_confidence']} "
+          f"presence-only={results['disc_generic']['vendor_product_confidence']} (want suspected / unknown)")
 
     # 4.7 R6 — the live registry must satisfy the evidence-class schema, and the
     # validator must REJECT violations (both directions, or it isn't a guard).

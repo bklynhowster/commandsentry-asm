@@ -195,6 +195,42 @@ def _fwbbot_corroborated(probe: dict | None) -> bool:
     return isinstance(probe, dict) and probe.get("corroborated") is True
 
 
+# ── Discovery-tier wafw00f (157, 4.7 Q1/Q2) ──────────────────────────────
+def _discovery_waf(cur, asset_id: str):
+    """The LIGHT/discovery-scan wafw00f verdict — persisted in
+    asset_surface.surface_data.subdomains[].waf {detected, vendor} by the ASM import
+    (import_asm_to_surface.py), the same blob the cloud fallback already reads. Returns
+    (detected, vendor) for THIS asset's own subdomain entry, else (False, None). This is
+    the SAME wafw00f detection as the heavy stack_id_wafw00f artifact but at a lower
+    operating envelope (reduced rate/depth, unauth), so the registry dedupes the two
+    (dedupe_key wafw00f_detection) and caps a discovery-only WAF at 'suspected'."""
+    cur.execute("select surface_data from public.asset_surface where asset_id=%s", (asset_id,))
+    row = cur.fetchone()
+    if not row or not row.get("surface_data"):
+        return (False, None)
+    sd = row["surface_data"]
+    if isinstance(sd, str):
+        try:
+            sd = json.loads(sd)
+        except Exception:
+            return (False, None)
+    subs = sd.get("subdomains") if isinstance(sd, dict) else None
+    if not isinstance(subs, list) or not subs:
+        return (False, None)
+    aid = str(asset_id).lower()
+    entry = next((s for s in subs
+                  if isinstance(s, dict) and str(s.get("name", "")).lower() == aid), None)
+    # sliced single-host surface (a per-subdomain asset) -> the lone entry is this asset
+    if entry is None and len(subs) == 1 and isinstance(subs[0], dict):
+        entry = subs[0]
+    if not isinstance(entry, dict):
+        return (False, None)
+    waf = entry.get("waf")
+    if not isinstance(waf, dict) or not waf.get("detected"):
+        return (False, None)
+    return (True, waf.get("vendor"))
+
+
 # ── DB signal gather (fresh signals for one asset) ───────────────────────
 def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str) -> dict:
     obs: dict = {}
@@ -267,6 +303,19 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
     probe = _fresh_json("stack_id_fwbbot_check")
     if _fwbbot_corroborated(probe):
         obs["fwbbot_check"] = True
+
+    # 157 (4.7 Q1/Q2): discovery-tier wafw00f from asset_surface (light scan), distinct
+    # from the heavy stack_id_wafw00f above. Registry dedupes the two (dedupe_key) so heavy
+    # wins when both fire and discovery-only caps at 'suspected'. This is what lifts the
+    # FortiWeb estate (test/testapi/www/geisinger.commandcommcentral.com) off 'unknown'
+    # without a per-host heavy scan. vendor 'None'/'Generic' -> presence-only; else named.
+    d_detected, d_vendor = _discovery_waf(cur, asset_id)
+    if d_detected:
+        dv = str(d_vendor or "").strip().lower()
+        if dv and dv not in ("none", "generic"):
+            obs["waf_vendor_discovery"] = d_vendor       # -> wafw00f_discovery_confidence
+        else:
+            obs["waf_present_discovery"] = True          # -> waf_present_discovery_wafw00f
     return obs
 
 
@@ -422,6 +471,15 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
             # R5 vendor bar (P1). Cloud-fallback results have no vendor_product_confidence
             # (cloud_provider is not a security-stack vendor) -> default 'unknown'.
             vpc = res.get("vendor_product_confidence", "unknown")
+            # 157 (4.7 Q1): audit-log the suspected cap when a WAF class rests on the
+            # discovery wafw00f alone (no heavy wafw00f corroboration) — so an operator
+            # asking "why not confirmed?" has the answer in the run log.
+            if nc == "waf" and ncf == "suspected":
+                _sigs = {e.get("signal") for e in res["evidence"]}
+                if ({"wafw00f_discovery_confidence", "waf_present_discovery_wafw00f"} & _sigs) \
+                        and "wafw00f_high_confidence" not in _sigs:
+                    print(f"  · {a['asset_id']}: capped at suspected: "
+                          f"source=discovery_wafw00f, heavy_wafw00f_absent=true")
             if nc == "unknown":
                 unknown += 1
             if from_cloud:
