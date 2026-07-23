@@ -17,8 +17,15 @@ name: Seed Device-Class
 # Byte-identical both repos (Command + Prodex).
 
 on:
-  schedule:
-    - cron: '17 */3 * * *'        # every 3 hours (offset :17 to dodge top-of-hour congestion)
+  # PAUSED 2026-07-22 (Obsidian 156): the 3h cron re-enqueued hosts that can only ever
+  # DEGRADE (nameservers / infra with no web surface — ns01/ns02.*, firewall.*, some
+  # mail.* hosts). A degraded heavy writes NO stack_id_passive artifact, so the Fix-B
+  # artifact-absence gate never excludes them; each degraded heavy also exits code 3,
+  # which GitHub reports as a failed run => a failure email. Cron disabled until 4.7
+  # rules on (a) a degrade-aware seed gate and (b) degraded-exit semantics. Manual
+  # dispatch below still works. Re-enable by uncommenting the schedule.
+  # schedule:
+  #   - cron: '17 */3 * * *'        # every 3 hours (offset :17 to dodge top-of-hour congestion)
   workflow_dispatch:
     inputs:
       batch_limit:
@@ -76,6 +83,21 @@ jobs:
                  select a.asset_id from public.assets a
                   where a.discovery_status = 'confirmed_live'
                     and a.ownership = 'owned'
+                    -- 156 Fix 2 (4.7 Q3): never seed an infra host with no web surface.
+                    and not a.not_web_scannable
+                    -- 156 Fix 2 (4.7 Q2): ONE post-collector heavy shot, then out. A heavy
+                    -- since the passive collector went live (2026-07-19) means the asset has
+                    -- had its chance: it either completed (=> stack_id_passive artifact, so
+                    -- the next gate excludes it) OR degraded (=> no artifact, but re-scanning
+                    -- just degrades again — the loop we're closing). 'failed' does NOT count
+                    -- (workflow error, not a real attempt) so failed assets get retried.
+                    -- started_at is the anchor (scan_run has no created_at). Keeps
+                    -- test.commandcommcentral.com eligible — its only heavy is 07-11, pre-collector.
+                    and not exists (select 1 from public.scan_run r2
+                                     where r2.asset_id = a.asset_id
+                                       and r2.intensity = 'heavy'
+                                       and r2.status in ('complete','degraded')
+                                       and r2.started_at >= '2026-07-19')
                     and not exists (select 1 from public.scan_run_artifacts art
                                       join public.scan_run r on r.scan_run_id = art.scan_run_id
                                      where r.asset_id = a.asset_id

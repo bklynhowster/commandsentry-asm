@@ -2337,7 +2337,12 @@ def run(descriptor_path: str, dsn: str) -> int:
             except Exception:
                 pass
             return 1
-        return 3
+        # Degraded is a VALID recorded outcome (status=degraded persisted) — the scan
+        # ran, the target just didn't respond usefully to the tools. Exit 0 so GitHub
+        # doesn't flag the workflow run as failed (was `return 3` → email flood; Obsidian
+        # 156, 4.7 Q1). Genuine failures (degraded-bookkeeping error above, unhandled
+        # exception below) stay non-zero. Downstream keys on scan_run.status, not exit code.
+        return 0
 
     except Exception as e:
         log(f"FATAL: unhandled exception: {e!r}")

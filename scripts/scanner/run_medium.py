@@ -4284,7 +4284,11 @@ def run(descriptor_path: str, dsn: str) -> int:
                 f"findings.scan_quality flipped if any.")
         except Exception as e2:
             log(f"degraded_out also failed: {e2!r}")
-        return 1
+            return 1  # degraded BOOKKEEPING failed — a real error, workflow goes red
+        # Degraded recorded cleanly = a VALID outcome (status=degraded persisted). Exit 0
+        # so GitHub doesn't flag the run as failed (was `return 1` → email flood; Obsidian
+        # 156, 4.7 Q1). Downstream keys on scan_run.status, not the process exit code.
+        return 0
     except Exception as e:
         log(f"FATAL: {e!r}")
         # Try to mark the run failed even if the FATAL happened mid-scan.
