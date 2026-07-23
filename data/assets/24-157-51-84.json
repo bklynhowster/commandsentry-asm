@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-07-23T14:44:40Z_0c945b58",
-    "started_at": "2026-07-23T14:44:40Z",
-    "completed_at": "2026-07-23T14:46:21Z",
-    "duration_seconds": 101,
+    "id": "scan_2026-07-23T20:00:26Z_5f556ed1",
+    "started_at": "2026-07-23T20:00:26Z",
+    "completed_at": "2026-07-23T20:02:22Z",
+    "duration_seconds": 116,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -30,7 +30,7 @@
     "live_subdomain_count": 1,
     "host_count": 1,
     "service_count": 1,
-    "newest_cert_expiry_days": 195,
+    "newest_cert_expiry_days": 194,
     "top_hosting_org": "Cablevision Systems Corp.",
     "platforms": []
   },
@@ -40,8 +40,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-07-23T14:46:21Z",
-      "last_seen": "2026-07-23T14:46:21Z",
+      "first_discovered": "2026-07-23T20:02:22Z",
+      "last_seen": "2026-07-23T20:02:22Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -56,7 +56,7 @@
           "asn_org": "Cablevision Systems Corp.",
           "country": "US",
           "region": "New York",
-          "city": "Highland",
+          "city": "Manorville",
           "reverse_dns": "189d3354.cst.lightpath.net",
           "is_private": false
         }
@@ -79,7 +79,7 @@
             "not_before": "2026-01-02T18:09:45Z",
             "not_after": "2027-02-03T18:09:45Z",
             "self_signed": false,
-            "days_to_expiry": 195
+            "days_to_expiry": 194
           }
         }
       ],
@@ -113,7 +113,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-07-23T09:04:31Z_aa9a988a",
+    "since_scan": "scan_2026-07-23T14:44:40Z_0c945b58",
     "added": {
       "subdomains": [],
       "services": [],
@@ -131,26 +131,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-06-26T10:00:30Z_ed78c3af",
-      "started_at": "2026-06-26T10:00:30Z",
-      "completed_at": "2026-06-26T10:01:51Z",
-      "subdomain_count": 1,
-      "live_subdomain_count": 1,
-      "host_count": 1,
-      "service_count": 1,
-      "subdomain_names": [
-        "24.157.51.84"
-      ],
-      "ports_by_sub": {
-        "24.157.51.84": {
-          "24.157.51.84": [
-            443
-          ]
-        }
-      },
-      "tech_versions": {}
-    },
     {
       "scan_id": "scan_2026-06-26T15:01:08Z_899c2056",
       "started_at": "2026-06-26T15:01:08Z",
@@ -2515,6 +2495,26 @@
       "scan_id": "scan_2026-07-23T14:44:40Z_0c945b58",
       "started_at": "2026-07-23T14:44:40Z",
       "completed_at": "2026-07-23T14:46:21Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 1,
+      "subdomain_names": [
+        "24.157.51.84"
+      ],
+      "ports_by_sub": {
+        "24.157.51.84": {
+          "24.157.51.84": [
+            443
+          ]
+        }
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-07-23T20:00:26Z_5f556ed1",
+      "started_at": "2026-07-23T20:00:26Z",
+      "completed_at": "2026-07-23T20:02:22Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 1,
