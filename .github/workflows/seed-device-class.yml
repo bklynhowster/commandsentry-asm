@@ -17,15 +17,16 @@ name: Seed Device-Class
 # Byte-identical both repos (Command + Prodex).
 
 on:
-  # PAUSED 2026-07-22 (Obsidian 156): the 3h cron re-enqueued hosts that can only ever
-  # DEGRADE (nameservers / infra with no web surface — ns01/ns02.*, firewall.*, some
-  # mail.* hosts). A degraded heavy writes NO stack_id_passive artifact, so the Fix-B
-  # artifact-absence gate never excludes them; each degraded heavy also exits code 3,
-  # which GitHub reports as a failed run => a failure email. Cron disabled until 4.7
-  # rules on (a) a degrade-aware seed gate and (b) degraded-exit semantics. Manual
-  # dispatch below still works. Re-enable by uncommenting the schedule.
-  # schedule:
-  #   - cron: '17 */3 * * *'        # every 3 hours (offset :17 to dodge top-of-hour congestion)
+  # RE-ENABLED 2026-07-23 (Obsidian 156) after every 156 fix shipped + was VERIFIED live:
+  #   • Fix 2 (degrade-aware seed gate) + Fix 3 (not_web_scannable mark) exclude the 6
+  #     infra degraders — dry-run of this gate = 3 real targets (ftp/insite.sciimage.com,
+  #     test.commandcommcentral.com), degraders gone.
+  #   • Fix 1 (degraded => exit 0) proven in production: Scanner #1290 scanned
+  #     ns02.sciimage.com heavy, came back degraded, and the run was GREEN (no failure
+  #     email). So even if a still-queued degrader drains, it no longer emails.
+  # 4.7 Q6 re-enable bar met. (Paused 2026-07-22; see git history for the incident.)
+  schedule:
+    - cron: '17 */3 * * *'        # every 3 hours (offset :17 to dodge top-of-hour congestion)
   workflow_dispatch:
     inputs:
       batch_limit:
