@@ -3279,13 +3279,13 @@ UPSERT_FINDING_SQL = """
 INSERT INTO public.findings (
     finding_id, asset_id, title, severity, category, description,
     cwe, "references", current_status, first_detected_at,
-    last_observed_at, source, tags, normalized_key,
+    last_observed_at, source, tags, normalized_key, params,
     validation_status, scanner_version, validated_at,
     first_detected_scan, last_seen_scan_run
 )
 VALUES (%(finding_id)s, %(asset_id)s, %(title)s, %(severity)s, %(category)s,
         %(description)s, %(cwe)s, %(references)s, 'detected',
-        now(), now(), %(source)s, %(tags)s, %(normalized_key)s,
+        now(), now(), %(source)s, %(tags)s, %(normalized_key)s, %(params)s::jsonb,
         %(validation_status)s, %(scanner_version)s,
         CASE WHEN %(validation_status)s = 'validated' THEN now() ELSE NULL END,
         %(scan_run_id)s, %(scan_run_id)s)
@@ -3332,6 +3332,11 @@ ON CONFLICT (finding_id) DO UPDATE SET
     -- Bucket-3 nikto finding (EXCLUDED NULL) preserves the existing key so a
     -- cross-source curated key is never clobbered.
     normalized_key    = COALESCE(EXCLUDED.normalized_key, findings.normalized_key),
+    -- #2.05 (Obsidian 160) — per-class target context. New non-empty wins; an empty '{}'
+    -- re-emit (a non-safe-exploit re-detect of the same finding_id) preserves any existing
+    -- params, mirroring the normalized_key "never clobber curated" rule directly above.
+    params            = CASE WHEN EXCLUDED.params = '{}'::jsonb
+                             THEN findings.params ELSE EXCLUDED.params END,
     -- Trust-layer Part 3 — derive-on-write (replaces upgrade-only CASE).
     -- validation_status follows the CURRENT scanner_version's active-set
     -- membership. Promote AND demote. Re-validation on a different
@@ -3510,6 +3515,9 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 "source": f"commandsentry_{ctx.intensity}",
                 "tags": f.tags,
                 "normalized_key": f.normalized_key,   # 4.7 I2 — class-collapse key
+                # #2.05 (Obsidian 160) — per-class target context. Medium findings carry no
+                # params; default '{}' matches the findings.params column default.
+                "params": Json(getattr(f, "params", None) or {}),
                 "validation_status": validation_status,
                 "scanner_version": scanner_version,
                 # Bug D fix (paired with trust-layer Part 4) — populate

@@ -975,6 +975,67 @@ def _parse_raw_headers(text: str) -> dict:
     return hdrs
 
 
+# #2.05.CORS soak gate (4.7 emitter-7d-soak + destructive-auto-action discipline): the passive
+# emitter WRITES findings, so it ships DRY-RUN by default. Unset -> audit-log what it WOULD emit
+# (so the 7d soak is watchable from logs), write nothing. Flip CORS_PASSIVE_EMIT_LIVE=1 after the
+# soak to start persisting. The active #2.1.b.CORS probe (later push) has its own separate gate.
+_CORS_PASSIVE_EMIT_LIVE = os.environ.get("CORS_PASSIVE_EMIT_LIVE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _emit_passive_cors_finding(ctx: HeavyScanContext, hdrs: dict) -> None:
+    """#2.05.CORS passive emitter (Obsidian 160, 4.7 Q1/Q2). Reuses the headers the passive
+    stack-id phase JUST parsed — ZERO new requests. A permissive CORS posture visible on a
+    plain browser-UA request (no Origin sent) is an always-on misconfiguration worth a LOW
+    SEED finding; the active #2.1.b.CORS probe (later push) confirms reflection / credentialed
+    read and escalates severity. not_web_scannable assets cannot reach a qualifying verdict
+    here — the Content-Type(json/html)+live-ACAO gate inside se.emit_cors_finding structurally
+    excludes non-web surfaces, so no DB round-trip is added to this persist-only phase.
+    DRY-RUN by default (CORS_PASSIVE_EMIT_LIVE unset) — audit-logs, writes nothing.
+    ADDITIVE + NON-FATAL: any error is swallowed so a header edge case can never abort the tier."""
+    try:
+        url = f"https://{ctx.hostname}/"
+        lh = {str(k).lower(): str(v) for k, v in (hdrs or {}).items()}
+        acao = lh.get("access-control-allow-origin")
+        params = se.emit_cors_finding(url, hdrs)
+        if acao:   # 4.7 Q1 — audit-log EVERY observed CORS posture, emitted or not
+            log(f"  cors: observed ACAO={acao!r} "
+                f"ACAC={lh.get('access-control-allow-credentials')!r} "
+                f"CT={lh.get('content-type')!r} -> "
+                f"{'EMIT' if params else 'no-emit (not permissive on a sensitive/credentialed surface)'}")
+        if not params:
+            return
+        if not _CORS_PASSIVE_EMIT_LIVE:   # soak: log the intent, persist nothing
+            log(f"  cors: DRY-RUN (CORS_PASSIVE_EMIT_LIVE unset) — would emit LOW cors finding "
+                f"for {url} (ACAO={params['acao_observed']}, creds={params['acac_observed']}); no write")
+            return
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ctx.findings.append(FindingEvent(
+            finding_id=stable_finding_id(ctx.asset_id, "cors-passive", "cors-posture", url),
+            asset_id=ctx.asset_id,
+            scan_id=ctx.scan_run_id,
+            source="commandsentry_heavy",
+            title="Potentially permissive CORS posture (passive)",
+            severity="LOW",   # 4.7 E — observed, NOT proven exploitable; the active probe escalates
+            category="cors",
+            observed_at=now_iso,
+            matched_at=url,
+            description=(
+                "Observed CORS posture: potentially permissive (passive header observation, no "
+                f"Origin sent). Access-Control-Allow-Origin: {params['acao_observed']}"
+                + (", Access-Control-Allow-Credentials: true" if params["acac_observed"] else "")
+                + ". NOT proven exploitable — the active CORS probe confirms reflection / "
+                  "credentialed cross-origin read. Target context in finding.params."
+            ),
+            subdomain=ctx.hostname,
+            port=443,
+            protocol="https",
+            params=params,
+        ))
+        log("  cors: emitted 1 LOW FindingEvent (category='cors', passive seed)")
+    except Exception as e:   # additive + non-fatal — never let a CORS edge case abort heavy
+        log(f"  cors: passive emit skipped (non-fatal): {e!r}")
+
+
 def run_stack_id_passive_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     """P0 passive stack-id collector (Obsidian 146). ADDITIVE + NON-FATAL; never
     aborts the tier. Appends one `stack_id_passive` artifact; touches no tool
@@ -1012,6 +1073,8 @@ def run_stack_id_passive_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
         vh = _vendor_header_subset(hdrs)
         if vh:
             signals["headers"] = vh
+        # #2.05.CORS (Obsidian 160) — reuse the headers we JUST parsed (zero new requests).
+        _emit_passive_cors_finding(ctx, hdrs)
 
     ctx.artifacts.append(("stack_id_passive", "json", json.dumps(signals)))
     got = [k for k in ("cert", "set_cookie_names", "headers") if k in signals]
@@ -1832,6 +1895,7 @@ def write_event_findings_and_artifacts(
     KNOWN_CATEGORIES = {
         "web", "network", "email", "tls", "dns",
         "secrets", "cve", "misconfig", "other",
+        "cors",   # #2.05 (Obsidian 160) — enum label added in migration 20260723b; passive CORS emitter
     }
 
     with conn.cursor() as cur:
@@ -1862,6 +1926,9 @@ def write_event_findings_and_artifacts(
                 # writes normalized_key. FindingEvents from cs_parsers carry the
                 # class-collapse key; testssl/net events default to None.
                 "normalized_key": ev.normalized_key,
+                # #2.05 (Obsidian 160) — per-class target context. cors: {endpoint,
+                # acao_observed, acac_observed, source}. Empty {} for all other heavy findings.
+                "params": Json(ev.params or {}),
                 "validation_status": validation_status,
                 "scanner_version": scanner_version,
                 "scan_run_id": ctx.scan_run_id,

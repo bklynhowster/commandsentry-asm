@@ -233,6 +233,13 @@ class FindingEvent:
     # parser sets this, run_normalize honours it over the (None) cross-source lookup.
     normalized_key: Optional[str] = None
 
+    # #2.05 (Obsidian 160 / 4.7 2026-07-23) — per-class target context for the safe-exploit
+    # pipeline, persisted to findings.params (jsonb, default {}). cors: {endpoint,
+    # acao_observed, acac_observed, source}. redirect/ssrf/lfi (phase 2): {endpoint,
+    # param_name, param_example, discovery_source}. Shape documented as code in
+    # safe_exploit.PARAMS_SCHEMAS; empty {} for every non-safe-exploit finding.
+    params: dict = field(default_factory=dict)
+
     def __post_init__(self):
         # Title normalization happens once at construction so every parser
         # gets it for free without each one having to remember.
@@ -499,6 +506,8 @@ def infer_category_from_tags(tags: list[str], template_id: str = "") -> str:
         return "csrf"
     if "redirect" in t or "open-redirect" in t:
         return "redirect"
+    if "cors" in t:                          # 4.7 Q3 (Obsidian 160 / #2.05) — CORS misconfiguration class
+        return "cors"
     if "idor" in t:
         return "idor"
     if "auth" in t or "authentication" in t or "auth-bypass" in t:
