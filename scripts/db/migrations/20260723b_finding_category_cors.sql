@@ -1,0 +1,26 @@
+-- 20260723b_finding_category_cors.sql
+-- Param-carrying finding pipeline FOUNDATION, part 2/2 (Obsidian 160 / #2.05.CORS, 4.7 2026-07-23).
+--
+-- Register 'cors' in finding_category_t so the passive CORS-finding emitter can persist
+-- category='cors' (4.7 Q3). Isolated in its OWN migration — like 20260710c ('httpx' source) and
+-- 20260612a ('degraded' status): Postgres 55P04 forbids USING a freshly-added enum value in the
+-- same transaction that defines it, so the label is COMMITTED here before any code references it.
+-- 'cors' is NOT used in this migration; the first USE is a later scan (separate tx) after the
+-- emitter ships. Skipping this migration would make every emitter write die with
+--   InvalidTextRepresentation: invalid input value for enum finding_category_t: "cors"
+-- (exactly the 2026-07-10 httpx-source failure mode).
+--
+-- Single ALTER, no do-block (splitter-safe), idempotent via IF NOT EXISTS, byte-identical both repos.
+--
+-- MIGRATION-META:
+-- idempotent: true
+-- transactional: true
+-- safe_auto_apply: true
+-- requires_backup: false
+-- estimated_duration_ms: 50
+-- notes: Additive enum label — finding_category_t += 'cors'. IF NOT EXISTS idempotent; label
+--   unused in-migration (55P04-safe). Byte-identical on commandsentry-asm and prodexsentry-asm.
+--   Prereq to the #2.05.CORS emitter (later push).
+-- END-META
+
+alter type public.finding_category_t add value if not exists 'cors';
