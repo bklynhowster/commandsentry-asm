@@ -58,6 +58,7 @@ except ImportError:
 # the sibling import resolves whether run as a script or imported by a test.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from confirmation_thresholds import CONFIRMATION_THRESHOLDS  # noqa: E402
+import asset_liveness  # noqa: E402  # Obsidian 161 step 3 — shared liveness (dark-signal gate + heal)
 
 
 # ---------------------------------------------------------------------------
@@ -630,6 +631,22 @@ def detect_dark_assets(conn, source_tag: str) -> list[dict]:
         }
         for r in rows
     ]
+
+
+# ── Dark-signal liveness gate wiring (Obsidian 161 step 3, 4.7 Q1/Q4/Q6) ────────────────────
+# The gate logic is in asset_liveness.apply_liveness_gate (pure of DB). Here we supply the
+# DB-bound get_verdict + heal callbacks and the live/dry-run flag. DRY-RUN by default: the gate
+# LOGS would-suppress-vs-would-emit but changes NOTHING (7d soak, 4.7 Q7). Flip
+# DARK_LIVENESS_GATE_LIVE=1 to actually suppress probe-alive false-darks + heal their clocks.
+LIVENESS_GATE_LIVE = os.environ.get("DARK_LIVENESS_GATE_LIVE", "").strip().lower() in ("1", "true", "yes")
+Q_HEAL_PROBE_ALIVE = "UPDATE public.assets SET last_probe_alive_at = now() WHERE asset_id = %(a)s"
+
+
+def _heal_probe_alive(conn, asset_id: str) -> None:
+    """Bump last_probe_alive_at (4.7 Q6) — the probe-healed clock, SEPARATE from last_seen /
+    last_observed (discovery). Only called for a stale asset the probe just proved alive."""
+    with conn.cursor() as cur:
+        cur.execute(Q_HEAL_PROBE_ALIVE, {"a": asset_id})
 
 
 # ---------------------------------------------------------------------------
@@ -1781,6 +1798,14 @@ def main() -> int:
             if not args.skip_events:
                 try:
                     dark_events = detect_dark_assets(conn, args.source_tag)
+                    # Obsidian 161 step 3 — gate on the shared liveness verdict: suppress any asset
+                    # that responds on ANY port (Howie's rule) + heal its probe clock; defer (don't
+                    # alert) when there's no fresh verdict (fail-safe). DRY-RUN logs, changes nothing.
+                    dark_events = asset_liveness.apply_liveness_gate(
+                        dark_events, LIVENESS_GATE_LIVE,
+                        get_verdict=lambda a: asset_liveness.get_fresh_verdict(conn, a),
+                        heal=lambda a: _heal_probe_alive(conn, a),
+                    )
                     if dark_events:
                         with conn.cursor() as cur:
                             cur.executemany(INSERT_EVENT, dark_events)

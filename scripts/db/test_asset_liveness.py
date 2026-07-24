@@ -14,6 +14,8 @@ from asset_liveness import (
     is_verdict_fresh,
     infer_asset_type,
     select_probe_ports,
+    gate_dark_decision,
+    apply_liveness_gate,
     SAFE_DEFAULT_PORTS,
     DEFAULT_VERDICT_MAX_AGE_H,
 )
@@ -105,3 +107,40 @@ def test_select_probe_ports_known_open_first_and_deduped():
     assert ports[0] == 8443                          # accumulated evidence probed first
     assert ports.count(443) == 1                     # de-duped across groups
     assert 80 in ports and 22 in ports               # web type + safe defaults present
+
+
+# ── 4.7 Q1/Q4/Q6 — the dark-signal gate ───────────────────────────────────────────
+def test_gate_dark_decision():
+    assert gate_dark_decision(None) == "defer"                                   # no verdict -> fail-safe
+    assert gate_dark_decision({"any_port_responded": True, "any_port_open": True}) == "suppress"
+    assert gate_dark_decision({"any_port_responded": True, "any_port_open": False}) == "suppress"  # RST/unimac
+    assert gate_dark_decision({"any_port_responded": False, "any_port_open": False}) == "emit"
+
+
+def _fixed_verdicts(mapping):
+    return lambda a: mapping.get(a)
+
+
+def test_apply_gate_dry_run_returns_all_unchanged_and_never_heals():
+    events = [{"asset_id": "ftp.unimacgraphics.com"}, {"asset_id": "dead.example.com"}]
+    verdicts = {"ftp.unimacgraphics.com": {"any_port_responded": True, "any_port_open": False},
+                "dead.example.com": {"any_port_responded": False, "any_port_open": False}}
+    healed = []
+    out = apply_liveness_gate(events, live=False, get_verdict=_fixed_verdicts(verdicts),
+                              heal=lambda a: healed.append(a), logfn=lambda *_: None)
+    assert out == events                              # zero behaviour change during the soak
+    assert healed == []                               # heal never fires in dry-run
+
+
+def test_apply_gate_live_suppresses_alive_emits_dark_heals_only_suppressed():
+    events = [{"asset_id": "ftp.unimacgraphics.com"},   # responded -> suppress + heal
+              {"asset_id": "dead.example.com"},          # not responded -> emit
+              {"asset_id": "flaky.example.com"}]         # no verdict -> defer (no heal)
+    verdicts = {"ftp.unimacgraphics.com": {"any_port_responded": True, "any_port_open": False},
+                "dead.example.com": {"any_port_responded": False, "any_port_open": False}}
+    healed = []
+    out = apply_liveness_gate(events, live=True, get_verdict=_fixed_verdicts(verdicts),
+                              heal=lambda a: healed.append(a), logfn=lambda *_: None)
+    assert [e["asset_id"] for e in out] == ["dead.example.com"]   # only the genuinely-dark emits
+    assert healed == ["ftp.unimacgraphics.com"]                   # heal only the probe-alive suppression
+    # the unimac false-dark is gone and its probe clock healed; the deferred flaky asset is NOT healed

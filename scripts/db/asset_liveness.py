@@ -152,3 +152,49 @@ def get_fresh_verdict(conn, asset_id: str, max_age_hours: int = DEFAULT_VERDICT_
     if not is_verdict_fresh(v["probed_at"], now=now, max_age_hours=max_age_hours):
         return None
     return v
+
+
+# ── Dark-signal gate (Obsidian 161 step 3, 4.7 Q1/Q4/Q6) ────────────────────────────────────────
+def gate_dark_decision(verdict: dict | None) -> str:
+    """PURE two-signal gate (4.7 Q1). Given the fresh liveness verdict for an already-STALE dark
+    candidate, decide what the dark signal should do:
+      * verdict is None (no fresh verdict) -> 'defer'   — don't alert on staleness alone (4.7 Q4
+            fail-safe; a probe-worker gap must never manufacture a dark alert).
+      * any_port_responded is True        -> 'suppress' — the HOST answered on some port; it is not
+            dead (Howie's rule). Do not alert; heal the clock.
+      * any_port_responded is False        -> 'emit'     — stale AND the probe confirms no response
+            = genuinely dark.
+    Staleness is assumed already true (only stale assets reach here); this adds the second signal."""
+    if verdict is None:
+        return "defer"
+    return "suppress" if verdict.get("any_port_responded") else "emit"
+
+
+def apply_liveness_gate(dark_events, live, get_verdict, heal=None, logfn=print):
+    """Gate candidate dark events on the shared liveness verdict (4.7 Q1/Q4/Q6). PURE of DB: the
+    caller injects `get_verdict(asset_id) -> verdict|None` and `heal(asset_id) -> None` (bump
+    last_probe_alive_at). Each event needs an 'asset_id'.
+      * DRY-RUN (live=False): LOG the would-decision for every candidate, return the events
+        UNCHANGED (zero behaviour change, no heal) — this is the 7d soak (4.7 Q7).
+      * LIVE: return only the 'emit' (genuinely-dark) events; suppress the rest; heal each
+        probe-alive suppression (never a 'defer').
+    Returns the list of events that should proceed to emission."""
+    kept, counts = [], {"emit": 0, "suppress": 0, "defer": 0, "heal": 0}
+    for ev in dark_events:
+        a = ev.get("asset_id")
+        v = get_verdict(a)
+        d = gate_dark_decision(v)
+        counts[d] += 1
+        detail = (f"responded={v.get('any_port_responded')},open={v.get('any_port_open')}"
+                  if v else "no fresh verdict")
+        logfn(f"[liveness-gate] {a}: {d} ({detail})" + ("" if live else " [dry-run]"))
+        if d == "emit":
+            kept.append(ev)
+        elif live and d == "suppress" and heal is not None:
+            heal(a)
+            counts["heal"] += 1
+    mode = "LIVE" if live else "DRY-RUN"
+    tail = "" if live else f" — returning all {len(dark_events)} unchanged"
+    logfn(f"[liveness-gate] {mode}: emit={counts['emit']} suppress={counts['suppress']} "
+          f"defer={counts['defer']} heal={counts['heal']}{tail}")
+    return kept if live else list(dark_events)
