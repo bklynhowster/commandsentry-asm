@@ -155,16 +155,41 @@ def categorize(name: str) -> str | None:
 
 # ─── Section builders (per-subdomain) ────────────────────────────────────────
 
-def build_reachability(work: Path) -> dict:
+# ── Extended liveness (Obsidian 161 step 5 / 4.7 Q5+Q7) — count NON-HTTP services as alive ──
+# httpx only speaks HTTP, so an SFTP-only or FTPS-only box (correct hardening: plaintext killed)
+# currently reads dead and ages out to a false "went dark". These ports, confirmed open by
+# naabu+fingerprintx (services[]), prove the host is alive with zero HTTP. (401/403 already count —
+# httpx returns a status_code for them; the real gap is these non-HTTP services.) SHADOW-MODE by
+# default (REACHABILITY_EXT_LIVE unset): the old httpx-only `live` stays authoritative and we only
+# LOG where the extended verdict diverges, for a soak; flip REACHABILITY_EXT_LIVE=1 to make it real.
+REACHABILITY_EXT_LIVE = os.environ.get("REACHABILITY_EXT_LIVE", "").strip().lower() in ("1", "true", "yes")
+_NONHTTP_LIVE_PORTS = {22, 21, 25, 110, 143, 465, 587, 990, 993, 995}   # SSH/SFTP, FTP(S), mail suite
+
+
+def _reachability_verdict(http_status, service_ports, ext_enabled: bool):
+    """PURE liveness core (4.7 Q5/Q7). Returns (live, ext_live, nonhttp_ports_hit).
+    http_live = any HTTP status present (INCLUDING 401/403 — an auth-gated response is alive).
+    ext_live ALSO counts a confirmed non-HTTP service (SSH/SFTP, FTPS, mail). In shadow (ext_enabled
+    False) `live` stays http_live so nothing changes; flipped on, `live` becomes ext_live."""
+    http_live = bool(http_status)
+    nonhttp = sorted(p for p in (service_ports or ()) if isinstance(p, int) and p in _NONHTTP_LIVE_PORTS)
+    ext_live = http_live or bool(nonhttp)
+    return (ext_live if ext_enabled else http_live), ext_live, nonhttp
+
+
+def build_reachability(work: Path, service_ports=None, name: str = "") -> dict:
     httpx_records = read_jsonl(work / "httpx.json")
-    if not httpx_records:
-        return {"live": False, "http_status": None, "title": None}
-    rec = httpx_records[0]
-    return {
-        "live":        bool(rec.get("status_code")),
-        "http_status": rec.get("status_code"),
-        "title":       rec.get("title"),
-    }
+    rec = httpx_records[0] if httpx_records else {}
+    http_status = rec.get("status_code")
+    live, ext_live, nonhttp = _reachability_verdict(http_status, service_ports, REACHABILITY_EXT_LIVE)
+    r = {"live": live, "http_status": http_status, "title": rec.get("title")}
+    if ext_live != bool(http_status):                       # 4.7 Q7 shadow telemetry — record + log divergence
+        r["live_ext"] = ext_live
+        r["ext_reason"] = "non-http service open: " + ",".join(map(str, nonhttp))
+        print(f"REACHABILITY-SHADOW: {name or work.name} httpx_live={bool(http_status)} "
+              f"ext_live={ext_live} (nonhttp_ports={nonhttp}) "
+              f"authoritative={'ext' if REACHABILITY_EXT_LIVE else 'httpx'}", file=sys.stderr)
+    return r
 
 def build_hosts(work: Path, ip_cache: dict) -> list[dict]:
     dnsx_records = read_jsonl(work / "dnsx.json")
@@ -493,6 +518,8 @@ def build_probe_status(work: Path) -> dict:
 
 def build_subdomain_record(name: str, sub_work: Path, *, is_root: bool,
                            discovered_via: str, ip_cache: dict) -> dict:
+    services = build_services(sub_work, ip_cache)   # compute once — reused by extended reachability (161 step 5)
+    service_ports = {s.get("port") for s in services if isinstance(s.get("port"), int)}
     return {
         "name":    name,
         "alive":   True,                            # we only build records for live subs
@@ -501,10 +528,10 @@ def build_subdomain_record(name: str, sub_work: Path, *, is_root: bool,
         "first_discovered": utc_now(),
         "last_seen":        utc_now(),
         "tags":             [],
-        "reachability":     build_reachability(sub_work),
+        "reachability":     build_reachability(sub_work, service_ports, name=name),
         "probe_status":     build_probe_status(sub_work),   # 4.7 G3: per-tool health
         "hosts":            build_hosts(sub_work, ip_cache),
-        "services":         build_services(sub_work, ip_cache),
+        "services":         services,
         "dns":              build_dns(sub_work),
         "fingerprint":      build_fingerprint(sub_work),
         "waf":              build_waf(sub_work),
