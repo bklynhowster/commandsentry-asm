@@ -345,12 +345,18 @@ def _resolve(fp_result: dict, cloud_result: dict | None) -> tuple[dict, bool]:
     """Fingerprint-first (F3): ANY non-unknown fingerprint (confirmed OR suspected)
     WINS and BLOCKS cloud — a suspected WAF on GCP stays a suspected WAF, never a
     silent cloud_endpoint. Cloud is fallback ONLY when fingerprint == unknown.
-    Returns (result, from_cloud)."""
-    if fp_result["device_class"] != "unknown":
-        return (fp_result, False)
+
+    EXCEPTION (157 Fix 4, 4.7 Q5): origin_host is the absence-of-fronting role and must YIELD
+    to the cloud fallback — a cloud-hosted origin is 'cloud_endpoint', not a bare 'origin_host'.
+    Without this, origin_host would steal every cloud asset that merely shows its own Server
+    header (the exact F3-vs-cloud regression Fix 1 hit). origin_host stands only when cloud is
+    ALSO empty. Returns (result, from_cloud)."""
+    dc = fp_result["device_class"]
+    if dc != "unknown" and dc != "origin_host":
+        return (fp_result, False)               # real edge/waf/cdn fingerprint blocks cloud (F3)
     if cloud_result is not None:
-        return (cloud_result, True)
-    return (fp_result, False)
+        return (cloud_result, True)             # cloud beats origin_host AND unknown
+    return (fp_result, False)                   # no cloud -> origin_host (or unknown) stands
 
 
 def _is_stale(last_seen, fresh_days: int) -> bool:
@@ -586,12 +592,15 @@ def _selftest() -> int:
     waf_conf = {"device_class": "waf", "confidence": "confirmed", "evidence": [], "vendor_product": {}}
     waf_susp = {"device_class": "waf", "confidence": "suspected", "evidence": [], "vendor_product": {}}
     unk = {"device_class": "unknown", "confidence": "unknown", "evidence": [], "vendor_product": {}}
+    origin = {"device_class": "origin_host", "confidence": "suspected", "evidence": [], "vendor_product": {}}
     cloud_ce = {"device_class": "cloud_endpoint", "confidence": "confirmed", "evidence": {}, "vendor_product": {}}
     f3 = [
         (_resolve(waf_conf, cloud_ce), (waf_conf, False)),   # confirmed fingerprint wins over cloud
         (_resolve(waf_susp, cloud_ce), (waf_susp, False)),   # suspected fingerprint BLOCKS cloud (F3)
         (_resolve(unk, cloud_ce),      (cloud_ce, True)),    # unknown fingerprint -> cloud fallback
         (_resolve(unk, None),          (unk, False)),        # nothing -> unknown
+        (_resolve(origin, cloud_ce),   (cloud_ce, True)),    # 157 Fix 4: origin_host YIELDS to cloud fallback
+        (_resolve(origin, None),       (origin, False)),     # 157 Fix 4: origin_host stands when cloud empty
     ]
     for got, want in f3:
         ok &= got == want

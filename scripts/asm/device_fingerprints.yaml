@@ -238,6 +238,22 @@ fingerprints:
     evidence_class: vendor_identifying
     vendor_product: {vendor: Fortinet}
 
+  # ── Bare-origin app-server header (HIGH signal, WEAKEST role) — Obsidian 157 Fix 4 / 4.7 Q5 ──
+  # The origin names its OWN app server (Server: nginx/Apache/IIS/Kestrel/..., or X-Powered-By /
+  # X-AspNet / X-Django / X-Rails). POSITIVE evidence of a directly-exposed origin — 4.7 Q5:
+  # NEVER assert origin_host from the ABSENCE of an edge tell, only from a self-named server.
+  # presence_only (the origin's own software is not an EDGE vendor -> names none). Mutually
+  # exclusive with the vendor Server rows above (a WAF/CDN rewrites Server to its own brand); any
+  # residual overlap (e.g. X-Powered-By passed through a CDN) is neutralised because origin_host
+  # loses every classify() tie AND yields to the cloud fallback (runner _resolve). An SSH-bannered
+  # appliance (ftp.sciimage.com) has NO app-server header -> stays edge_firewall (4.7 Q5).
+  - signal: origin_host_app_server_header
+    observation: http_headers
+    match_regex: "server:\\s*(apache|nginx|gunicorn|werkzeug|microsoft-iis|iis|jetty|tomcat|kestrel)|x-powered-by:|x-aspnet|x-django|x-rails"
+    device_class: origin_host
+    evidence_class: presence_only
+    vendor_product: {}
+
   # ── Cert issuer/subject pattern (MEDIUM) ─────────────────────────────────
   # A corp wildcard cert (e.g. GoDaddy *.sciimage.com) is consistent with a VIP /
   # SSL-offload edge — a supporting, not decisive, signal (equally consistent with

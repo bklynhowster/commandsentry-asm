@@ -379,9 +379,14 @@ def classify(observations: dict,
             slot["vi_" + g["vi_weight"]].add(key)
         slot["vendor"].update(g["vendor"])
 
+    # 157 Fix 4 (4.7 Q5): origin_host is the WEAKEST topology role (positive "bare origin",
+    # i.e. absence-of-fronting). On an equal (high,medium,low) tally it must LOSE to any real
+    # fronting class, so it only wins when it is the SOLE class. Priority 0 for origin_host, 1
+    # otherwise, as the lowest-order tiebreak.
     win_class, win = max(
         by_class.items(),
-        key=lambda kv: (len(kv[1]["high"]), len(kv[1]["medium"]), len(kv[1]["low"])),
+        key=lambda kv: (len(kv[1]["high"]), len(kv[1]["medium"]), len(kv[1]["low"]),
+                        0 if kv[0] == "origin_host" else 1),
     )
     conf = _confidence(len(win["high"]), len(win["medium"]))
     vp_conf = _confidence(len(win["vi_high"]), len(win["vi_medium"]))
@@ -439,6 +444,11 @@ def _selftest() -> int:
     corrob = {"waf_vendor_discovery": "FortiWeb",               # discovery wafw00f + an INDEPENDENT
               "set_cookie_names": ["cookiesession1"]}            #   tell (cookiesession1) -> confirmed
     disc_generic = {"waf_present_discovery": True}               # 157: generic discovery now fires NOTHING (removed)
+    # 157 Fix 4 (4.7 Q5) — bare-origin app-server header. Positive origin_host, WEAKEST role.
+    origin = {"http_headers": "server: nginx/1.24.0"}            # self-named app server -> origin_host/suspected
+    origin_xpb = {"http_headers": "x-powered-by: ASP.NET"}       # X-Powered-By -> origin_host/suspected
+    origin_loses = {"waf_vendor": "FortiWeb",                    # origin_host TIES a real class -> must LOSE
+                    "http_headers": "server: nginx"}             #   (tiebreak: waf wins, origin_host yields)
 
     expected = {
         "ftp": ("edge_firewall", "suspected"),
@@ -449,13 +459,19 @@ def _selftest() -> int:
         "dedupe": ("waf", "suspected"),
         "corrob": ("waf", "confirmed"),
         "disc_generic": ("unknown", "unknown"),
+        "origin": ("origin_host", "suspected"),
+        "origin_xpb": ("origin_host", "suspected"),
+        "origin_loses": ("waf", "suspected"),
     }
     results = {"ftp": classify(ftp, fps, th), "waf": classify(waf, fps, th),
                "bare": classify(bare, fps, th),
                "pressable": classify(pressable, fps, th),
                "disc": classify(disc, fps, th), "dedupe": classify(dedupe, fps, th),
                "corrob": classify(corrob, fps, th),
-               "disc_generic": classify(disc_generic, fps, th)}
+               "disc_generic": classify(disc_generic, fps, th),
+               "origin": classify(origin, fps, th),
+               "origin_xpb": classify(origin_xpb, fps, th),
+               "origin_loses": classify(origin_loses, fps, th)}
     ok = True
     for k, r in results.items():
         got = (r["device_class"], r["confidence"])
