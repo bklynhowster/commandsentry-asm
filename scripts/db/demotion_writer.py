@@ -84,24 +84,11 @@ def now() -> datetime:
 # PURE cores (unit-tested without a DB) — the load-bearing logic lives here.
 # ────────────────────────────────────────────────────────────────────────────
 
-def classify_ports(port_results: list[str]) -> str:
-    """Reduce per-port probe outcomes to one reason for a resolvable host.
-    Inputs are 'open' | 'refused' | 'noresponse'. Precedence:
-      any 'open'      -> 'alive'      (a service answered)
-      all 'refused'   -> 'service_gone'  (host up, ports closed / RST)
-      all 'noresponse'-> 'unreachable'   (silent drop / timeout)
-      mixed refused+noresponse -> 'service_gone'  (4.7 Q5: bounded beats indefinite hold)
-      empty           -> 'service_gone'  (resolved but nothing to test / all closed)
-    """
-    if not port_results:
-        return "service_gone"
-    if any(r == "open" for r in port_results):
-        return "alive"
-    if all(r == "refused" for r in port_results):
-        return "service_gone"
-    if all(r == "noresponse" for r in port_results):
-        return "unreachable"
-    return "service_gone"  # mixed refused + noresponse
+# classify_ports now lives in asset_liveness.py (Obsidian 161, 4.7 Q3) as the CANONICAL
+# classify_ports_for_state_flip — ONE source of truth shared with the dark-digest suppression
+# path, so the two liveness semantics (state-flip vs alert-suppression) can never drift
+# (4.7 risk #1). Re-exported under the original name so every existing caller + test is unchanged.
+from asset_liveness import classify_ports_for_state_flip as classify_ports  # noqa: E402
 
 
 def aggregate_probes(reasons: list[str], last_alive_moved: bool) -> dict:
