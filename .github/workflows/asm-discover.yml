@@ -70,12 +70,14 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Python deps for normalize (4.7 J6/K3′)
+      - name: Install Python deps for normalize (4.7 J6/K3′) + N2 cloud gate (P1)
         # pyyaml: normalize.build_services reads scripts/asm/cloud_providers.yaml
         # for the service-verify scope. Lazy-imported + fail-safe (scope OFF if
         # absent), but install it here so the phantom-suppression actually runs
         # at discovery time (the importer step installs it later — too late).
-        run: python3 -m pip install --break-system-packages --quiet pyyaml
+        # psycopg: cloud_ip_check.py (N2 gate, 4.7 P1) reads assets.device_class
+        # from the DB at scan time to decide SHALLOW vs DEEP port scan.
+        run: python3 -m pip install --break-system-packages --quiet pyyaml 'psycopg[binary]'
 
       - name: Cache Go binaries
         uses: actions/cache@v4
@@ -226,6 +228,11 @@ jobs:
         # rest of our target list, killing the loop after iteration 1.
         if: steps.targets.outputs.mode != 'skipped'
         shell: bash {0}
+        env:
+          # N2 gate (4.7 P1): cloud_ip_check.py reads assets.device_class from the DB
+          # at scan time to decide SHALLOW vs DEEP port scan. Graceful/fail-open if unset
+          # (helper falls back to the cloud_ip_ranges.json prefix table, then DEEP).
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
         run: |
           chmod +x scanner/asm-discover.sh
           while IFS= read -r tid; do

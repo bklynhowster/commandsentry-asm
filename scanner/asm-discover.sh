@@ -229,38 +229,29 @@ reconfirm_naabu_opens() {
   return 0
 }
 
-# ── N2 cloud-edge port gating (4.7 rulings M1-M5, 2026-07-24) ──
-# N1 (reconfirm) reduces but cannot eliminate phantom ports against a cloud edge
-# that SYN-ACKs arbitrary ports repeatedly (live-verified on littleleaffarms/GCP,
-# 2026-07-24: 8 of 10 survivors still phantom). Structural fix: for cloud/LB/CDN
-# assets, DON'T run the top-1000 sweep at all — probe only the curated set of ports
-# a real web app exposes. Cloud detection is the SCAN-TIME gate (M1 hybrid); the
-# classifier remains the authoritative device_class record. Detection data is the
-# SAME registry the classifier uses (M2, scripts/asm/cloud_providers.yaml) via
-# cloud_ip_check.py. Ships ACTIVE with kill switch: N2_CLOUD_PORT_GATE=0 disables.
+# ── N2 cloud-edge port gating (4.7 M1-M5 + P1-P6 REVISED M1, 2026-07-24) ──
+# N1 (reconfirm) reduces but cannot eliminate phantom ports against a cloud edge that
+# SYN-ACKs arbitrary ports repeatedly (live-verified littleleaffarms/GCP: 8 of 10
+# survivors still phantom). Structural fix: for cloud/LB/CDN assets DON'T run the
+# top-1000 sweep — probe only the curated ports a real web app exposes. The scan-time
+# SHALLOW-vs-DEEP decision is made by cloud_ip_check.py: PRIMARY = read the classifier's
+# authoritative assets.device_class from the DB (SUPABASE_DSN); BACKSTOP = CIDR-match the
+# resolved IPs against the local cloud_ip_ranges.json (published ranges); FAIL-OPEN to
+# DEEP. (The earlier Cymru-ASN DNS lookup was DROPPED — it failed on the Mullvad-egress
+# runner; 4.7 P4.) Ships ACTIVE with kill switch: N2_CLOUD_PORT_GATE=0 disables.
 CLOUD_CURATED_PORTS="${CLOUD_CURATED_PORTS:-80 443 8080 8443}"
 
-# Echoes provider id + returns 0 if the given IP is a cloud edge; else returns 1.
-# Fails OPEN (returns 1 = "not cloud" = normal deep sweep) on any lookup error, so
-# a broken check never SKIPS a real origin's deep scan.
-_ip_is_cloud() {
-  local ip="$1"
-  [[ "${N2_CLOUD_PORT_GATE:-1}" == "1" ]] || return 1
-  [[ -n "$ip" && -f "$CLOUD_CHECK" ]] || return 1
-  python3 "$CLOUD_CHECK" "$ip" 2>/dev/null
-}
-
-# Cloud gate for a set of resolved IPs: if the FIRST bare-IP in the list is a cloud
-# edge, shallow-probe ALL listed IPs on the curated ports (with N1's reconfirm
-# discipline) into naabu.json and return 0 (handled — caller SKIPS naabu). Else
-# return 1 (caller runs the normal sweep). Writes naabu.json in naabu's own
-# JSON-lines shape so the downstream parser is unchanged.
+# Cloud gate: cloud_ip_check.py decides SHALLOW (exit 0) vs DEEP (exit 1). On SHALLOW,
+# shallow-probe ALL listed IPs on the curated ports (N1 reconfirm discipline) into
+# naabu.json and return 0 (caller SKIPS naabu). On DEEP (or gate off / helper missing)
+# return 1 (caller runs the normal sweep). Writes naabu.json in naabu's own JSON-lines
+# shape so the downstream parser is unchanged. Args: <out.json> <asset_id> <ip...>.
 cloud_gate_ports() {
-  local out="$1"; shift
-  local ips="$*" first prov
-  first=$(printf '%s\n' $ips | grep -m1 -E '^[0-9]+(\.[0-9]+){3}$')
-  [[ -z "$first" ]] && return 1
-  prov=$(_ip_is_cloud "$first") || return 1
+  local out="$1" asset_id="$2"; shift 2
+  local ips="$*" decision
+  [[ "${N2_CLOUD_PORT_GATE:-1}" == "1" ]] || return 1
+  [[ -f "$CLOUD_CHECK" ]] || return 1
+  decision=$(python3 "$CLOUD_CHECK" "$asset_id" $ips 2>/dev/null) || return 1   # exit 1 = DEEP → caller sweeps
   local attempts="${NAABU_RECONFIRM_ATTEMPTS:-3}" tmo="${NAABU_RECONFIRM_TIMEOUT:-3}"
   local ip port i ok kept=0
   : > "$out"
@@ -274,7 +265,7 @@ cloud_gate_ports() {
       [[ $ok -eq 1 ]] && { printf '{"ip":"%s","port":%s,"host":"%s","source":"cloud_shallow_probe"}\n' "$ip" "$port" "$ip" >> "$out"; kept=$((kept+1)); }
     done
   done
-  log "cloud edge ($prov) — shallow curated probe {$CLOUD_CURATED_PORTS}, $kept open; top-1000 sweep SKIPPED (N2)"
+  log "cloud edge [$decision] — shallow curated probe {$CLOUD_CURATED_PORTS}, $kept open; top-1000 sweep SKIPPED (N2)"
   return 0
 }
 
@@ -332,7 +323,7 @@ discover_fqdn() {
 
   phase "Port discovery (naabu)"
   local naabu_rc=0
-  if cloud_gate_ports "$wd/naabu.json" $(grep -E '^[0-9]+(\.[0-9]+){3}$' "$wd/_resolved_ips.txt" 2>/dev/null); then
+  if cloud_gate_ports "$wd/naabu.json" "$target" $(grep -E '^[0-9]+(\.[0-9]+){3}$' "$wd/_resolved_ips.txt" 2>/dev/null); then
     :   # N2: cloud edge — shallow curated probe done, top-1000 sweep skipped
   else
     naabu -list "$wd/_resolved_ips.txt" \
@@ -698,7 +689,7 @@ discover_ip() {
   echo "$ip" > "$wd/_resolved_ips.txt"
 
   phase "Port discovery (naabu)"
-  if cloud_gate_ports "$wd/naabu.json" "$ip"; then
+  if cloud_gate_ports "$wd/naabu.json" "$ip" "$ip"; then
     :   # N2: cloud edge — shallow curated probe done, top-1000 sweep skipped
   else
     naabu -host "$ip" \

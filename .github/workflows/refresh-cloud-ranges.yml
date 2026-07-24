@@ -1,0 +1,46 @@
+name: Refresh cloud IP ranges
+
+# Populates scripts/asm/cloud_ip_ranges.json — the scan-time IP-prefix BACKSTOP for
+# cloud_ip_check.py (4.7 ruling P3, revised M1, 2026-07-24). Fetches the official
+# provider feeds (GCP/AWS/Azure) HERE (a runner that can reach them) rather than at
+# scan time, so the committed file is deterministic and scan-time needs zero external
+# calls. Safety lives in refresh_cloud_ranges.py: a feed that fails or returns a
+# suspiciously small set RETAINS the committed prefixes (never blindly emptied).
+#
+# NOTE: v1 commits directly to main (the script's retain-on-failure guard is the safety
+# net, matching the repo's existing asm-scan auto-commit pattern). A PR-review upgrade
+# (peter-evans/create-pull-request) is the intended hardening per 4.7 P3.
+
+on:
+  schedule:
+    - cron: '30 4 * * 0'      # weekly, Sunday 04:30 UTC
+  workflow_dispatch: {}        # manual — use this to POPULATE the seed the first time
+
+concurrency:
+  group: refresh-cloud-ranges
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Fetch + build cloud_ip_ranges.json
+        run: python3 scripts/asm/refresh_cloud_ranges.py
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- scripts/asm/cloud_ip_ranges.json; then
+            echo "No change in cloud_ip_ranges.json"; exit 0
+          fi
+          git config user.name  "commandsentry-bot"
+          git config user.email "bot@commandsentry.local"
+          git add scripts/asm/cloud_ip_ranges.json
+          git commit -m "chore(cloud-ranges): weekly refresh of cloud_ip_ranges.json (N2 backstop)"
+          git pull --rebase --autostash || true
+          git push
