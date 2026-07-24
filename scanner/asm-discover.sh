@@ -178,6 +178,56 @@ discover_one() {
 }
 
 # ─── Phase: FQDN discovery ─────────────────────────────────────────
+# ── N1 naabu reconfirm gate (4.7 ruling N1, 2026-07-24) ──
+# naabu's CONNECT scan against cloud / load-balancer / anycast edges reports
+# PHANTOM open ports: the edge completes handshakes on arbitrary ports that an
+# immediate re-probe from the same egress does not. Empirically
+# (littleleaffarms.prodexlabs.com on GCP, 2026-07-24) 16 of 18 "open" ports were
+# phantom — verified closed on re-probe; only 80/443 real. Each phantom became a
+# per-port finding, and the set is nondeterministic, so every heavy scan spammed
+# a fresh batch of "new" findings.
+#
+# Re-verify every naabu "open" with up to N quick TCP connects from the SAME
+# egress (4.7 N1: single-egress sufficient — port connectivity is consistent from
+# one vantage; a real port answers, a phantom doesn't). Keep a port if ANY attempt
+# completes a handshake; drop only on 0/N (phantom). Removes the FP class at the
+# source, before the parser turns naabu.json into per-port findings. Only
+# already-reported opens are re-probed, so cost is bounded; dropped ports are
+# logged to naabu_phantoms.log for trend/diagnostics.
+#
+# Ships ACTIVE (4.7 N5) but with a kill switch: NAABU_RECONFIRM_GATE=0 disables.
+# Tunables: NAABU_RECONFIRM_ATTEMPTS (default 3), NAABU_RECONFIRM_TIMEOUT (default 3s).
+reconfirm_naabu_opens() {
+  local nj="$1"
+  [[ "${NAABU_RECONFIRM_GATE:-1}" == "1" ]] || return 0
+  [[ -s "$nj" ]] || return 0
+  command -v jq >/dev/null 2>&1 || { warn "naabu reconfirm: jq unavailable, skipping"; return 0; }
+  local attempts="${NAABU_RECONFIRM_ATTEMPTS:-3}" tmo="${NAABU_RECONFIRM_TIMEOUT:-3}"
+  local dir tmp kept=0 dropped=0 line ip port i ok
+  dir=$(dirname "$nj"); tmp="${nj}.reconf"; : > "$tmp"
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    ip=$(printf '%s' "$line"   | jq -r '.ip // .host // empty' 2>/dev/null)
+    port=$(printf '%s' "$line" | jq -r '.port // empty'        2>/dev/null)
+    if [[ -z "$ip" || -z "$port" ]]; then
+      printf '%s\n' "$line" >> "$tmp"; continue   # unparseable → keep conservatively
+    fi
+    ok=0
+    for ((i=1; i<=attempts; i++)); do
+      if timeout "$tmo" bash -c "exec 3<>/dev/tcp/$ip/$port" 2>/dev/null; then ok=1; break; fi
+    done
+    if [[ $ok -eq 1 ]]; then
+      printf '%s\n' "$line" >> "$tmp"; kept=$((kept+1))
+    else
+      dropped=$((dropped+1))
+      printf '%s:%s\n' "$ip" "$port" >> "$dir/naabu_phantoms.log"
+    fi
+  done < "$nj"
+  mv "$tmp" "$nj"
+  [[ $dropped -gt 0 ]] && log "naabu reconfirm gate: kept $kept, dropped $dropped phantom port(s) → naabu_phantoms.log"
+  return 0
+}
+
 discover_fqdn() {
   local target="$1" wd="$2"
   local mode="${3:-full}"    # "full" (default) or "fast" — fast skips testssl
@@ -239,6 +289,7 @@ discover_fqdn() {
     > "$wd/naabu.json" 2> "$wd/naabu.err"
   local naabu_rc=$?   # 4.7 G3: preserve rc — rc!=0 = couldn't reach host this scan
   [[ $naabu_rc -ne 0 ]] && warn "naabu had errors (rc=$naabu_rc)"
+  reconfirm_naabu_opens "$wd/naabu.json"   # N1: drop phantom cloud/LB opens before they become findings
 
   phase "Service fingerprinting (fingerprintx)"
   local fpx_rc=0
@@ -598,6 +649,7 @@ discover_ip() {
     -scan-type CONNECT \
     -silent -json \
     > "$wd/naabu.json" 2> "$wd/naabu.err" || warn "naabu had errors"
+  reconfirm_naabu_opens "$wd/naabu.json"   # N1: drop phantom cloud/LB opens before they become findings
 
   phase "Service fingerprinting (fingerprintx)"
   if [[ -s "$wd/naabu.json" ]]; then
