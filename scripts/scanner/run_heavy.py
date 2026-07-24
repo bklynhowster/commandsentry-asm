@@ -1799,6 +1799,64 @@ def _parse_fingerprintx(stdout: str) -> dict:
     return svc
 
 
+# ── N1 reconfirm + N2 cloud-edge gate for the net-depth naabu sweep ──
+# (4.7 N1 + M1-M5 + P1-P6 revised M1, 2026-07-24). The phantom open-port findings
+# (source=commandsentry_heavy) are emitted by THIS sweep — not asm-discover's — so the
+# gate belongs here. On a cloud/LB edge (device_class cloud_endpoint/cdn/waf, or a
+# resolved IP in cloud_ip_ranges.json) the top-1000 CONNECT sweep yields phantoms (the
+# edge SYN-ACKs arbitrary ports), so we SHALLOW-probe only the curated ports (N2).
+# Otherwise we sweep, then re-verify every open port from the same egress and drop 0/3
+# as phantom (N1). run_heavy runs with SUPABASE_DSN in scope, so cloud_ip_check.py's DB
+# device_class read is the PRIMARY signal here. Kill switches: N2_CLOUD_PORT_GATE=0,
+# NAABU_RECONFIRM_GATE=0.
+import socket as _socket
+
+_CLOUD_CHECK = Path(__file__).resolve().parent.parent / "asm" / "cloud_ip_check.py"
+NAABU_CURATED_PORTS = [int(x) for x in os.environ.get("CLOUD_CURATED_PORTS", "80 443 8080 8443").split()]
+_RECONFIRM_ATTEMPTS = int(os.environ.get("NAABU_RECONFIRM_ATTEMPTS", "3"))
+_RECONFIRM_TIMEOUT = float(os.environ.get("NAABU_RECONFIRM_TIMEOUT", "3"))
+
+
+def _resolve_ips(host: str) -> list[str]:
+    try:
+        return sorted({ai[4][0] for ai in _socket.getaddrinfo(host, None, _socket.AF_INET)})
+    except Exception:
+        return []
+
+
+def _reconfirm_port(host: str, port, attempts: int = _RECONFIRM_ATTEMPTS,
+                    timeout: float = _RECONFIRM_TIMEOUT) -> bool:
+    """True if a TCP handshake to host:port completes on ANY of `attempts` tries (N1)."""
+    for _ in range(max(1, attempts)):
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            s.connect((host, int(port)))
+            return True
+        except Exception:
+            pass
+        finally:
+            s.close()
+    return False
+
+
+def _cloud_scope(asset_id: str, ips: list[str]) -> tuple[bool, str]:
+    """(shallow?, reason) via cloud_ip_check.py — DB device_class primary + prefix backstop, fail-open DEEP."""
+    if os.environ.get("N2_CLOUD_PORT_GATE", "1") != "1":
+        return False, "gate_off"
+    try:
+        r = subprocess.run([sys.executable, str(_CLOUD_CHECK), asset_id, *ips],
+                           capture_output=True, text=True, timeout=25)
+        return (r.returncode == 0, (r.stdout or "").strip() or "?")
+    except Exception as e:
+        return False, f"error:{type(e).__name__}"   # fail-open (4.7 P5)
+
+
+def _shallow_curated_probe(host: str) -> list[dict]:
+    """Probe only the curated cloud ports (with reconfirm); returns naabu-shaped open ports."""
+    return [{"port": port, "proto": "tcp"} for port in NAABU_CURATED_PORTS if _reconfirm_port(host, port)]
+
+
 def run_naabu_phase(ctx: HeavyScanContext, work_dir: Path) -> tuple[bool, list[dict]]:
     """naabu CONNECT top-ports port discovery. Returns (naabu_ok, open_ports).
 
@@ -1818,22 +1876,45 @@ def run_naabu_phase(ctx: HeavyScanContext, work_dir: Path) -> tuple[bool, list[d
         log("  naabu SKIP — testssl did not prove reachability (no egress proof); not credited")
         return False, []
 
-    rc, stdout, stderr = run_cmd(
-        ["naabu", "-host", ctx.hostname, "-top-ports", str(NAABU_TOP_PORTS),
-         "-rate", str(NAABU_RATE), "-scan-type", "CONNECT", "-silent", "-json"],
-        timeout=300,
-    )
-    if stdout.strip():
-        ctx.artifacts.append(("naabu", "json", stdout))
-    _log_stderr_tail(stderr, label="naabu")
+    # N2 cloud gate (4.7 M1-M5 + P1-P6): cloud/LB edges get a curated SHALLOW probe
+    # instead of the phantom-prone top-1000 sweep; everything else sweeps + N1 reconfirm.
+    _ips = _resolve_ips(ctx.hostname)
+    _shallow, _reason = _cloud_scope(ctx.asset_id, _ips)
+    if _shallow:
+        open_ports = _shallow_curated_probe(ctx.hostname)
+        log(f"  naabu SKIPPED — cloud edge [{_reason}]; shallow curated {NAABU_CURATED_PORTS} -> "
+            f"{len(open_ports)} open (N2)")
+        if not open_ports:
+            log("  shallow curated probe: zero open — NOT credited")
+            return False, []
+    else:
+        rc, stdout, stderr = run_cmd(
+            ["naabu", "-host", ctx.hostname, "-top-ports", str(NAABU_TOP_PORTS),
+             "-rate", str(NAABU_RATE), "-scan-type", "CONNECT", "-silent", "-json"],
+            timeout=300,
+        )
+        if stdout.strip():
+            ctx.artifacts.append(("naabu", "json", stdout))
+        _log_stderr_tail(stderr, label="naabu")
 
-    if rc != 0:
-        log(f"  naabu DEGRADED (not credited, absence-of-evidence): rc={rc}")
-        return False, []
-    open_ports = _parse_naabu_ports(stdout)
-    if not open_ports:
-        log("  naabu: rc=0 but zero open ports — NOT credited (4.7 Q5 absence-of-evidence)")
-        return False, []
+        if rc != 0:
+            log(f"  naabu DEGRADED (not credited, absence-of-evidence): rc={rc}")
+            return False, []
+        _raw = _parse_naabu_ports(stdout)
+        if not _raw:
+            log("  naabu: rc=0 but zero open ports — NOT credited (4.7 Q5 absence-of-evidence)")
+            return False, []
+        # N1 reconfirm: re-probe each open port from the same egress; drop 0/3 as phantom.
+        if os.environ.get("NAABU_RECONFIRM_GATE", "1") == "1":
+            open_ports = [p for p in _raw if _reconfirm_port(ctx.hostname, p["port"])]
+            _dropped = len(_raw) - len(open_ports)
+            if _dropped:
+                log(f"  naabu reconfirm gate: dropped {_dropped}/{len(_raw)} phantom port(s) (N1)")
+            if not open_ports:
+                log("  naabu: all ports failed reconfirm — NOT credited")
+                return False, []
+        else:
+            open_ports = _raw
 
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     for p in open_ports:
