@@ -159,6 +159,32 @@ TITLE_LABELS = {
 CIPHER_ID_RE = re.compile(r"^(cipher[-_][a-z0-9_]+?)(?:_x[0-9a-fA-F]+)$")
 
 
+# ── IP-sourced hostname-match guard (4.7 ruling Q1/Q3, 2026-07-24) ──
+# Normalizer-side backstop to the asm-discover.sh --ip scanner guard. When
+# testssl is pointed at a bare IP literal (discover_ip's `testssl --ip "$ip"
+# "$ip:443"`), it runs with NO SNI context and its hostname-match check
+# (cert_trust) compares the served cert against the IP address — which no
+# certificate can list — so it ALWAYS emits "certificate does not match
+# supplied URI (same w/o SNI)". Empirically (2026-07-24 cert_trust surge) that
+# was a fleet-wide false-positive factory. The scanner guard strips these from
+# the --ip JSON at the source; THIS is the policy backstop so ANY callsite that
+# runs testssl against an IP — now or future — can't emit the artifact.
+#
+# Scope is deliberately narrow (4.7 Q3 "conservative first pass"): only genuine
+# hostname-match checks are dropped, and ONLY when the tested nodename is a bare
+# IP. Cipher/protocol/chain-of-trust checks do NOT depend on hostname and are
+# kept. Real cert-name mismatches are still caught on the FQDN path (SNI).
+# When adding testssl checks or bumping the testssl version, evaluate whether a
+# new check needs hostname/SNI context and add it here if so.
+HOSTNAME_DEPENDENT_CHECKS = {"cert_trust"}
+_BARE_IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+
+
+def _is_bare_ip(nodename: Optional[str]) -> bool:
+    """True if the testssl nodename component is a bare IPv4 literal."""
+    return bool(nodename) and bool(_BARE_IPV4_RE.match(nodename.strip()))
+
+
 def _normalize_id(testssl_id: str) -> tuple[str, bool]:
     """
     Returns (grouped_id, is_cipher_grouping).
@@ -250,6 +276,20 @@ def parse_testssl_file(
         # Collapse synonym IDs into their canonical ID so duplicate reporting
         # of the same underlying issue counts as one finding, not several.
         grouped_id = DEDUPE_MAP.get(grouped_id, grouped_id)
+
+        # IP-sourced hostname-match guard (4.7 Q1/Q3). Drop hostname-match
+        # checks (cert_trust) when testssl was run against a bare IP literal —
+        # they compare the cert against the IP and always fail "does not match
+        # supplied URI (same w/o SNI)". Belt-and-suspenders: match the check id
+        # OR the mismatch text, but ONLY when the nodename is a bare IP, so real
+        # FQDN-path cert-name findings (e.g. a host serving the wrong cert with
+        # SNI) are preserved.
+        _node = _parse_host_ip(rec.get("ip") or "")[0]
+        if _is_bare_ip(_node) and (
+            grouped_id in HOSTNAME_DEPENDENT_CHECKS
+            or "does not match supplied uri" in (rec.get("finding") or "").lower()
+        ):
+            continue
 
         # Severity calibration to match Command's curated-report standard.
         # Cross-checked against the 5/13-5/14 HTML reports:

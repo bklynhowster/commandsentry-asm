@@ -616,6 +616,35 @@ discover_ip() {
     if grep -q '"port":443' "$wd/naabu.json" 2>/dev/null; then
       testssl.sh --jsonfile "$wd/testssl.json" --quiet --warnings off \
         --severity LOW --ip "$ip" "$ip:443" > "$wd/testssl.log" 2>&1 || warn "testssl had errors"
+
+      # ── IP-path cert_trust suppression (2026-07-24, cert_trust surge audit) ──
+      # On the IP scan path the "supplied URI" is a bare IP literal, and no
+      # certificate can list an IP — so testssl's hostname-match check ALWAYS
+      # emits cert_trust "certificate does not match supplied URI (same w/o SNI)"
+      # here, regardless of what the real endpoint serves. Empirically this was a
+      # false-positive factory: of 27 fleet cert_trust findings in the 07-21+
+      # surge, 21 were artifacts of THIS path (7 bare IPs + 14 FQDNs that share
+      # those IPs yet serve a perfectly valid cert to a real SNI client); only 6
+      # were genuine name mismatches — and every one of those is independently
+      # caught by the FQDN path (see the testssl call ~line 296, real SNI). So
+      # drop ONLY the cert-hostname-match records from the IP-path JSON; all other
+      # TLS checks (ciphers, protocols, chain-of-trust) are valid against an IP
+      # and are kept. Belt-and-suspenders: match the exact testssl id AND the
+      # mismatch text, so a testssl build that suffixes the id (e.g.
+      # "cert_trust <cert#1>") is still caught, without touching cert_trust_wildcard
+      # or cert_chain_of_trust.
+      if [[ -s "$wd/testssl.json" ]] && jq -e 'type=="array"' "$wd/testssl.json" >/dev/null 2>&1; then
+        _ct_before=$(jq 'length' "$wd/testssl.json" 2>/dev/null || echo '?')
+        if jq 'map(select((.id != "cert_trust") and (((.finding // "") | test("does not match supplied URI")) | not)))' \
+              "$wd/testssl.json" > "$wd/testssl.json.tmp" 2>/dev/null; then
+          _ct_after=$(jq 'length' "$wd/testssl.json.tmp" 2>/dev/null || echo '?')
+          mv "$wd/testssl.json.tmp" "$wd/testssl.json"
+          log "IP-path cert_trust filter: testssl records ${_ct_before} -> ${_ct_after} (dropped hostname-vs-IP match noise)"
+        else
+          warn "IP-path cert_trust filter failed; leaving testssl.json unmodified"
+          rm -f "$wd/testssl.json.tmp"
+        fi
+      fi
     fi
     # Exposure templates removed — vuln scanning lives in a separate (future) workflow.
   else
