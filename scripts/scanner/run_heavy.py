@@ -1528,7 +1528,8 @@ def _select_exploit_findings(ctx: HeavyScanContext) -> list:
     """Existing OPEN findings for this asset (finding-driven, existing-only -> FK-safe), each with
     its latest finding_history.matched_at, for the safe_exploit selector. Open set is the canonical
     ('detected','confirmed','open','regressed') (schema.sql / 20260528c). Class-agnostic read;
-    #2.1 filters to sensitive-path downstream."""
+    #2.1 / #2.1.b filter to sensitive-path / cors downstream (category + params carry the cors
+    endpoint the passive emitter recorded)."""
     if not ctx.dsn:
         return []
     try:
@@ -1536,7 +1537,7 @@ def _select_exploit_findings(ctx: HeavyScanContext) -> list:
         with psycopg.connect(ctx.dsn, autocommit=True, connect_timeout=10) as c:
             with c.cursor(row_factory=dict_row) as cur:
                 cur.execute(
-                    "select f.finding_id, f.title, "
+                    "select f.finding_id, f.title, f.category, f.params, "
                     "  (select fh.matched_at from public.finding_history fh "
                     "     where fh.finding_id = f.finding_id and fh.matched_at is not null "
                     "     order by fh.observed_at desc nulls last limit 1) as matched_at "
@@ -1571,15 +1572,20 @@ def _write_exploit_attempt(ctx: HeavyScanContext, finding_id: str, exploit_class
         log(f"  safe-exploit: attempt write failed ({e}) — non-fatal")
 
 
-def _fire_exploit_get(ctx: HeavyScanContext, work_dir: Path, url: str, probe_id: str, egress: str) -> dict:
+def _fire_exploit_get(ctx: HeavyScanContext, work_dir: Path, url: str, probe_id: str, egress: str,
+                      extra_headers: list | None = None) -> dict:
     """ONE detect-only GET, attribution-headed (4.7 B), body captured for classification. Returns the
     safe_exploit captured shape {status, headers, body, time, size}. 4.7 A — the body is REDACTED at
-    capture; the raw body is never persisted (only classify's redacted PoC reaches the DB)."""
+    capture; the raw body is never persisted (only classify's redacted PoC reaches the DB).
+    extra_headers (e.g. ['-H', 'Origin: ...']) lets the CORS class add its reflected-origin probe
+    header without changing the sensitive-path callers."""
     sink = work_dir / f"exploit_{probe_id}.body"
     args = (["curl", "-sSk", "-o", str(sink), "-D", "-",
              "-w", "\nCS_STATUS:%{http_code} CS_SIZE:%{size_download} CS_TIME:%{time_total}",
              "--max-time", "15", "-A", _PROBE_BOT_UA]
             + se.exploit_headers(probe_id, _EXPLOIT_CONTACT))
+    if extra_headers:
+        args += extra_headers
     if egress == "direct" and _PROBE_EGRESS_INTERFACE:
         args += ["--interface", _PROBE_EGRESS_INTERFACE]
     args.append(url)
@@ -1647,6 +1653,52 @@ def _run_sensitive_path_live(ctx: HeavyScanContext, work_dir: Path, targets: lis
     log(f"  safe-exploit: LIVE sensitive-path — fired={fired} proven={proven} attempted_blocked={blocked}")
 
 
+def _run_cors_live(ctx: HeavyScanContext, work_dir: Path, targets: list,
+                   egress: str, recent: int, details: dict) -> None:
+    """LIVE CORS reflected-origin proof loop (#2.1.b, Obsidian 150 §6 / 160). Fires ONE Origin-headed
+    GET per target (Origin: CANARY_ORIGIN) and classifies reflection — PROVEN when the server reflects
+    our canary origin WITH credentials (the exploitable P2 the passive emitter can't see; the canary
+    is a never-resolving .invalid so nothing is ever actually cross-originated). Same two-tier
+    kill-switch (Q8) + 24h rate budget (Q5) as sensitive-path; shares the budget already partly spent
+    this scan (recent + sensitive-path fired)."""
+    if not targets:
+        return
+    base = _fire_exploit_get(ctx, work_dir, f"https://{ctx.hostname}/", "cse-cors-baseline", egress)
+    ga = se.global_abort_reason(base) or (None if 0 < base["status"] < 500 else f"baseline status {base['status']}")
+    if ga:
+        log(f"  safe-exploit: CORS GLOBAL ABORT before firing — baseline unhealthy ({ga})")
+        details["cors_global_abort"] = f"baseline: {ga}"
+        return
+    budget = max(0, _EXPLOIT_RATE_CEILING - recent - details.get("fired", 0))
+    origin = se.CANARY_ORIGIN
+    fired = proven = blocked = 0
+    for t in targets:
+        if fired >= budget:
+            log(f"  safe-exploit: CORS 24h budget exhausted ({budget}) — deferring rest to next scan")
+            break
+        probe_id = "cse-cors-" + secrets.token_hex(6)
+        url = t["url"]
+        resp = _fire_exploit_get(ctx, work_dir, url, probe_id, egress,
+                                 extra_headers=["-H", f"Origin: {origin}"])
+        ga = se.global_abort_reason(resp) or (f"response time {resp['time']}s > 10s" if resp["time"] > 10.0 else None)
+        if ga:
+            log(f"  safe-exploit: CORS GLOBAL ABORT — {ga}")
+            details["cors_global_abort"] = ga
+            _write_exploit_attempt(ctx, t["finding_id"], "cors", se.NOT_ATTEMPTED,
+                                   f"global abort: {ga}", None, {"url": url, "probe_id": probe_id})
+            break
+        verdict = se.classify("cors", {"resp": resp, "origin_sent": origin})
+        _write_exploit_attempt(ctx, t["finding_id"], "cors", verdict["exploit_status"],
+                               verdict["reason"], verdict["poc"],
+                               {"url": url, "origin_sent": origin, "probe_id": probe_id})
+        fired += 1
+        proven += verdict["exploit_status"] == se.PROVEN
+        blocked += verdict["exploit_status"] == se.BLOCKED
+        time.sleep(_WAF_PROBE_PACING_S)
+    details.update({"cors_fired": fired, "cors_proven": proven, "cors_attempted_blocked": blocked})
+    log(f"  safe-exploit: LIVE cors — fired={fired} proven={proven} attempted_blocked={blocked}")
+
+
 def run_safe_exploit_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     """Safe proof-of-exploitation phase (4.7 rulings, Obsidian 150 §6; #2.1). Gated on
     assets.exploit_authorized (SEPARATE from active_probe_authorized, Q5) AND EXPLOIT_LIVE
@@ -1656,24 +1708,28 @@ def run_safe_exploit_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     capture-time redaction (A); attribution headers (B)."""
     authorized, egress = _read_exploit_policy(ctx)
     fire = authorized and _EXPLOIT_LIVE
-    targets = se.select_sensitive_path_targets(_select_exploit_findings(ctx))   # #2.1: sensitive-path only
-    details: dict = {"live_flag": _EXPLOIT_LIVE, "egress": egress, "candidates": len(targets)}
+    findings = _select_exploit_findings(ctx)
+    sp_targets = se.select_sensitive_path_targets(findings)       # #2.1
+    cors_targets = se.select_cors_targets(findings)               # #2.1.b — finding-driven off the emitter's cors findings
+    details: dict = {"live_flag": _EXPLOIT_LIVE, "egress": egress,
+                     "candidates_sensitive_path": len(sp_targets), "candidates_cors": len(cors_targets)}
 
     if not authorized:
         log("  safe-exploit: SKIP — asset not exploit_authorized (opt-in false / kill switch)")
     elif not _EXPLOIT_LIVE:
-        log(f"  safe-exploit: authorized but DRY-RUN (EXPLOIT_LIVE unset), egress={egress} — "
-            f"would attempt {len(targets)} sensitive-path finding(s), firing nothing")
+        log(f"  safe-exploit: authorized but DRY-RUN (EXPLOIT_LIVE unset), egress={egress} — would "
+            f"attempt {len(sp_targets)} sensitive-path + {len(cors_targets)} cors finding(s), firing nothing")
     else:
         recent = _exploit_recent_count(ctx)
         if se.rate_ceiling_exceeded(recent, _EXPLOIT_RATE_CEILING):
             log(f"  safe-exploit: rate ceiling reached ({recent}/{_EXPLOIT_RATE_CEILING} in 24h) — deferring")
             details["deferred_rate_ceiling"] = recent
         else:
-            _run_sensitive_path_live(ctx, work_dir, targets, egress, recent, details)
+            _run_sensitive_path_live(ctx, work_dir, sp_targets, egress, recent, details)
+            _run_cors_live(ctx, work_dir, cors_targets, egress, recent, details)
 
     ctx.artifacts.append(("exploit_phase_summary", "json", json.dumps({
-        "schema": 1, "class_increment": "2.1", "authorized": authorized,
+        "schema": 1, "class_increment": "2.1.b", "authorized": authorized,
         "dry_run": not fire, "details": details})))
 
 
