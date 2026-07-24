@@ -352,11 +352,22 @@ def _resolve(fp_result: dict, cloud_result: dict | None) -> tuple[dict, bool]:
     header (the exact F3-vs-cloud regression Fix 1 hit). origin_host stands only when cloud is
     ALSO empty. Returns (result, from_cloud)."""
     dc = fp_result["device_class"]
-    if dc != "unknown" and dc != "origin_host":
+    if _fp_blocks_cloud(dc):
         return (fp_result, False)               # real edge/waf/cdn fingerprint blocks cloud (F3)
     if cloud_result is not None:
         return (cloud_result, True)             # cloud beats origin_host AND unknown
     return (fp_result, False)                   # no cloud -> origin_host (or unknown) stands
+
+
+def _fp_blocks_cloud(device_class: str) -> bool:
+    """Which fingerprint classes BLOCK the cloud fallback (F3). A real edge/waf/cdn does; but
+    origin_host (157 Fix 4 — the WEAKEST role) and unknown do NOT — they must fall through to the
+    cloud fallback so a cloud-hosted origin stays cloud_endpoint instead of being downgraded to
+    origin_host. PURE + selftested: classify_asset applies the same predicate but needs a DB cursor,
+    so this is the seam the selftest pins (the 2026-07-24 dry-run caught uoltest.unimacgraphics.com
+    cloud_endpoint->origin_host precisely because this decision was inlined in classify_asset, which
+    returned the origin_host fingerprint BEFORE _resolve ever ran)."""
+    return device_class not in ("unknown", "origin_host")
 
 
 def _is_stale(last_seen, fresh_days: int) -> bool:
@@ -427,7 +438,10 @@ def classify_asset(cur, a: dict, fps, th, fresh_days, nuclei_re, cloud_reg) -> t
     flag (D6-F5), NOT a topology signal — cloud topology keys on cloud_provider (F1)."""
     fp = classify(gather_observations(cur, a["asset_id"], fresh_days, nuclei_re), fps, th)
     cloud = _cloud_fallback(cur, a["asset_id"], cloud_reg, fresh_days)
-    if fp["device_class"] != "unknown":
+    # 157 Fix 4: a real edge/waf/cdn fingerprint blocks cloud AND composes hosting; but origin_host
+    # (weakest role) does NOT block here — it falls through to _resolve, which yields to the cloud
+    # fallback so a cloud-hosted origin (uoltest.unimacgraphics.com) stays cloud_endpoint.
+    if _fp_blocks_cloud(fp["device_class"]):
         _merge_cloud_provider(fp, cloud)
         return (fp, False)
     return _resolve(fp, cloud)
@@ -606,6 +620,13 @@ def _selftest() -> int:
         ok &= got == want
     print(f"  F3 ordering (conf-wins / susp-blocks-cloud / unk->cloud / none->unknown): "
           f"{'ok' if all(g == w for g, w in f3) else 'FAIL'}")
+    # 157 Fix 4 — the block-cloud predicate. origin_host must NOT block cloud (else the 2026-07-24
+    # dry-run's uoltest.unimacgraphics.com cloud_endpoint->origin_host downgrade recurs).
+    blocks_ok = (all(_fp_blocks_cloud(c) for c in ("waf", "cdn", "edge_firewall"))
+                 and not _fp_blocks_cloud("origin_host") and not _fp_blocks_cloud("unknown"))
+    ok &= blocks_ok
+    print(f"  {'ok' if blocks_ok else 'FAIL'} _fp_blocks_cloud: edge/waf/cdn block cloud; "
+          f"origin_host+unknown fall through to _resolve")
     print(f"  ssh={extract_ssh_banner(fpx)!r}  cert={c}  nuclei_re={rx!r}")
     print("SELFTEST:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
