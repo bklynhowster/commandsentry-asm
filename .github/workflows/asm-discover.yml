@@ -353,6 +353,26 @@ jobs:
           python3 -m pip install --break-system-packages --quiet 'psycopg[binary]==3.3.4' pyyaml
           python3 scripts/db/import_asm_to_surface.py --source-tag asm_cron
 
+      - name: Liveness probe worker (161 — writes asset_liveness_verdict; consumers dry-run)
+        # Probes every confirmed_live asset once/sweep and writes ONE asset_liveness_verdict row
+        # per asset (Obsidian 161 step 2, 4.7 Q2/Q4/Q7). PURE observation — writes ONLY to the new
+        # verdict table, NEVER mutates asset state — so it ships in WRITE mode (that's how the
+        # shared verdict accumulates). Its consumers stay dry-run until later pushes: the dark-
+        # digest suppression (step 3) and the demotion writer's verdict read (step 6, coordinated
+        # with the ~07-25 write-enable). Runs AFTER the importer (fresh confirmed_live set) and
+        # BEFORE the demotion writer. Sweep-health fail-safe: aborts (writes nothing) if the fleet
+        # comes back almost entirely non-responding (our egress, not the fleet dying).
+        if: success() && steps.targets.outputs.mode != 'skipped'
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          if [[ -z "${SUPABASE_DSN}" ]]; then
+            echo "::warning::SUPABASE_DSN secret not set — skipping liveness probe worker."
+            exit 0
+          fi
+          python3 -m pip install --break-system-packages --quiet 'psycopg[binary]==3.3.4'
+          python3 scripts/db/asset_liveness_probe.py --run-tag "${GITHUB_RUN_ID}"
+
       - name: P2 demotion writer (DRY-RUN — no asset writes)
         # Went-dark demotion writer in DRY-RUN mode: --write-enable is intentionally
         # OMITTED, so this changes NO asset state — it only inserts observation rows into
