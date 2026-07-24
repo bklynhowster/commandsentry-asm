@@ -26,6 +26,7 @@ ASSETS_DIR="$REPO_ROOT/data/assets"
 RAW_DIR="$REPO_ROOT/data/raw"     # gitignored, raw tool outputs
 PROFILES_DIR="$SCRIPT_DIR/profiles"
 NORMALIZER="$SCRIPT_DIR/normalize.py"
+CLOUD_CHECK="$REPO_ROOT/scripts/asm/cloud_ip_check.py"   # N2 (4.7 M1/M2): scan-time cloud-edge gate
 
 # ─── Helpers ───────────────────────────────────────────────────────
 log()   { printf "\033[1;36m[%s]\033[0m %s\n" "$(date -u +%H:%M:%S)" "$*" >&2; }
@@ -228,6 +229,55 @@ reconfirm_naabu_opens() {
   return 0
 }
 
+# ── N2 cloud-edge port gating (4.7 rulings M1-M5, 2026-07-24) ──
+# N1 (reconfirm) reduces but cannot eliminate phantom ports against a cloud edge
+# that SYN-ACKs arbitrary ports repeatedly (live-verified on littleleaffarms/GCP,
+# 2026-07-24: 8 of 10 survivors still phantom). Structural fix: for cloud/LB/CDN
+# assets, DON'T run the top-1000 sweep at all — probe only the curated set of ports
+# a real web app exposes. Cloud detection is the SCAN-TIME gate (M1 hybrid); the
+# classifier remains the authoritative device_class record. Detection data is the
+# SAME registry the classifier uses (M2, scripts/asm/cloud_providers.yaml) via
+# cloud_ip_check.py. Ships ACTIVE with kill switch: N2_CLOUD_PORT_GATE=0 disables.
+CLOUD_CURATED_PORTS="${CLOUD_CURATED_PORTS:-80 443 8080 8443}"
+
+# Echoes provider id + returns 0 if the given IP is a cloud edge; else returns 1.
+# Fails OPEN (returns 1 = "not cloud" = normal deep sweep) on any lookup error, so
+# a broken check never SKIPS a real origin's deep scan.
+_ip_is_cloud() {
+  local ip="$1"
+  [[ "${N2_CLOUD_PORT_GATE:-1}" == "1" ]] || return 1
+  [[ -n "$ip" && -f "$CLOUD_CHECK" ]] || return 1
+  python3 "$CLOUD_CHECK" "$ip" 2>/dev/null
+}
+
+# Cloud gate for a set of resolved IPs: if the FIRST bare-IP in the list is a cloud
+# edge, shallow-probe ALL listed IPs on the curated ports (with N1's reconfirm
+# discipline) into naabu.json and return 0 (handled — caller SKIPS naabu). Else
+# return 1 (caller runs the normal sweep). Writes naabu.json in naabu's own
+# JSON-lines shape so the downstream parser is unchanged.
+cloud_gate_ports() {
+  local out="$1"; shift
+  local ips="$*" first prov
+  first=$(printf '%s\n' $ips | grep -m1 -E '^[0-9]+(\.[0-9]+){3}$')
+  [[ -z "$first" ]] && return 1
+  prov=$(_ip_is_cloud "$first") || return 1
+  local attempts="${NAABU_RECONFIRM_ATTEMPTS:-3}" tmo="${NAABU_RECONFIRM_TIMEOUT:-3}"
+  local ip port i ok kept=0
+  : > "$out"
+  for ip in $ips; do
+    [[ "$ip" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || continue
+    for port in $CLOUD_CURATED_PORTS; do
+      ok=0
+      for ((i=1; i<=attempts; i++)); do
+        if timeout "$tmo" bash -c "exec 3<>/dev/tcp/$ip/$port" 2>/dev/null; then ok=1; break; fi
+      done
+      [[ $ok -eq 1 ]] && { printf '{"ip":"%s","port":%s,"host":"%s","source":"cloud_shallow_probe"}\n' "$ip" "$port" "$ip" >> "$out"; kept=$((kept+1)); }
+    done
+  done
+  log "cloud edge ($prov) — shallow curated probe {$CLOUD_CURATED_PORTS}, $kept open; top-1000 sweep SKIPPED (N2)"
+  return 0
+}
+
 discover_fqdn() {
   local target="$1" wd="$2"
   local mode="${3:-full}"    # "full" (default) or "fast" — fast skips testssl
@@ -281,15 +331,20 @@ discover_fqdn() {
   fi
 
   phase "Port discovery (naabu)"
-  naabu -list "$wd/_resolved_ips.txt" \
-    -top-ports "${NAABU_TOP_PORTS:-1000}" \
-    -rate "${NAABU_RATE:-1000}" \
-    -scan-type CONNECT \
-    -silent -json \
-    > "$wd/naabu.json" 2> "$wd/naabu.err"
-  local naabu_rc=$?   # 4.7 G3: preserve rc — rc!=0 = couldn't reach host this scan
-  [[ $naabu_rc -ne 0 ]] && warn "naabu had errors (rc=$naabu_rc)"
-  reconfirm_naabu_opens "$wd/naabu.json"   # N1: drop phantom cloud/LB opens before they become findings
+  local naabu_rc=0
+  if cloud_gate_ports "$wd/naabu.json" $(grep -E '^[0-9]+(\.[0-9]+){3}$' "$wd/_resolved_ips.txt" 2>/dev/null); then
+    :   # N2: cloud edge — shallow curated probe done, top-1000 sweep skipped
+  else
+    naabu -list "$wd/_resolved_ips.txt" \
+      -top-ports "${NAABU_TOP_PORTS:-1000}" \
+      -rate "${NAABU_RATE:-1000}" \
+      -scan-type CONNECT \
+      -silent -json \
+      > "$wd/naabu.json" 2> "$wd/naabu.err"
+    naabu_rc=$?   # 4.7 G3: preserve rc — rc!=0 = couldn't reach host this scan
+    [[ $naabu_rc -ne 0 ]] && warn "naabu had errors (rc=$naabu_rc)"
+    reconfirm_naabu_opens "$wd/naabu.json"   # N1: drop phantom cloud/LB opens before they become findings
+  fi
 
   phase "Service fingerprinting (fingerprintx)"
   local fpx_rc=0
@@ -643,13 +698,17 @@ discover_ip() {
   echo "$ip" > "$wd/_resolved_ips.txt"
 
   phase "Port discovery (naabu)"
-  naabu -host "$ip" \
-    -top-ports "${NAABU_TOP_PORTS:-1000}" \
-    -rate "${NAABU_RATE:-1000}" \
-    -scan-type CONNECT \
-    -silent -json \
-    > "$wd/naabu.json" 2> "$wd/naabu.err" || warn "naabu had errors"
-  reconfirm_naabu_opens "$wd/naabu.json"   # N1: drop phantom cloud/LB opens before they become findings
+  if cloud_gate_ports "$wd/naabu.json" "$ip"; then
+    :   # N2: cloud edge — shallow curated probe done, top-1000 sweep skipped
+  else
+    naabu -host "$ip" \
+      -top-ports "${NAABU_TOP_PORTS:-1000}" \
+      -rate "${NAABU_RATE:-1000}" \
+      -scan-type CONNECT \
+      -silent -json \
+      > "$wd/naabu.json" 2> "$wd/naabu.err" || warn "naabu had errors"
+    reconfirm_naabu_opens "$wd/naabu.json"   # N1: drop phantom cloud/LB opens before they become findings
+  fi
 
   phase "Service fingerprinting (fingerprintx)"
   if [[ -s "$wd/naabu.json" ]]; then
