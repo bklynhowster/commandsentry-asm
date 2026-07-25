@@ -290,9 +290,14 @@ def build_light_planned_steps(ctx: ScanContext) -> list[str]:
     actually runs. wpvulnerability is omitted — it self-gates on WordPress
     detection inside the check, so it can't be honestly predicted here."""
     steps = ["naabu"]  # port_scan always runs first
+    # MUST mirror run()'s gating EXACTLY (bug caught 2026-07-25 on a live Light
+    # run: planned=2 steps but 8 tools actually ran). asset_kind is an OVERRIDE
+    # that FORCES run_https true — it is NOT an additional required condition.
     no_scan_data = len(ctx.open_ports) == 0
     run_https = (443 in ctx.open_ports) or no_scan_data
-    if ctx.asset_kind in ("portal", "marketing", "vpn-endpoint", "web-app") and run_https:
+    if ctx.asset_kind in ("portal", "marketing", "vpn-endpoint", "web-app"):
+        run_https = True
+    if run_https:
         steps += ["tls_check", "headers_check", "common_paths", "httpx_tech", "methods_check"]
     steps.append("dns_posture")  # always
     return steps
