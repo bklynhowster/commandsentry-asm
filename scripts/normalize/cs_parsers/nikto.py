@@ -57,6 +57,23 @@ SKIP_PATTERNS = [
     re.compile(r"^OSVDB-\d+:\s*$"),
     re.compile(r"^---+"),
     re.compile(r"^\s*$"),
+    # TOOL LIMITATIONS ARE NOT FINDINGS (2026-07-25, Howie reviewing
+    # littleleaffarms). nikto emitted, as a LOW finding:
+    #   "An alt-svc header was found which is advertising HTTP/3 … Nikto cannot
+    #    test HTTP/3 over QUIC"
+    # That is nikto reporting what NIKTO can't do — zero security content, and it
+    # sat in the open-findings list looking like a defect. Anything phrased as
+    # "cannot test / not tested / skipping" is scanner housekeeping, not a result.
+    # Covers the observed "Nikto cannot test HTTP/3 over QUIC" plus the other
+    # phrasings nikto uses for the same non-result ("could not be tested",
+    # "were not tested", "skipping ... tests"). Verified against a keep/drop
+    # corpus so real findings (.git, phpinfo, directory indexing, missing
+    # headers, ETag inode leak, backup files, OPTIONS) all still survive.
+    re.compile(r"\bcannot\s+(?:be\s+)?test", re.IGNORECASE),
+    re.compile(r"\b(?:could|can|will)\s+not\s+(?:be\s+)?test", re.IGNORECASE),
+    re.compile(r"\b(?:was|were)\s+not\s+tested\b", re.IGNORECASE),
+    re.compile(r"\bno tests?\b.*\bperformed\b", re.IGNORECASE),
+    re.compile(r"\bskipping\b.*\btests?\b", re.IGNORECASE),
 ]
 
 # Bracketed test ID: `[NNNNNN] /path: description`

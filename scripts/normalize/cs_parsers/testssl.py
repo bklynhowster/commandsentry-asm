@@ -85,6 +85,61 @@ SCORECARD_IDS = {
 }
 
 
+# TLS INVENTORY, NOT FINDINGS (2026-07-25, Howie reviewing littleleaffarms:
+# "somewhat redundant and crazy … doesn't really help a security analyst").
+#
+# testssl reports a pile of certificate/handshake FACTS. Facts arriving at INFO
+# are already dropped by SKIP_SEVERITIES — but these come in at LOW/MEDIUM, so
+# they survived and padded the findings list with things an analyst cannot act on:
+#
+#   cert_notAfter          "2026-09-08 11:20"  ← just the expiry DATE. The actual
+#                          warning is cert_expirationStatus, which we KEEP — so
+#                          shipping both meant ONE fact filed as TWO findings.
+#   FS_TLS12_sig_algs      a LIST of supported signature algorithms — and on this
+#                          host the list was mostly STRONG. Reporting a good
+#                          result as a finding is worse than saying nothing.
+#   FS_KEMs                "no post-quantum key exchange offered" — aspirational,
+#                          not a defect in 2026.
+#   TLS_session_ticket     ticket lifetime trivia.
+#
+# What stays: cert_expirationStatus, cert_chain_of_trust, cert_trust,
+# OCSP_stapling, protocol/cipher weaknesses, named attacks. Anything an analyst
+# would actually open a ticket for.
+METADATA_IDS = {
+    # certificate facts
+    "cert_notAfter",
+    "cert_notBefore",
+    "cert_keySize",
+    "cert_signatureAlgorithm",
+    "cert_commonName",
+    "cert_subjectAltName",
+    "cert_serialNumber",
+    "cert_fingerprintSHA1",
+    "cert_fingerprintSHA256",
+    "cert_caIssuers",
+    "cert_crlDistributionPoints",
+    "cert_ocspURL",
+    "cert_mustStapleExtension",
+    "cert_eTS_wildcard",
+    "intermediate_cert_notAfter",
+    "intermediate_cert_notBefore",
+    "intermediate_cert_keySize",
+    "intermediate_cert_signatureAlgorithm",
+    # handshake / capability inventory
+    "FS_TLS12_sig_algs",
+    "FS_ECDHE_curves",
+    "FS_TLS13_sig_algs",
+    "FS_KEMs",
+    "TLS_session_ticket",
+    "TLS_timestamp",
+    "TLS_extensions",
+    "SSL_sessionID_support",
+    "sessionresumption_ticket",
+    "sessionresumption_ID",
+    "clientsimulation",
+}
+
+
 # testssl IDs that should KEEP their MODERATE severity even without CWE.
 # Most testssl MEDIUM-no-CWE entries are hardening items that Command's
 # curated reports demote to LOW (HSTS_time, TLS1_2, FS, TLS_misses_extension_23,
@@ -151,6 +206,21 @@ TITLE_LABELS = {
     "cert_chain_of_trust":         "Certificate chain of trust issue",
     "cert_trust_wildcard":         "Wildcard certificate in use",
     "certs_list_ordering_problem": "Certificate list ordering issue",
+    # Plain-English labels (2026-07-25, Howie: "in the most basic layman's terms").
+    # The raw testssl id leaked into the title as "TLS · cert_expirationStatus: …",
+    # which tells an analyst nothing. These read as the problem, not the test name.
+    "cert_expirationStatus":       "TLS certificate expiring soon",
+    "cert_trust":                  "TLS certificate does not match the site name",
+    "cert_revocation":             "Certificate revocation checking unavailable",
+    "cipherlist_LOW":              "Weak (LOW-strength) ciphers offered",
+    "cipherlist_WEAK":             "Weak ciphers offered",
+    "cipherlist_3DES_IDEA":        "Obsolete 3DES/IDEA ciphers offered",
+    "cipherlist_EXPORT":           "Export-grade ciphers offered",
+    "cipherlist_aNULL":            "Anonymous (unauthenticated) ciphers offered",
+    "SSLv2":                       "SSLv2 enabled (obsolete, insecure)",
+    "SSLv3":                       "SSLv3 enabled (obsolete, insecure)",
+    "secure_client_renego":        "Insecure client-initiated renegotiation",
+    "secure_renego":               "Insecure TLS renegotiation",
 }
 
 
@@ -271,6 +341,10 @@ def parse_testssl_file(
 
         # Skip pure meta/scorecard IDs only (overall_grade, service, etc.).
         if grouped_id in SCORECARD_IDS:
+            continue
+
+        # Skip TLS inventory reported at LOW/MEDIUM (2026-07-25) — see METADATA_IDS.
+        if grouped_id in METADATA_IDS:
             continue
 
         # Collapse synonym IDs into their canonical ID so duplicate reporting
