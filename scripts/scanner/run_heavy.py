@@ -111,6 +111,7 @@ from run_medium import (
     get_scanner_version,
     derive_validation_status,
     flush_progress,
+    flush_planned_steps,
     build_rotation_log,
     mark_tool_ok,
     mark_tool_degraded,
@@ -2342,6 +2343,15 @@ def run(descriptor_path: str, dsn: str) -> int:
         # DegradedRunError lands in the except branch below and routes
         # cleanly through degraded_out_heavy.
         assert_validate_mode_target_allowed(ctx.hostname, skip_vpn)
+
+        # Live scan progress (note 103, #46): heavy's phase list is static
+        # (unlike medium's tech-stack-dependent plan), so write it up front to
+        # drive the portal ScanProgress card's denominator. Names MUST match the
+        # tool_status keys each phase sets — testssl.sh / httpx — and the
+        # net-depth pair credit (naabu / fingerprintx). Best-effort:
+        # flush_planned_steps no-ops if dsn unset and swallows failures.
+        ctx.planned_steps = ["testssl.sh", "httpx", "naabu", "fingerprintx"]
+        flush_planned_steps(ctx)
 
         # Phase 1 — testssl.sh (P2). The whole point of v1 — clears the
         # stranded backlog so the note-127 auto-closer can reconcile.
