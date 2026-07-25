@@ -236,6 +236,14 @@ class ScanContext:
     # log()-only failure paths.
     tool_status:   dict[str, dict] = field(default_factory=dict)
 
+    # Live scan progress (note 103, #46): mirrors run_medium/run_heavy so the
+    # portal ScanProgress card renders for Light too. dsn lets the imported
+    # flush_progress/flush_planned_steps open their own short-lived conn;
+    # planned_steps (built after port_scan, once open_ports + kind are known) is
+    # the card's denominator.
+    dsn:           str | None = None
+    planned_steps: list[str] | None = None
+
 
 # ─── Subprocess helper ──────────────────────────────────────────────────
 def run_cmd(cmd: list[str], timeout: int = 30, input_str: str | None = None) -> tuple[int, str, str]:
@@ -270,15 +278,37 @@ def log(msg: str) -> None:
 # Detectors that cry-wolf on empty-but-healthy runs are the exact
 # nuclei-empty trap we don't want to repeat.
 
+# Live scan progress (note 103, #46): reuse run_medium's DB-flush helpers so
+# Light writes tool_status + planned_steps mid-run for the portal ScanProgress
+# card. run_medium imports nothing from run_light, so this is NOT circular.
+from run_medium import flush_progress, flush_planned_steps  # noqa: E402
+
+
+def build_light_planned_steps(ctx: ScanContext) -> list[str]:
+    """Honest phase list for THIS run, built AFTER port_scan (open_ports + kind
+    known). Mirrors run()'s dispatch so the card's denominator matches what
+    actually runs. wpvulnerability is omitted — it self-gates on WordPress
+    detection inside the check, so it can't be honestly predicted here."""
+    steps = ["naabu"]  # port_scan always runs first
+    no_scan_data = len(ctx.open_ports) == 0
+    run_https = (443 in ctx.open_ports) or no_scan_data
+    if ctx.asset_kind in ("portal", "marketing", "vpn-endpoint", "web-app") and run_https:
+        steps += ["tls_check", "headers_check", "common_paths", "httpx_tech", "methods_check"]
+    steps.append("dns_posture")  # always
+    return steps
+
+
 def mark_tool_ok(ctx: ScanContext, tool_name: str) -> None:
     """Record that a tool produced real output."""
     ctx.tool_status[tool_name] = {"ok": True}
+    flush_progress(ctx)
 
 
 def mark_tool_degraded(ctx: ScanContext, tool_name: str, reason: str) -> None:
     """Record that a tool failed in a recognized way. `reason` is a stable
     machine-readable slug (snake_case) — downstream groups on it."""
     ctx.tool_status[tool_name] = {"degraded": reason}
+    flush_progress(ctx)
 
 
 def mark_tool_skipped(ctx: ScanContext, tool_name: str, reason: str) -> None:
@@ -293,6 +323,7 @@ def mark_tool_skipped(ctx: ScanContext, tool_name: str, reason: str) -> None:
     helper ready.
     """
     ctx.tool_status[tool_name] = {"skipped": reason}
+    flush_progress(ctx)
 
 
 def tls_check_is_degraded(exception: BaseException) -> tuple[bool, str]:
@@ -2527,6 +2558,7 @@ def run(descriptor_path: str, dsn: str) -> int:
         intensity=descriptor["intensity"],
         asset_kind=asset.get("kind"),
     )
+    ctx.dsn = dsn   # #46: enable mid-run progress flushes (flush_progress no-ops without it)
     log(f"asset_id={ctx.asset_id} hostname={ctx.hostname} kind={ctx.asset_kind} scan_run_id={ctx.scan_run_id}")
 
     try:
@@ -2544,6 +2576,11 @@ def run(descriptor_path: str, dsn: str) -> int:
         log("→ port_scan")
         ctx.open_ports = port_scan(ctx)
         no_scan_data = len(ctx.open_ports) == 0
+
+        # #46: open_ports + kind are known now, so write the honest phase plan
+        # (portal ScanProgress card denominator). Best-effort; no-ops without dsn.
+        ctx.planned_steps = build_light_planned_steps(ctx)
+        flush_planned_steps(ctx)
 
         # ─── HTTPS suite ───────────────────────────────────────────────
         # Fires when port 443 was found OR we have no scan data
