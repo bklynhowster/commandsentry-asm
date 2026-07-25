@@ -2564,6 +2564,19 @@ def run(descriptor_path: str, dsn: str) -> int:
         asset_kind=asset.get("kind"),
     )
     ctx.dsn = dsn   # #46: enable mid-run progress flushes (flush_progress no-ops without it)
+
+    # #46 (2026-07-25): write a PROVISIONAL plan at t=0, BEFORE port_scan.
+    # port_scan (naabu) is Light's slowest phase, so writing the plan only after
+    # it meant the portal showed a content-free indeterminate bar for most of the
+    # scan, flashed the phase card for a few seconds, then hid it at completion —
+    # i.e. no usable feedback ("I honestly don't see any difference"). The
+    # provisional plan assumes the HTTPS suite runs (true whenever 443 is open, no
+    # port data, or the kind override applies = the overwhelming majority);
+    # build_light_planned_steps re-writes the HONEST plan right after port_scan,
+    # which corrects the denominator for the rare mail-relay/443-closed case.
+    ctx.planned_steps = ["naabu", "tls_check", "headers_check", "common_paths",
+                         "httpx_tech", "methods_check", "dns_posture"]
+    flush_planned_steps(ctx)
     log(f"asset_id={ctx.asset_id} hostname={ctx.hostname} kind={ctx.asset_kind} scan_run_id={ctx.scan_run_id}")
 
     try:
