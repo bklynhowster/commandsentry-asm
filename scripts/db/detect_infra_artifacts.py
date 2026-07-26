@@ -69,6 +69,33 @@ REVISIT_TRIGGER_CYCLES = 4
 
 CURATED_CLOUD_PORTS = (80, 443, 8080, 8443)
 
+# ── SERVICE-ANSWERED TAGS — the hard exclusion (added 2026-07-26) ─────────
+#
+# A finding carrying any of these tags means the scanner got a real RESPONSE
+# from that port: a protocol banner, a TLS handshake, or an auth prompt.
+# Something answered. That is affirmative evidence of a LIVE SERVICE and it
+# directly contradicts "phantom", which by definition is a port that answers
+# the scanner and nothing else.
+#
+# WHY THIS EXISTS — it cost us. On 2026-07-26 the first disposition closed 5
+# GENUINELY OPEN mail services on email.commandcompanies.com (110 POP3, 143
+# IMAP, 587 submission, 993 IMAPS, 995 POP3S — a real Microsoft O365
+# endpoint) as naabu phantoms. The rows were tagged smtp / imap / auth / tls /
+# banner the whole time. Reverted via the disposition tag handle.
+#
+# The predicate's flaw was structural, not incidental: "any non-curated port
+# on a cloud-classified asset is phantom" holds for a WEB asset behind a CDN.
+# It is false for a MAIL host, where non-web ports are the entire point — and
+# an O365 endpoint is cloud-classified precisely because it is cloud.
+#
+# So the fix is not a hostname special-case (the next one won't be mail).
+# It is: never call a port phantom when the evidence says a service replied.
+# This is a candidate SUPPRESSOR, not a scorer — a single matching tag drops
+# the row, and it errs toward under-reporting. That is the correct direction:
+# a missed candidate costs a human one extra look; a wrong candidate is how a
+# real exposed service gets closed as noise.
+SERVICE_ANSWERED_TAGS = ("banner", "auth", "tls")
+
 SIGNALS = {
     # cert_trust on an IP-typed asset: a certificate can never match a bare
     # IP literal, so the check is a category error rather than a finding.
@@ -94,6 +121,10 @@ SIGNALS = {
                  NULLIF(substring(f.finding_id from 'open-port-([0-9]+)-tcp'), '')::int,
                  -1
                ) NOT IN %(curated)s
+           -- A service answered on this port => NOT a phantom. See
+           -- SERVICE_ANSWERED_TAGS above; this clause is what stops the
+           -- 2026-07-26 mail-port mistake recurring.
+           AND NOT (COALESCE(f.tags, '{}') && %(answered)s::text[])
     """,
 }
 
@@ -107,8 +138,19 @@ def _collect(psycopg, dsn) -> Verdict:
     try:
         out = []
         with conn.cursor() as cur:
+            # Bind ONLY the placeholders a given signal actually references.
+            # psycopg's tolerance for unused keys in a params dict is not
+            # something to rely on unverified — and an unused-param error
+            # would surface as a detector that reports zero, which is exactly
+            # the silent-success trap (Q6) this script exists to avoid.
+            all_params = {
+                "curated": CURATED_CLOUD_PORTS,
+                "answered": list(SERVICE_ANSWERED_TAGS),
+            }
             for name, sql in SIGNALS.items():
-                cur.execute(sql, {"curated": CURATED_CLOUD_PORTS})
+                params = {k: v for k, v in all_params.items()
+                          if f"%({k})s" in sql}
+                cur.execute(sql, params or None)
                 for r in cur.fetchall():
                     out.append({
                         "signal": name,
