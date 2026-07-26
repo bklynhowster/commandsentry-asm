@@ -10,9 +10,9 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-07-25T19:18:50Z_97ea2b46",
-    "started_at": "2026-07-25T19:18:50Z",
-    "completed_at": "2026-07-25T19:24:00Z",
+    "id": "scan_2026-07-26T03:38:37Z_c357911c",
+    "started_at": "2026-07-26T03:38:37Z",
+    "completed_at": "2026-07-26T03:43:47Z",
     "duration_seconds": 310,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
@@ -33,7 +33,7 @@
     "live_subdomain_count": 3,
     "host_count": 22,
     "service_count": 16,
-    "newest_cert_expiry_days": 87,
+    "newest_cert_expiry_days": 86,
     "top_hosting_org": "Microsoft Corporation",
     "platforms": [
       "WordPress on wp.cloud (Pressable)"
@@ -45,8 +45,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-07-25T19:24:00Z",
-      "last_seen": "2026-07-25T19:24:00Z",
+      "first_discovered": "2026-07-26T03:43:47Z",
+      "last_seen": "2026-07-26T03:43:47Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -137,7 +137,7 @@
             "not_before": "2026-07-23T00:44:49Z",
             "not_after": "2026-10-21T00:44:48Z",
             "self_signed": false,
-            "days_to_expiry": 87
+            "days_to_expiry": 86
           }
         },
         {
@@ -190,7 +190,7 @@
             "not_before": "2026-07-23T00:44:49Z",
             "not_after": "2026-10-21T00:44:48Z",
             "self_signed": false,
-            "days_to_expiry": 87
+            "days_to_expiry": 86
           }
         }
       ],
@@ -207,10 +207,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
-          "MS=ms93622757",
-          "apple-domain-verification=cWkfjNKuM61a3EZ6",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430"
+          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
+          "MS=ms93622757",
+          "apple-domain-verification=cWkfjNKuM61a3EZ6"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -322,8 +322,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-25T19:24:00Z",
-      "last_seen": "2026-07-25T19:24:00Z",
+      "first_discovered": "2026-07-26T03:43:48Z",
+      "last_seen": "2026-07-26T03:43:48Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -343,7 +343,7 @@
       },
       "hosts": [
         {
-          "ip": "2603:1036:207:459::2",
+          "ip": "2603:1036:207:45a::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -353,7 +353,17 @@
           "is_private": false
         },
         {
-          "ip": "2603:1036:302:415b::2",
+          "ip": "2603:1036:302:4158::2",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Washington",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "2603:1036:302:4846::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -373,17 +383,7 @@
           "is_private": false
         },
         {
-          "ip": "2603:1036:302:505f::2",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "2603:1036:303:3094::2",
+          "ip": "2603:1036:303:3803::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -393,7 +393,7 @@
           "is_private": false
         },
         {
-          "ip": "2603:1036:303:3806::2",
+          "ip": "2603:1036:303:3c1a::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -403,7 +403,7 @@
           "is_private": false
         },
         {
-          "ip": "2603:1036:303:380b::2",
+          "ip": "2603:1036:303:3c31::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -413,7 +413,7 @@
           "is_private": false
         },
         {
-          "ip": "2603:1036:303:3c18::2",
+          "ip": "2603:1036:303:3c33::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -423,27 +423,7 @@
           "is_private": false
         },
         {
-          "ip": "40.99.232.114",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "52.96.109.194",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Washington",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "52.96.111.34",
+          "ip": "52.96.109.242",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -463,27 +443,7 @@
           "is_private": false
         },
         {
-          "ip": "52.96.165.178",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Boydton",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "52.96.181.242",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Boydton",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "52.96.183.34",
+          "ip": "52.96.111.98",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -493,7 +453,7 @@
           "is_private": false
         },
         {
-          "ip": "52.96.189.34",
+          "ip": "52.96.165.130",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -503,7 +463,7 @@
           "is_private": false
         },
         {
-          "ip": "52.96.222.178",
+          "ip": "52.96.173.178",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -513,7 +473,7 @@
           "is_private": false
         },
         {
-          "ip": "52.96.242.18",
+          "ip": "52.96.182.114",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -523,7 +483,7 @@
           "is_private": false
         },
         {
-          "ip": "52.96.87.210",
+          "ip": "52.96.182.98",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -533,19 +493,59 @@
           "is_private": false
         },
         {
-          "ip": "52.96.88.34",
+          "ip": "52.96.184.18",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Boydton",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.88.18",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
           "region": "Virginia",
           "city": "Washington",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.88.2",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Washington",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.88.98",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Washington",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "52.96.97.130",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Boydton",
           "reverse_dns": null,
           "is_private": false
         }
       ],
       "services": [
         {
-          "ip": "52.96.165.178",
+          "ip": "52.96.165.130",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -553,7 +553,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.165.178",
+          "ip": "52.96.165.130",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
@@ -587,11 +587,11 @@
             "not_before": "2026-06-26T00:00:00Z",
             "not_after": "2027-01-10T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 169
+            "days_to_expiry": 168
           }
         },
         {
-          "ip": "52.96.181.242",
+          "ip": "52.96.173.178",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -599,7 +599,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.181.242",
+          "ip": "52.96.173.178",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
@@ -633,11 +633,11 @@
             "not_before": "2026-06-26T00:00:00Z",
             "not_after": "2027-01-10T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 169
+            "days_to_expiry": 168
           }
         },
         {
-          "ip": "52.96.189.34",
+          "ip": "52.96.184.18",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -645,7 +645,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.189.34",
+          "ip": "52.96.184.18",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
@@ -679,11 +679,11 @@
             "not_before": "2026-06-26T00:00:00Z",
             "not_after": "2027-01-10T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 169
+            "days_to_expiry": 168
           }
         },
         {
-          "ip": "52.96.222.178",
+          "ip": "52.96.97.130",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -691,7 +691,7 @@
           "tls": false
         },
         {
-          "ip": "52.96.222.178",
+          "ip": "52.96.97.130",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
@@ -725,26 +725,26 @@
             "not_before": "2026-06-26T00:00:00Z",
             "not_after": "2027-01-10T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 169
+            "days_to_expiry": 168
           }
         }
       ],
       "dns": {
         "a": [
-          "40.99.232.114",
-          "52.96.87.210",
-          "52.96.88.34",
-          "52.96.109.194",
-          "52.96.111.34",
+          "52.96.88.2",
+          "52.96.88.18",
+          "52.96.88.98",
+          "52.96.109.242",
           "52.96.111.82",
-          "52.96.183.34",
-          "52.96.242.18"
+          "52.96.111.98",
+          "52.96.182.98",
+          "52.96.182.114"
         ],
         "aaaa": [
+          "2603:1036:302:4158::2",
           "2603:1036:302:48b4::2",
-          "2603:1036:302:415b::2",
-          "2603:1036:302:505f::2",
-          "2603:1036:207:459::2"
+          "2603:1036:302:4846::2",
+          "2603:1036:207:45a::2"
         ],
         "cname": "outlook.office365.com",
         "mx": [],
@@ -785,8 +785,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-25T19:24:02Z",
-      "last_seen": "2026-07-25T19:24:02Z",
+      "first_discovered": "2026-07-26T03:43:50Z",
+      "last_seen": "2026-07-26T03:43:50Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -877,7 +877,7 @@
             "not_before": "2026-07-23T00:44:49Z",
             "not_after": "2026-10-21T00:44:48Z",
             "self_signed": false,
-            "days_to_expiry": 87
+            "days_to_expiry": 86
           }
         },
         {
@@ -930,7 +930,7 @@
             "not_before": "2026-07-23T00:44:49Z",
             "not_after": "2026-10-21T00:44:48Z",
             "self_signed": false,
-            "days_to_expiry": 87
+            "days_to_expiry": 86
           }
         }
       ],
@@ -948,9 +948,9 @@
         ],
         "txt": [
           "apple-domain-verification=cWkfjNKuM61a3EZ6",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
           "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
-          "MS=ms93622757"
+          "MS=ms93622757",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -1060,8 +1060,135 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-07-25T13:50:55Z_45c461f0",
+    "since_scan": "scan_2026-07-25T19:18:50Z_97ea2b46",
     "added": {
+      "subdomains": [],
+      "services": [
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.165.130",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.165.130",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.173.178",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.173.178",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.184.18",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.184.18",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.97.130",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.97.130",
+          "port": 443,
+          "protocol": "tcp"
+        }
+      ],
+      "hosts": [
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:207:45a::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:302:4158::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:302:4846::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:303:3803::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:303:3c1a::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:303:3c31::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:303:3c33::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.109.242"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.111.98"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.165.130"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.173.178"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.182.114"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.182.98"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.184.18"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.88.18"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.88.2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.88.98"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.97.130"
+        }
+      ]
+    },
+    "removed": {
       "subdomains": [],
       "services": [
         {
@@ -1124,10 +1251,6 @@
         },
         {
           "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:302:48b4::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
           "ip": "2603:1036:302:505f::2"
         },
         {
@@ -1157,10 +1280,6 @@
         {
           "subdomain": "email.commandcompanies.com",
           "ip": "52.96.111.34"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.111.82"
         },
         {
           "subdomain": "email.commandcompanies.com",
@@ -1196,221 +1315,6 @@
         }
       ]
     },
-    "removed": {
-      "subdomains": [],
-      "services": [
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.228.226",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.228.226",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.230.210",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.230.210",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.230.50",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.230.50",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.39.226",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.39.226",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.182.162",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.182.162",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.183.2",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.183.2",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.214.50",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.214.50",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.242.2",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.242.2",
-          "port": 443,
-          "protocol": "tcp"
-        }
-      ],
-      "hosts": [
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:301:300f::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:301:3030::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:301:3033::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:301:3035::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:301:3038::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:301:303f::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:301:30a1::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:301:30a2::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:301:30a5::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:5:44a::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:5:44e::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:5:450::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.228.226"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.230.210"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.230.50"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.39.226"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.157.162"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.163.18"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.164.178"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.182.162"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.183.2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.191.226"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.201.114"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.214.50"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.226.146"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.242.2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.242.34"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.79.130"
-        }
-      ]
-    },
     "changed": {
       "fingerprint": [],
       "cert": [],
@@ -1418,47 +1322,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-06-29T11:16:36Z_baa60da7",
-      "started_at": "2026-06-29T11:16:36Z",
-      "completed_at": "2026-06-29T11:19:26Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 2,
-      "service_count": 8,
-      "subdomain_names": [
-        "commandcompanies.com",
-        "www.commandcompanies.com"
-      ],
-      "ports_by_sub": {
-        "commandcompanies.com": {
-          "199.16.172.42": [
-            80,
-            443
-          ],
-          "199.16.173.153": [
-            80,
-            443
-          ]
-        },
-        "www.commandcompanies.com": {
-          "199.16.172.42": [
-            80,
-            443
-          ],
-          "199.16.173.153": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.3",
-        "Slider Revolution": "6.7.57",
-        "Yoast SEO": "27.9",
-        "jQuery Migrate": "3.4.1"
-      }
-    },
     {
       "scan_id": "scan_2026-06-29T16:01:01Z_1e6c5ba9",
       "started_at": "2026-06-29T16:01:01Z",
@@ -11854,6 +11717,67 @@
             443
           ],
           "52.96.222.178": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.42": [
+            80,
+            443
+          ],
+          "199.16.173.153": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.3",
+        "Slider Revolution": "6.7.58",
+        "Yoast SEO": "28.1",
+        "jQuery Migrate": "3.4.1",
+        "Microsoft HTTPAPI": "2.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-07-26T03:38:37Z_c357911c",
+      "started_at": "2026-07-26T03:38:37Z",
+      "completed_at": "2026-07-26T03:43:47Z",
+      "subdomain_count": 3,
+      "live_subdomain_count": 3,
+      "host_count": 22,
+      "service_count": 16,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "email.commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.42": [
+            80,
+            443
+          ],
+          "199.16.173.153": [
+            80,
+            443
+          ]
+        },
+        "email.commandcompanies.com": {
+          "52.96.165.130": [
+            80,
+            443
+          ],
+          "52.96.173.178": [
+            80,
+            443
+          ],
+          "52.96.184.18": [
+            80,
+            443
+          ],
+          "52.96.97.130": [
             80,
             443
           ]
