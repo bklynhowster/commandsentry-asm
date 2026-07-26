@@ -24,7 +24,7 @@ refusals from broken-gate states at the GH Actions layer):
   - GateResult.reason == 'ownership_not_allowed' (the namesake / unknown /
     not-on-allowlist case) → routine refusal. The scanner did its job.
     DB stamp + SendGrid alert + GREEN workflow run. Caller EXITS 0.
-  - GateResult.reason in {'asset_not_found', 'db_error'} or a thrown
+  - GateResult.reason in {'asset_not_found', 'db_unreadable'} or a thrown
     exception during gate import / execution (the fail-closed-on-
     uncertainty paths) → something is actually broken. The gate refused
     because it couldn't trust the input or the lookup. Caller EXITS 1
@@ -48,8 +48,19 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from typing import Optional
+
+# Shared verdict-vs-transport framework (4.7 G1). Do NOT hand-roll retry here
+# — G1 required one library precisely so gates cannot drift apart.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+from gate_retry import (  # noqa: E402
+    SAFETY,
+    TransportFailure,
+    Verdict,
+    run_with_transport_retry,
+)
 
 
 # ─── Allowlist — bound to LIVE assets.ownership data 2026-06-11 ──────────
@@ -72,20 +83,20 @@ class GateResult:
 
     Caller branches exit code on `is_routine_refusal()`:
       - True (ownership_not_allowed) → exit 0, scan was correctly refused.
-      - False (asset_not_found, db_error) → exit 1, gate failed closed
+      - False (asset_not_found, db_unreadable) → exit 1, gate failed closed
         on uncertainty — something is actually broken.
     """
 
     asset_id: str
     intensity: str
     ownership: Optional[str]
-    reason: str  # 'ownership_not_allowed' | 'asset_not_found' | 'db_error'
+    reason: str  # 'ownership_not_allowed' | 'asset_not_found' | 'db_unreadable'
     message: str
 
     def is_routine_refusal(self) -> bool:
         """True for the policy-compliant refusal case (ownership_not_allowed).
         False for the fail-closed-on-uncertainty cases (asset_not_found,
-        db_error) which indicate a broken gate state and should bubble up
+        db_unreadable) which indicate a broken gate state and should bubble up
         as a failed workflow run."""
         return self.reason == "ownership_not_allowed"
 
@@ -128,27 +139,77 @@ def check_ownership_or_block(
     if intensity not in _ACTIVE_INTENSITIES:
         return None
 
-    # ─── Ownership lookup (single SELECT, fails CLOSED on error) ────────
+    # ─── Ownership lookup — verdict vs transport (4.7 G2, 2026-07-25) ───
+    #
+    # Was a single SELECT that failed CLOSED on ANY exception and fired an
+    # alert email immediately. That conflated two different things: the DB
+    # ANSWERING (row present/absent, ownership value) with us never REACHING
+    # it. One transient pooler blip mid-scan => scan_run marked failed +
+    # a page, against a healthy DB. Same defect class as the migration-ledger
+    # gate in run #1348 (see gate_retry.py).
+    #
+    # Now: the lookup retries on transport failure under the SAFETY budget
+    # (3 attempts, 1s/3s backoff, ~19s worst case — G3's safety tier; this
+    # gate runs at scan start while a VPN slot is held, so the budget is
+    # bounded deliberately). A real answer short-circuits immediately and is
+    # never retried.
+    #
+    # FAIL DIRECTION (G4): ROE is a SAFETY gate. Unreadable => BLOCK. We do
+    # not scan a target whose authorisation we could not confirm, and this
+    # gate deliberately exposes no fail-open switch.
     ownership: Optional[str]
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT ownership FROM public.assets WHERE asset_id = %s",
-                (asset_id,),
-            )
-            row = cur.fetchone()
-    except Exception as e:
-        # DB error — fail closed. We can't even reach the assets table.
+
+    def _lookup() -> Verdict:
+        """One attempt. Returns a Verdict for any real answer; raises
+        TransportFailure when the DB did not render one."""
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT ownership FROM public.assets WHERE asset_id = %s",
+                    (asset_id,),
+                )
+                return Verdict(True, "row_read", payload=cur.fetchone())
+        except Exception as e:  # noqa — driver error taxonomy varies
+            # Leave the connection usable for the next attempt and for the
+            # _stamp_failed write that follows a block; an aborted psycopg
+            # transaction rejects every subsequent statement otherwise.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise TransportFailure(repr(e)) from e
+
+    v = run_with_transport_retry(
+        _lookup,
+        SAFETY,
+        on_retry=lambda n, e, back: print(
+            f"::warning::roe_gate ownership lookup attempt {n}/{SAFETY.attempts} "
+            f"failed ({e}) — retrying in {back}s",
+            file=sys.stderr,
+        ),
+    )
+
+    if v.unreadable:
+        # Exhausted retries. Persistent DB unavailability, NOT an ROE denial —
+        # say so, because this alert is now high-signal by construction: it
+        # only fires after ~19s of sustained failure, not on a blip.
         result = GateResult(
             asset_id=asset_id,
             intensity=intensity,
             ownership=None,
-            reason="db_error",
-            message=f"roe_block: ownership lookup failed for {asset_id}: {e!r}",
+            reason="db_unreadable",
+            message=(
+                f"roe_block: ownership UNREADABLE for {asset_id} after "
+                f"{v.attempts} attempts over ~{SAFETY.worst_case_s:.0f}s — DB "
+                f"unavailable to the scanner, NOT an ROE denial. "
+                f"Last error: {v.payload!r}"
+            ),
         )
         _stamp_failed(conn, scan_run_id, queue_id, result.message)
         _send_alert(result, scan_run_id, queue_id, github_run_url, queue_source)
         return result
+
+    row = v.payload
 
     if row is None:
         result = GateResult(

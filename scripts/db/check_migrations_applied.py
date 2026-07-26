@@ -15,64 +15,68 @@ Phase 2 NOTE: this refuses ALL unapplied migrations. The `safe_auto_apply` exemp
 nothing auto-applies, so an exempt-but-unapplied migration would silently scan against a
 missing object — so we refuse regardless of the header.
 
-CONNECT RETRY (2026-07-25). The gate sits on the 10-minute scan cron, so it is the most
-frequently executed DB call in the system. It was single-shot: one connect, no retry,
-fail-closed. Scanner run #1348 died on `connection timeout expired` — a transient pooler
-blip, not ledger drift — killing the whole tick and paging on a healthy DB (73/73 ledger
-rows matched minutes later). Fail-closed is right for a ledger DISAGREEMENT; a transport
-failure is "I don't know yet," which is a different thing. So: transport errors now retry
-(3 attempts, 2s then 8s backoff), while any real answer from the DB — including
-"schema_migrations missing" — short-circuits immediately and is never retried. Exhausting
-all attempts still exits non-zero (we never scan against an unverified schema), but says
-UNREADABLE rather than implying drift. Tunable via LEDGER_GATE_ATTEMPTS /
-LEDGER_GATE_CONNECT_TIMEOUT for tests.
+CONNECT RETRY (2026-07-25, refactored onto the shared framework same day per 4.7 G1).
+The gate sits on the 10-minute scan cron, so it is the most frequently executed DB call in
+the system. It was single-shot: one connect, no retry, fail-closed. Scanner run #1348 died
+on `connection timeout expired` — a transient pooler blip, not ledger drift — killing the
+whole tick and paging on a healthy DB (73/73 ledger rows matched minutes later).
+Fail-closed is right for a ledger DISAGREEMENT; a transport failure is "I don't know yet."
+
+The retry logic now lives in scripts/common/gate_retry.py and is SHARED with roe_gate and
+every other gate (G1: one library, so gates cannot drift apart). This module supplies only
+the domain part — what counts as a verdict here. Budget = FAST_CRON (3 attempts, 4s connect,
+1s/3s backoff, ~16s worst case; see the deviation note in gate_retry re G3's literal 10s).
+
+FAIL DIRECTION (G4): the ledger gate is a PROGRESS gate — it protects schema correctness,
+not real-world consequences. G4 permits progress gates to fail OPEN on unreadable, but only
+behind an explicit operator-set env var, never a code default. Default here stays CLOSED.
+Set LEDGER_GATE_TRANSPORT_MODE=fail_open to accept the trade (proceed on unreadable, loudly).
 
 Usage:
     check_migrations_applied.py --dsn "$SUPABASE_DSN" [--migrations-dir scripts/db/migrations]
     # DSN may also come from env SUPABASE_DSN / DSN.
 Exit: 0 clean (all applied + sha-matched) | 1 unapplied/mismatch (REFUSE) | 2 usage/DB error.
 """
-import argparse, glob, hashlib, os, sys, time
+import argparse, glob, hashlib, os, sys
 
-ATTEMPTS = int(os.environ.get("LEDGER_GATE_ATTEMPTS", "3"))
-CONNECT_TIMEOUT = int(os.environ.get("LEDGER_GATE_CONNECT_TIMEOUT", "20"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+from gate_retry import (  # noqa: E402
+    FAST_CRON,
+    TransportFailure,
+    Verdict,
+    run_with_transport_retry,
+)
 
-
-class LedgerVerdict(Exception):
-    """A real answer from the DB about ledger STATE — authoritative, never retried.
-
-    Distinct from a transport failure. If the connection worked and the DB told us
-    something (e.g. the ledger table does not exist), retrying just repeats the same
-    answer three times and delays the failure by a minute.
-    """
-
-    def __init__(self, msg, code):
-        super().__init__(msg)
-        self.msg = msg
-        self.code = code
+# Operator-set fail direction (G4). Progress gates MAY fail open; this must be a
+# deliberate operational choice, never a code default. Safety gates get no such switch.
+FAIL_OPEN = os.environ.get("LEDGER_GATE_TRANSPORT_MODE", "").lower() == "fail_open"
 
 
 def read_ledger(psycopg, dsn):
     """One attempt at reading the ledger.
 
-    Returns {filename: content_sha256}. Raises LedgerVerdict for an authoritative
-    answer; any other exception is treated as transport and is retryable.
+    Returns a Verdict. `passed=True` carries {filename: content_sha256}.
+    `passed=False` is an authoritative negative answer (the ledger table does
+    not exist) — a real answer, so the framework will NOT retry it. Anything
+    that means we never got an answer raises TransportFailure.
     """
-    conn = psycopg.connect(dsn, connect_timeout=CONNECT_TIMEOUT)
+    try:
+        conn = psycopg.connect(dsn, connect_timeout=FAST_CRON.connect_timeout_s)
+    except Exception as e:  # noqa — connect never reached the server
+        raise TransportFailure(repr(e)) from e
     try:
         cur = conn.cursor()
         cur.execute("select to_regclass('public.schema_migrations')")
         if cur.fetchone()[0] is None:
-            raise LedgerVerdict(
-                "schema_migrations missing — apply 20260710a_schema_migrations_ledger.sql + run seed_ledger.py",
-                2,
-            )
+            return Verdict(False, "schema_migrations_missing")
         cur.execute("select filename, content_sha256 from public.schema_migrations")
-        return {r[0]: r[1] for r in cur.fetchall()}
+        return Verdict(True, "ledger_read", payload={r[0]: r[1] for r in cur.fetchall()})
+    except Exception as e:  # noqa — mid-query loss of the server
+        raise TransportFailure(repr(e)) from e
     finally:
         try:
             conn.close()
-        except Exception:  # noqa — close is best-effort; never mask the real error
+        except Exception:
             pass
 
 
@@ -94,32 +98,36 @@ def main():
     if not files:
         print(f"::error::no migrations in {args.migrations_dir}", file=sys.stderr); return 2
 
-    ledger, last_err = None, None
-    for attempt in range(1, ATTEMPTS + 1):
-        try:
-            ledger = read_ledger(psycopg, args.dsn)
-            break
-        except LedgerVerdict as v:
-            print(f"::error::{v.msg}", file=sys.stderr); return v.code
-        except Exception as e:  # noqa — transport: connect timeout, reset, DNS, pooler
-            last_err = e
-            if attempt < ATTEMPTS:
-                backoff = 2 * (attempt ** 2)  # 2s, 8s
-                print(
-                    f"::warning::ledger read attempt {attempt}/{ATTEMPTS} failed ({e}) — retrying in {backoff}s",
-                    file=sys.stderr,
-                )
-                time.sleep(backoff)
-
-    if ledger is None:
-        # Still fail-closed — we never scan against a schema we could not verify — but
-        # name it correctly so the alert isn't mistaken for migration drift.
-        print(
-            f"::error::ledger UNREADABLE after {ATTEMPTS} attempt(s) — DB unreachable, "
-            f"NOT ledger drift. Last error: {last_err}",
+    v = run_with_transport_retry(
+        lambda: read_ledger(psycopg, args.dsn),
+        FAST_CRON,
+        on_retry=lambda n, e, back: print(
+            f"::warning::ledger read attempt {n}/{FAST_CRON.attempts} failed "
+            f"({e}) — retrying in {back}s",
             file=sys.stderr,
+        ),
+    )
+
+    if v.unreadable:
+        # Never scan against a schema we could not verify — but name it
+        # correctly so the alert is not mistaken for migration drift.
+        msg = (
+            f"ledger UNREADABLE after {v.attempts} attempt(s) over "
+            f"~{FAST_CRON.worst_case_s:.0f}s — DB unreachable, NOT ledger drift. "
+            f"Last error: {v.payload!r}"
         )
+        if FAIL_OPEN:
+            print(f"::warning::{msg} — LEDGER_GATE_TRANSPORT_MODE=fail_open, PROCEEDING UNVERIFIED", file=sys.stderr)
+            return 0
+        print(f"::error::{msg}", file=sys.stderr)
         return 2
+
+    if not v.passed:  # authoritative negative — never retried
+        print("::error::schema_migrations missing — apply 20260710a_schema_migrations_ledger.sql "
+              "+ run seed_ledger.py", file=sys.stderr)
+        return 2
+
+    ledger = v.payload
 
     unapplied, mismatch = [], []
     for path in files:
