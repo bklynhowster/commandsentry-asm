@@ -51,7 +51,7 @@ choice via env var, **never a code default**, and it must be loud.
 | gate | file | env to fail open | status |
 |---|---|---|---|
 | migration ledger | `scripts/db/check_migrations_applied.py` | `LEDGER_GATE_TRANSPORT_MODE=fail_open` | ✅ **fixed 2026-07-25**, refactored onto `gate_retry` |
-| queue claim | `scripts/scanner/poll_queue.py` | — | ⚠️ **no retry.** Connect failure → `return 1` → red run + email. Same noise shape as #1348. Fail direction is correct (no scan proceeds); the missing piece is retry. **Recommend FAST_CRON.** |
+| queue claim | `scripts/scanner/poll_queue.py` | *(none — see note)* | ✅ **fixed 2026-07-26** — FAST_CRON retry on connect. No fail-open switch: "proceed without a queue row" is meaningless, so unreadable still exits non-zero and no scan is claimed. |
 
 ## Not gates — scheduled writers
 

@@ -91,6 +91,15 @@ import os
 import sys
 from typing import Any
 
+# Shared verdict-vs-transport framework (4.7 G1). One library; never hand-roll.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+from gate_retry import (  # noqa: E402
+    FAST_CRON,
+    TransportFailure,
+    Verdict,
+    run_with_transport_retry,
+)
+
 # ─── Lazy import so --help works without psycopg installed ─────────────
 def _import_deps() -> Any:
     try:
@@ -319,12 +328,44 @@ def run(dsn: str) -> int:
     """
     psycopg, dict_row = _import_deps()
 
+    # ─── Connect — verdict vs transport (4.7 G1/G4, 2026-07-26) ─────────
+    #
+    # Was a single connect that returned 1 on ANY exception. On the 10-minute
+    # scan cron that means one transient pooler blip = a red workflow run and
+    # an email, against a healthy DB — the same noise shape that killed run
+    # #1348 on the migration-ledger gate.
+    #
+    # A failed CONNECT is purely transport: the DB never rendered a judgement
+    # about the queue. So it retries under FAST_CRON (3 attempts, 1s/3s
+    # backoff, ~16s worst case) via the shared framework.
+    #
+    # FAIL DIRECTION (G4): poll_queue is a PROGRESS gate — it claims work, it
+    # does not authorise anything. Unreadable still returns non-zero so the
+    # tick is honestly red, and NO scan proceeds. There is deliberately no
+    # fail-open switch: "proceed without a queue row" is meaningless here.
     log("connecting...")
-    try:
-        conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
-    except Exception as e:
-        log(f"DB connect failed: {e}")
+
+    def _connect() -> Verdict:
+        try:
+            return Verdict(True, "connected",
+                           payload=psycopg.connect(dsn, row_factory=dict_row,
+                                                   autocommit=False))
+        except Exception as e:  # noqa — connect never reached the server
+            raise TransportFailure(repr(e)) from e
+
+    v = run_with_transport_retry(
+        _connect,
+        FAST_CRON,
+        on_retry=lambda n, e, back: log(
+            f"DB connect attempt {n}/{FAST_CRON.attempts} failed ({e}) — "
+            f"retrying in {back}s"),
+    )
+    if v.unreadable:
+        log(f"DB UNREACHABLE after {v.attempts} attempts over "
+            f"~{FAST_CRON.worst_case_s:.0f}s — no scan claimed. "
+            f"Last error: {v.payload!r}")
         return 1
+    conn = v.payload
 
     try:
         # ─── Step 1: atomic claim ─────────────────────────────────────
