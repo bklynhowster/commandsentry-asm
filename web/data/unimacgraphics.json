@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-07-29T13:57:58Z_7d4ab365",
-    "started_at": "2026-07-29T13:57:58Z",
-    "completed_at": "2026-07-29T14:05:55Z",
-    "duration_seconds": 477,
+    "id": "scan_2026-07-29T14:54:07Z_8c5bbc19",
+    "started_at": "2026-07-29T14:54:07Z",
+    "completed_at": "2026-07-29T15:03:03Z",
+    "duration_seconds": 536,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -46,8 +46,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -211,11 +211,11 @@
         ],
         "txt": [
           "sek942qd3nt1s4lqh1h2ovmmai",
-          "k15vdsovvom4v46fi4r4rivts6",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
           "MS=ms33269626",
           "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
-          "2o6gse9gno2mv04ik7f14kssfq"
+          "2o6gse9gno2mv04ik7f14kssfq",
+          "k15vdsovvom4v46fi4r4rivts6"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -322,8 +322,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -456,8 +456,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -565,8 +565,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -674,13 +674,13 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
         "http_status": 200,
-        "title": "Sign in to your account"
+        "title": "Redirecting"
       },
       "probe_status": {
         "naabu": {
@@ -722,9 +722,10 @@
           "banner": null,
           "tls": true,
           "cert": {
-            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=WA, C=US",
-            "issuer": "CN=Microsoft TLS G2 RSA CA OCSP 02, O=Microsoft Corporation, C=US",
+            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
             "san": [
+              "stamp2.login.microsoftonline.com",
               "login.microsoftonline-int.com",
               "login.microsoftonline-p.com",
               "login.microsoftonline.com",
@@ -732,13 +733,12 @@
               "login2.microsoftonline.com",
               "loginex.microsoftonline-int.com",
               "loginex.microsoftonline.com",
-              "stamp2.login.microsoftonline-int.com",
-              "stamp2.login.microsoftonline.com"
+              "stamp2.login.microsoftonline-int.com"
             ],
-            "not_before": "2026-06-12T20:13:01Z",
-            "not_after": "2026-12-09T20:13:01Z",
+            "not_before": "2026-06-13T00:00:00Z",
+            "not_after": "2026-12-10T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 133
+            "days_to_expiry": 134
           }
         }
       ],
@@ -776,8 +776,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -824,9 +824,10 @@
           "banner": null,
           "tls": true,
           "cert": {
-            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=WA, C=US",
-            "issuer": "CN=Microsoft TLS G2 RSA CA OCSP 02, O=Microsoft Corporation, C=US",
+            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
             "san": [
+              "stamp2.login.microsoftonline.com",
               "login.microsoftonline-int.com",
               "login.microsoftonline-p.com",
               "login.microsoftonline.com",
@@ -834,13 +835,12 @@
               "login2.microsoftonline.com",
               "loginex.microsoftonline-int.com",
               "loginex.microsoftonline.com",
-              "stamp2.login.microsoftonline-int.com",
-              "stamp2.login.microsoftonline.com"
+              "stamp2.login.microsoftonline-int.com"
             ],
-            "not_before": "2026-06-12T20:13:01Z",
-            "not_after": "2026-12-09T20:13:01Z",
+            "not_before": "2026-06-09T00:00:00Z",
+            "not_after": "2026-12-06T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 133
+            "days_to_expiry": 130
           }
         }
       ],
@@ -878,8 +878,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1012,8 +1012,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1146,8 +1146,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1260,8 +1260,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1369,8 +1369,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1493,8 +1493,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1657,12 +1657,12 @@
           "ns36.domaincontrol.com"
         ],
         "txt": [
-          "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
-          "2o6gse9gno2mv04ik7f14kssfq",
-          "k15vdsovvom4v46fi4r4rivts6",
           "sek942qd3nt1s4lqh1h2ovmmai",
+          "2o6gse9gno2mv04ik7f14kssfq",
+          "MS=ms33269626",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "MS=ms33269626"
+          "k15vdsovvom4v46fi4r4rivts6",
+          "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -1769,8 +1769,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1903,8 +1903,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T14:05:55Z",
-      "last_seen": "2026-07-29T14:05:55Z",
+      "first_discovered": "2026-07-29T15:03:03Z",
+      "last_seen": "2026-07-29T15:03:03Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -18927,9 +18927,9 @@
       }
     },
     {
-      "scan_id": "scan_2026-07-29T13:57:58Z_7d4ab365",
-      "started_at": "2026-07-29T13:57:58Z",
-      "completed_at": "2026-07-29T14:05:55Z",
+      "scan_id": "scan_2026-07-29T14:54:07Z_8c5bbc19",
+      "started_at": "2026-07-29T14:54:07Z",
+      "completed_at": "2026-07-29T15:03:03Z",
       "subdomain_count": 14,
       "live_subdomain_count": 14,
       "host_count": 3,
