@@ -119,8 +119,22 @@ jobs:
       - name: Preflight — every test module imports cleanly
         run: |
           set -uo pipefail
-          bad=0
+          # MIN_MODULES: a lane that finds nothing must FAIL, not pass quietly.
+          # QA of this workflow caught exactly that here — against an empty tree
+          # this step printed "all test modules import cleanly" and exited 0.
+          # Same bug lane 4 exists to prevent (a check that passes by never
+          # running), sitting in the step meant to catch it. A wrong path, a
+          # moved directory, or a bad find predicate would have been invisible.
+          # The floor is set well BELOW the real count (27 Command / 31 Prodex)
+          # on purpose. Its job is detecting "the glob found nothing" — a wrong
+          # path, a moved dir, a bad predicate — not policing how many tests
+          # exist. Set too close to the actual count it becomes a tripwire that
+          # fails the build when someone legitimately deletes a few tests, and
+          # a check that cries wolf gets deleted.
+          MIN_MODULES=15
+          bad=0; n=0
           while IFS= read -r f; do
+            n=$((n+1))
             mod_dir=$(dirname "$f"); mod=$(basename "$f" .py)
             if ! out=$(cd "$mod_dir" && python3 -c "import $mod" 2>&1); then
               echo "::error file=$f::cannot be imported — pytest collection would INTERNALERROR here"
@@ -128,7 +142,12 @@ jobs:
               bad=1
             fi
           done < <(find scanner scripts -name 'test_*.py' -not -path '*/common/tests/*')
-          [ $bad -eq 0 ] && echo "all test modules import cleanly"
+          if [ "$n" -lt "$MIN_MODULES" ]; then
+            echo "::error::preflight found only $n test modules, expected >= $MIN_MODULES."
+            echo "         Either tests were deleted/moved, or this lane's find path is wrong."
+            bad=1
+          fi
+          [ $bad -eq 0 ] && echo "$n test modules import cleanly"
           exit $bad
 
       # ── Lane 1: pytest-style (~580 tests, 27 files) ──
@@ -157,7 +176,19 @@ jobs:
       - name: gate + mail mechanism suites
         run: |
           set -uo pipefail
-          fail=0
+          # Counted for the same reason as the preflight. Today an empty glob
+          # happens to fail here, but only because the unexpanded literal is
+          # passed to python3 and errors — incidental, and it silently inverts
+          # to a pass the day anyone sets `shopt -s nullglob`. Count instead of
+          # relying on that.
+          #
+          # Floor sits below the real count (9) for the same reason as the
+          # preflight — it detects "the directory vanished", it does not police
+          # how many suites exist. The three SAFETY suites are additionally
+          # named explicitly in the next step, so losing one of THOSE fails
+          # there regardless of this number.
+          MIN_SUITES=6
+          fail=0; ran=0
           run_one() {  # run_one <cmd> <file>
             if "$1" "$2" 2>&1 | sed -u 's/^::warning::/[expected-by-test] /'; then
               echo "  -> PASS"
@@ -166,15 +197,23 @@ jobs:
             fi
           }
           for f in scripts/common/tests/test_*.py; do
-            echo "::group::$f"
+            [ -e "$f" ] || continue
+            ran=$((ran+1)); echo "::group::$f"
             run_one python3 "$f" || fail=1
             echo "::endgroup::"
           done
           for f in scripts/common/tests/test_*.sh; do
-            echo "::group::$f"
+            [ -e "$f" ] || continue
+            ran=$((ran+1)); echo "::group::$f"
             run_one bash "$f" || fail=1
             echo "::endgroup::"
           done
+          if [ "$ran" -lt "$MIN_SUITES" ]; then
+            echo "::error::ran only $ran mechanism suites, expected >= $MIN_SUITES —"
+            echo "         suites were removed or scripts/common/tests/ moved."
+            fail=1
+          fi
+          echo "ran $ran mechanism suites"
           exit $fail
 
       # ── Lane 3: the safety-gate regression checks, called out by name ──
