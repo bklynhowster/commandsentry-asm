@@ -81,7 +81,27 @@ jobs:
         # The real guard against a live connection is that this job has no DSN:
         # SUPABASE_DSN is empty and no secret is in scope. An installed driver
         # with nothing to connect to cannot reach a database.
-        run: python -m pip install --quiet pytest 'psycopg[binary]'
+        #
+        # pyyaml is required for the same class of reason, found on run #2:
+        # 34 tests failed with "PyYAML required to read device_fingerprints.yaml".
+        # Note the difference in failure mode, which is worth understanding —
+        # scanner/normalize.py imports yaml LAZILY and returns {} on failure by
+        # design (K4-safe: a missing registry leaks phantoms rather than
+        # dropping real ports) with a loud WARN. So no INTERNALERROR, just a
+        # silently descoped cloud-phantom filter and 34 red tests.
+        #
+        # This list was then derived properly instead of one dep per CI run:
+        # every third-party import across scripts/ and scanner/ was enumerated,
+        # then each candidate was BLOCKED with a raising stub module to see
+        # what actually breaks. Results:
+        #   psycopg blocked -> 1 error   (INTERNALERROR — matches run #1)
+        #   yaml    blocked -> 34 failed (exactly matches run #2)
+        #   requests blocked -> 580 passed  (imported lazily; NOT needed)
+        # anthropic and supabase appear only in backfill scripts with no tests.
+        # The list lives in requirements-test.txt so it is a versioned artifact
+        # you can install locally to reproduce CI exactly, rather than a string
+        # buried in a workflow file.
+        run: python -m pip install --quiet -r requirements-test.txt
 
       # ── Lane 0: preflight — can every test module even be imported? ──
       # pytest collects by IMPORTING. Ten production modules in scripts/db do
