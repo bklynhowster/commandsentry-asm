@@ -39,6 +39,9 @@ import argparse
 import json
 import os
 import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+import mailer as _mailer  # noqa: E402 — shared provider-branching send path
 from pathlib import Path
 from typing import Any
 
@@ -682,7 +685,6 @@ EVENT_TYPE_TO_PREF_KEY = {
 # forgotten env leak silently. Unset => skip the fan-out, matching the existing
 # graceful no-op when SENDGRID_API_KEY is missing. Losing a notification is
 # strictly better than sending one as the wrong tenant.
-SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send"
 SENDGRID_FROM_EMAIL = os.environ.get("ALERTER_FROM", "")
 SENDGRID_FROM_NAME = os.environ.get("ALERTER_FROM_NAME", "")
 PORTAL_BASE_URL = (os.environ.get("PORTAL_BASE_URL") or "").rstrip("/")
@@ -731,6 +733,10 @@ def dispatch_event_notifications(
     # No cross-tenant fallback (see SENDGRID_FROM_EMAIL above): unset means we
     # do not know who we are, and sending as the wrong tenant is worse than not
     # sending. Same graceful-skip shape as the missing-API-key path above.
+    # 4.7 M5 — assert transport config here, at the top of the fan-out, before
+    # any per-recipient work. Differentiated message names the exact missing var.
+    _mailer.warn_if_unconfigured(os.environ.get("INSTANCE_NAME", ""))
+
     _missing = [n for n, v in (("ALERTER_FROM", SENDGRID_FROM_EMAIL),
                                ("ALERTER_FROM_NAME", SENDGRID_FROM_NAME),
                                ("PORTAL_BASE_URL", PORTAL_BASE_URL)) if not v]
@@ -972,37 +978,28 @@ def _send_notification_email(
         },
     }).encode("utf-8")
 
-    req = urllib.request.Request(
-        SENDGRID_API_URL,
-        data=body,
-        method="POST",
+    # Delegates to scripts/common/mailer.py — provider chosen by MAIL_PROVIDER
+    # (4.7 M1, Obsidian 164). This POSTed straight to SendGrid, hardcoded, in
+    # BOTH repos, which is why Prodex (iCloud SMTP, never SendGrid) could never
+    # send these notifications at all. api_key is now ignored — the mailer reads
+    # SENDGRID_API_KEY itself when that provider is selected.
+    ok, detail = _mailer.send_email(
+        to_addrs=[to_email],
+        subject=subject,
+        html=html,
+        from_addr=SENDGRID_FROM_EMAIL,
+        from_name=SENDGRID_FROM_NAME,
         headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": f"asm-importer/1.0 (+{PORTAL_BASE_URL})",
-            "Accept": "application/json",
+            "List-Unsubscribe": f"<{portal_url}/account/notifications>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            "X-Entity-Ref-ID": f"asm-{asset_id}",
         },
+        timeout=10,
     )
-
-    try:
-        # SendGrid returns 202 Accepted (empty body) on success.
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return 200 <= resp.status < 300
-    except urllib.error.HTTPError as e:
-        err_body = ""
-        try:
-            err_body = e.read().decode("utf-8", "replace")
-        except Exception:
-            pass
-        print(
-            f"  ! SendGrid {e.code} for {to_email} ({asset_id}): {err_body[:200]}",
-            file=sys.stderr,
-        )
-        return False
-    except Exception as e:
-        print(f"  ! Notification send failed for {to_email} ({asset_id}): {e}", file=sys.stderr)
-        return False
-
+    if not ok:
+        print(f"  ! notification send failed for {to_email} "
+              f"[{_mailer.describe_config()}]: {detail}", file=sys.stderr)
+    return ok
 
 def _event_to_html_row(ev: dict) -> str:
     et = ev["event_type"]

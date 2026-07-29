@@ -51,6 +51,21 @@ jobs:
           # script prefers SENDGRID_API_KEY when set.
           SENDGRID_API_KEY:    ${{ secrets.SENDGRID_API_KEY }}
           RESEND_API_KEY:      ${{ secrets.RESEND_API_KEY }}
+          # Mail transport (4.7 M1). Command: sendgrid. Prodex: smtp/iCloud.
+          MAIL_PROVIDER:       ${{ vars.MAIL_PROVIDER }}
+          SMTP_HOST:           ${{ vars.SMTP_HOST }}
+          SMTP_PORT:           ${{ vars.SMTP_PORT }}
+          SMTP_USER:           ${{ vars.SMTP_USER }}
+          SMTP_PASS:           ${{ secrets.SMTP_PASS }}
+          INSTANCE_NAME:       ${{ github.event.repository.name }}
+          #
+          # ⚠️ THE `||` FALLBACKS BELOW ARE COMMAND-ONLY AND MUST NOT BE COPIED
+          # TO ANOTHER INSTANCE. run_alerter.py deliberately has NO defaults for
+          # these (4.7 M5) precisely so an unset var can't silently send as the
+          # wrong tenant — but a workflow-level `||` default re-introduces
+          # exactly that hazard. It is safe HERE only because these literals ARE
+          # Command's own identity. If this file is ever mirrored to Prodex,
+          # DELETE the `|| '...'` halves and set repo variables instead.
           ALERTER_FROM:        ${{ vars.ALERTER_FROM       || 'CommandSentry@commandcompanies.com' }}
           ALERTER_FROM_NAME:   ${{ vars.ALERTER_FROM_NAME  || 'COMMANDsentry' }}
           ALERTER_TO:          ${{ vars.ALERTER_TO         || 'hschneider@commandcompanies.com,howiehow@mac.com' }}

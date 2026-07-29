@@ -347,6 +347,13 @@ jobs:
           # Missing key = silent (events still written to DB, just no email).
           # Migrated Resend→SendGrid 2026-07-01 (same secret as the digest).
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          # Mail transport (4.7 M1). Command: sendgrid. Prodex: smtp/iCloud.
+          MAIL_PROVIDER:    ${{ vars.MAIL_PROVIDER }}
+          SMTP_HOST:        ${{ vars.SMTP_HOST }}
+          SMTP_PORT:        ${{ vars.SMTP_PORT }}
+          SMTP_USER:        ${{ vars.SMTP_USER }}
+          SMTP_PASS:        ${{ secrets.SMTP_PASS }}
+          INSTANCE_NAME:    ${{ github.event.repository.name }}
           # Per-instance identity (2026-07-26). No cross-tenant defaults in code:
           # unset => the script skips rather than sending as the wrong instance.
           PORTAL_BASE_URL:  ${{ vars.PORTAL_BASE_URL }}

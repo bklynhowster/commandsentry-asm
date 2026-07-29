@@ -1,0 +1,60 @@
+# Mail canary — proves this instance can actually deliver mail.
+# 4.7 ruling M6 (Obsidian 164). MANDATORY, not follow-up.
+#
+# WHY. A startup config assertion (M5) verifies "SMTP_PASS is set to something."
+# It does NOT verify "SMTP_PASS is still valid at Apple's authentication."
+# iCloud app-specific passwords are revoked whenever the Apple ID password
+# changes, and mail is best-effort by design, so every send silently fails and
+# nobody notices the ABSENCE of an informational digest. That is the exact
+# shape of the bug this whole thread started from.
+#
+# TIMING. 11:00 UTC — one hour BEFORE the 12:00 UTC digest, so a failure leaves
+# time to fix the credential before the mail that matters goes out.
+#
+# BOTH INSTANCES run their own canary (Command over SendGrid, Prodex over SMTP)
+# so a provider-specific outage or a per-instance credential expiry is
+# attributable rather than ambiguous.
+name: Mail canary
+
+on:
+  schedule:
+    - cron: "0 11 * * *"   # daily, 1h before the 12:00 UTC digest
+  workflow_dispatch:
+
+concurrency:
+  group: mail-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Send canary
+        env:
+          # Per-instance transport. Command: sendgrid. Prodex: smtp/iCloud.
+          MAIL_PROVIDER:        ${{ vars.MAIL_PROVIDER }}
+          SENDGRID_API_KEY:     ${{ secrets.SENDGRID_API_KEY }}
+          SMTP_HOST:            ${{ vars.SMTP_HOST }}
+          SMTP_PORT:            ${{ vars.SMTP_PORT }}
+          SMTP_USER:            ${{ vars.SMTP_USER }}
+          SMTP_PASS:            ${{ secrets.SMTP_PASS }}
+          # Identity — no cross-tenant defaults in code, so these are required.
+          ALERTER_FROM:         ${{ vars.ALERTER_FROM }}
+          ALERTER_FROM_NAME:    ${{ vars.ALERTER_FROM_NAME }}
+          # Must be an address someone or something ACTUALLY WATCHES (M6) —
+          # a canary to an unwatched mailbox is not a signal.
+          MAIL_CANARY_ADDRESS:  ${{ vars.MAIL_CANARY_ADDRESS }}
+          INSTANCE_NAME:        ${{ github.event.repository.name }}
+        run: python3 scripts/common/mail_canary.py send
+
+      - name: Check canary receipt
+        # Send-succeeded is not delivered-successfully. This step is honest
+        # about the gap: with no receipt source wired it reports UNVERIFIED
+        # rather than printing a green check it cannot justify.
+        if: always()
+        env:
+          MAIL_CANARY_LAST_RECEIVED: ${{ vars.MAIL_CANARY_LAST_RECEIVED }}
+          INSTANCE_NAME:             ${{ github.event.repository.name }}
+        run: python3 scripts/common/mail_canary.py watch --max-age-hours 26

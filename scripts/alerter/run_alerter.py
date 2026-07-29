@@ -53,6 +53,9 @@ import os
 import sys
 import urllib.error
 import urllib.request
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
+import mailer as _mailer  # noqa: E402 — shared provider-branching send path
 from datetime import datetime, timedelta, timezone
 from html import escape, unescape
 
@@ -857,44 +860,22 @@ def send_via_sendgrid(
     html: str,
     text: str,
 ) -> dict:
+    """Delegates to scripts/common/mailer.py — provider chosen by MAIL_PROVIDER
+    (4.7 M1, Obsidian 164).
+
+    Name kept for the call site's sake; this is no longer SendGrid-specific.
+    It was, hardcoded, in BOTH repos — which is why Prodex (iCloud SMTP, never
+    SendGrid) had no working scanner mail transport at all. `api_key` is now
+    ignored; the mailer reads SENDGRID_API_KEY itself when that provider is
+    selected. Raises on failure to preserve this function's existing contract.
     """
-    POST to SendGrid v3 /mail/send. Returns a dict shaped to look like the
-    Resend response ({'id': ...}) so the call site doesn't have to special-
-    case providers. SendGrid puts the message ID in the X-Message-Id
-    response header rather than a JSON body; success is HTTP 202 Accepted
-    with an empty body.
-    """
-    payload = {
-        "personalizations": [
-            {"to": [{"email": a} for a in to_addrs]},
-        ],
-        "from":    {"email": from_addr, "name": from_name},
-        "subject": subject,
-        "content": [
-            # text/plain first so HTML clients pick the html alternative.
-            {"type": "text/plain", "value": text},
-            {"type": "text/html",  "value": html},
-        ],
-    }
-    req = urllib.request.Request(
-        url="https://api.sendgrid.com/v3/mail/send",
-        method="POST",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type":  "application/json",
-            "User-Agent":    "asm-alerter/1.0",
-        },
+    ok, detail = _mailer.send_email(
+        to_addrs=to_addrs, subject=subject, html=html, text=text,
+        from_addr=from_addr, from_name=from_name,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            # SendGrid returns 202 with empty body. Message ID is in
-            # the X-Message-Id header.
-            message_id = resp.headers.get("X-Message-Id") or ""
-            return {"id": message_id, "status_code": resp.status}
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"SendGrid HTTP {e.code}: {body[:500]}") from None
+    if not ok:
+        raise RuntimeError(f"mail send failed [{_mailer.describe_config()}]: {detail}")
+    return {"id": detail, "status_code": 202}
 
 
 # ---------------------------------------------------------------------------
@@ -931,6 +912,7 @@ def main() -> int:
     from_name    = _env("ALERTER_FROM_NAME", default="")
     to_raw       = _env("ALERTER_TO", default="")
     to_addrs     = [a.strip() for a in (to_raw or "").split(",") if a.strip()]
+    _mailer.warn_if_unconfigured(os.environ.get("INSTANCE_NAME", ""))  # 4.7 M5
     name         = _env("ALERTER_NAME", default="daily_digest") or "daily_digest"
     first_hours  = int(_env("ALERTER_FIRST_RUN_HOURS", default="24") or "24")
     dashboard_url= _env("ALERTER_DASHBOARD_URL", default="")
