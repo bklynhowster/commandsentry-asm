@@ -83,6 +83,42 @@ class _StubCmd:
         return False
 
 
+class _StubReconfirm:
+    """Swap run_heavy._reconfirm_port for a canned verdict, and count calls.
+
+    Added 2026-07-29. The N1 reconfirm gate (commit 15f68a9, 07-24) re-probes
+    every naabu-reported port with a real TCP handshake and drops anything that
+    fails, killing phantom open-ports. The tests below predate it (07-12) and
+    stubbed only run_cmd — so `_reconfirm_port` was still making a LIVE socket
+    call to demo.example.com, failing (correctly, it does not exist), and
+    dropping every port. Three tests had been failing ever since against
+    perfectly correct code.
+
+    Two lessons worth keeping: a unit test that reaches the network is a bug
+    even when it passes, and adding a filter to a pipeline means revisiting
+    every test that feeds that pipeline."""
+
+    def __init__(self, verdict=True):
+        self._verdict = verdict
+        self.calls: list = []
+        self._orig = None
+
+    def __enter__(self):
+        self._orig = run_heavy._reconfirm_port
+
+        def _stub(host, port, *a, **kw):
+            self.calls.append((host, int(port)))
+            v = self._verdict
+            return v(port) if callable(v) else v
+
+        run_heavy._reconfirm_port = _stub
+        return self
+
+    def __exit__(self, *exc):
+        run_heavy._reconfirm_port = self._orig
+        return False
+
+
 # ─── _parse_naabu_ports ─────────────────────────────────────────────────
 
 def test_parse_naabu_basic():
@@ -151,16 +187,66 @@ def test_naabu_not_reachable_returns_false_no_probe():
     """No testssl reachability proof → skip before firing naabu. The egress
     guard: don't scan-blind over the tunnel, and don't credit."""
     ctx = _mk_ctx(reachable=False)
-    with _StubCmd(0, json.dumps({"port": 22, "protocol": "tcp"})) as stub:
+    with _StubCmd(0, json.dumps({"port": 22, "protocol": "tcp"})) as stub, _StubReconfirm():
         ok, ports = run_naabu_phase(ctx, _DUMMY_WORK_DIR)
     assert ok is False and ports == [], (ok, ports)
     assert stub.calls == [], "naabu must NOT run when unreachable"
     assert ctx.findings == []
 
 
+
+
+# ─── N1 reconfirm gate — the phantom-port killer, previously untested ────
+# This gate is the whole point of the 07-24 naabu FP work (18 phantom ports
+# against a GCP edge, nondeterministic set = "new every scan"). It had ZERO
+# test coverage until now, which is how three tests could sit red against it
+# without anyone learning anything.
+
+def test_reconfirm_drops_phantom_ports_and_keeps_real_ones():
+    """The core N1 contract: naabu says 5 ports, only 2 answer a handshake,
+    only those 2 survive."""
+    ctx = _mk_ctx()
+    stdout = "\n".join(
+        json.dumps({"port": p, "protocol": "tcp"}) for p in (22, 80, 443, 3306, 8080))
+    real = {80, 443}
+    with _StubCmd(0, stdout), _StubReconfirm(verdict=lambda p: int(p) in real) as rc:
+        ok, ports = run_naabu_phase(ctx, _DUMMY_WORK_DIR)
+    assert ok is True, (ok, ports)
+    assert sorted(p["port"] for p in ports) == [80, 443], ports
+    assert len(ctx.findings) == 2, "a dropped phantom must not become a finding"
+    assert sorted(p for _h, p in rc.calls) == [22, 80, 443, 3306, 8080], (
+        "every reported port must be reconfirmed — no sampling")
+
+
+def test_reconfirm_all_phantom_is_not_credited():
+    """If NOTHING reconfirms, the tool is not credited (ok=False) rather than
+    credited-with-zero. Same absence-of-evidence rule as rc0-with-no-ports:
+    a credited empty result would let the autocloser false-close prior port
+    findings."""
+    ctx = _mk_ctx()
+    stdout = json.dumps({"port": 3306, "protocol": "tcp"})
+    with _StubCmd(0, stdout), _StubReconfirm(verdict=False):
+        ok, ports = run_naabu_phase(ctx, _DUMMY_WORK_DIR)
+    assert ok is False and ports == [], (ok, ports)
+    assert ctx.findings == []
+
+
+def test_reconfirm_gate_can_be_disabled_by_env(monkeypatch):
+    """NAABU_RECONFIRM_GATE=0 bypasses N1. Pinned because it is an escape
+    hatch on a false-positive control: if it ever becomes the default, the
+    phantom ports come back."""
+    monkeypatch.setenv("NAABU_RECONFIRM_GATE", "0")
+    ctx = _mk_ctx()
+    stdout = json.dumps({"port": 3306, "protocol": "tcp"})
+    with _StubCmd(0, stdout), _StubReconfirm(verdict=False) as rc:
+        ok, ports = run_naabu_phase(ctx, _DUMMY_WORK_DIR)
+    assert ok is True and [p["port"] for p in ports] == [3306], (ok, ports)
+    assert rc.calls == [], "gate disabled — reconfirm must not be consulted"
+
+
 def test_naabu_rc_nonzero_returns_false():
     ctx = _mk_ctx()
-    with _StubCmd(1, "", "boom"):
+    with _StubCmd(1, "", "boom"), _StubReconfirm():
         ok, ports = run_naabu_phase(ctx, _DUMMY_WORK_DIR)
     assert ok is False and ports == [], (ok, ports)
     assert ctx.findings == [], "degraded naabu must emit no findings"
@@ -170,7 +256,7 @@ def test_naabu_rc0_empty_ports_returns_false():
     """rc0 but zero open ports = absence-of-evidence, NOT evidence-of-absence
     (4.7 Q5). Not credited → autocloser can't false-close prior port findings."""
     ctx = _mk_ctx()
-    with _StubCmd(0, "\n   \n"):
+    with _StubCmd(0, "\n   \n"), _StubReconfirm():
         ok, ports = run_naabu_phase(ctx, _DUMMY_WORK_DIR)
     assert ok is False and ports == [], (ok, ports)
     assert ctx.findings == []
@@ -182,7 +268,7 @@ def test_naabu_rc0_with_ports_returns_true_and_emits_findings():
         json.dumps({"port": 22, "protocol": "tcp"}) + "\n"
         + json.dumps({"port": 443, "protocol": "tcp"}) + "\n"
     )
-    with _StubCmd(0, stdout):
+    with _StubCmd(0, stdout), _StubReconfirm():
         ok, ports = run_naabu_phase(ctx, _DUMMY_WORK_DIR)
     assert ok is True, (ok, ports)
     assert [p["port"] for p in ports] == [22, 443]
@@ -201,7 +287,7 @@ def test_naabu_does_not_self_credit_tools_run():
     all-or-nothing credit (4.7 D1). If a phase self-credited, a partial scan
     could false-close."""
     ctx = _mk_ctx()
-    with _StubCmd(0, json.dumps({"port": 22, "protocol": "tcp"}) + "\n"):
+    with _StubCmd(0, json.dumps({"port": 22, "protocol": "tcp"}) + "\n"), _StubReconfirm():
         run_naabu_phase(ctx, _DUMMY_WORK_DIR)
     assert ctx.tools_run == [], "naabu phase must not append to tools_run"
     assert ctx.tool_status == {}, "naabu phase must not touch tool_status"
@@ -279,7 +365,7 @@ def test_naabu_and_fpx_same_port_distinct_finding_ids():
     """Existence (naabu) and service (fingerprintx) are two findings per port
     → distinct finding_ids, so they roll up separately."""
     ctx = _mk_ctx()
-    with _StubCmd(0, json.dumps({"port": 22, "protocol": "tcp"}) + "\n"):
+    with _StubCmd(0, json.dumps({"port": 22, "protocol": "tcp"}) + "\n"), _StubReconfirm():
         _, ports = run_naabu_phase(ctx, _DUMMY_WORK_DIR)
     naabu_id = ctx.findings[0].finding_id
 
@@ -297,7 +383,7 @@ def test_naabu_identity_stable_across_runs():
     ids = []
     for _ in range(2):
         ctx = _mk_ctx()
-        with _StubCmd(0, json.dumps({"port": 443, "protocol": "tcp"}) + "\n"):
+        with _StubCmd(0, json.dumps({"port": 443, "protocol": "tcp"}) + "\n"), _StubReconfirm():
             run_naabu_phase(ctx, _DUMMY_WORK_DIR)
         ids.append(ctx.findings[0].finding_id)
     assert ids[0] == ids[1], f"naabu finding_id not stable: {ids}"

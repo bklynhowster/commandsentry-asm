@@ -1,3 +1,4 @@
+import pathlib
 import sys, types, importlib
 sys.path.insert(0,".")
 import gate_retry; gate_retry.time.sleep=lambda *_:None
@@ -65,6 +66,6 @@ r,c=call([("boom",)],intensity="light")
 ck("OUTCOME_light_short_circuits_no_db_hit", r is None and c.cursor_calls==0, f"cursor={c.cursor_calls}")
 
 # ── G4: safety gate exposes NO fail-open switch ──
-src=open("roe_gate.py").read()
+src=(pathlib.Path(__file__).parent.parent.parent / "scanner" / "roe_gate.py").read_text()
 ck("MECHANISM_safety_gate_has_no_fail_open_env", "fail_open" not in src.lower().replace("no fail-open switch",""))
 print("\n"+("ALL PASS" if not F else "FAILURES: "+", ".join(F))); sys.exit(1 if F else 0)

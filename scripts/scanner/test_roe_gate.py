@@ -196,7 +196,7 @@ def test_db_error_during_lookup_blocks_fail_closed(intensity, _stub_side_effects
         queue_id="qid-5",
     )
     assert isinstance(result, GateResult)
-    assert result.reason == "db_error"
+    assert result.reason == "db_unreadable"
     assert result.ownership is None
     stamp, alert = _stub_side_effects
     assert stamp.call_count == 1
@@ -236,13 +236,20 @@ def test_allowlist_is_exactly_owned_and_test_target():
 def test_is_routine_refusal_split_by_reason():
     """Lock-in for the 2026-06-11 QA fix that splits exit code by reason.
     Routine refusals (ownership_not_allowed) are SUCCESS — the scanner
-    did its job. Fail-closed cases (asset_not_found, db_error) are
+    did its job. Fail-closed cases (asset_not_found, db_unreadable) are
     FAILURE — the gate refused because something was broken.
 
     If you add a new reason code, decide explicitly which side of this
     line it belongs on and add a row here. Don't let an unrouted reason
     silently take the False (non-routine) default and start spamming
-    Howie's failure-email channel."""
+    Howie's failure-email channel.
+
+    2026-07-29: that warning was prophetic. The G1/G2 gate fix on 07-25
+    renamed db_error -> db_unreadable and this row was not updated, so the
+    suite kept asserting a reason string the gate can no longer emit while
+    the real one went unrouted. The default (False) happened to be right —
+    unreadable IS a broken gate state — but it was never a decision, which
+    is precisely what this test exists to prevent. Row updated below."""
     assert GateResult(
         asset_id="x", intensity="medium", ownership="namesake",
         reason="ownership_not_allowed", message="m",
@@ -253,8 +260,26 @@ def test_is_routine_refusal_split_by_reason():
     ).is_routine_refusal() is False
     assert GateResult(
         asset_id="x", intensity="medium", ownership=None,
-        reason="db_error", message="m",
+        reason="db_unreadable", message="m",
     ).is_routine_refusal() is False
+
+    # Pin the default itself. Above this line each reason is routed by an
+    # explicit row; a reason nobody has classified must still land on the
+    # loud side, so a forgotten row fails a workflow rather than passing a
+    # scan through a gate whose verdict nobody understood.
+    assert GateResult(
+        asset_id="x", intensity="medium", ownership=None,
+        reason="a_reason_nobody_has_classified_yet", message="m",
+    ).is_routine_refusal() is False
+
+    # And the reason strings asserted here must actually exist in the gate.
+    # This is what would have caught the 07-25 rename on the day it landed.
+    import pathlib
+    _src = (pathlib.Path(__file__).parent / "roe_gate.py").read_text()
+    for _reason in ("ownership_not_allowed", "asset_not_found", "db_unreadable"):
+        assert f'"{_reason}"' in _src, (
+            f"{_reason} is asserted here but no longer appears in roe_gate.py — "
+            "either the gate renamed it or this row is stale")
 
 
 def test_unknown_intensity_short_circuits_as_non_active():

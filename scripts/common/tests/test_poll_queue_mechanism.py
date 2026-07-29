@@ -1,3 +1,4 @@
+import pathlib
 """poll_queue connect retry — MECHANISM tests (4.7 G1/G4/G5).
 Asserts attempt COUNTS; an exit code alone cannot prove retry fired."""
 import io, sys, types, contextlib, importlib
@@ -48,7 +49,7 @@ ck("MECHANISM_exhausts_exactly_3_attempts", calls == 3, f"calls={calls}")
 ck("OUTCOME_unreadable_still_exits_nonzero_no_scan_claimed", rc == 1, f"rc={rc}")
 ck("OUTCOME_message_says_UNREACHABLE_not_a_queue_verdict", "UNREACHABLE" in out and "no scan claimed" in out)
 
-src = open("poll_queue.py").read()
+src = (pathlib.Path(__file__).parent.parent.parent / "scanner" / "poll_queue.py").read_text()
 ck("MECHANISM_progress_gate_has_no_fail_open_switch", "fail_open" not in src.lower())
 ck("MECHANISM_uses_shared_framework_not_handrolled", "run_with_transport_retry" in src and "time.sleep" not in src)
 

@@ -132,9 +132,30 @@ def test_x_ac_is_colon_anchored_not_x_accel():
     # LOAD-BEARING (4.7 Q5): the cited token is "x-ac:" — a bare "x-ac" substring
     # would false-match nginx's x-accel-* headers. If someone drops the colon
     # anchor, this test catches it. A delete-this-test PR must never merge.
+    #
+    # 2026-07-29: this test went red without the anchor ever breaking. It
+    # asserted device_class == "unknown" as a PROXY for "x-ac didn't match",
+    # and on 07-24 `server: nginx` gained a legitimate positive signal
+    # (origin_host, commit 3bb9967d), so the proxy moved while the property it
+    # stood for held perfectly. Now asserts the property directly: no vendor
+    # attribution, and specifically not the CDN the x-ac token belongs to.
+    #
+    # Keeping the proxy would have meant either deleting a load-bearing test or
+    # asserting origin_host here — which would silently re-point this test at
+    # nginx classification instead of the colon anchor. Assert what you mean.
     r = _classify({"http_headers": "x-accel-buffering: True\nserver: nginx"})
-    assert r["device_class"] == "unknown"
-    assert r["vendor_product"] == {}
+    assert r["vendor_product"] == {}, (
+        f"x-accel-buffering false-matched a vendor: {r['vendor_product']}")
+    assert r["device_class"] != "cdn", (
+        "nginx's x-accel-* header was read as a CDN — the x-ac: colon anchor is gone")
+
+    # The other half of the anchor, and the half that actually proves it is an
+    # anchor rather than a deleted rule: the REAL token must still match.
+    # Without this, dropping the x-ac rule entirely would pass the check above.
+    real = _classify({"http_headers": "x-ac: MISS\nserver: nginx"})
+    assert real["device_class"] == "cdn", (
+        f"the real 'x-ac:' token no longer resolves to a CDN: {real['device_class']}")
+    assert real["vendor_product"] != {}, "x-ac: matched no vendor — rule may have been removed"
 
 
 def test_x_ac_does_not_fire_on_x_account():

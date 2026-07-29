@@ -148,9 +148,21 @@ def test_cloud_edge_header_tells_fire_at_suspected():
 
 def test_cloud_edge_no_false_fire_on_generic_server():
     # a bare origin Server string must NOT name a cloud edge — the empirical bar.
+    #
+    # 2026-07-29: was `device_class == "unknown"`, which was a proxy for the
+    # real bar in the comment above. On 07-24 `server: nginx` gained a
+    # legitimate origin_host signal (commit 3bb9967d) and the proxy went red
+    # while the actual property — "don't claim an edge device from a generic
+    # origin banner" — never broke. Asserting the bar itself, so this test
+    # survives future taxonomy additions instead of failing on each one.
     fps, th = load_fingerprints(), load_thresholds()
     res = classify({"http_headers": "server: nginx"}, fps, th)
-    assert res["device_class"] == "unknown" and res["vendor_product"] == {}
+    EDGE_CLASSES = {"cloud_edge", "waf", "cdn", "load_balancer", "reverse_proxy"}
+    assert res["device_class"] not in EDGE_CLASSES, (
+        f"generic 'server: nginx' was classified as an edge device "
+        f"({res['device_class']}) — the empirical bar has slipped")
+    assert res["vendor_product"] == {}, (
+        f"generic 'server: nginx' produced a vendor attribution: {res['vendor_product']}")
 
 
 def test_google_frontend_is_not_a_device_tripwire():
