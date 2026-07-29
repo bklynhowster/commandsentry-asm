@@ -141,18 +141,38 @@ jobs:
       # end. pytest cannot collect them — importing one runs it and the
       # SystemExit aborts the whole session with INTERNALERROR. They are run
       # as programs, which is what they are.
+      # ::warning:: in EXPECTED test output is neutralised, deliberately.
+      # The gate suites simulate DB blips on purpose, and the retry path prints
+      # "::warning::roe_gate ownership lookup attempt 1/3 failed" — which
+      # Actions parses out of the log stream and attaches to the run. Result:
+      # run #4 passed while displaying 8 warning annotations, all of them tests
+      # succeeding at proving the retry works. A green build that looks like it
+      # has 8 problems is how people learn to stop reading annotations, and
+      # then a real one goes unnoticed.
+      #
+      # Rewriting the prefix keeps the line fully visible in the log while
+      # stopping Actions from treating it as a build-level warning. Chosen over
+      # ::stop-commands:: because that disables command parsing job-wide and
+      # stays disabled if a step exits before re-enabling it.
       - name: gate + mail mechanism suites
         run: |
           set -uo pipefail
           fail=0
+          run_one() {  # run_one <cmd> <file>
+            if "$1" "$2" 2>&1 | sed -u 's/^::warning::/[expected-by-test] /'; then
+              echo "  -> PASS"
+            else
+              echo "  -> FAIL"; return 1
+            fi
+          }
           for f in scripts/common/tests/test_*.py; do
             echo "::group::$f"
-            if python3 "$f"; then echo "  -> PASS"; else echo "  -> FAIL"; fail=1; fi
+            run_one python3 "$f" || fail=1
             echo "::endgroup::"
           done
           for f in scripts/common/tests/test_*.sh; do
             echo "::group::$f"
-            if bash "$f"; then echo "  -> PASS"; else echo "  -> FAIL"; fail=1; fi
+            run_one bash "$f" || fail=1
             echo "::endgroup::"
           done
           exit $fail
@@ -165,9 +185,16 @@ jobs:
       - name: SAFETY gate regression (fail-open must stay closed)
         run: |
           set -euo pipefail
-          bash scripts/common/tests/test_vpn_egress_gate_mechanism.sh
-          python3 scripts/common/tests/test_active_probe_policy_gate_mechanism.py
-          python3 scripts/common/tests/test_roe_gate_mechanism.py
+          # Same ::warning:: neutralisation as the previous step — roe_gate's
+          # retry path prints one per simulated blip. set -e + pipefail still
+          # fail the step on a real failure; verified by running a deliberately
+          # failing suite through the same pipe.
+          bash scripts/common/tests/test_vpn_egress_gate_mechanism.sh 2>&1 \
+            | sed -u 's/^::warning::/[expected-by-test] /'
+          python3 scripts/common/tests/test_active_probe_policy_gate_mechanism.py 2>&1 \
+            | sed -u 's/^::warning::/[expected-by-test] /'
+          python3 scripts/common/tests/test_roe_gate_mechanism.py 2>&1 \
+            | sed -u 's/^::warning::/[expected-by-test] /'
 
       # ── Lane 4: every test file is reachable by one of the lanes ──
       # The failure mode this prevents: a new test lands in a directory no
