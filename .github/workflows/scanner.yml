@@ -501,6 +501,10 @@ jobs:
           # active scan. Gate's abort decision does NOT depend on this
           # being set or the POST succeeding — see roe_gate.py.
           ROE_ALERT_TOKEN: ${{ secrets.ROE_ALERT_TOKEN }}
+          # Per-instance portal for the ROE-block alert POST. NO default in
+          # code — unset means roe_gate skips the alert rather than POSTing
+          # this instance's asset data to another instance's portal.
+          PORTAL_BASE_URL: ${{ vars.PORTAL_BASE_URL }}
           # SPEC_SCANNER_DEGRADATION_HARDENING.md batch 2 — validate-mode.
           # When the workflow_dispatch input skip_vpn=true is set, no
           # Mullvad bring-up happens (the three VPN steps above gate on
@@ -554,6 +558,10 @@ jobs:
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
           ROE_ALERT_TOKEN: ${{ secrets.ROE_ALERT_TOKEN }}
+          # Per-instance portal for the ROE-block alert POST. NO default in
+          # code — unset means roe_gate skips the alert rather than POSTing
+          # this instance's asset data to another instance's portal.
+          PORTAL_BASE_URL: ${{ vars.PORTAL_BASE_URL }}
           SKIP_VPN: ${{ github.event.inputs.skip_vpn || 'false' }}
           # testssl wall raised to 30 min (was 600s default). The 10-min cap was
           # marginal over Mullvad latency — api.ccc completed at 557s (93% of cap)

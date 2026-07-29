@@ -670,9 +670,22 @@ EVENT_TYPE_TO_PREF_KEY = {
 # Howie's personal domain over Resend; commandcompanies.com is Command-owned,
 # SendGrid-verified, and IronPort-trusted. Uses the SAME SENDGRID_API_KEY the
 # daily digest already runs on (asm repo Actions secret).
+#
+# PER-INSTANCE, NO CROSS-TENANT DEFAULT (2026-07-26). Sender, product name and
+# portal URL were hardcoded to Command and IDENTICAL in both scanner repos,
+# while asm-discover.yml invokes this importer AND passes SENDGRID_API_KEY on
+# BOTH. So with that secret set on Prodex, Prodex real-time notification email
+# goes out FROM a Command address, branded COMMANDsentry, linking to Command's
+# portal — leaking Prodex fleet activity into Command's identity.
+#
+# Deliberately NO fallback to Command's values: a default is what lets a
+# forgotten env leak silently. Unset => skip the fan-out, matching the existing
+# graceful no-op when SENDGRID_API_KEY is missing. Losing a notification is
+# strictly better than sending one as the wrong tenant.
 SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send"
-SENDGRID_FROM_EMAIL = "CommandSentry@commandcompanies.com"
-SENDGRID_FROM_NAME = "COMMANDsentry"
+SENDGRID_FROM_EMAIL = os.environ.get("ALERTER_FROM", "")
+SENDGRID_FROM_NAME = os.environ.get("ALERTER_FROM_NAME", "")
+PORTAL_BASE_URL = (os.environ.get("PORTAL_BASE_URL") or "").rstrip("/")
 
 FETCH_SUBSCRIBERS = """
 SELECT
@@ -712,6 +725,20 @@ def dispatch_event_notifications(
         # Email is a best-effort augmentation.
         stats["skipped_no_key"] = 1
         print("  ! SENDGRID_API_KEY not set — skipping notification fan-out", file=sys.stderr)
+        return stats
+
+    # Per-instance identity must be configured before we send AS this instance.
+    # No cross-tenant fallback (see SENDGRID_FROM_EMAIL above): unset means we
+    # do not know who we are, and sending as the wrong tenant is worse than not
+    # sending. Same graceful-skip shape as the missing-API-key path above.
+    _missing = [n for n, v in (("ALERTER_FROM", SENDGRID_FROM_EMAIL),
+                               ("ALERTER_FROM_NAME", SENDGRID_FROM_NAME),
+                               ("PORTAL_BASE_URL", PORTAL_BASE_URL)) if not v]
+    if _missing:
+        stats["skipped_no_identity"] = 1
+        print(f"::warning::  ! {', '.join(_missing)} not set — skipping notification "
+              f"fan-out rather than sending as another instance. Events are still "
+              f"committed and render in the portal timeline.", file=sys.stderr)
         return stats
 
     # Fetch subscribers once. Small table; cheap.
@@ -852,18 +879,18 @@ def _send_notification_email(
     # Pick the most operationally important event as the subject anchor.
     # Priority: went dark > new asset > port changes.
     if n_dark:
-        subject = f"COMMANDsentry alert: {asset_id} stopped responding"
+        subject = f"{SENDGRID_FROM_NAME} alert: {asset_id} stopped responding"
     elif n_first:
-        subject = f"COMMANDsentry: new asset discovered ({asset_id})"
+        subject = f"{SENDGRID_FROM_NAME}: new asset discovered ({asset_id})"
     elif n_open and not n_close:
         word = "port" if n_open == 1 else "ports"
-        subject = f"COMMANDsentry: {n_open} new {word} on {asset_id}"
+        subject = f"{SENDGRID_FROM_NAME}: {n_open} new {word} on {asset_id}"
     elif n_close and not n_open:
         word = "port" if n_close == 1 else "ports"
-        subject = f"COMMANDsentry: {n_close} {word} no longer responding on {asset_id}"
+        subject = f"{SENDGRID_FROM_NAME}: {n_close} {word} no longer responding on {asset_id}"
     else:
         # Mixed opens and closes
-        subject = f"COMMANDsentry: surface change on {asset_id}"
+        subject = f"{SENDGRID_FROM_NAME}: surface change on {asset_id}"
 
     # Internal-readable summary for the email body header (no spam triggers,
     # but keeps the structured detail visible inline).
@@ -880,7 +907,7 @@ def _send_notification_email(
 
     rows_html = "\n".join(_event_to_html_row(ev) for ev in events)
 
-    portal_url = "https://commandsentry-portal.netlify.app"
+    portal_url = PORTAL_BASE_URL
     asset_url = f"{portal_url}/assets/{asset_id}"
 
     html = f"""<!DOCTYPE html>
@@ -911,7 +938,7 @@ def _send_notification_email(
           <table role="presentation" cellpadding="0" cellspacing="0" border="0">
             <tr><td align="center" style="background-color:#C8632A;">
               <a href="{asset_url}" target="_blank" style="display:inline-block;padding:12px 28px;font-size:14px;font-weight:600;color:#FFFFFF;text-decoration:none;letter-spacing:0.02em;">
-                View asset in COMMANDsentry &rarr;
+                View asset in {SENDGRID_FROM_NAME} &rarr;
               </a>
             </td></tr>
           </table>
@@ -929,7 +956,7 @@ def _send_notification_email(
     # opt-in transactional mail, reducing the spam-classifier suspicion.
     # The unsubscribe URL points at the user's notification-prefs page so
     # they can actually opt out (good citizenship + RFC 8058 compliance).
-    portal_url = "https://commandsentry-portal.netlify.app"
+    portal_url = PORTAL_BASE_URL
     # SendGrid v3 shape: recipients under personalizations[].to[], sender as
     # {email,name}, MIME parts under content[]. Custom deliverability headers
     # (List-Unsubscribe / RFC 8058 one-click, X-Entity-Ref-ID) go top-level.
@@ -952,7 +979,7 @@ def _send_notification_email(
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "COMMANDsentry-importer/1.0 (+https://commandsentry-portal.netlify.app)",
+            "User-Agent": f"asm-importer/1.0 (+{PORTAL_BASE_URL})",
             "Accept": "application/json",
         },
     )

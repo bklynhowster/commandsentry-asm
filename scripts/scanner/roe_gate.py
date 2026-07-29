@@ -72,7 +72,24 @@ ROE_OWNERSHIP_ALLOWLIST = frozenset({"owned", "test_target"})
 _ACTIVE_INTENSITIES = frozenset({"medium", "heavy"})
 
 # ─── Portal alert endpoint (best-effort SendGrid delivery) ──────────────
-_ROE_ALERT_URL = "https://commandsentry-portal.netlify.app/api/roe-block-alert"
+#
+# PER-INSTANCE, NO CROSS-TENANT DEFAULT (2026-07-26). This was hardcoded to
+# the Command portal and was IDENTICAL in both scanner repos, so a PRODEX ROE
+# block POSTed Prodex asset_id / ownership / scan_run_id to COMMAND's portal —
+# and the alert never reached the Prodex owner. Live cross-tenant leak.
+#
+# The portal brand sweep used "default to Command's value so Command is
+# unchanged." That is right for a cosmetic string and WRONG here: in a
+# cross-tenant context a default means a forgotten env silently leaks again.
+# So there is deliberately NO default. Unset => skip the alert with a loud
+# warning. Sending nothing beats sending another tenant's data to the wrong
+# portal, and the scan_run audit row is the durable signal anyway (see module
+# docstring) — we lose visibility, not correctness.
+#
+# Set PORTAL_BASE_URL per repo (scanner.yml already proves per-instance env
+# injection works here — ROE_ALERT_TOKEN arrives the same way).
+_PORTAL_BASE_URL = (os.environ.get("PORTAL_BASE_URL") or "").rstrip("/")
+_ROE_ALERT_PATH = "/api/roe-block-alert"
 
 
 @dataclass
@@ -304,6 +321,14 @@ def _send_alert(
         print("[roe_gate] ROE_ALERT_TOKEN not set — skipping alert (gate still aborted)")
         return
 
+    if not _PORTAL_BASE_URL:
+        # No cross-tenant fallback by design — see _PORTAL_BASE_URL above.
+        print("::warning::[roe_gate] PORTAL_BASE_URL not set — skipping alert rather "
+              "than POSTing to another instance's portal. The gate still aborted and "
+              "the scan_run/scan_queue rows are stamped; only the email is lost.",
+              file=sys.stderr)
+        return
+
     payload = {
         "asset_id": result.asset_id,
         "intensity": result.intensity,
@@ -327,7 +352,7 @@ def _send_alert(
 
     try:
         r = requests.post(
-            _ROE_ALERT_URL,
+            _PORTAL_BASE_URL + _ROE_ALERT_PATH,
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",

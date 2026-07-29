@@ -347,6 +347,11 @@ jobs:
           # Missing key = silent (events still written to DB, just no email).
           # Migrated Resend→SendGrid 2026-07-01 (same secret as the digest).
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          # Per-instance identity (2026-07-26). No cross-tenant defaults in code:
+          # unset => the script skips rather than sending as the wrong instance.
+          PORTAL_BASE_URL:  ${{ vars.PORTAL_BASE_URL }}
+          ALERTER_FROM:     ${{ vars.ALERTER_FROM }}
+          ALERTER_FROM_NAME: ${{ vars.ALERTER_FROM_NAME }}
         run: |
           if [[ -z "${SUPABASE_DSN}" ]]; then
             echo "::warning::SUPABASE_DSN secret not set — skipping Surface upload."

@@ -45,13 +45,18 @@ Repo → Settings → Secrets and variables → Actions:
 | `SUPABASE_DSN` | session pooler URL with password (NOT the direct IPv6 one) |
 | `RESEND_API_KEY` | the `re_…` token from step 2 |
 
-Optional vars (override defaults via repo variables, not secrets):
+**REQUIRED per-instance identity vars (repo variables, not secrets).**
+As of 2026-07-26 these have **no defaults in code** — they previously
+defaulted to Command values *identically in both scanner repos*, so an
+unset var silently sent the digest as, and to, the wrong instance.
+Unset now means the digest refuses to send and warns.
 
-| Name | Default |
-|---|---|
-| `ALERTER_FROM` | `commandsentry@goldenlaneinc.com` |
-| `ALERTER_TO` | `hschneider@commandcompanies.com,howiehow@mac.com` |
-| `ALERTER_DASHBOARD_URL` | Supabase project dashboard link |
+| Name | Default | Example |
+|---|---|---|
+| `ALERTER_FROM` | **none** | `CommandSentry@commandcompanies.com` |
+| `ALERTER_FROM_NAME` | **none** | `COMMANDsentry` / `PRODEXsentry` |
+| `ALERTER_TO` | **none** | `you@example.com,other@example.com` |
+| `ALERTER_DASHBOARD_URL` | **none** | this instance's Supabase dashboard |
 
 ### 4. Smoke-test with dry-run
 
