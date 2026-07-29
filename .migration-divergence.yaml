@@ -1,4 +1,4 @@
-# Instance divergence registry — 4.7 Q6, migration-ledger Phase 4.
+# Migration-set divergence registry — 4.7 Q6, migration-ledger Phase 4.
 # See SCANNER_MIGRATION_LEDGER_SPEC.md.
 #
 # The two scanner repos (commandsentry-asm / prodexsentry-asm) intentionally carry some
@@ -9,20 +9,6 @@
 #   todo_port              : queued to port to the other instance (surfaced as action items)
 #
 # KEEP THIS FILE IDENTICAL IN BOTH REPOS.
-#
-# ─── 2026-07-29: scope widened to CODE, per 4.7 ruling Q5 ─────────────────────
-# This registry tracked ONLY migrations, which is exactly why four Prodex-only
-# modules (derive_asset_kind.py, dispatch.py, matrix_loader.py, surface_read.py,
-# 762 lines) read as unexplained drift for three weeks — nothing recorded them, so
-# they looked like an accident rather than a decision. A code_divergence section is
-# added below. **Unregistered instance divergence is a bug.**
-#
-# The FILENAME stays `.migration-divergence.yaml` deliberately: compare_migrations.py
-# and migration-parity.yml read it by name. 4.7 suggested consolidating to
-# `.instance-divergence.yaml`; renaming is deferred to a follow-up so this port does
-# not also change the parity tooling's contract. Only `migrations:` below is
-# machine-read today — `code_divergence:` is documentation until the CI check lands.
-# ─────────────────────────────────────────────────────────────────────────────
 
 intentional_divergence:
   command_only:
@@ -30,63 +16,12 @@ intentional_divergence:
     "20260707a_portal_characterization_cols.sql": "portal characterization cols — Command-only"
     "20260707b_cloud_endpoint_cols.sql": "cloud endpoint classifier cols — Command-first migration file; Prodex reached column-parity via 20260713c_cloud_cols_prodex_parity (2026-07-13). Type divergence: Command cloud_provider = cloud_provider_t enum, Prodex = text (idempotent enum needs a do-block the migration splitter can't parse)."
     "20260707c_cloud_drift_col.sql": "cloud classifier drift column — Command-first migration file; Prodex reached column-parity via 20260713c (2026-07-13)."
-  prodex_only: {}
-  # 2026-07-29: emptied. All four host-characterization / targeted-scan-P1 entries
-  # left this section under 4.7 ruling Q1 (PORT, do not formalise as prodex_only).
-  # Two landed on Command in PR 1 and are therefore no longer divergent — deleted
-  # per Q5 (git history preserves them: `git log --follow .migration-divergence.yaml`).
-  # The two ENUM migrations moved to todo_port below.
+  prodex_only:
+    "20260705a_asset_kind_add_redirect_dead.sql": "host characterization: asset_kind redirect/dead — Prodex-first"
+    "20260705b_asset_kind_characterization_cols.sql": "host characterization columns — Prodex-first"
+    "20260706a_targeted_scan_p1_schema.sql": "targeted-scan P1 schema (scan_profile/parent_run_id/matrix_version_sha) — Prodex-first"
+    "20260706b_finding_source_commandsentry_exposure.sql": "targeted-scan exposure finding_source — Prodex-first"
 
 # Migrations queued to port to the OTHER instance. Format:
 #   - {from: prodex, to: command, migration: "20260706a_targeted_scan_p1_schema.sql", reason: "port after review"}
-todo_port:
-  - from: prodex
-    to: command
-    migration: "20260705a_asset_kind_add_redirect_dead.sql"
-    reason: >-
-      Adds 'redirect' + 'dead' to asset_kind_t. Deliberately HELD until PR 2 (the
-      run_medium.py wiring). Two reasons. (1) IRREVERSIBLE — Postgres cannot remove an
-      enum value, so the one-way door stays shut until we are committed to running the
-      feature; if PR 2 is reverted per Q6 we will not have added a permanent value for
-      nothing. (2) NOT safe_auto_apply — the file's own header states ALTER TYPE ...
-      ADD VALUE cannot run inside an explicit transaction, and apply_pending_migrations.py
-      wraps statements + the ledger insert in ONE txn. So it needs hand-apply via psql
-      then a seeded ledger row (4.7 Q2 option d), NOT migrate.yml. Only derive_asset_kind.py
-      emits these values, and it is inert until PR 2.
-  - from: prodex
-    to: command
-    migration: "20260706b_finding_source_commandsentry_exposure.sql"
-    reason: >-
-      Adds 'commandsentry_exposure' to finding_source_t. HELD until PR 2 for the same two
-      reasons (irreversible; ALTER TYPE ADD VALUE is not txn-safe so not safe_auto_apply).
-      Verified 2026-07-29: the value's ONLY consumer is run_medium.py — none of PR 1's four
-      modules reference it — so PR 1 does not need it. Name is stable: first and last
-      touched are the same commit (c7f99c3, 2026-07-06), unchanged for 23 days, satisfying
-      4.7 Q2's stability precondition. Per Q2, rewrite splitter-safe on port — though note
-      20260705a already uses ALTER TYPE ... ADD VALUE IF NOT EXISTS, so the pattern is
-      established and 20260706b's do-block wrapper is redundant, not necessary.
-
-# ─── Code divergence (4.7 Q5) — documentation only until the CI check lands ───
-code_divergence:
-  command_only: {}
-  prodex_only: {}
-  # 2026-07-29: emptied by PR 1. Previously (unregistered — the gap Q5 closes):
-  #   scripts/normalize/derive_asset_kind.py    landed 2026-07-05 (9b0ceb6)
-  #   scripts/scanner/dispatch.py               landed 2026-07-06 (cab6b5c)
-  #   scripts/scanner/matrix_loader.py          landed 2026-07-06 (0712de9)
-  #   scripts/scanner/surface_read.py           landed 2026-07-06 (c7f99c3)
-  #   scripts/scanner/matrix/roles.yaml         landed 2026-07-06 (0712de9)
-  #   + their 4 test files
-  # All ported to Command in PR 1 (2026-07-29), so no divergence remains.
-  #
-  # STILL DIVERGENT and deliberately so until PR 2 — NOT a file, so not listed above:
-  #   run_medium.py wiring (planner call, ScanPlan, scan_profile + matrix_version_sha
-  #   at close_out, ExposureFinding mapping). Prodex 4515 lines / Command 4346 = 223
-  #   differing lines, so the wiring cannot be copied and must be hand-applied per
-  #   4.7 Q3. Held until after the 2026-08-07 device-class soak-end per Q4.
-
-# FOLLOW-UP (4.7 Q5, not blocking this port):
-#   1. CI check that diffs the two repos' file trees and fails on any file present in
-#      one and absent in the other unless registered here. Prevents silent drift.
-#   2. Rename to .instance-divergence.yaml and migrate compare_migrations.py +
-#      migration-parity.yml onto the new name.
+todo_port: []
