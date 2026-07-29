@@ -90,6 +90,26 @@ delivered). Both instances send their own so a failure is attributable to a prov
 `MAIL_CANARY_ADDRESS` **must be an address someone or something actually watches.** A canary
 to an unwatched mailbox is not a signal.
 
+### Canary runs on PRODEX ONLY — deliberate (2026-07-26)
+
+4.7's M6 said both instances. In practice Command doesn't need it, and Howie caught this:
+
+- **Command already has both signals.** The daily digest lands in his inbox (positive), and
+  if the send fails `run_alerter` returns 1 → the workflow goes red → GitHub emails the
+  failure (negative — verified: `status == "error"` → `return 1`). A canary there is a
+  second daily email proving what the digest already proves.
+- **Prodex has neither.** It has no `alerter.yml` and nothing scheduled that sends, which is
+  exactly *why* its broken transport went unnoticed — nothing arrived whose absence you'd
+  notice, and nothing failed red. For Prodex the canary is the **only** signal.
+
+So `MAIL_CANARY_ADDRESS` is set on Prodex and deliberately **unset on Command**. The
+workflow ships to both (parity) and no-ops where the address is absent. Do not "fix" this by
+setting it on Command — that adds a redundant daily email, not coverage.
+
+Known cosmetic wart, accepted: the unset case emits a daily `::warning::` on Command, so a
+deliberate choice looks like a misconfiguration in the Actions log. Judged not worth a
+commit.
+
 **Known gap, stated rather than hidden:** the watchdog has no inbox reader wired, so it
 reports `DELIVERY is NOT verified` instead of printing a green check it can't justify. Send
 is verified; receipt is not. Wire a reader before treating it as green.
