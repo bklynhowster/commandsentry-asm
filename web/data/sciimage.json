@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-07-29T09:17:27Z_10e76501",
-    "started_at": "2026-07-29T09:17:27Z",
-    "completed_at": "2026-07-29T09:21:25Z",
-    "duration_seconds": 238,
+    "id": "scan_2026-07-29T14:16:36Z_f949f9ae",
+    "started_at": "2026-07-29T14:16:36Z",
+    "completed_at": "2026-07-29T14:20:55Z",
+    "duration_seconds": 259,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -42,8 +42,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T09:21:25Z",
-      "last_seen": "2026-07-29T09:21:25Z",
+      "first_discovered": "2026-07-29T14:20:55Z",
+      "last_seen": "2026-07-29T14:20:55Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -145,8 +145,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T09:21:25Z",
-      "last_seen": "2026-07-29T09:21:25Z",
+      "first_discovered": "2026-07-29T14:20:55Z",
+      "last_seen": "2026-07-29T14:20:55Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -285,8 +285,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T09:21:26Z",
-      "last_seen": "2026-07-29T09:21:26Z",
+      "first_discovered": "2026-07-29T14:20:55Z",
+      "last_seen": "2026-07-29T14:20:55Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -345,8 +345,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T09:21:26Z",
-      "last_seen": "2026-07-29T09:21:26Z",
+      "first_discovered": "2026-07-29T14:20:55Z",
+      "last_seen": "2026-07-29T14:20:55Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -403,8 +403,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T09:21:26Z",
-      "last_seen": "2026-07-29T09:21:26Z",
+      "first_discovered": "2026-07-29T14:20:55Z",
+      "last_seen": "2026-07-29T14:20:55Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -490,8 +490,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-29T09:21:26Z",
-      "last_seen": "2026-07-29T09:21:26Z",
+      "first_discovered": "2026-07-29T14:20:55Z",
+      "last_seen": "2026-07-29T14:20:55Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -573,9 +573,12 @@
       }
     }
   ],
-  "phantom_subdomains": [],
+  "phantom_subdomains": [
+    "api-v1.sciimage.com",
+    "new.sciimage.com"
+  ],
   "deltas": {
-    "since_scan": "scan_2026-07-29T03:45:38Z_27ea4b38",
+    "since_scan": "scan_2026-07-29T09:17:27Z_10e76501",
     "added": {
       "subdomains": [],
       "services": [],
@@ -593,52 +596,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-07-02T14:34:00Z_892c768f",
-      "started_at": "2026-07-02T14:34:00Z",
-      "completed_at": "2026-07-02T14:36:08Z",
-      "subdomain_count": 5,
-      "live_subdomain_count": 5,
-      "host_count": 5,
-      "service_count": 7,
-      "subdomain_names": [
-        "ftp.sciimage.com",
-        "ns01.sciimage.com",
-        "ns02.sciimage.com",
-        "vpn.sciimage.com",
-        "vpn2.sciimage.com"
-      ],
-      "ports_by_sub": {
-        "ftp.sciimage.com": {
-          "24.157.51.76": [
-            22,
-            80,
-            443
-          ]
-        },
-        "ns01.sciimage.com": {
-          "13.248.212.206": [
-            53
-          ]
-        },
-        "ns02.sciimage.com": {
-          "76.223.76.45": [
-            53
-          ]
-        },
-        "vpn.sciimage.com": {
-          "24.157.51.66": [
-            443
-          ]
-        },
-        "vpn2.sciimage.com": {
-          "52.119.65.2": [
-            443
-          ]
-        }
-      },
-      "tech_versions": {}
-    },
     {
       "scan_id": "scan_2026-07-02T19:57:04Z_627707a7",
       "started_at": "2026-07-02T19:57:04Z",
@@ -6558,6 +6515,51 @@
       "scan_id": "scan_2026-07-29T09:17:27Z_10e76501",
       "started_at": "2026-07-29T09:17:27Z",
       "completed_at": "2026-07-29T09:21:25Z",
+      "subdomain_count": 6,
+      "live_subdomain_count": 6,
+      "host_count": 6,
+      "service_count": 7,
+      "subdomain_names": [
+        "ftp.sciimage.com",
+        "insite.sciimage.com",
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "ports_by_sub": {
+        "ftp.sciimage.com": {
+          "24.157.51.76": [
+            22,
+            80,
+            443
+          ]
+        },
+        "insite.sciimage.com": {
+          "24.157.51.70": [
+            80,
+            443
+          ]
+        },
+        "ns01.sciimage.com": {},
+        "ns02.sciimage.com": {},
+        "vpn.sciimage.com": {
+          "24.157.51.66": [
+            443
+          ]
+        },
+        "vpn2.sciimage.com": {
+          "52.119.65.2": [
+            443
+          ]
+        }
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-07-29T14:16:36Z_f949f9ae",
+      "started_at": "2026-07-29T14:16:36Z",
+      "completed_at": "2026-07-29T14:20:55Z",
       "subdomain_count": 6,
       "live_subdomain_count": 6,
       "host_count": 6,
