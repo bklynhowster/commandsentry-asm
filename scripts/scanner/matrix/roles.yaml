@@ -1,0 +1,183 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Role / service → check-pack matrix (P1) — TARGETED_SCAN_ARCHITECTURE_SPEC.md §4
+# ---------------------------------------------------------------------------
+# SOURCE OF TRUTH (4.7 ruling 5). Repo-versioned, PR-reviewed, part of the
+# validated-SHA regime — scan behavior must stay f(git SHA, target), so this is
+# NEVER hot-edited at runtime. The loader (matrix_loader.py) validates it ONCE
+# per process and FAILS LOUD at startup on any invalid shape (4.7 fleet-scale #4).
+#
+# THREE-AXIS MODEL: intensity (light/medium/heavy) × profile (these rows, a
+# per-host UNION) × engine (http exists now; network/dast later). A host's scan
+# = the union of the roles its open services + fingerprint match. Role is a
+# VECTOR, not a scalar — a box can be web + rdp + smb at once.
+# ═══════════════════════════════════════════════════════════════════════════
+version: 1
+
+# Validation vocab — the loader rejects any row referencing values outside these.
+severity_levels: [CRITICAL, HIGH, MODERATE-HIGH, MODERATE, LOW, INFO]
+engines: [http, network, dast, none]
+
+# ─── Universal baseline (spec §5) — runs on EVERY host regardless of role. ───
+# Kind/role may only ADD depth on top of this; it may never cut below it.
+baseline:
+  # Read these from discovery's cached scan (cheap); force fresh only when stale.
+  read_from_discovery: [ports, services]
+  # Always run fresh (cheap, high-signal), regardless of discovery cache.
+  fresh: [tls_audit, security_headers, dns_email_posture]
+  # Discovery older than this (hours) → force a fresh port sweep (nmap -sT).
+  staleness_hours: 72
+  # light-intensity uses discovery cache only (no fresh port sweep); medium/heavy
+  # get the full baseline. light does not role-narrow, so the small gap (bounded
+  # by the 24h discovery cadence) is acceptable for a ~5-min scan.
+  light_cache_only: true
+
+# ─── Fallback: an open port with no matching role is NEVER a silent gap. ─────
+unmatched_port:
+  engine: network
+  base_severity: MODERATE
+  note: "unknown open port — generic exposure finding; flag for matrix backfill"
+
+# ─── Roles ───────────────────────────────────────────────────────────────────
+# match: how discovery data selects this role.
+#   ports:            any of these open TCP ports (network roles)
+#   http:             true → matches any host serving http/https
+#   fingerprint_any:  any of these tokens (lowercased substring) in tech/server
+# base_severity / auth_detected_severity: exposure-is-the-finding (spec §6). Two
+#   columns — emit at the auth-modified severity. Web roles are per-finding
+#   (no exposure-by-presence), so they carry no base_severity.
+# auth_detection: the probe that decides base vs auth-detected (engine-side).
+roles:
+
+  # ── HTTP engine (web-ish) — exists in P1 ──────────────────────────────────
+  wordpress:
+    engine: http
+    match: { http: true, fingerprint_any: [wordpress, wp-content, woocommerce] }
+    priority: 30           # most specific web role wins
+    nuclei_tags: [wordpress, cve, misconfig]
+    aux_tools: [wpscan]
+
+  api:
+    engine: http
+    match: { http: true, fingerprint_any: [graphql, swagger, openapi, "/api"] }
+    priority: 20
+    nuclei_tags: [misconfig, exposure, cve, graphql]
+    aux_tools: [katana]
+    probes: [waf_bypass_put_patch_8kb]   # activated in P2 (Armor payload lever)
+
+  web-spa:
+    engine: http
+    match: { http: true, fingerprint_any: [react, vue, angular, next.js, unpkg, spa] }
+    priority: 15
+    nuclei_tags: [misconfig, exposure, tech]
+    aux_tools: [katana, retire_js, trufflehog]
+
+  web-generic:
+    engine: http
+    match: { http: true }                # any http host that matched no web role above
+    priority: 10                          # lowest web priority — the catch-all web pack
+    nuclei_tags: [misconfig, exposure, tech, cve]
+    aux_tools: [katana]
+
+  # ── network engine (non-HTTP) — MATRIX DATA now, ENGINE lands in P3 ────────
+  # Baseline still emits the exposure finding for these ports in P1 (spec §5);
+  # the deep protocol packs below run once run_network.py exists.
+  # auth_detection semantic: auth_results[role]=True means the "better" auth
+  # posture was DETECTED → use auth_detected_severity. False/unknown → base
+  # (conservative; never under-reports). auth_results plumbing lands with the
+  # network engine (P3); until then everything emits at base_severity.
+  rdp:
+    engine: network
+    match: { ports: [3389] }
+    base_severity: HIGH               # exposed RDP is HIGH; P1 ceiling stays HIGH
+    auth_detected_severity: HIGH      # NLA-enforced is still exposed → still HIGH
+    auth_detection: nla_enforced      # a 3rd 'unsafe' column (no-NLA=CRITICAL) is a P2 enhancement
+    nuclei_tags: [rdp, network]
+
+  smb:
+    engine: network
+    match: { ports: [445] }
+    base_severity: MODERATE-HIGH      # signing-enforced SMB, exposed
+    auth_detected_severity: HIGH      # null-session accessible → worse
+    auth_detection: null_session_open
+    nuclei_tags: [smb, network]
+
+  ssh:
+    engine: network
+    match: { ports: [22] }
+    base_severity: MODERATE           # password auth allowed (the common weakness)
+    auth_detected_severity: LOW       # key-only auth DETECTED → hardened
+    auth_detection: key_only_auth
+    nuclei_tags: [ssh, network]
+
+  telnet:
+    engine: network
+    match: { ports: [23] }
+    base_severity: HIGH               # cleartext auth, well-known target
+    auth_detected_severity: HIGH
+    auth_detection: none
+    nuclei_tags: [network]
+
+  ftp:
+    engine: network
+    match: { ports: [21] }
+    base_severity: HIGH               # typically cleartext; anonymous-access risk
+    auth_detected_severity: HIGH
+    auth_detection: none
+    nuclei_tags: [ftp, network]
+
+  vnc:
+    engine: network
+    match: { ports: [5900, 5901] }
+    base_severity: HIGH               # often weak / no auth
+    auth_detected_severity: HIGH
+    auth_detection: none
+    nuclei_tags: [vnc, network]
+
+  nfs:
+    engine: network
+    match: { ports: [2049] }
+    base_severity: HIGH               # remote filesystem access
+    auth_detected_severity: HIGH
+    auth_detection: none
+    nuclei_tags: [network]
+
+  snmp:
+    engine: network
+    match: { ports: [161] }
+    base_severity: HIGH               # community-string enum; 'public' default
+    auth_detected_severity: HIGH
+    auth_detection: none
+    nuclei_tags: [snmp, network]
+
+  db:
+    engine: network                    # incl. Oracle 1521, CouchDB 5984, Memcached 11211, ES 9200
+    match: { ports: [5432, 3306, 1433, 6379, 27017, 9200, 1521, 5984, 11211] }
+    base_severity: CRITICAL            # a public DB is a finding on sight
+    auth_detected_severity: HIGH       # HIGH when the protocol requires an auth handshake
+    auth_detection: db_auth_handshake
+    nuclei_tags: [network]
+
+  mail:
+    engine: network
+    match: { ports: [25, 465, 587, 110, 143] }
+    base_severity: MODERATE
+    auth_detected_severity: MODERATE
+    auth_detection: none
+    nuclei_tags: [network]
+    probes: [smtp_open_relay, starttls, vrfy_expn]
+
+  infra:
+    engine: network                    # 9200 removed → owned by `db` (ES is a datastore, not mgmt)
+    match: { ports: [623, 6443, 2375], fingerprint_any: [ipmi, kubernetes, docker-api] }
+    base_severity: HIGH
+    auth_detected_severity: HIGH
+    auth_detection: default_cred
+    nuclei_tags: [network, exposure, misconfig]
+
+  # ── no-op kinds (per characterization) ────────────────────────────────────
+  redirect:
+    engine: none
+    match: { fingerprint_any: [__redirect_kind__] }   # set by kind derivation
+  dead:
+    engine: none
+    match: { fingerprint_any: [__dead_kind__] }
