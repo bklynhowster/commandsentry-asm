@@ -1,0 +1,24 @@
+# Dependencies required to RUN THE TEST SUITE. Not the scanner's runtime set —
+# the scanner container image (see the container image build spec) is the SSOT
+# for that. This file exists so `pip install -r requirements-test.txt` gives you
+# the same environment CI has, and so the list is a versioned artifact instead
+# of a string inside a workflow YAML.
+#
+# Derived empirically on 2026-07-29, not guessed. Every third-party import
+# across scripts/ and scanner/ was enumerated, then each candidate was blocked
+# with a raising stub module to see what actually breaks:
+#
+#   psycopg  blocked -> 1 error, exit 3  (import-time sys.exit -> INTERNALERROR)
+#   yaml     blocked -> 34 failed        (lazy import, returns {} by design)
+#   requests blocked -> 580 passed       (lazy; NOT required — deliberately absent)
+#
+# anthropic and supabase are imported only by scripts/backfill/* which has no
+# tests. Adding them here would slow every run for no coverage.
+#
+# RULE: adding a line here means proving it. Block the module with a stub that
+# raises ImportError and confirm the suite actually fails without it. Two CI
+# runs were burned discovering psycopg and pyyaml one at a time.
+
+pytest
+psycopg[binary]
+pyyaml
