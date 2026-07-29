@@ -59,10 +59,57 @@ jobs:
           python-version: '3.10'   # matches the scanner container image
 
       - name: Install test deps
-        # No requirements.txt at root; the unit suites are stdlib-only apart
-        # from pytest itself. Deliberately NOT installing psycopg — the tests
-        # stub it, and installing it invites a test to open a real connection.
-        run: python -m pip install --quiet pytest
+        # psycopg IS required, and the first CI run is what proved it.
+        #
+        # This step originally installed pytest only, on the reasoning that the
+        # tests stub psycopg and installing it "invites a test to open a real
+        # connection." That was clever and wrong. Ten production modules do:
+        #
+        #     try: import psycopg
+        #     except ImportError: print(...); sys.exit(1)
+        #
+        # — a sensible fail-fast for a CLI, but it runs at IMPORT time. And
+        # scripts/db/test_auth_gated.py imports import_asm_to_surface for real
+        # rather than stubbing it. So collection called sys.exit(1) inside a
+        # module import, pytest raised INTERNALERROR, and the whole session
+        # died with exit 3 before a single test ran.
+        #
+        # It passed locally only because the sandbox had psycopg installed
+        # system-wide. A "clean checkout" repro is not clean if the
+        # INTERPRETER still has the packages.
+        #
+        # The real guard against a live connection is that this job has no DSN:
+        # SUPABASE_DSN is empty and no secret is in scope. An installed driver
+        # with nothing to connect to cannot reach a database.
+        run: python -m pip install --quiet pytest 'psycopg[binary]'
+
+      # ── Lane 0: preflight — can every test module even be imported? ──
+      # pytest collects by IMPORTING. Ten production modules in scripts/db do
+      # `except ImportError: sys.exit(1)` at module scope, so one missing
+      # dependency doesn't fail one test — it raises SystemExit inside
+      # collection, which pytest reports as INTERNALERROR and the entire
+      # session dies with exit 3 before anything runs. That is what happened on
+      # run #1: 580 tests reported as a 60-line traceback that never named the
+      # module at fault.
+      #
+      # This step imports each test module in its OWN subprocess, so a
+      # SystemExit is contained and attributable. It prints the offending file
+      # and the exit code, then fails. Cheap, and it turns the worst failure
+      # mode in this pipeline into one readable line.
+      - name: Preflight — every test module imports cleanly
+        run: |
+          set -uo pipefail
+          bad=0
+          while IFS= read -r f; do
+            mod_dir=$(dirname "$f"); mod=$(basename "$f" .py)
+            if ! out=$(cd "$mod_dir" && python3 -c "import $mod" 2>&1); then
+              echo "::error file=$f::cannot be imported — pytest collection would INTERNALERROR here"
+              echo "$out" | tail -5
+              bad=1
+            fi
+          done < <(find scanner scripts -name 'test_*.py' -not -path '*/common/tests/*')
+          [ $bad -eq 0 ] && echo "all test modules import cleanly"
+          exit $bad
 
       # ── Lane 1: pytest-style (~580 tests, 27 files) ──
       - name: pytest suites
