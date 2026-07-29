@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-mailer.py — one send path, provider chosen by env. 2026-07-26.
+mailer.py — one send path, provider chosen by env. 2026-07-29.
 
     MAIL_PROVIDER = "sendgrid" (default) | "smtp"
 

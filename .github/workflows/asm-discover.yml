@@ -354,7 +354,7 @@ jobs:
           SMTP_USER:        ${{ vars.SMTP_USER }}
           SMTP_PASS:        ${{ secrets.SMTP_PASS }}
           INSTANCE_NAME:    ${{ github.event.repository.name }}
-          # Per-instance identity (2026-07-26). No cross-tenant defaults in code:
+          # Per-instance identity (2026-07-29). No cross-tenant defaults in code:
           # unset => the script skips rather than sending as the wrong instance.
           PORTAL_BASE_URL:  ${{ vars.PORTAL_BASE_URL }}
           ALERTER_FROM:     ${{ vars.ALERTER_FROM }}

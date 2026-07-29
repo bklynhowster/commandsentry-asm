@@ -73,7 +73,7 @@ _ACTIVE_INTENSITIES = frozenset({"medium", "heavy"})
 
 # ─── Portal alert endpoint (best-effort SendGrid delivery) ──────────────
 #
-# PER-INSTANCE, NO CROSS-TENANT DEFAULT (2026-07-26). This was hardcoded to
+# PER-INSTANCE, NO CROSS-TENANT DEFAULT (2026-07-29). This was hardcoded to
 # the Command portal and was IDENTICAL in both scanner repos, so a PRODEX ROE
 # block POSTed Prodex asset_id / ownership / scan_run_id to COMMAND's portal —
 # and the alert never reached the Prodex owner. Live cross-tenant leak.

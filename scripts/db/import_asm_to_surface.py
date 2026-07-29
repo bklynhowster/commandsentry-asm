@@ -674,7 +674,7 @@ EVENT_TYPE_TO_PREF_KEY = {
 # SendGrid-verified, and IronPort-trusted. Uses the SAME SENDGRID_API_KEY the
 # daily digest already runs on (asm repo Actions secret).
 #
-# PER-INSTANCE, NO CROSS-TENANT DEFAULT (2026-07-26). Sender, product name and
+# PER-INSTANCE, NO CROSS-TENANT DEFAULT (2026-07-29). Sender, product name and
 # portal URL were hardcoded to Command and IDENTICAL in both scanner repos,
 # while asm-discover.yml invokes this importer AND passes SENDGRID_API_KEY on
 # BOTH. So with that secret set on Prodex, Prodex real-time notification email

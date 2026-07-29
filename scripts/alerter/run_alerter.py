@@ -897,7 +897,7 @@ def main() -> int:
         or _env("RESEND_API_KEY", required=not args.dry_run)
         or ""
     )
-    # PER-INSTANCE IDENTITY — NO CROSS-TENANT DEFAULTS (2026-07-26).
+    # PER-INSTANCE IDENTITY — NO CROSS-TENANT DEFAULTS (2026-07-29).
     #
     # These defaulted to Command's sender AND, worse, to a
     # hschneider@commandcompanies.com RECIPIENT — identically in both scanner

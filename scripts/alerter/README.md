@@ -46,7 +46,7 @@ Repo → Settings → Secrets and variables → Actions:
 | `RESEND_API_KEY` | the `re_…` token from step 2 |
 
 **REQUIRED per-instance identity vars (repo variables, not secrets).**
-As of 2026-07-26 these have **no defaults in code** — they previously
+As of 2026-07-29 these have **no defaults in code** — they previously
 defaulted to Command values *identically in both scanner repos*, so an
 unset var silently sent the digest as, and to, the wrong instance.
 Unset now means the digest refuses to send and warns.

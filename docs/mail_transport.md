@@ -1,6 +1,6 @@
 # Mail Transport — dual-provider, per-instance
 
-**Ratified 2026-07-26 (4.7 rulings M1–M6, Obsidian 164).**
+**Ratified 2026-07-29 (4.7 rulings M1–M6, Obsidian 164).**
 
 ## The rule
 
@@ -90,7 +90,7 @@ delivered). Both instances send their own so a failure is attributable to a prov
 `MAIL_CANARY_ADDRESS` **must be an address someone or something actually watches.** A canary
 to an unwatched mailbox is not a signal.
 
-### Canary runs on PRODEX ONLY — deliberate (2026-07-26)
+### Canary runs on PRODEX ONLY — deliberate (2026-07-29)
 
 4.7's M6 said both instances. In practice Command doesn't need it, and Howie caught this:
 
@@ -121,8 +121,21 @@ Accepted as the same security envelope as `SUPABASE_DSN` and the VPN credentials
 there — another secret in an existing envelope, not a new class. Note that repo is
 **public**; Actions secrets are not exposed to fork PRs by default.
 
-**Sequencing (ruled):** narrow the `cowork-push-ba` broad PAT — already tracked — **before**
-adding `SMTP_PASS`. Don't compound long-lived credentials.
+**Sequencing (ruled, then overridden 2026-07-29):** M3 said narrow the `cowork-push-ba`
+broad PAT **before** adding `SMTP_PASS`, to avoid compounding long-lived credentials. Howie
+chose to add `SMTP_PASS` first so Prodex mail could be proven working; the PAT narrowing
+remains open.
+
+Mitigating fact found during the PAT investigation: **no workflow in any of the three repos
+references `cowork-push-ba`.** The workflow tokens are `GITHUB_TOKEN` (built-in,
+auto-scoped), `ROE_ALERT_TOKEN`, `NETLIFY_AUTH_TOKEN` and `DISPATCH_TOKEN`; no git remote
+carries an embedded credential. Its only apparent consumer is Cowork's own push path, which
+points toward **retiring** it rather than narrowing it — and would make M3's gate moot
+rather than merely deferred.
+
+**Status:** `SMTP_PASS` is set on `prodexsentry-asm`. The same app-specific password is also
+in Prodex's Netlify env for the portal, so **a rotation must update both** or the canary
+starts failing on whichever lags.
 
 **Rotation:** app-specific passwords die on Apple ID password change. The canary is the
 detection mechanism. Quarterly rotation as hygiene, coordinated with password changes.
@@ -141,6 +154,15 @@ detection mechanism. Quarterly rotation as hygiene, coordinated with password ch
 
 Neither instance sends until these are set — that is the trade for removing cross-tenant
 defaults: it fails safe, but it fails until configured.
+
+**Both instances configured and verified 2026-07-29.** Prodex has all eight set; Command has
+`PORTAL_BASE_URL`, `ALERTER_FROM`, `ALERTER_FROM_NAME` (it needs no `MAIL_PROVIDER` — sendgrid
+is the default — and deliberately no `MAIL_CANARY_ADDRESS`, per the section above).
+
+**End-to-end proof, Prodex, 2026-07-29:** canary run #1 green in 13s, log line
+`canary sent [prodexsentry-asm] smtp smtp.mail.me.com:587 -> 1 recipient(s)`, and the message
+**landed in the inbox** (not junk), branded PRODEXsentry. That is the first time Prodex
+scanner-side mail has been demonstrated working end to end.
 
 | variable | Command | Prodex |
 |---|---|---|
