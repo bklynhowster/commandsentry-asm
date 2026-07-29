@@ -39,8 +39,46 @@ egress over an unapproved network. A wrong *proceed* has consequences outside ou
 | gate | file | protects | status |
 |---|---|---|---|
 | ROE / ownership | `scripts/scanner/roe_gate.py` | no active scan without ownership on the allowlist | ✅ **fixed 2026-07-25** — SAFETY budget, retries transport, verdicts short-circuit, alert only after exhausted retries |
-| active-probe authorisation | `run_heavy.py` (`active_probe_authorized`) | no intrusive probe without per-asset opt-in | ⬜ audit pending |
-| VPN egress check | `scanner.yml` VPN bring-up + carve-out | no scan egressing over an unapproved network | ⬜ audit pending |
+| active-probe authorisation | `run_heavy.py` (`_read_active_probe_policy`) | no intrusive probe without per-asset opt-in | ✅ **audited + fixed 2026-07-29** — fail direction was already correct; retry added and `__unreadable__` marker introduced so the audit stops recording an unread policy as a decision |
+| VPN egress check | `scripts/scanner/vpn_bringup.sh` step 6 | no scan egressing over an unapproved network | ✅ **audited + fixed 2026-07-29** — **was failing OPEN**; now exits 4/5 rather than proceeding unverified |
+
+### Audit findings, 2026-07-29
+
+**VPN egress check — this one was live and wrong.** It ran a single `curl` to ipify; if
+that one request failed it logged `"single curl probe didn't return an IP (continuing —
+tunnel is up per wg-quick)"`, set `VPN_IP="<unknown>"`, and the comparison was then skipped
+by the `!= "<unknown>"` guard. One flaky HTTP request was sufficient to run a scan with
+egress **unverified** — potentially over the naked GitHub runner address, which is the one
+outcome this gate exists to prevent. `wg-quick`'s exit code and `ip route` prove the
+interface came up; they do not prove traffic leaves through it, and a wrong route table
+satisfies both.
+
+Two structural problems behind it: the verification probe was *weaker* than the baseline
+measurement it verified against (1 provider vs 3), and the failure mode was written as a
+log line rather than a verdict. Fixed by extracting `probe_egress_ip()` — used for **both**
+baseline and verification — and replacing the fail-open with distinct exits:
+
+| condition | classification | exit |
+|---|---|---|
+| IP changed | verdict pass | 0 |
+| IP unchanged | verdict fail | 3 |
+| IP unreadable after 3×3 probes | transport exhausted | **4** |
+| no baseline captured | unverifiable | **5** |
+
+**Active-probe authorisation — correct outcome, dishonest record.** Every error path already
+returned not-authorised, so no DB blip could ever *fire* an unauthorised probe; the fail
+direction never needed changing. The defect was epistemic: `"asset opted out"` and `"we
+never reached the DB"` produced an identical return value *and* an identical audit row, so
+the audit table recorded policy decisions that were never read. Now retries transport
+(SAFETY budget) and returns `__unreadable__` in the reason slot, which flows to
+`details.egress_reason` in the jsonb audit column. Both call sites — `fwbbot_check` and
+`waf_differential` — log the distinction. A missing row stays a *real answer*, not
+unreadable.
+
+Neither gate uses `gate_retry.py` directly: one is bash, the other predates the library and
+sits inside a lazy-import block. Both implement the SAFETY budget by hand and are covered by
+mechanism tests (`scripts/common/tests/test_vpn_egress_gate_mechanism.sh`, `scripts/common/tests/test_active_probe_policy_gate_mechanism.py`).
+**Port them onto `gate_retry` when either is next touched substantively.**
 
 ## Progress gates — may fail open, but only on an explicit operator decision
 

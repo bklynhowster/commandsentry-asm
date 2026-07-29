@@ -1116,24 +1116,48 @@ def _read_active_probe_policy(ctx: HeavyScanContext) -> tuple[bool, str, str]:
     to 'direct' ONLY when a VPN ban is DOCUMENTED (reason column). Missing dsn / any error
     -> NOT authorized + default egress (fail closed)."""
     if not ctx.dsn:
-        return False, _ACTIVE_PROBE_EGRESS, ""
+        return False, _ACTIVE_PROBE_EGRESS, "__unreadable__"
     try:
         psycopg, dict_row, _ = _import_deps()   # lazy deps — module-level import is intentionally absent (matches run())
-        with psycopg.connect(ctx.dsn, autocommit=True, connect_timeout=10) as c:
-            with c.cursor(row_factory=dict_row) as cur:
-                cur.execute("select active_probe_authorized, active_probe_egress, "
-                            "active_probe_egress_reason from public.assets where asset_id=%s",
-                            (ctx.asset_id,))
-                r = cur.fetchone()
+
+        # 2026-07-29 gate audit: retry TRANSPORT, never retry a VERDICT.
+        # The fail DIRECTION here was always correct — any error yields
+        # not-authorized, so a DB blip can never fire an unauthorised probe.
+        # What was wrong is that "asset is opted out" and "we couldn't reach
+        # the DB" produced an identical result AND an identical audit row
+        # (authorized=false), so the audit table recorded a policy decision
+        # that was never actually read. Retrying transport means a blip no
+        # longer silently skips an authorised probe; the "__unreadable__"
+        # marker keeps the audit honest when it genuinely can't be read.
+        # SAFETY tier, so the budget matches gate_retry.SAFETY (3 / 5s / 1s+3s).
+        _last = None
+        for _attempt in range(1, 4):
+            try:
+                with psycopg.connect(ctx.dsn, autocommit=True, connect_timeout=5) as c:
+                    with c.cursor(row_factory=dict_row) as cur:
+                        cur.execute("select active_probe_authorized, active_probe_egress, "
+                                    "active_probe_egress_reason from public.assets where asset_id=%s",
+                                    (ctx.asset_id,))
+                        r = cur.fetchone()
+                break
+            except Exception as _e:  # transport — retry
+                _last = _e
+                if _attempt < 3:
+                    time.sleep(1 if _attempt == 1 else 3)
+                else:
+                    raise
         if not r:
+            # A real answer: the DB responded and this asset has no row.
+            # NOT unreadable — do not mark it as such.
             return False, _ACTIVE_PROBE_EGRESS, ""
         egress = (r.get("active_probe_egress") or _ACTIVE_PROBE_EGRESS).strip().lower()
         if egress not in ("vpn", "direct"):
             egress = _ACTIVE_PROBE_EGRESS
         return bool(r.get("active_probe_authorized")), egress, (r.get("active_probe_egress_reason") or "")
-    except Exception as e:  # non-fatal: unknown authorization -> treat as NOT authorized
-        log(f"  fwbbot_check probe: policy read failed ({e}) — treating as unauthorized")
-        return False, _ACTIVE_PROBE_EGRESS, ""
+    except Exception as e:  # transport exhausted: authorization UNKNOWN -> fail closed
+        log(f"  fwbbot_check probe: policy read UNREADABLE after retries ({e}) — "
+            f"treating as unauthorized (safe), but this is 'unknown', NOT 'opted out'")
+        return False, _ACTIVE_PROBE_EGRESS, "__unreadable__"
 
 
 def _write_active_probe_audit(ctx: HeavyScanContext, v: dict) -> None:
@@ -1224,7 +1248,14 @@ def run_fwbbot_check_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     if egress_reason:
         details["egress_reason"] = egress_reason[:200]
     if not authorized:
-        log("  fwbbot_check probe: SKIP — asset not active_probe_authorized (opt-in false / kill switch)")
+        # Distinguish a real "opted out" from "we never got an answer" — both
+        # correctly skip the probe, but only one is a policy decision. The
+        # audit row carries the same distinction via details.egress_reason.
+        if egress_reason == "__unreadable__":
+            log("  fwbbot_check probe: SKIP — policy UNREADABLE after retries "
+                "(NOT a policy decision; authorization is unknown, not denied)")
+        else:
+            log("  fwbbot_check probe: SKIP — asset not active_probe_authorized (opt-in false / kill switch)")
     elif not _ACTIVE_PROBE_LIVE:
         log(f"  fwbbot_check probe: authorized but DRY-RUN (ACTIVE_PROBE_LIVE unset), egress={egress} — would probe, firing nothing")
     else:
@@ -1433,7 +1464,14 @@ def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> N
     if egress_reason:
         details["egress_reason"] = egress_reason[:200]
     if not authorized:
-        log("  waf_differential probe: SKIP — asset not active_probe_authorized (opt-in false / kill switch)")
+        # Same distinction as the fwbbot probe: "opted out" is a policy
+        # decision, "unreadable" is an absence of one. Both skip; only one
+        # is a fact about the asset.
+        if egress_reason == "__unreadable__":
+            log("  waf_differential probe: SKIP — policy UNREADABLE after retries "
+                "(NOT a policy decision; authorization is unknown, not denied)")
+        else:
+            log("  waf_differential probe: SKIP — asset not active_probe_authorized (opt-in false / kill switch)")
     elif not _ACTIVE_PROBE_LIVE:
         log(f"  waf_differential probe: authorized but DRY-RUN (ACTIVE_PROBE_LIVE unset), egress={egress} "
             f"— would fire baseline+{len(_WAF_PAYLOADS)} payload classes, firing nothing")

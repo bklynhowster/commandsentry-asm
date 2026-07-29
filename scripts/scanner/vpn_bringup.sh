@@ -25,14 +25,16 @@
 #
 # Outputs (to $GITHUB_OUTPUT when running under GH Actions):
 #   vpn_region       — region we connected to
-#   vpn_egress_ip    — egress IP per `ip route` + simple curl (1 attempt)
+#   vpn_egress_ip    — verified post-VPN egress IP (3 providers, 3 attempts)
 #   vpn_baseline_ip  — runner's pre-VPN IP for comparison
 #
 # Exit codes:
-#   0  — tunnel up, routing verified
+#   0  — tunnel up, egress change VERIFIED
 #   1  — wireguard install failed
 #   2  — wg-quick up failed
-#   3  — egress didn't change OR routing didn't redirect through wg
+#   3  — VERDICT: egress didn't change (traffic not routed through wg)
+#   4  — egress IP unreadable after retries — cannot verify (no fail-open)
+#   5  — no pre-VPN baseline captured — nothing to compare against
 
 set -uo pipefail
 
@@ -53,15 +55,28 @@ if [[ -z "$REGION" ]] || [[ ! -f "/etc/wireguard/${REGION}.conf" ]]; then
   fi
 fi
 
+# ─── Shared egress probe — 3 providers, N attempts ───────────────────
+# Used for BOTH the pre-VPN baseline and the post-VPN verification. They
+# used to differ: baseline tried three providers, the post-VPN check tried
+# ipify once. The verification was less robust than the measurement it
+# verified against, which is backwards for a safety gate.
+# Echoes an IPv4 on success, empty string on failure.
+probe_egress_ip() {
+  local attempts="${1:-3}" a p ip
+  for ((a = 1; a <= attempts; a++)); do
+    for p in https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
+      ip=$(curl -s --max-time 8 "$p" 2>/dev/null | head -1 | tr -d '[:space:]' || true)
+      if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$ip"; return 0
+      fi
+    done
+    [[ $a -lt $attempts ]] && sleep $((a * 2))
+  done
+  echo ""; return 1
+}
+
 # ─── Step 1: Baseline IP (pre-VPN) ───────────────────────────────────
-BASELINE_IP=""
-for provider in https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
-  ip=$(curl -s --max-time 8 "$provider" 2>/dev/null | head -1 | tr -d '[:space:]' || true)
-  if [[ -n "$ip" ]] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    BASELINE_IP="$ip"
-    break
-  fi
-done
+BASELINE_IP="$(probe_egress_ip 2)"
 log "baseline runner IP (pre-VPN): ${BASELINE_IP:-<unknown>}"
 
 # ─── Step 2: Verify baked-in binaries from the container image ───────
@@ -133,19 +148,44 @@ ts_log "✓ tunnel up via wireguard-go"
 log "default route after tunnel bring-up:"
 ip route show default 2>&1 | head -5 || true
 
-# ─── Step 6: Verify egress IP changed (best effort, single probe) ────
-# Skip the retry loop that hung in earlier Mullvad-CLI scans. ONE
-# curl, short timeout. If it fails we still proceed — the tunnel is
-# up per wg-quick's exit code + `ip route`.
+# ─── Step 6: Verify egress actually changed — SAFETY GATE, no fail-open ──
+#
+# 2026-07-29 (gate audit, docs/gate_criticality_matrix.md). This previously did
+# ONE curl to ipify and, if that curl failed, logged "continuing — tunnel is up
+# per wg-quick" and PROCEEDED with the comparison skipped. That is a fail-open
+# in a safety gate: a single flaky HTTP request was enough to let a scan run
+# with egress UNVERIFIED — potentially over the naked GitHub runner IP, which
+# is the exact thing this gate exists to prevent.
+#
+# wg-quick's exit code and `ip route` only prove the interface came up. They do
+# not prove traffic leaves through it; a wrong route table satisfies both and
+# still egresses on the runner's own address.
+#
+# Verdict vs transport, same invariant as gate_retry.py:
+#   IP changed          -> VERDICT pass   -> proceed
+#   IP unchanged        -> VERDICT fail   -> exit 3 (was already correct)
+#   IP unreadable       -> TRANSPORT      -> retry; if still unreadable, exit 4
+#   no baseline to compare -> UNVERIFIABLE -> exit 5
+# 4.7 G4 is categorical: safety gates never fail open, and there is deliberately
+# no env var to override this. Blocking a scan costs a cadence slot; scanning
+# someone else's infrastructure from an unapproved address costs a lot more.
 sleep 2
-VPN_IP=$(timeout 10 curl -s --max-time 8 https://api.ipify.org 2>/dev/null | tr -d '[:space:]' || true)
-if [[ ! "$VPN_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  log "single curl probe didn't return an IP (continuing — tunnel is up per wg-quick)"
-  VPN_IP="<unknown>"
+VPN_IP="$(probe_egress_ip 3)"
+if [[ -z "$VPN_IP" ]]; then
+  err "egress IP UNREADABLE after 3 attempts across 3 providers"
+  err "the tunnel may be fine, but we cannot PROVE traffic is routed through it"
+  err "refusing to scan with unverified egress (safety gate — no fail-open)"
+  exit 4
 fi
 log "egress IP per curl: $VPN_IP"
 
-if [[ "$VPN_IP" != "<unknown>" ]] && [[ -n "$BASELINE_IP" ]] && [[ "$VPN_IP" == "$BASELINE_IP" ]]; then
+if [[ -z "$BASELINE_IP" ]]; then
+  err "no pre-VPN baseline IP was captured — nothing to compare against"
+  err "cannot prove egress changed; refusing to scan with unverified egress"
+  exit 5
+fi
+
+if [[ "$VPN_IP" == "$BASELINE_IP" ]]; then
   err "egress IP did not change — wg-quick up succeeded but traffic not routed"
   err "baseline: $BASELINE_IP, post-VPN: $VPN_IP"
   exit 3
