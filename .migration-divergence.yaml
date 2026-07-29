@@ -85,28 +85,6 @@ code_divergence:
   #   differing lines, so the wiring cannot be copied and must be hand-applied per
   #   4.7 Q3. Held until after the 2026-08-07 device-class soak-end per Q4.
 
-# ─── DO NOT "FIX" THIS: two ported migrations differ BY NECESSITY ────────────
-# 20260705b_asset_kind_characterization_cols.sql and 20260706a_targeted_scan_p1_schema.sql
-# exist in BOTH repos with the same filename but DIFFERENT CONTENT. That is correct
-# and must stay that way.
-#
-# Command's copies carry a MIGRATION-META header (added 2026-07-29 on port — the
-# Prodex originals predate the ledger, first META migration is 20260710a, and
-# validate_meta() rejects a new migration without one). Prodex's copies are the
-# untouched originals.
-#
-# **Syncing them would take Prodex's scanner OFFLINE.** The ledger stores a
-# content_sha256 per filename, and check_migrations_applied.py does:
-#     elif ledger[fn] and ledger[fn] != sha:  -> "SHA-MISMATCH (file edited after
-#     apply)" -> exit 1 -> the gate REFUSES ALL SCANS
-# Prodex has already applied both; editing them changes the SHA and trips that gate.
-# Command has not applied them yet, so its SHA is recorded on first apply.
-#
-# RULE: never edit an already-applied migration. Per-instance content divergence on
-# an applied migration is expected; only the FILENAME SET is compared for parity
-# (compare_migrations.py uses os.path.basename), and the sets DO match for these two.
-# ─────────────────────────────────────────────────────────────────────────────
-
 # FOLLOW-UP (4.7 Q5, not blocking this port):
 #   1. CI check that diffs the two repos' file trees and fails on any file present in
 #      one and absent in the other unless registered here. Prevents silent drift.
