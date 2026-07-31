@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-07-31T14:45:08Z_201a377b",
-    "started_at": "2026-07-31T14:45:08Z",
-    "completed_at": "2026-07-31T14:49:31Z",
-    "duration_seconds": 263,
+    "id": "scan_2026-07-31T20:05:52Z_aad8b4db",
+    "started_at": "2026-07-31T20:05:52Z",
+    "completed_at": "2026-07-31T20:09:21Z",
+    "duration_seconds": 209,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -33,7 +33,7 @@
     "live_subdomain_count": 2,
     "host_count": 2,
     "service_count": 8,
-    "newest_cert_expiry_days": 71,
+    "newest_cert_expiry_days": 70,
     "top_hosting_org": "Automattic, Inc",
     "platforms": [
       "WordPress on wp.cloud (Pressable)"
@@ -45,8 +45,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-07-31T14:49:31Z",
-      "last_seen": "2026-07-31T14:49:31Z",
+      "first_discovered": "2026-07-31T20:09:21Z",
+      "last_seen": "2026-07-31T20:09:21Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -155,7 +155,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 71
+            "days_to_expiry": 70
           }
         },
         {
@@ -226,7 +226,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 71
+            "days_to_expiry": 70
           }
         }
       ],
@@ -243,8 +243,8 @@
           "ns18.domaincontrol.com"
         ],
         "txt": [
-          "ca3-109f68bf8eb24748b4c4aaa123b93e17",
-          ""
+          "",
+          "ca3-109f68bf8eb24748b4c4aaa123b93e17"
         ],
         "spf": null,
         "dnssec": false
@@ -361,13 +361,13 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-07-31T14:49:31Z",
-      "last_seen": "2026-07-31T14:49:31Z",
+      "first_discovered": "2026-07-31T20:09:21Z",
+      "last_seen": "2026-07-31T20:09:21Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 403,
-        "title": "403 Forbidden"
+        "http_status": 200,
+        "title": "Home - Command Marketing Innovations"
       },
       "probe_status": {
         "naabu": {
@@ -471,7 +471,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 71
+            "days_to_expiry": 70
           }
         },
         {
@@ -542,7 +542,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 71
+            "days_to_expiry": 70
           }
         }
       ],
@@ -567,12 +567,102 @@
       },
       "fingerprint": {
         "server": "nginx",
-        "platform_label": null,
+        "platform_label": "WordPress on wp.cloud (Pressable)",
         "tech": [
+          {
+            "name": "Bootstrap",
+            "version": "5.1.0",
+            "category": "frontend"
+          },
+          {
+            "name": "Email Encoder for Wordpress",
+            "version": null,
+            "category": null
+          },
+          {
+            "name": "Font Awesome",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          },
+          {
+            "name": "Mailcheck",
+            "version": "1.1.2",
+            "category": null
+          },
+          {
+            "name": "MySQL",
+            "version": null,
+            "category": "database"
+          },
           {
             "name": "Nginx",
             "version": null,
             "category": "webserver"
+          },
+          {
+            "name": "PHP",
+            "version": null,
+            "category": "language"
+          },
+          {
+            "name": "Slider Revolution",
+            "version": "6.7.58",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "WPMU DEV Smush",
+            "version": "4.2.0",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "WordPress",
+            "version": null,
+            "category": "cms"
+          },
+          {
+            "name": "Yoast SEO",
+            "version": "28.1",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "jQuery",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery Migrate",
+            "version": "3.4.1",
+            "category": "frontend"
+          },
+          {
+            "name": "jsDelivr",
+            "version": null,
+            "category": "cdn"
+          },
+          {
+            "name": "punycode",
+            "version": "1.0.0",
+            "category": null
+          },
+          {
+            "name": "reCAPTCHA",
+            "version": null,
+            "category": null
+          },
+          {
+            "name": "wp.cloud",
+            "version": null,
+            "category": "hosting"
+          },
+          {
+            "name": "wpBakery",
+            "version": null,
+            "category": "wp-plugin"
           }
         ]
       },
@@ -585,7 +675,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-07-31T09:35:38Z_24281c0d",
+    "since_scan": "scan_2026-07-31T14:45:08Z_201a377b",
     "added": {
       "subdomains": [],
       "services": [],
@@ -603,50 +693,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-07-05T04:20:37Z_2644ab4d",
-      "started_at": "2026-07-05T04:20:37Z",
-      "completed_at": "2026-07-05T04:23:28Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 2,
-      "service_count": 8,
-      "subdomain_names": [
-        "commandmarketinginnovations.com",
-        "www.commandmarketinginnovations.com"
-      ],
-      "ports_by_sub": {
-        "commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        },
-        "www.commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.0",
-        "Mailcheck": "1.1.2",
-        "Slider Revolution": "6.7.58",
-        "WPMU DEV Smush": "4.1.2",
-        "Yoast SEO": "27.9",
-        "jQuery Migrate": "3.4.1",
-        "punycode": "1.0.0"
-      }
-    },
     {
       "scan_id": "scan_2026-07-05T09:27:32Z_42d277a0",
       "started_at": "2026-07-05T09:27:32Z",
@@ -5843,6 +5889,50 @@
       "scan_id": "scan_2026-07-31T14:45:08Z_201a377b",
       "started_at": "2026-07-31T14:45:08Z",
       "completed_at": "2026-07-31T14:49:31Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.7.58",
+        "WPMU DEV Smush": "4.2.0",
+        "Yoast SEO": "28.1",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-07-31T20:05:52Z_aad8b4db",
+      "started_at": "2026-07-31T20:05:52Z",
+      "completed_at": "2026-07-31T20:09:21Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 2,
