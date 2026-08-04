@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-08-04T14:55:20Z_6ce1fef7",
-    "started_at": "2026-08-04T14:55:20Z",
-    "completed_at": "2026-08-04T14:59:49Z",
-    "duration_seconds": 269,
+    "id": "scan_2026-08-04T20:07:16Z_79480f42",
+    "started_at": "2026-08-04T20:07:16Z",
+    "completed_at": "2026-08-04T20:11:37Z",
+    "duration_seconds": 261,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -29,11 +29,11 @@
   },
   "registration": {},
   "summary": {
-    "subdomain_count": 4,
-    "live_subdomain_count": 4,
+    "subdomain_count": 2,
+    "live_subdomain_count": 2,
     "host_count": 2,
     "service_count": 8,
-    "newest_cert_expiry_days": 67,
+    "newest_cert_expiry_days": 66,
     "top_hosting_org": "Automattic, Inc",
     "platforms": [
       "WordPress on wp.cloud (Pressable)"
@@ -45,13 +45,13 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-08-04T14:59:49Z",
-      "last_seen": "2026-08-04T14:59:49Z",
+      "first_discovered": "2026-08-04T20:11:37Z",
+      "last_seen": "2026-08-04T20:11:37Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 200,
-        "title": "Home - Command Marketing Innovations"
+        "http_status": 403,
+        "title": "403 Forbidden"
       },
       "probe_status": {
         "naabu": {
@@ -155,7 +155,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 67
+            "days_to_expiry": 66
           }
         },
         {
@@ -226,7 +226,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 67
+            "days_to_expiry": 66
           }
         }
       ],
@@ -251,102 +251,12 @@
       },
       "fingerprint": {
         "server": "nginx",
-        "platform_label": "WordPress on wp.cloud (Pressable)",
+        "platform_label": null,
         "tech": [
-          {
-            "name": "Bootstrap",
-            "version": "5.1.0",
-            "category": "frontend"
-          },
-          {
-            "name": "Email Encoder for Wordpress",
-            "version": null,
-            "category": null
-          },
-          {
-            "name": "Font Awesome",
-            "version": null,
-            "category": "frontend"
-          },
-          {
-            "name": "HSTS",
-            "version": null,
-            "category": "security"
-          },
-          {
-            "name": "Mailcheck",
-            "version": "1.1.2",
-            "category": null
-          },
-          {
-            "name": "MySQL",
-            "version": null,
-            "category": "database"
-          },
           {
             "name": "Nginx",
             "version": null,
             "category": "webserver"
-          },
-          {
-            "name": "PHP",
-            "version": null,
-            "category": "language"
-          },
-          {
-            "name": "Slider Revolution",
-            "version": "6.7.58",
-            "category": "wp-plugin"
-          },
-          {
-            "name": "WPMU DEV Smush",
-            "version": "4.2.0",
-            "category": "wp-plugin"
-          },
-          {
-            "name": "WordPress",
-            "version": null,
-            "category": "cms"
-          },
-          {
-            "name": "Yoast SEO",
-            "version": "28.2",
-            "category": "wp-plugin"
-          },
-          {
-            "name": "jQuery",
-            "version": null,
-            "category": "frontend"
-          },
-          {
-            "name": "jQuery Migrate",
-            "version": "3.4.1",
-            "category": "frontend"
-          },
-          {
-            "name": "jsDelivr",
-            "version": null,
-            "category": "cdn"
-          },
-          {
-            "name": "punycode",
-            "version": "1.0.0",
-            "category": null
-          },
-          {
-            "name": "reCAPTCHA",
-            "version": null,
-            "category": null
-          },
-          {
-            "name": "wp.cloud",
-            "version": null,
-            "category": "hosting"
-          },
-          {
-            "name": "wpBakery",
-            "version": null,
-            "category": "wp-plugin"
           }
         ]
       },
@@ -357,86 +267,12 @@
       }
     },
     {
-      "name": "app3.commandmarketinginnovations.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-08-04T14:59:49Z",
-      "last_seen": "2026-08-04T14:59:49Z",
-      "tags": [],
-      "reachability": {
-        "live": false,
-        "http_status": null,
-        "title": null
-      },
-      "probe_status": {},
-      "hosts": [],
-      "services": [],
-      "dns": {
-        "a": [],
-        "aaaa": [],
-        "cname": null,
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": null,
-        "platform_label": null,
-        "tech": []
-      },
-      "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
-      }
-    },
-    {
-      "name": "builds.commandmarketinginnovations.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-08-04T14:59:49Z",
-      "last_seen": "2026-08-04T14:59:49Z",
-      "tags": [],
-      "reachability": {
-        "live": false,
-        "http_status": null,
-        "title": null
-      },
-      "probe_status": {},
-      "hosts": [],
-      "services": [],
-      "dns": {
-        "a": [],
-        "aaaa": [],
-        "cname": null,
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": null,
-        "platform_label": null,
-        "tech": []
-      },
-      "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
-      }
-    },
-    {
       "name": "www.commandmarketinginnovations.com",
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-08-04T14:59:49Z",
-      "last_seen": "2026-08-04T14:59:49Z",
+      "first_discovered": "2026-08-04T20:11:37Z",
+      "last_seen": "2026-08-04T20:11:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -545,7 +381,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 67
+            "days_to_expiry": 66
           }
         },
         {
@@ -616,7 +452,7 @@
             "not_before": "2026-07-12T18:20:11Z",
             "not_after": "2026-10-10T18:20:10Z",
             "self_signed": false,
-            "days_to_expiry": 67
+            "days_to_expiry": 66
           }
         }
       ],
@@ -747,42 +583,15 @@
       }
     }
   ],
-  "phantom_subdomains": [
-    "api-v2.commandmarketinginnovations.com",
-    "app2.commandmarketinginnovations.com",
-    "billing.commandmarketinginnovations.com",
-    "build.commandmarketinginnovations.com",
-    "campaign.commandmarketinginnovations.com",
-    "dev2.commandmarketinginnovations.com",
-    "docs.commandmarketinginnovations.com",
-    "downloads.commandmarketinginnovations.com",
-    "finance.commandmarketinginnovations.com",
-    "gw.commandmarketinginnovations.com",
-    "helpdesk.commandmarketinginnovations.com",
-    "jenkins.commandmarketinginnovations.com",
-    "jump.commandmarketinginnovations.com",
-    "legacy.commandmarketinginnovations.com",
-    "mobile.commandmarketinginnovations.com",
-    "mongo.commandmarketinginnovations.com",
-    "mx1.commandmarketinginnovations.com",
-    "mysql.commandmarketinginnovations.com",
-    "news.commandmarketinginnovations.com",
-    "node2.commandmarketinginnovations.com",
-    "ns4.commandmarketinginnovations.com",
-    "prod.commandmarketinginnovations.com",
-    "prometheus.commandmarketinginnovations.com",
-    "smtp2.commandmarketinginnovations.com",
-    "sonarqube.commandmarketinginnovations.com",
-    "sql.commandmarketinginnovations.com",
-    "ssh.commandmarketinginnovations.com",
-    "support.commandmarketinginnovations.com",
-    "user.commandmarketinginnovations.com",
-    "v2.commandmarketinginnovations.com",
-    "workers.commandmarketinginnovations.com"
-  ],
+  "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-08-04T09:11:44Z_6940f153",
+    "since_scan": "scan_2026-08-04T14:55:20Z_6ce1fef7",
     "added": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
+    "removed": {
       "subdomains": [
         "app3.commandmarketinginnovations.com",
         "builds.commandmarketinginnovations.com"
@@ -790,75 +599,13 @@
       "services": [],
       "hosts": []
     },
-    "removed": {
-      "subdomains": [],
-      "services": [],
-      "hosts": []
-    },
     "changed": {
-      "fingerprint": [
-        {
-          "subdomain": "commandmarketinginnovations.com",
-          "name": "Yoast SEO",
-          "from": "28.1",
-          "to": "28.2"
-        },
-        {
-          "subdomain": "www.commandmarketinginnovations.com",
-          "name": "Yoast SEO",
-          "from": "28.1",
-          "to": "28.2"
-        }
-      ],
+      "fingerprint": [],
       "cert": [],
       "reachability": []
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-07-08T03:44:12Z_0788fb3d",
-      "started_at": "2026-07-08T03:44:12Z",
-      "completed_at": "2026-07-08T03:46:50Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 2,
-      "service_count": 8,
-      "subdomain_names": [
-        "commandmarketinginnovations.com",
-        "www.commandmarketinginnovations.com"
-      ],
-      "ports_by_sub": {
-        "commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        },
-        "www.commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.0",
-        "Mailcheck": "1.1.2",
-        "Slider Revolution": "6.7.58",
-        "WPMU DEV Smush": "4.1.2",
-        "Yoast SEO": "28.0",
-        "jQuery Migrate": "3.4.1",
-        "punycode": "1.0.0"
-      }
-    },
     {
       "scan_id": "scan_2026-07-08T08:54:26Z_2d32d438",
       "started_at": "2026-07-08T08:54:26Z",
@@ -6078,6 +5825,50 @@
         },
         "app3.commandmarketinginnovations.com": {},
         "builds.commandmarketinginnovations.com": {},
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.7.58",
+        "WPMU DEV Smush": "4.2.0",
+        "Yoast SEO": "28.2",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-08-04T20:07:16Z_79480f42",
+      "started_at": "2026-08-04T20:07:16Z",
+      "completed_at": "2026-08-04T20:11:37Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
         "www.commandmarketinginnovations.com": {
           "199.16.172.41": [
             80,
