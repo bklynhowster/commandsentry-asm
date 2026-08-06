@@ -61,6 +61,15 @@ from derive_device_class import (  # noqa: E402
     FINGERPRINTS_PATH, classify, load_fingerprints, load_thresholds,
     validate_fingerprints, RegistryValidationError,  # noqa: F401  (R6 startup guard)
 )
+
+# N2 cloud port-gate SSOT (4.7 P1/P5). would_reroute is scored against the SAME
+# class set the gate actually routes on. IMPORTED, never re-declared: a local
+# copy drifts silently and the audit metric stops matching reality, which is
+# precisely the defect this replaced. Deliberately NOT wrapped in try/except --
+# this is a first-party module in the same repo, and a routing metric that
+# quietly falls back to a guess is the fail-open shape being eliminated fleet-wide.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "asm"))
+from cloud_ip_check import CLOUD_CLASSES  # noqa: E402
 try:  # cloud fallback re-derives from surface_data (4.7 F1/F4; E2 re-derive-every-run)
     from derive_cloud_endpoint import (  # noqa: E402
         classify as classify_cloud, load_registry as load_cloud_registry,
@@ -162,6 +171,32 @@ def load_nuclei_fortinet_regex(path=FINGERPRINTS_PATH) -> str:
             pass
     alt = "|".join(re.escape(p.rstrip("-")) for p in prefixes)
     return f":({alt})-"
+
+
+# ── N2 routing buckets — what the cloud port-gate ACTUALLY does ──────────
+def _routing_bucket(device_class: str | None) -> str:
+    """Which N2 cloud-port-gate outcome a device_class lands in.
+
+    cloud_ip_check.decide() reads device_class ONLY -- it never consults
+    confidence -- and resolves to exactly three outcomes:
+
+      shallow   dc in CLOUD_CLASSES {cloud_endpoint, cdn, waf}
+                -> curated probe, decided at tier 1
+      deep      dc == 'origin_host'
+                -> full sweep, decided at tier 1
+      backstop  anything else, including unknown/unreadable/adc_lb/edge_firewall
+                -> falls through to the cloud_ip_ranges.json CIDR table, so the
+                   outcome depends on the asset's IP rather than on its class
+
+    A transition reroutes iff it moves the asset between these buckets. Moves
+    WITHIN a bucket (e.g. waf/suspected -> waf/confirmed, or cdn -> cloud_endpoint)
+    change no routing decision at all.
+    """
+    if device_class in CLOUD_CLASSES:
+        return "shallow"
+    if device_class == "origin_host":
+        return "deep"
+    return "backstop"
 
 
 # ── E6c: transition event taxonomy ───────────────────────────────────────
@@ -519,7 +554,13 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
             if ev is None:
                 continue
             tally[ev] += 1
-            would_reroute = ncf == "confirmed"
+            # Was: `ncf == "confirmed"`. That measured whether the NEW class was
+            # confirmed -- a dimension the N2 gate never reads -- so it was wrong
+            # in BOTH directions: false on cloud_endpoint/confirmed -> unknown
+            # (a real reroute, 30 assets in the 07-24..08-06 soak), and true on
+            # waf/suspected -> waf/confirmed (no routing change whatsoever).
+            # Obsidian 169/170, corrected 2026-08-06.
+            would_reroute = _routing_bucket(a["device_class"]) != _routing_bucket(nc)
             flag = "  !! red flag (resets soak)" if ev == "TRANSITION_DOWNGRADE" else (
                    "  [would reroute]" if would_reroute else "")
             print(f"{a['asset_id']:38.38s} "
@@ -589,6 +630,33 @@ def _selftest() -> int:
         got = event_for(*args)
         ok &= got == want
         print(f"  event_for{args[:2]}->{args[2:]} = {got} (want {want})")
+    # N2 would_reroute — must track the gate's BUCKETS, never confidence.
+    # The first two rows are the 2026-08-06 defect (Obsidian 169): the old
+    # `ncf == "confirmed"` scored these False while the gate really does lose
+    # its tier-1 SHALLOW answer and fall through to the CIDR backstop.
+    # The waf->waf row is the same bug in reverse: a pure confidence move that
+    # the old rule scored True despite changing no routing decision at all.
+    reroute_cases = [
+        ("cloud_endpoint", "unknown",        True),   # shallow -> backstop  (the defect)
+        ("cdn",            "unknown",        True),   # shallow -> backstop
+        ("cloud_endpoint", "origin_host",    True),   # shallow -> deep
+        ("origin_host",    "cloud_endpoint", True),   # deep    -> shallow
+        ("unknown",        "cloud_endpoint", True),   # backstop-> shallow
+        ("waf",            "waf",            False),  # confidence-only: NO reroute
+        ("cdn",            "cloud_endpoint", False),  # within CLOUD_CLASSES: NO reroute
+        ("waf",            "cdn",            False),  # within CLOUD_CLASSES: NO reroute
+        ("unknown",        "adc_lb",         False),  # both backstop: NO reroute
+        ("unknown",        "unreadable",     False),  # both backstop (phase 2 forward-compat)
+    ]
+    for prior_c, new_c, want in reroute_cases:
+        got = _routing_bucket(prior_c) != _routing_bucket(new_c)
+        ok &= got == want
+        print(f"  reroute {prior_c} -> {new_c} = {got} (want {want})")
+    # Tripwire, not a correctness check: _routing_bucket imports CLOUD_CLASSES so
+    # it cannot drift behaviourally. This fires when someone CHANGES the gate's
+    # routing semantics, which is a signal to re-review what would_reroute means.
+    ok &= CLOUD_CLASSES == {"cloud_endpoint", "cdn", "waf"}
+    print(f"  CLOUD_CLASSES tripwire = {sorted(CLOUD_CLASSES)}")
     # F2/F4 cloud-fallback mapping (pure): class by rotating flag, confidence by tier + freshness
     cloud_cases = [
         ({"cloud_provider": "gcp",    "is_cloud_endpoint": False, "match_tier": "asn"},   False, ("cloud_endpoint", "confirmed")),
