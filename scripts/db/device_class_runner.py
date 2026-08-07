@@ -53,6 +53,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -89,6 +90,62 @@ except ImportError:  # pragma: no cover
     yaml = None
 
 _CONF_RANK = {"unknown": 0, "suspected": 1, "confirmed": 2}
+
+# The device classes that are POSITIVE topology verdicts (not unknown/unreadable).
+_POSITIVE_CLASSES = frozenset(CLOUD_CLASSES | {"origin_host", "edge_firewall", "adc_lb"})
+
+
+# ── UNREADABLE phase 2 detection primitives (4.7 175, PURE + selftested) ──
+# These are the runner-layer discriminator between "evidence collection failed /
+# was absent" (-> unreadable) and "evidence gathered, nothing matched" (-> unknown).
+# The pure classify() cannot make this call (it only sees the observations dict);
+# the runner can, because it ran the reads. See Obsidian 175, 4.7 Q1/Q2.
+#
+# PHASE 2a (this increment) uses these to LOG the would-be verdict only. No write
+# behaviour changes and no new event rows are written until phase 2b — deliberately,
+# per 4.7 Q6 (measure the flip-rate in dry-run for 7+ days before enabling any write).
+
+_STATUS_READS_OK = "reads_ok"                        # got observations -> classify normally
+_STATUS_GENUINE_EMPTY = "genuine_empty"              # fresh scan existed, nothing matched -> unknown (streak candidate, Q4)
+_STATUS_NO_FRESH_COLLECTION = "no_fresh_collection"  # nothing fresh to read at all -> unreadable (Q2 Layer A)
+
+
+def _read_with_retry(query_fn, attempts: int = 3, backoff_ms: int = 100, _sleep=time.sleep):
+    """Layer C (4.7 Q3): re-read a SUCCESSFUL-BUT-EMPTY result a bounded number of times
+    before treating empty as real. Targets the H2 concurrency window — the ASM importer
+    rewrites asset_surface, and a classify read landing mid-rewrite sees no row for a few
+    ms; a short backoff crosses it.
+
+    query_fn() must return a falsy value (None/[]/{}) on empty and RAISE on a transport
+    error. This helper NEVER swallows exceptions — 4.7 G1 keeps transport failures on the
+    exception path (they are NOT relabelled to empty). It only retries genuine empties.
+    `_sleep` is injected so the selftest runs at zero wall-time (and so this cannot be
+    defeated by the def-time-default sleep-binding trap that bit gate_retry)."""
+    result = None
+    for attempt in range(attempts):
+        result = query_fn()          # raises propagate — deliberately not caught
+        if result:
+            return result
+        if attempt < attempts - 1:
+            _sleep(backoff_ms / 1000.0)
+    return result
+
+
+def _collection_status(has_observations: bool, fresh_scan_exists: bool) -> str:
+    """Layer A (4.7 Q2): classify an empty read, AFTER Layer C retries have settled.
+    Pure decision over two booleans the runner computes from its own queries.
+
+      has_observations  — did we end up with ANY usable evidence this pass?
+      fresh_scan_exists — is there a fresh scan_run for this asset within the window?
+
+    has evidence            -> reads_ok        (classify normally)
+    empty + fresh scan      -> genuine_empty   (scan ran, nothing matched -> unknown; Q4 streak)
+    empty + no fresh scan   -> no_fresh_collection (nothing to read -> unreadable; preserve prior)"""
+    if has_observations:
+        return _STATUS_READS_OK
+    if fresh_scan_exists:
+        return _STATUS_GENUINE_EMPTY
+    return _STATUS_NO_FRESH_COLLECTION
 
 
 # ── pure signal extractors (unit-tested, no DB) ──────────────────────────
@@ -267,6 +324,17 @@ def _discovery_waf(cur, asset_id: str):
 
 
 # ── DB signal gather (fresh signals for one asset) ───────────────────────
+def _fresh_scan_exists(cur, asset_id: str, freshness_days: int) -> bool:
+    """Layer A absence probe (4.7 Q2, Obsidian 175): did ANY scan_run for this asset
+    complete within the freshness window? Distinguishes 'no collection happened'
+    (-> unreadable) from 'collection happened, nothing matched' (-> unknown). Read-only."""
+    cur.execute(
+        f"""select 1 from scan_run
+             where asset_id = %s and completed_at > now() - interval '{int(freshness_days)} days'
+             limit 1""", (asset_id,))
+    return cur.fetchone() is not None
+
+
 def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str) -> dict:
     obs: dict = {}
     fresh = f"now() - interval '{int(freshness_days)} days'"
@@ -539,6 +607,20 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
                           f"source=discovery_wafw00f, heavy_wafw00f_absent=true")
             if nc == "unknown":
                 unknown += 1
+                # ── UNREADABLE phase 2a — MEASURE ONLY (4.7 Q6, Obsidian 175) ──
+                # The final verdict is unknown. Would phase 2b relabel it unreadable?
+                # Compute the would-be status and LOG it. This writes NOTHING different
+                # (the audit row + any assets write below are unchanged) — it exists
+                # solely to measure the flip-rate for 7+ days before enabling writes.
+                had_evidence = bool(res.get("evidence"))
+                status2a = _collection_status(
+                    had_evidence, _fresh_scan_exists(cur, a["asset_id"], fresh_days))
+                if status2a == _STATUS_NO_FRESH_COLLECTION:
+                    print(f"  · {a['asset_id']}: [2a-measure] would-be UNREADABLE "
+                          f"(no fresh collection; prior={a['device_class']}/{a['device_class_confidence']})")
+                elif status2a == _STATUS_GENUINE_EMPTY and a["device_class"] in _POSITIVE_CLASSES:
+                    print(f"  · {a['asset_id']}: [2a-measure] genuine-empty over positive "
+                          f"prior={a['device_class']}/{a['device_class_confidence']} (Q4 downgrade-streak candidate)")
             if from_cloud:
                 if nc == "cdn":
                     cdn_ct += 1
@@ -652,6 +734,33 @@ def _selftest() -> int:
         got = _routing_bucket(prior_c) != _routing_bucket(new_c)
         ok &= got == want
         print(f"  reroute {prior_c} -> {new_c} = {got} (want {want})")
+    # UNREADABLE phase 2a detection primitives (4.7 175).
+    # Layer C: retries a successful-empty read, stops on first hit, exhausts the bound,
+    # and NEVER swallows an exception. _sleep injected so this runs at zero wall-time.
+    _c = {"n": 0}
+    def _empty_then_full():
+        _c["n"] += 1
+        return [] if _c["n"] < 2 else ["row"]
+    ok &= _read_with_retry(_empty_then_full, _sleep=lambda _s: None) == ["row"]
+    ok &= _c["n"] == 2                                  # stopped as soon as data arrived
+    _c2 = {"n": 0}
+    def _always_empty():
+        _c2["n"] += 1
+        return []
+    ok &= _read_with_retry(_always_empty, attempts=3, _sleep=lambda _s: None) == []
+    ok &= _c2["n"] == 3                                 # exhausted the bound, no more
+    _raised = False
+    try:
+        _read_with_retry(lambda: (_ for _ in ()).throw(RuntimeError("boom")), _sleep=lambda _s: None)
+    except RuntimeError:
+        _raised = True
+    ok &= _raised                                      # G1: transport error propagates, not relabelled
+    # Layer A: the empty-read discriminator (Q2)
+    ok &= _collection_status(True,  True)  == _STATUS_READS_OK
+    ok &= _collection_status(True,  False) == _STATUS_READS_OK
+    ok &= _collection_status(False, True)  == _STATUS_GENUINE_EMPTY
+    ok &= _collection_status(False, False) == _STATUS_NO_FRESH_COLLECTION
+    print(f"  layer C retry (2/3-attempt + raise-propagates) + layer A status: 4 cases ok")
     # Tripwire, not a correctness check: _routing_bucket imports CLOUD_CLASSES so
     # it cannot drift behaviourally. This fires when someone CHANGES the gate's
     # routing semantics, which is a signal to re-review what would_reroute means.
