@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-08-13T08:09:07Z_d520678c",
-    "started_at": "2026-08-13T08:09:07Z",
-    "completed_at": "2026-08-13T08:12:42Z",
-    "duration_seconds": 215,
+    "id": "scan_2026-08-13T13:50:58Z_40dbbc5b",
+    "started_at": "2026-08-13T13:50:58Z",
+    "completed_at": "2026-08-13T13:54:24Z",
+    "duration_seconds": 206,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -34,7 +34,9 @@
     "service_count": 7,
     "newest_cert_expiry_days": 174,
     "top_hosting_org": "Cablevision Systems Corp.",
-    "platforms": []
+    "platforms": [
+      "Microsoft .NET / IIS"
+    ]
   },
   "subdomains": [
     {
@@ -42,8 +44,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-08-13T08:12:42Z",
-      "last_seen": "2026-08-13T08:12:42Z",
+      "first_discovered": "2026-08-13T13:54:24Z",
+      "last_seen": "2026-08-13T13:54:24Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -145,13 +147,13 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-08-13T08:12:42Z",
-      "last_seen": "2026-08-13T08:12:42Z",
+      "first_discovered": "2026-08-13T13:54:25Z",
+      "last_seen": "2026-08-13T13:54:25Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 200,
-        "title": null
+        "http_status": 404,
+        "title": "Error"
       },
       "probe_status": {
         "naabu": {
@@ -220,57 +222,17 @@
       },
       "fingerprint": {
         "server": null,
-        "platform_label": null,
+        "platform_label": "Microsoft .NET / IIS",
         "tech": [
-          {
-            "name": "Backbone.js",
-            "version": null,
-            "category": null
-          },
-          {
-            "name": "Chart.js",
-            "version": null,
-            "category": null
-          },
           {
             "name": "HSTS",
             "version": null,
             "category": "security"
           },
           {
-            "name": "Marionette.js",
+            "name": "Microsoft ASP.NET",
             "version": null,
-            "category": null
-          },
-          {
-            "name": "Moment.js",
-            "version": null,
-            "category": null
-          },
-          {
-            "name": "Underscore.js",
-            "version": null,
-            "category": null
-          },
-          {
-            "name": "crypto-js",
-            "version": null,
-            "category": null
-          },
-          {
-            "name": "jQuery",
-            "version": null,
-            "category": "frontend"
-          },
-          {
-            "name": "jQuery UI",
-            "version": null,
-            "category": null
-          },
-          {
-            "name": "spin.js",
-            "version": null,
-            "category": null
+            "category": "framework"
           }
         ]
       },
@@ -285,8 +247,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-08-13T08:12:42Z",
-      "last_seen": "2026-08-13T08:12:42Z",
+      "first_discovered": "2026-08-13T13:54:25Z",
+      "last_seen": "2026-08-13T13:54:25Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -345,8 +307,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-08-13T08:12:42Z",
-      "last_seen": "2026-08-13T08:12:42Z",
+      "first_discovered": "2026-08-13T13:54:25Z",
+      "last_seen": "2026-08-13T13:54:25Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -403,8 +365,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-08-13T08:12:42Z",
-      "last_seen": "2026-08-13T08:12:42Z",
+      "first_discovered": "2026-08-13T13:54:25Z",
+      "last_seen": "2026-08-13T13:54:25Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -490,8 +452,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-08-13T08:12:42Z",
-      "last_seen": "2026-08-13T08:12:42Z",
+      "first_discovered": "2026-08-13T13:54:25Z",
+      "last_seen": "2026-08-13T13:54:25Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -575,7 +537,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-08-13T02:56:38Z_7cb843d5",
+    "since_scan": "scan_2026-08-13T08:09:07Z_d520678c",
     "added": {
       "subdomains": [],
       "services": [],
@@ -593,59 +555,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-07-15T14:15:42Z_db01f6db",
-      "started_at": "2026-07-15T14:15:42Z",
-      "completed_at": "2026-07-15T14:19:03Z",
-      "subdomain_count": 6,
-      "live_subdomain_count": 6,
-      "host_count": 6,
-      "service_count": 9,
-      "subdomain_names": [
-        "ftp.sciimage.com",
-        "insite.sciimage.com",
-        "ns01.sciimage.com",
-        "ns02.sciimage.com",
-        "vpn.sciimage.com",
-        "vpn2.sciimage.com"
-      ],
-      "ports_by_sub": {
-        "ftp.sciimage.com": {
-          "24.157.51.76": [
-            22,
-            80,
-            443
-          ]
-        },
-        "insite.sciimage.com": {
-          "24.157.51.70": [
-            80,
-            443
-          ]
-        },
-        "ns01.sciimage.com": {
-          "13.248.212.206": [
-            53
-          ]
-        },
-        "ns02.sciimage.com": {
-          "76.223.76.45": [
-            53
-          ]
-        },
-        "vpn.sciimage.com": {
-          "24.157.51.66": [
-            443
-          ]
-        },
-        "vpn2.sciimage.com": {
-          "52.119.65.2": [
-            443
-          ]
-        }
-      },
-      "tech_versions": {}
-    },
     {
       "scan_id": "scan_2026-07-15T19:39:10Z_e96686f8",
       "started_at": "2026-07-15T19:39:10Z",
@@ -6212,6 +6121,51 @@
       "scan_id": "scan_2026-08-13T08:09:07Z_d520678c",
       "started_at": "2026-08-13T08:09:07Z",
       "completed_at": "2026-08-13T08:12:42Z",
+      "subdomain_count": 6,
+      "live_subdomain_count": 6,
+      "host_count": 6,
+      "service_count": 7,
+      "subdomain_names": [
+        "ftp.sciimage.com",
+        "insite.sciimage.com",
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "ports_by_sub": {
+        "ftp.sciimage.com": {
+          "24.157.51.76": [
+            22,
+            80,
+            443
+          ]
+        },
+        "insite.sciimage.com": {
+          "24.157.51.70": [
+            80,
+            443
+          ]
+        },
+        "ns01.sciimage.com": {},
+        "ns02.sciimage.com": {},
+        "vpn.sciimage.com": {
+          "24.157.51.66": [
+            443
+          ]
+        },
+        "vpn2.sciimage.com": {
+          "52.119.65.2": [
+            443
+          ]
+        }
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-08-13T13:50:58Z_40dbbc5b",
+      "started_at": "2026-08-13T13:50:58Z",
+      "completed_at": "2026-08-13T13:54:24Z",
       "subdomain_count": 6,
       "live_subdomain_count": 6,
       "host_count": 6,
