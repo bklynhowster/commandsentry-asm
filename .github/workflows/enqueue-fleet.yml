@@ -74,6 +74,30 @@ jobs:
           LIMIT_SQL=""
           if [ "${BATCH_LIMIT:-0}" != "0" ]; then LIMIT_SQL="limit ${BATCH_LIMIT}"; fi
           # eligible = owned + confirmed-live + not already queued/running (dup guard).
+          #
+          # ORDER BY STALENESS, not asset_id (2026-08-26). The dup guard only
+          # excludes assets CURRENTLY queued/running — not ones already scanned.
+          # With `order by a.asset_id` that meant: run a batch of 10, let it
+          # drain, run again -> the same alphabetically-first 10 come back
+          # eligible and get re-scanned. The fleet never advanced past the head
+          # of the alphabet, so the header's "repeated runs walk the fleet" was
+          # only true for back-to-back dispatches fired BEFORE the first batch
+          # drained. Proven empirically on Prodex: batch 1 took atlantis-gcp ..
+          # l3h-nh (exactly the first 10); l3h-ss (11th) was untouched.
+          #
+          # Ordering by last completed scan of THIS intensity, nulls first,
+          # makes repeated runs self-advancing: never-scanned assets go first,
+          # then the stalest. No state to track, and it stays correct however
+          # many times it's run. asset_id remains the tiebreaker so the
+          # selection is deterministic.
+          #
+          # status in ('complete','degraded') — NOT 'complete' alone. 'degraded'
+          # is a real scan_run status (migration 20260612a) and a degraded run
+          # still collects and persists findings; counting only 'complete' would
+          # treat every degraded scan as never-scanned and re-pick it forever —
+          # the same defect this fix exists to remove. 'failed' is deliberately
+          # EXCLUDED: a failed run got nothing, so it sorts nulls-first and is
+          # retried promptly, which is what we want.
           CTE="with eligible as (
                  select a.asset_id from public.assets a
                   where a.discovery_status = 'confirmed_live'
@@ -81,7 +105,12 @@ jobs:
                     and not exists (select 1 from public.scan_queue q
                                      where q.asset_id = a.asset_id
                                        and q.status in ('queued','running'))
-                  order by a.asset_id ${LIMIT_SQL})"
+                  order by (select max(r.completed_at)
+                              from public.scan_run r
+                             where r.asset_id = a.asset_id
+                               and r.intensity = '${INTENSITY}'
+                               and r.status in ('complete','degraded')) asc nulls first,
+                           a.asset_id ${LIMIT_SQL})"
           COUNT=$(psql "$SUPABASE_DSN" -t -A -v ON_ERROR_STOP=1 -c "${CTE} select count(*) from eligible;")
           echo "::notice::Eligible to enqueue at '${INTENSITY}' (batch_limit=${BATCH_LIMIT:-0}): ${COUNT} assets."
           if [ "${DRY_RUN}" = "true" ]; then
