@@ -189,7 +189,7 @@ RUN nuclei -update-templates -silent 2>/dev/null || true
 RUN set -eux; \
     for t in wireguard-go wg \
              subfinder dnsx httpx naabu nuclei katana fingerprintx \
-             ffuf nikto wafw00f testssl.sh \
+             ffuf gau nikto wafw00f testssl.sh \
              whois jq yq python python3 sudo ip iptables \
              psql gh; do \
       command -v "$t" >/dev/null 2>&1 \

@@ -84,6 +84,7 @@ jobs:
               echo "httpx:       $(httpx -version 2>&1 | head -1)";
               echo "subfinder:   $(subfinder -version 2>&1 | head -1)";
               echo "ffuf:        $(ffuf -V 2>&1 | head -1)";
+              echo "gau:         $(gau --version 2>&1 | head -1)";
               echo "nikto:       $(nikto -Version 2>&1 | head -1)";
               echo "wafw00f:     $(wafw00f --version 2>&1 | head -1)";
               echo "testssl.sh:  $(testssl.sh --version 2>&1 | head -3 | tail -1)";
