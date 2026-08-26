@@ -25,6 +25,7 @@ Run with:
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -33,6 +34,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from run_heavy import testssl_is_degraded
+from run_heavy import (
+    HeavyScanContext,
+    close_out_heavy,
+    degraded_out_heavy,
+    fail_out_heavy,
+)
 
 
 # ─── testssl_is_degraded — VALID NEGATIVE cases (must NOT be degraded) ──
@@ -438,6 +445,114 @@ def test_reach_truncated_with_engine_problem_IS_degraded():
 
 
 # ─── Test driver — bare-Python fallback when pytest isn't installed ─────
+
+# ─── Close-out param coverage (regression, 2026-08-26) ──────────────────
+#
+# run_heavy reuses run_medium's CLOSE_/DEGRADED_ SQL constants. On PRODEX,
+# c7f99c3 (2026-07-06) added scan_profile + matrix_version_sha to those
+# SHARED statements without updating run_heavy's params dicts, so psycopg
+# raised ProgrammingError('query parameter missing: ...') and EVERY heavy
+# close-out died — the scan ran, collected, then crashed before persisting.
+# It survived ~7 weeks because nothing asserted that run_heavy's params
+# cover the placeholders in the SQL it executes.
+#
+# Command was NOT affected (20260706a is Prodex-first per
+# .migration-divergence.yaml, so this SQL names no such columns here) —
+# the test is carried on both instances anyway so the guard exists before
+# Command ever ports P1a, and so the file stays byte-identical.
+#
+# This test executes the real close-out functions against a capturing fake
+# cursor and asserts params ⊇ placeholders for every statement issued. It
+# is deliberately generic: any future column added to the shared SQL fails
+# here instead of in production.
+
+_PLACEHOLDER_RE = re.compile(r"%\((\w+)\)s")
+
+
+class _CapturingCursor:
+    """Records (sql, params) instead of talking to a DB."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, dict(params or {})))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _CapturingConn:
+    def __init__(self, cur: _CapturingCursor) -> None:
+        self._cur = cur
+
+    def cursor(self):
+        return self._cur
+
+
+def _minimal_ctx() -> HeavyScanContext:
+    """Smallest context the close-out paths accept. tools_run/tool_status
+    are both empty so assert_tool_status_invariant's set-equality holds."""
+    return HeavyScanContext(
+        descriptor={},
+        hostname="example.test",
+        asset_id="example.test",
+        scan_run_id="00000000-0000-0000-0000-000000000001",
+        queue_id="00000000-0000-0000-0000-000000000002",
+        intensity="heavy",
+        egress_ip_initial="203.0.113.9",
+        vpn_config_used="test-wg-000",
+    )
+
+
+def _assert_params_cover_sql(calls, label):
+    """Every %(name)s in each executed statement must exist in its params."""
+    total_placeholders = 0
+    for sql, params in calls:
+        names = set(_PLACEHOLDER_RE.findall(sql))
+        total_placeholders += len(names)
+        missing = names - set(params)
+        assert not missing, (
+            f"{label}: SQL references {sorted(missing)} but params supplies "
+            f"{sorted(params)} — this is the ProgrammingError('query parameter "
+            f"missing') class of bug that killed heavy close-out for 7 weeks"
+        )
+    return total_placeholders
+
+
+def test_close_out_heavy_params_cover_sql():
+    cur = _CapturingCursor()
+    close_out_heavy(_CapturingConn(cur), _minimal_ctx(), 3, 1, lambda x: x)
+    # FLOOR: the check must not pass by executing nothing / finding nothing.
+    assert len(cur.calls) >= 2, (
+        f"expected >=2 statements (scan_run + scan_queue), got {len(cur.calls)}"
+    )
+    n = _assert_params_cover_sql(cur.calls, "close_out_heavy")
+    assert n >= 8, f"suspiciously few placeholders inspected ({n}) — check the regex"
+
+
+def test_degraded_out_heavy_params_cover_sql():
+    cur = _CapturingCursor()
+    degraded_out_heavy(_CapturingConn(cur), _minimal_ctx(), "boom", 2, 0, lambda x: x)
+    assert len(cur.calls) >= 2, (
+        f"expected >=2 statements, got {len(cur.calls)}"
+    )
+    n = _assert_params_cover_sql(cur.calls, "degraded_out_heavy")
+    assert n >= 8, f"suspiciously few placeholders inspected ({n}) — check the regex"
+
+
+def test_fail_out_heavy_params_cover_sql():
+    cur = _CapturingCursor()
+    fail_out_heavy(_CapturingConn(cur), _minimal_ctx(), "boom")
+    assert len(cur.calls) >= 2, (
+        f"expected >=2 statements, got {len(cur.calls)}"
+    )
+    n = _assert_params_cover_sql(cur.calls, "fail_out_heavy")
+    assert n >= 2, f"suspiciously few placeholders inspected ({n}) — check the regex"
+
 
 def _all_tests():
     """Return the list of test functions defined in this module."""

@@ -2269,6 +2269,29 @@ def close_out_heavy(conn, ctx: HeavyScanContext, inserted: int, updated: int, Js
             "egress_ip": ctx.egress_ip_initial,
             "vpn_config_used": ctx.vpn_config_used,
             "rotation_log": Json(build_rotation_log(ctx)),
+            # ─── P1a keys (2026-08-26 fix) ──────────────────────────────────
+            # CLOSE_SCAN_RUN_SQL is SHARED with run_medium. On PRODEX, c7f99c3
+            # (2026-07-06, "P1a: targeted-scan wiring") added
+            # scan_profile + matrix_version_sha to that SQL. run_heavy never
+            # supplied them, so psycopg raised
+            #   ProgrammingError('query parameter missing: matrix_version_sha,
+            #                     scan_profile')
+            # and every PRODEX heavy close-out died here for ~7 weeks — the scan
+            # ran, collected, then crashed before persisting anything.
+            #
+            # PRODEX-ONLY BUG. 20260706a_targeted_scan_p1_schema.sql is
+            # registered Prodex-first in .migration-divergence.yaml, so Command
+            # has neither the columns nor those SQL lines and was never broken.
+            # We pass the keys on BOTH instances anyway: psycopg ignores params
+            # the SQL doesn't reference, so this is a no-op on Command, keeps
+            # run_heavy.py byte-identical across repos, and needs no change if
+            # Command later ports P1a.
+            #
+            # NULL is the CORRECT value, not a placeholder: heavy does not run
+            # the targeted-scan matrix planner, and the SQL comment defines NULL
+            # as "planner didn't run" (never "empty profile").
+            "scan_profile": None,
+            "matrix_version_sha": None,
         }
         cur.execute(CLOSE_SCAN_RUN_SQL, params)
         cur.execute(CLOSE_SCAN_QUEUE_SQL, params)
@@ -2298,6 +2321,11 @@ def degraded_out_heavy(conn, ctx: HeavyScanContext, error: str,
             "egress_ip": ctx.egress_ip_initial,
             "vpn_config_used": ctx.vpn_config_used,
             "rotation_log": Json(build_rotation_log(ctx)),
+            # Same P1a parity keys as close_out_heavy — DEGRADED_SCAN_RUN_SQL is
+            # likewise shared with run_medium and names both. See the comment in
+            # close_out_heavy for the full history.
+            "scan_profile": None,
+            "matrix_version_sha": None,
         }
         cur.execute(DEGRADED_SCAN_RUN_SQL, params)
         cur.execute(DEGRADED_SCAN_QUEUE_SQL, params)
