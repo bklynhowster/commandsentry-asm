@@ -51,7 +51,8 @@ RUN go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
  && go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest \
  && go install github.com/projectdiscovery/katana/cmd/katana@latest \
  && go install github.com/praetorian-inc/fingerprintx/cmd/fingerprintx@latest \
- && go install github.com/ffuf/ffuf/v2@latest
+ && go install github.com/ffuf/ffuf/v2@latest \
+ && go install github.com/lc/gau/v2/cmd/gau@latest
 
 # ─── Extract `wg` userspace tool from wireguard-tools .deb ─────────
 # We need the `wg` CLI (for setconf/show/set fwmark) but NOT wg-quick

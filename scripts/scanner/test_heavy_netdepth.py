@@ -36,6 +36,7 @@ import run_heavy
 from run_heavy import (
     HeavyScanContext,
     _parse_fingerprintx,
+    _parse_gau_urls,
     _parse_naabu_ports,
     run_fingerprintx_phase,
     run_naabu_phase,
@@ -182,6 +183,35 @@ def test_parse_fpx_skips_garbage():
 
 
 # ─── run_naabu_phase — four-gate ────────────────────────────────────────
+
+def test_parse_gau_dedupe_http_only_order():
+    # gau prints one URL per line. Keep http(s) only, dedupe preserving order.
+    stdout = (
+        "https://ex.com/a\n"
+        "https://ex.com/a\n"          # dup — dropped
+        "http://ex.com/b?x=1\n"
+        "\n" "   \n"                  # blanks — dropped
+        "not-a-url\n"                 # non-URL — dropped
+        "ftp://ex.com/z\n"            # non-http scheme — dropped
+        "https://ex.com/c\n"
+    )
+    assert _parse_gau_urls(stdout) == [
+        "https://ex.com/a", "http://ex.com/b?x=1", "https://ex.com/c",
+    ], _parse_gau_urls(stdout)
+
+
+def test_parse_gau_cap():
+    stdout = "\n".join(f"https://ex.com/{i}" for i in range(10))
+    got = _parse_gau_urls(stdout, cap=3)
+    assert got == ["https://ex.com/0", "https://ex.com/1", "https://ex.com/2"], got
+
+
+def test_parse_gau_empty_is_empty_list():
+    # No URLs (e.g. archive returned nothing, or only stderr noise) -> []. The
+    # phase treats an empty harvest as DEGRADED (non-fatal), never a finding.
+    assert _parse_gau_urls("") == []
+    assert _parse_gau_urls("gau: config not found, using defaults\n") == []
+
 
 def test_naabu_not_reachable_returns_false_no_probe():
     """No testssl reachability proof → skip before firing naabu. The egress
