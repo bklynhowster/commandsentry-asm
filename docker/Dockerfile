@@ -181,6 +181,7 @@ COPY --from=builder /root/go/bin/nuclei          /usr/local/bin/
 COPY --from=builder /root/go/bin/katana          /usr/local/bin/
 COPY --from=builder /root/go/bin/fingerprintx    /usr/local/bin/
 COPY --from=builder /root/go/bin/ffuf            /usr/local/bin/
+COPY --from=builder /root/go/bin/gau             /usr/local/bin/
 
 # ─── Pre-pull nuclei templates so first scan doesn't pay the cost ──
 RUN nuclei -update-templates -silent 2>/dev/null || true
