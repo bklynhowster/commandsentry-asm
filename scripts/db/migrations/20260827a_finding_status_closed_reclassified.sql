@@ -1,0 +1,100 @@
+-- ============================================================================
+-- 20260827a — finding_status_t + history_status_t: 'closed_reclassified'
+-- ============================================================================
+--
+-- Ship A1 (Command). 4.7 ruling R1 / S2. Spec: Obsidian 184 §9, 185.
+-- TAXONOMY ONLY — rides with the two one-line code changes noted below, and
+-- the backfill lands SEPARATELY (see WHY THE BACKFILL IS NOT IN THIS FILE).
+--
+-- THE PROBLEM. Ship A2 teaches check_dns_posture that DMARC inherits from the
+-- organisational domain (RFC 7489 §6.6.3) and that an apex owns its own gap.
+-- Once that ships, ~60 per-subdomain SPF/DMARC findings on this instance stop
+-- being emitted. `asm_autoclose_stale_findings()` sees findings that a
+-- successfully-run tool no longer re-detects and stamps them:
+--     current_status = 'remediated', remediated_at = now()
+-- Nothing was remediated. The note-126 invariant (remediated_at IS NOT NULL
+-- iff status in {remediated, validated_remediated}) would be SATISFIED, so
+-- nothing flags it. Corrupted remediation metrics, false time-to-remediate,
+-- polluted audit trail — and it looks correct.
+--
+-- WHY NOT 'false_positive'. On PRODEX the equivalent findings genuinely were
+-- false: its apex publishes p=quarantine with no sp=, so every subdomain
+-- inherits enforcement and the findings were never true. Prodex was backfilled
+-- to false_positive on 2026-08-27 (55 rows).
+--
+-- COMMAND IS THE OPPOSITE CASE. Measured 2026-08-27 via 8.8.8.8/1.1.1.1/9.9.9.9:
+-- five of seven apexes publish NO DMARC at all. There is nothing to inherit, so
+-- those findings are TRUE. They are not going away — they are being
+-- RE-ATTRIBUTED to the apex that owns the fact, where one finding replaces N
+-- per-subdomain copies. Marking a true finding 'false_positive' would be a lie
+-- in the audit trail and would corrupt any "how many false positives did we
+-- ship" analysis. Hence a distinct terminal status meaning exactly:
+--     closed because we changed WHERE this fact is modelled,
+--     not because it was fixed and not because it was never true.
+--
+-- WHY BOTH ENUMS. finding_history.status is history_status_t, a DISTINCT type
+-- from findings.current_status (finding_status_t) with no implicit cast.
+-- write_finding_history_for_scan_run INSERTs current_status into it. Adding the
+-- value to only one enum reproduces the exact crash from 2026-06-29c, where
+-- live heavy #805 exited 1 because history_status_t lacked values that
+-- finding_status_t carried.
+--
+-- WHY NO do-BLOCK, BUT transactional:true. ALTER TYPE ... ADD VALUE cannot run
+-- inside a DO block. It CAN run inside a transaction on PostgreSQL 12+ — the
+-- only surviving restriction is that the new value may not be USED in the same
+-- transaction that adds it, and this file only ADDs. Supabase is PG 15+.
+--   VERIFY BEFORE APPLYING:  SHOW server_version;     -- must be >= 12
+-- This matters because apply_pending_migrations.py opens its work connection
+-- with autocommit=False, and migration_meta.py REJECTS safe_auto_apply:true
+-- alongside transactional:false. Declaring transactional:false here would not
+-- make the runner behave differently — it would simply fail validation, block
+-- auto-apply, and leave scanning halted with no manual path in migrate.yml.
+-- IF NOT EXISTS makes it idempotent and safe to re-apply.
+--
+-- WHY THE BACKFILL IS NOT IN THIS FILE. A new enum value cannot be USED in the
+-- same transaction that adds it. The backfill therefore cannot live here and
+-- runs as a separate, dry-run-gated statement after this applies.
+--
+-- CODE THAT MUST LAND WITH THIS (both instances, else the status will not stick):
+--   run_light.py  ~L2504  — add 'closed_reclassified' to the UPSERT
+--   run_medium.py ~L3299  — status-downgrade preserve list
+-- Without those, the next scan's ON CONFLICT re-detection flips the row back to
+-- 'detected' and the backfill silently undoes itself.
+--
+-- NO AUTOCLOSER CHANGE NEEDED. asm_autoclose_stale_findings() selects
+-- `WHERE f.current_status IN ('detected','open','regressed')` — verified in
+-- 20260626a L161. A closed_reclassified row is excluded by construction, which
+-- is the terminal-status guard 4.7 asked for as belt-and-suspenders.
+--
+-- Additive, idempotent, splitter-safe (no do-blocks, no semicolons inside
+-- statements). Byte-identical both repos.
+-- ============================================================================
+
+ALTER TYPE public.finding_status_t ADD VALUE IF NOT EXISTS 'closed_reclassified';
+ALTER TYPE public.history_status_t ADD VALUE IF NOT EXISTS 'closed_reclassified';
+
+-- ============================================================================
+-- SANITY QUERIES — after this applies.
+-- ============================================================================
+--
+-- 1) Both enums carry the value:
+--      SELECT unnest(enum_range(NULL::public.finding_status_t));
+--      SELECT unnest(enum_range(NULL::public.history_status_t));
+--
+-- 2) Autocloser cannot touch it (expect 0 rows once the backfill runs):
+--      SELECT count(*) FROM public.findings
+--       WHERE current_status = 'closed_reclassified'
+--         AND current_status IN ('detected','open','regressed');
+--
+-- 3) Portal must not crash on an unknown status — closed_reclassified should
+--    be filtered from active views and remain visible to audit queries.
+--
+-- MIGRATION-META:
+-- idempotent: true
+-- transactional: true
+-- safe_auto_apply: true
+-- requires_backup: false
+-- estimated_duration_ms: 50
+-- risk: low
+-- notes: Taxonomy only. Adds 'closed_reclassified' to finding_status_t AND history_status_t (both required — distinct types, no implicit cast; see 20260629c). transactional:true is correct on PG12+, where ADD VALUE is permitted inside a transaction so long as the value is not USED there; this file only adds. No data change here — the backfill is a separate dry-run-gated statement precisely because a new enum value cannot be used in the transaction that adds it. Ships with the two upsert preserve-list edits in run_light.py/run_medium.py, without which the status will not survive re-detection.
+-- END-META

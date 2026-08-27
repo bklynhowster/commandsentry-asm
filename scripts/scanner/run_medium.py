@@ -3297,6 +3297,9 @@ ON CONFLICT (finding_id) DO UPDATE SET
       WHEN findings.current_status IN (
              'remediated', 'validated_remediated',
              'false_positive', 'wont_fix', 'accepted_risk',
+             -- 20260827a — a fact re-attributed to the apex that owns it.
+             -- Omit and re-detection silently undoes the Ship A1 backfill.
+             'closed_reclassified',
              -- Note 129 round 7 — `regressed` is now sticky while open.
              -- Pre-round-7 a re-observation flipped regressed → detected
              -- via the ELSE branch, erasing the "this was fixed and

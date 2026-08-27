@@ -892,17 +892,212 @@ def check_common_paths(ctx: ScanContext) -> None:
         mark_tool_ok(ctx, "common_paths")
 
 
+# ── Email-auth DNS helpers (Ship A2, 2026-08-27) ───────────────────────────
+# Four check-correctness fixes, all the same shape: make the check answer the
+# question that MATTERS rather than the question it can most easily ask.
+# Spec: Obsidian 184 (+ §9/§10), rulings 4.7 S1-S6. Measured evidence: Obsidian 185.
+
+_SENDING_HOST_RE = re.compile(r"^(mail|smtp|mx|imap|pop|webmail)\d*\.", re.I)
+
+# DKIM selectors to probe. MX-informed first, then generic. NOT exhaustive and
+# CANNOT be — selectors are arbitrary strings chosen at setup. See _dkim_probe.
+_DKIM_GENERIC = ("default", "dkim", "mail", "s1", "s2", "s3",
+                 "k1", "k2", "selector1", "selector2", "google")
+_DKIM_BY_MX = (
+    ("sendgrid.net", ("s1", "s2")),
+    ("iphmx.com",    ("cisco", "ces", "iport")),      # Cisco CES / IronPort
+    ("google",       ("google",)),
+    ("outlook.com",  ("selector1", "selector2")),     # M365 / Exchange Online
+    ("protection.outlook.com", ("selector1", "selector2")),
+)
+
+
+def _dig_txt(name: str) -> tuple[int, list[str]]:
+    """TXT lookup returning (rc, unquoted lines)."""
+    rc, out, _ = run_cmd(["dig", "+short", "TXT", name], timeout=10)
+    return rc, [l.strip().strip('"') for l in out.splitlines() if l.strip()]
+
+
+def _dmarc_record(host: str) -> tuple[int, str | None]:
+    """Return (rc, the v=DMARC1 record at _dmarc.<host>) or (rc, None)."""
+    rc, lines = _dig_txt(f"_dmarc.{host}")
+    for l in lines:
+        if l.lower().startswith("v=dmarc1"):
+            return rc, l
+    return rc, None
+
+
+def dmarc_effective_policy(record: str | None, *, for_subdomain: bool) -> str | None:
+    """RFC 7489 §6.6.3 — the policy a receiver actually applies.
+
+    PURE, unit-testable. For a SUBDOMAIN evaluating an ORGANISATIONAL-domain
+    record, `sp=` overrides `p=` when present. Returns 'none'|'quarantine'|
+    'reject', or None when there is no record at all.
+
+    This is the whole bug Ship A2 fixes: the old check asked "does THIS name
+    have a _dmarc record?" and called absence a MODERATE finding. A subdomain
+    with no record inherits the org policy and IS protected — which made 55
+    PRODEX findings false positives. On COMMAND the opposite holds: 5 of 7
+    apexes publish no DMARC at all, so nothing inherits and those findings are
+    TRUE. Both estates measured 2026-08-27; see test_dns_posture.py.
+    """
+    if not record:
+        return None
+    tags = {}
+    for part in record.split(";"):
+        if "=" in part:
+            k, _, v = part.strip().partition("=")
+            tags[k.strip().lower()] = v.strip().lower()
+    if for_subdomain and tags.get("sp"):
+        return tags["sp"]
+    return tags.get("p")
+
+
+def is_sending_host(hostname: str, own_spf: bool, mx_records: list[str]) -> dict:
+    """Sending-host inference. 4.7 R3: MX PRIMARY, own-SPF PRIMARY, naming
+    SECONDARY (empirical over heuristic). PURE, unit-testable.
+
+    Fail-safe direction is TREAT AS SENDING: a false positive finding is
+    recoverable, a silent coverage gap on a real mail sender is not.
+    """
+    signals = {
+        "mx_present":     bool(mx_records),
+        "own_spf":        bool(own_spf),
+        "naming_pattern": bool(_SENDING_HOST_RE.match(hostname)),
+    }
+    strong = signals["mx_present"] or signals["own_spf"]
+    return {
+        "is_sending_host": strong or signals["naming_pattern"],
+        "signals": signals,
+        "inference_confidence": "high" if strong else "heuristic",
+    }
+
+
+def _dkim_probe(hostname: str, mx_records: list[str]) -> list[dict]:
+    """Probe DKIM selectors. Returns PRESENT keys only — never absence.
+
+    🔴 LOAD-BEARING (Obsidian 184 §10.3): DKIM absence is NOT externally
+    provable. A probe proves presence only; "not found" means "not among the
+    selectors we tried". Emitting a `dkim-missing` finding would have been a
+    FALSE POSITIVE on commandcompanies.com, which has three working keys.
+    So this returns evidence and the caller emits NO finding when empty.
+
+    Two traps this handles, both observed on that one domain:
+      - CNAME delegation (SendGrid/ESPs) — the key lives at the target.
+      - `v=DKIM1` is OPTIONAL per RFC 6376 §3.6.1. SendGrid's record starts
+        `k=rsa`. Match on the `p=` tag, NEVER on `v=DKIM1`.
+    """
+    mx_blob = " ".join(mx_records).lower()
+    selectors: list[str] = []
+    for needle, sels in _DKIM_BY_MX:
+        if needle in mx_blob:
+            selectors.extend(sels)
+    for s in _DKIM_GENERIC:
+        if s not in selectors:
+            selectors.append(s)
+
+    found: list[dict] = []
+    for sel in selectors:
+        name = f"{sel}._domainkey.{hostname}"
+        rc, lines = _dig_txt(name)
+        blob = " ".join(lines)
+        if "p=" in blob:                       # NOT "v=DKIM1" — see docstring
+            found.append({"selector": sel, "delegated": False})
+            continue
+        # CNAME delegation: dig +short TXT returns the CNAME chain; follow it.
+        rc2, cout, _ = run_cmd(["dig", "+short", "CNAME", name], timeout=10)
+        target = cout.strip().splitlines()[0].rstrip(".") if cout.strip() else ""
+        if target:
+            _, tlines = _dig_txt(target)
+            if "p=" in " ".join(tlines):
+                found.append({"selector": sel, "delegated": True, "target": target})
+    return found
+
+
 def check_dns_posture(ctx: ScanContext) -> None:
-    """Use dig to check DMARC, SPF, DKIM presence."""
+    """Email-auth DNS posture: SPF, DMARC (inheritance-aware), DKIM evidence.
+
+    Ship A2 corrections vs the original implementation:
+      1. DMARC organisational-domain inheritance (RFC 7489 §6.6.3).
+      2. SPF suppressed on non-sending subdomains already covered by an
+         enforcing org DMARC policy.
+      3. Bare-IP guard — `dig TXT <ip>` is meaningless and produced 30 live
+         false positives on the Command estate.
+      4. DKIM presence probe, EVIDENCE-ONLY (never asserts absence).
+    """
     ctx.tools_run.append("dns_posture")
     results: dict[str, Any] = {}
 
-    # SPF — TXT record on the hostname
+    asset = (ctx.descriptor or {}).get("asset") or {}
+    apex = asset.get("apex_domain")
+    # ── (3) BARE-IP GUARD — must run FIRST. Note ALL ip assets self-reference
+    # apex_domain, so an `asset_id == apex_domain` apex test would classify
+    # every IP as an apex and emit on all of them. Measured on Command: 31/31.
+    if str(asset.get("type") or "") in ("ip", "ip_range"):
+        results["skipped"] = "bare_ip_dns_checks_not_applicable"
+        ctx.artifacts.append(("dns_posture", "json", json.dumps(results)))
+        mark_tool_ok(ctx, "dns_posture")
+        return
+
+    # Apex test: identity, NOT type. `type='apex_domain'` is unreliable —
+    # measured on Command 2026-08-27: 15 rows carry that type, but only 6
+    # self-reference; the other 9 are mislabelled subdomains.
+    #
+    # 🔴 THE TWO INSTANCES USE DIFFERENT CONVENTIONS. Measured 2026-08-27:
+    #   Command : apex rows SELF-REFERENCE (apex_domain = asset_id), 0 NULL
+    #   Prodex  : the apex row is NULL     (apex_domain IS NULL),    0 self-ref
+    # BOTH arms are load-bearing; neither may be dropped. Testing only
+    # `apex is None` marks all 6 Command apexes non-apex AND promotes 6
+    # single_host rows to apex — backwards on the instance carrying the ~60
+    # re-attributed findings. Testing only self-reference silently demotes the
+    # Prodex apex, which would then emit solely via the sending-host arm.
+    #
+    # Bare IPs never reach here (guard above): on Command all 31 `ip` rows
+    # self-reference and both `ip_range` rows are NULL, so they would satisfy
+    # BOTH arms and be misread as apexes.
+    is_apex = (apex is None) or (ctx.asset_id == apex)
+
+    # ── MX (new in A2). Serves sending-host inference AND DKIM provider hints.
+    mx_rc, mx_out, _ = run_cmd(["dig", "+short", "MX", ctx.hostname], timeout=10)
+    mx_records = [l.strip() for l in mx_out.splitlines() if l.strip()]
+    results["mx"] = mx_records
+
+    # ── SPF on this exact name
     spf_rc, stdout, _ = run_cmd(["dig", "+short", "TXT", ctx.hostname], timeout=10)
     txt_lines = [l.strip().strip('"') for l in stdout.splitlines() if l.strip()]
     spf_lines = [l for l in txt_lines if l.lower().startswith("v=spf1")]
     results["spf"] = spf_lines
-    if not spf_lines:
+
+    # ── DMARC on this exact name, plus the ORG record for inheritance
+    dmarc_rc, dmarc_rec = _dmarc_record(ctx.hostname)
+    org_rec = None
+    if not is_apex and apex:
+        _, org_rec = _dmarc_record(apex)
+    results["dmarc"] = [dmarc_rec] if dmarc_rec else []
+    results["org_dmarc"] = org_rec
+    results["is_apex"] = is_apex
+
+    # Effective policy a receiver applies to mail claiming THIS name.
+    effective = (dmarc_effective_policy(dmarc_rec, for_subdomain=False)
+                 or dmarc_effective_policy(org_rec, for_subdomain=True))
+    results["effective_dmarc_policy"] = effective
+    protected = effective in ("quarantine", "reject")
+
+    sending = is_sending_host(ctx.hostname, bool(spf_lines), mx_records)
+    results["sending_host"] = sending
+
+    # ── (4) DKIM — EVIDENCE ONLY. Never emits a finding. See _dkim_probe.
+    dkim = _dkim_probe(ctx.hostname, mx_records) if (is_apex or sending["is_sending_host"]) else []
+    results["dkim_selectors_found"] = dkim
+
+    # Emit DNS findings when this name OWNS the fact: it's the apex, or it
+    # sends mail in its own right. NULL apex_domain now folds into is_apex, so
+    # the old separate `unknown_scope` arm is redundant — a NULL-scoped
+    # subdomain on Command still emits, preserving the fail-safe direction.
+    emit_scope = is_apex or sending["is_sending_host"]
+
+    # ── (1)+(2) SPF
+    if not spf_lines and emit_scope:
         ctx.findings.append(LightFinding(
             check_name="dns-missing-spf",
             title="DNS missing SPF record",
@@ -913,31 +1108,43 @@ def check_dns_posture(ctx: ScanContext) -> None:
                         f"without receiving-server rejection.",
             tags=["dns", "email-auth", "spf"],
             cwe=[290],  # CWE-290 Authentication Bypass by Spoofing
-            raw_excerpt=stdout[:1000],
+            raw_excerpt=json.dumps({"spf": spf_lines, "sending_host": sending})[:1000],
         ))
+    elif not spf_lines:
+        # Non-sending subdomain. SPF does NOT inherit, but org-level enforcing
+        # DMARC still quarantines/rejects spoofed subdomain mail (no aligned
+        # pass is achievable), so there is no practical exposure. 4.7 S3:
+        # SUPPRESS — neither MODERATE nor INFO.
+        results["spf_suppressed"] = ("non_sending_subdomain_protected_by_org_dmarc"
+                                     if protected else "non_sending_subdomain_apex_owns_the_gap")
 
-    # DMARC — TXT on _dmarc.<hostname>
-    dmarc_rc, stdout, _ = run_cmd(["dig", "+short", "TXT", f"_dmarc.{ctx.hostname}"], timeout=10)
-    dmarc_lines = [l.strip().strip('"') for l in stdout.splitlines() if l.strip()]
-    dmarc_records = [l for l in dmarc_lines if l.lower().startswith("v=dmarc1")]
-    results["dmarc"] = dmarc_records
-    if not dmarc_records:
+    # ── (1) DMARC, inheritance-aware
+    if not dmarc_rec and emit_scope and not protected:
         ctx.findings.append(LightFinding(
             check_name="dns-missing-dmarc",
             title="DNS missing DMARC record",
             severity="MODERATE",
             category="dns",
-            description=f"No DMARC (v=DMARC1) TXT record found at _dmarc.{ctx.hostname}. "
-                        f"DMARC instructs receiving servers what to do with mail that "
-                        f"fails SPF/DKIM — without it, spoofed mail passes through.",
+            description=f"No DMARC (v=DMARC1) TXT record found at _dmarc.{ctx.hostname}, "
+                        f"and no enforcing policy is inherited from the organisational "
+                        f"domain. DMARC instructs receiving servers what to do with mail "
+                        f"that fails SPF/DKIM — without it, spoofed mail passes through.",
             tags=["dns", "email-auth", "dmarc"],
             cwe=[290],  # CWE-290 Authentication Bypass by Spoofing
-            raw_excerpt=stdout[:1000],
+            raw_excerpt=json.dumps({"own": dmarc_rec, "org": org_rec,
+                                    "effective": effective})[:1000],
         ))
-    else:
-        # Check for p=none (monitoring only — not enforcing)
-        rec = dmarc_records[0]
-        if "p=none" in rec.lower():
+    elif not dmarc_rec:
+        results["dmarc_suppressed"] = (
+            f"inherits_{effective}_from_{apex}" if protected
+            else "apex_owns_the_gap")
+    if dmarc_rec:
+        # Policy weakness on a record this name actually OWNS. Still emitted
+        # per-name because the record is published here — but a subdomain that
+        # merely INHERITS a weak org policy does NOT emit: the apex owns that
+        # gap and emits it itself (4.7 S1 — avoids the same N-copies-of-one-
+        # fact problem the inheritance fix exists to solve).
+        if dmarc_effective_policy(dmarc_rec, for_subdomain=False) == "none":
             ctx.findings.append(LightFinding(
                 check_name="dns-dmarc-policy-none",
                 title="DMARC policy set to p=none (monitoring only)",
@@ -948,7 +1155,7 @@ def check_dns_posture(ctx: ScanContext) -> None:
                             f"but won't reject it. Move to p=quarantine once you've "
                             f"reviewed DMARC reports, then to p=reject.",
                 tags=["dns", "dmarc", "policy"],
-                raw_excerpt=rec,
+                raw_excerpt=dmarc_rec,
             ))
 
     ctx.artifacts.append(("dns_posture", "json", json.dumps(results)))
@@ -2304,10 +2511,15 @@ ON CONFLICT (finding_id) DO UPDATE SET
     normalized_key = COALESCE(EXCLUDED.normalized_key, findings.normalized_key),
     -- Status-downgrade guard (same pattern as import_jsonl.py):
     -- re-detecting an issue does NOT reopen a closed finding.
+    -- 'closed_reclassified' (20260827a) MUST be in this list: it marks a fact
+    -- re-attributed to the apex that owns it. Omit it and the next scan's
+    -- re-detection flips the row back to 'detected', silently undoing the
+    -- Ship A1 backfill.
     current_status = CASE
       WHEN findings.current_status IN (
              'remediated', 'validated_remediated',
-             'false_positive', 'wont_fix', 'accepted_risk'
+             'false_positive', 'wont_fix', 'accepted_risk',
+             'closed_reclassified'
            )
         THEN findings.current_status
       ELSE 'detected'
