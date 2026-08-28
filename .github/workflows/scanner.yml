@@ -659,3 +659,43 @@ jobs:
             echo "| scan_run_id   | \`$SCAN_RUN_ID\` |"
             echo "| Final status  | $STATUS |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # ─── Self-chain: drain the rest of the queue ───────────────────
+      # GitHub throttles scheduled crons hard, and the built-in GITHUB_TOKEN
+      # cannot self-trigger workflow_dispatch (anti-recursion). So when queued
+      # work remains we re-fire the scanner via a PAT (secrets.DISPATCH_TOKEN).
+      # Each run drains ONE asset (atomic SKIP LOCKED claim) then hands to the
+      # next — the queue drains back-to-back with no external cron. No-op when
+      # DISPATCH_TOKEN is unset or the queue is empty. Gated on has_work so a
+      # pre-poll failure can't loop. Ported to Command 2026-08-28 (parity):
+      # Command's poke model claims ONE asset per tick. Its cron is
+      # '7-57/10 * * * *' (every 10 min), so a 42-asset sweep needs ~7h AT BEST
+      # — and GitHub throttles scheduled crons hard, so the real figure is
+      # worse and unpredictable. Observed 2026-08-27: the queue sat idle with
+      # 40 queued and nothing running. Until the Command secret is set this
+      # step logs "self-chain disabled" and exits 0 — landing it is safe alone.
+      - name: Self-chain if queue has more work
+        if: ${{ always() && steps.poll.outputs.has_work == 'true' }}
+        env:
+          SUPABASE_DSN:   ${{ secrets.SUPABASE_DSN }}
+          DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: |
+          if [ -z "${DISPATCH_TOKEN:-}" ]; then
+            echo "DISPATCH_TOKEN unset — self-chain disabled."; exit 0
+          fi
+          DEPTH=$(psql "$SUPABASE_DSN" -t -A -c \
+            "select count(*) from public.scan_queue where status='queued';" 2>/dev/null || echo 0)
+          DEPTH=$(echo "$DEPTH" | tr -d '[:space:]'); DEPTH=${DEPTH:-0}
+          echo "queued depth = $DEPTH"
+          if [ "$DEPTH" -gt 0 ] 2>/dev/null; then
+            echo "Re-dispatching scanner to drain remaining $DEPTH queued scan(s)."
+            curl -sS -X POST \
+              -H "Authorization: Bearer $DISPATCH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/scanner.yml/dispatches" \
+              -d '{"ref":"main"}' \
+              && echo "Re-dispatch fired." || echo "::warning::Re-dispatch failed (non-fatal)."
+          else
+            echo "Queue empty — drain complete."
+          fi
