@@ -282,6 +282,9 @@ def log(msg: str) -> None:
 # Light writes tool_status + planned_steps mid-run for the portal ScanProgress
 # card. run_medium imports nothing from run_light, so this is NOT circular.
 from run_medium import flush_progress, flush_planned_steps  # noqa: E402
+# Declared-tier findings.source — single source of truth shared with the @phase
+# registry (spec 190 / 4.7 ruling 191 Q1). Decouples source from run intensity.
+from phase_source import source_for_tier, LIGHT  # noqa: E402
 
 
 def build_light_planned_steps(ctx: ScanContext) -> list[str]:
@@ -2668,11 +2671,12 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 "cve":            f.cve,
                 "normalized_key": normalized_key,
                 "references":     f.references,
-                # Source is derived from ctx.intensity so this same upsert
-                # path is reusable by run_medium.py / run_heavy.py without
-                # forking the function. All three values were added to
-                # finding_source_t in migration 20260528b.
-                "source":      f"commandsentry_{ctx.intensity}",
+                # Source is the phase's DECLARED tier (LIGHT), NOT ctx.intensity,
+                # so a light check's source can never depend on which run invoked
+                # it once tiers go cumulative (spec 190 / 4.7 ruling 191 Q1).
+                # No-op today: a light run only ever has intensity='light'.
+                # finding_source_t values were added in migration 20260528b.
+                "source":      source_for_tier(LIGHT),
                 "tags":        f.tags,
                 # ADR-001 validated-SHA key — see top-of-file derive_validation_status.
                 "validation_status": validation_status,

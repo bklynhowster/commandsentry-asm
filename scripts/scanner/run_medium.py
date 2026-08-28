@@ -71,6 +71,7 @@ from typing import Any
 
 # Scanner degradation primitives — fail-closed on "we didn't actually scan."
 # See SPEC_SCANNER_DEGRADATION_HARDENING.md. 2026-06-12.
+from phase_source import source_for_tier, MEDIUM  # noqa: E402  (spec 190/191 Q1: declared-tier source)
 from degradation import (
     DegradedRunError,
     MAX_BAN_EVENTS,
@@ -3515,7 +3516,7 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 "description": f.description,
                 "cwe": f.cwe,
                 "references": f.references,
-                "source": f"commandsentry_{ctx.intensity}",
+                "source": source_for_tier(MEDIUM),
                 "tags": f.tags,
                 "normalized_key": f.normalized_key,   # 4.7 I2 — class-collapse key
                 # #2.05 (Obsidian 160) — per-class target context. Medium findings carry no
@@ -3666,7 +3667,7 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
             # from scan_run.intensity (avoids any standard/medium normalization gap).
             cur.execute(
                 "SELECT delta_close_for_scan_run(%s, %s) AS n_closed",
-                (ctx.scan_run_id, f"commandsentry_{ctx.intensity}"),
+                (ctx.scan_run_id, source_for_tier(MEDIUM)),
             )
             # conn is dict_row — read the aliased column by NAME, not [0]
             # (indexing a dict-row with 0 raises KeyError(0)).
@@ -3686,7 +3687,7 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
             # Same source token + clean-path gate as the close/regress around it.
             cur.execute(
                 "SELECT settle_regressed_for_scan_run(%s, %s) AS n_settled",
-                (ctx.scan_run_id, f"commandsentry_{ctx.intensity}"),
+                (ctx.scan_run_id, source_for_tier(MEDIUM)),
             )
             _st_row = cur.fetchone()
             n_settled = (_st_row["n_settled"] if _st_row else 0) or 0
@@ -3704,7 +3705,7 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
             # the close above.
             cur.execute(
                 "SELECT regress_observed_for_scan_run(%s, %s) AS n_regressed",
-                (ctx.scan_run_id, f"commandsentry_{ctx.intensity}"),
+                (ctx.scan_run_id, source_for_tier(MEDIUM)),
             )
             _rg_row = cur.fetchone()
             n_regressed = (_rg_row["n_regressed"] if _rg_row else 0) or 0
@@ -3724,7 +3725,7 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
                 "UPDATE public.findings SET last_regressed_at = now() "
                 "WHERE current_status = 'regressed' AND last_regressed_at IS NULL "
                 "AND source::text = %s AND last_seen_scan_run = %s",
-                (f"commandsentry_{ctx.intensity}", ctx.scan_run_id),
+                (source_for_tier(MEDIUM), ctx.scan_run_id),
             )
 
             # Note 129 round 7 — finding_history per re-emitted finding.
