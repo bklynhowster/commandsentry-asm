@@ -86,15 +86,19 @@ import argparse
 import json
 import os
 import re
+import hashlib
 import secrets
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import (ThreadPoolExecutor, as_completed,
+                                TimeoutError as FuturesTimeout)
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse
 
 # ─── Reuse run_medium scaffolding wholesale ─────────────────────────────
 # Per spec "Reuse, don't reinvent." Helpers we share with the medium
@@ -839,11 +843,32 @@ def run_httpx_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
 # no target-probing path; --timeout/--retries govern the archive HTTP client).
 # Ship 1 is INPUT-ONLY: it harvests + persists the URLs and emits NO FindingEvent.
 # The harvested surface feeds finding-driven target selection in a later ship.
+#
+# 🔴 UNDER-INVOKED FOR 5 WEEKS — corrected 2026-08-28. gau ran clean (rc=0, one
+# benign "no .gau.toml" stderr line, no provider errors) and returned 3-4 URLs on
+# EVERY run across BOTH estates — almost entirely http/https variants of the
+# root. It looked healthy because `ok` only means rc==0 with a non-empty result.
+# Two defects, both ours, neither gau's:
+#
+#   1. NO --subs. gau queried ONLY the exact hostname. We scanned the apex
+#      `commandcompanies.com` while the actual site lives on
+#      `www.commandcompanies.com` — so every archived URL for the real site was
+#      excluded BY DEFAULT. We asked the archives about the wrong hostname and
+#      reported the answer as a clean result.
+#   2. The success log CLAIMED "archives: wayback,commoncrawl,otx,urlscan" — a
+#      string WE hardcoded, not gau reporting what it queried. We had zero
+#      evidence any provider beyond the first responded. --verbose fixes that;
+#      we now persist gau's own stderr as the evidence instead of asserting it.
+#
+# No API keys are needed — gau's docs are explicit that a missing config file
+# just warns and uses defaults. That warning was a red herring in every run.
 _GAU_ARCHIVE_TIMEOUT_S = 45      # per-request timeout to the ARCHIVE apis (not the target)
 _GAU_THREADS = 3                 # archive-fetch workers
-_GAU_WALL_TIMEOUT_S = 120        # hard wall on the whole invocation (4.7 R2: bounded per-asset runtime)
+_GAU_WALL_TIMEOUT_S = 180        # hard wall (raised from 120: --subs returns more, and a
+                                 # wall-kill is rc!=0 -> degraded, so truncation stays visible)
 _GAU_MAX_URLS = 5000             # cap the harvest so a deep Wayback history can't bloat the artifact
 _GAU_BLACKLIST = "png,jpg,jpeg,gif,svg,woff,woff2,ttf,eot,ico,css"  # static assets — noise for target-selection
+_GAU_STDERR_KEEP = 4000          # bounded evidence of what gau actually did
 
 
 def _parse_gau_urls(stdout: str, cap: int = _GAU_MAX_URLS) -> list[str]:
@@ -866,6 +891,66 @@ def _parse_gau_urls(stdout: str, cap: int = _GAU_MAX_URLS) -> list[str]:
     return out
 
 
+
+def gau_harvest_shape(urls: list[str], hostname: str) -> dict:
+    """PURE (unit-testable). Describe WHAT gau found, not just how much.
+
+    `distinct_paths` counts paths that are not "" or "/" — i.e. surface we did
+    not already know from DNS alone. That is the yield signal: a count-based
+    floor ("< 20 URLs is bad") is arbitrary and punishes genuinely small sites,
+    but "gau returned only the root" means the same thing on every domain.
+
+    `subdomain_urls` measures whether --subs is actually earning its keep — it
+    is the direct evidence for the 2026-08-28 fix, so a regression that drops
+    the flag shows up as a number, not just an absent argument.
+    """
+    hosts, paths, subs = set(), set(), 0
+    base = (hostname or "").lower().lstrip(".")
+    for u in urls:
+        try:
+            pr = urlparse(u)
+        except Exception:  # noqa
+            continue
+        h = (pr.hostname or "").lower()
+        if not h or pr.scheme not in ("http", "https"):
+            # Malformed entry. Must NOT contribute a path: urlparse("not a url")
+            # yields hostname=None but path="not a url", which would count as
+            # discovered surface and defeat the root-only yield floor.
+            continue
+        hosts.add(h)
+        if h != base and h.endswith("." + base):
+            subs += 1
+        pth = (pr.path or "").rstrip("/")
+        if pth not in ("", "/"):
+            paths.add(pth)
+    return {
+        "total_urls": len(urls),
+        "distinct_hosts": len(hosts),
+        "distinct_paths": len(paths),
+        "subdomain_urls": subs,
+        "hosts": sorted(hosts)[:25],
+    }
+
+
+
+def gau_yield_verdict(shape: dict) -> str | None:
+    """PURE. Return a degradation reason, or None when the harvest is useful.
+
+    Extracted deliberately. When this lived inline as `if shape[...] == 0:` the
+    only way to test it was to grep the function source for the right words —
+    and a mutation that replaced the condition with `if False:` left those words
+    sitting in a dead branch and passed 16/16. A decision you can only assert
+    ON is not a decision you have tested.
+
+    Shape-based, not count-based: "gau returned zero non-root paths" means the
+    same thing on a 5-page site and a 50,000-page site, whereas any URL-count
+    threshold is arbitrary and punishes small estates.
+    """
+    if shape.get("distinct_paths", 0) == 0:
+        return "root_only_no_surface"
+    return None
+
+
 def run_gau_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     """Harvest archived URLs for this host (INPUT-ONLY Ship 1). ADDITIVE +
     NON-FATAL: a missing binary or an archive outage marks the tool degraded and
@@ -878,6 +963,10 @@ def run_gau_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
 
     rc, stdout, stderr = run_cmd(
         ["gau", ctx.hostname,
+         "--subs",                                   # 🔴 THE FIX — without this gau
+                                                     # queries ONLY the exact host, so an
+                                                     # apex scan misses the entire www site
+         "--verbose",                                # make gau report its own provider work
          "--timeout", str(_GAU_ARCHIVE_TIMEOUT_S),
          "--threads", str(_GAU_THREADS),
          "--blacklist", _GAU_BLACKLIST],
@@ -886,8 +975,22 @@ def run_gau_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     _log_stderr_tail(stderr, label="gau")
 
     urls = _parse_gau_urls(stdout)
+    shape = gau_harvest_shape(urls, ctx.hostname)
+
     if urls:
-        ctx.artifacts.append((tool_name, "text", "\n".join(urls)))
+        # Persist the harvest AND the evidence of how it was obtained. The
+        # stderr is gau's own account of its provider work — it replaces the
+        # provider list we used to assert in the success log.
+        ctx.artifacts.append((tool_name, "json", json.dumps({
+            "urls": urls,
+            "invocation": {"subs": True, "verbose": True,
+                           "blacklist": _GAU_BLACKLIST,
+                           "threads": _GAU_THREADS,
+                           "archive_timeout_s": _GAU_ARCHIVE_TIMEOUT_S,
+                           "wall_timeout_s": _GAU_WALL_TIMEOUT_S},
+            "shape": shape,
+            "gau_stderr": (stderr or "")[-_GAU_STDERR_KEEP:],
+        })))
 
     if rc != 0 or not urls:
         reason = ("binary_unavailable" if rc == 127
@@ -897,11 +1000,261 @@ def run_gau_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
         flush_progress(ctx)
         return
 
-    log(f"  gau: harvested {len(urls)} archived URL(s) — INPUT-ONLY, zero target "
-        f"traffic (archives: wayback,commoncrawl,otx,urlscan)")
+    # YIELD FLOOR — not a magic count. gau exists to discover SURFACE, so the
+    # honest failure signal is "we learned no paths", which is scale-free: a
+    # genuinely sparse domain and a huge one both fail it the same way, and
+    # neither is judged against an arbitrary threshold. Root-only means the
+    # archives told us nothing we did not already know from DNS.
+    verdict = gau_yield_verdict(shape)
+    if verdict:
+        log(f"  gau DEGRADED: {len(urls)} URL(s) but ZERO non-root paths — "
+            f"no surface discovered (hosts={shape['distinct_hosts']})")
+        mark_tool_degraded(ctx, tool_name, verdict)
+        flush_progress(ctx)
+        return
+
+    log(f"  gau: harvested {len(urls)} archived URL(s) across "
+        f"{shape['distinct_hosts']} host(s), {shape['distinct_paths']} distinct path(s), "
+        f"{shape['subdomain_urls']} on subdomains — INPUT-ONLY, zero target traffic")
     mark_tool_ok(ctx, tool_name)
     flush_progress(ctx)
 
+
+
+# ── Ship 2: bounded content fetch (Obsidian 168; 4.7 sequence gau → THIS → retire+trufflehog)
+# ============================================================================
+# WHY THIS EXISTS. retire-equivalent library identification has six extractor
+# strategies. `uri` and `filename` work off the URL and need NO fetch — those
+# cover CDN-served libraries. But the WordPress page-builder estate (Elementor,
+# WPBakery) BUNDLES and RENAMES libraries into files like `frontend.min.js`,
+# where the version only appears INSIDE the body. Those need `filecontent`,
+# which is regex-over-body, and that is the majority case on this fleet.
+# (`func` needs a live JS runtime — unavailable to us. `hashes` is unreliable:
+# jQuery's hash map is empty. See Obsidian 168 Corrections 1 and 2.)
+#
+# 🔴 THIS IS THE FIRST RESPONSE-BODY FETCH IN HEAVY. Every other phase is
+# headers-only (httpx `-td -silent -json`, stack-id `curl -sSI`, reachability
+# `curl -sIv`). This sends real requests the target receives — ordinary
+# browsing traffic, the same files a browser loads when rendering the page,
+# but real. That is precisely why it is BOUNDED.
+#
+# BOUNDS (Howie's call 2026-08-28, "Middle"): three axes, whichever trips
+# FIRST. A file count alone is unsafe — one 12 MB unminified bundle would blow
+# the wall on its own, hence the per-file cap AND the global byte budget.
+#
+# AUTHORIZATION: deliberately does NOT ride `active_probe_authorized`. It fires
+# no payloads and touches nothing non-public — it fetches what the page itself
+# tells a browser to load. Gating it there would dilute what that flag means
+# (things that could plausibly cause harm) and would restrict JS coverage to
+# the handful of explicitly-authorized assets. It respects the ROE gate like
+# every other phase.
+#
+# SHIP 2 IS INPUT-ONLY, exactly like gau Ship 1: it persists a MANIFEST and
+# emits NO FindingEvent, so it cannot auto-close another tool's findings (no
+# `source='content_fetch'` rows exist for the note-127 autocloser to reconcile).
+# Bodies land in work_dir for the Ship 3 matcher to read IN THE SAME RUN — they
+# are deliberately NOT persisted to scan_run_artifacts, because 10 MB of
+# minified JS does not belong in jsonb.
+# 🔴 DARK-LAUNCHED 2026-08-28 — code lands, phase does NOT run.
+# 4.7 ruled Q1-Q6 on this phase (Obsidian 187) and the corrections are NOT yet
+# implemented. The one with real-world consequence is Q3: allow_redirects=True
+# follows redirect chains ANYWHERE, so a <script src> on our target could send
+# requests to third parties. Howie's authorization covers Command and Prodex
+# estates — not wherever a redirect points. Until the per-hop same-origin +
+# CDN-allowlist policy lands, this phase stays off.
+# Flip to True only when Q1-Q6 are implemented and re-reviewed.
+_CONTENT_FETCH_ENABLED = False
+
+_FETCH_MAX_FILES     = 60                 # Middle profile
+_FETCH_MAX_BYTES     = 10 * 1024 * 1024   # global budget across ALL files
+_FETCH_MAX_ONE_BYTES = 4 * 1024 * 1024    # no single file may eat the budget
+_FETCH_WALL_S        = 90                 # hard wall on the whole phase
+_FETCH_WORKERS       = 3                  # concurrent fetches
+_FETCH_REQ_TIMEOUT_S = 10                 # per-request
+_FETCH_CHUNK         = 64 * 1024
+
+_SCRIPT_SRC_RE = re.compile(
+    r"""<script\b[^>]*?\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))""",
+    re.I | re.S,
+)
+
+
+def extract_script_srcs(html: str, base_url: str,
+                        cap: int = _FETCH_MAX_FILES) -> list[str]:
+    """PURE (unit-testable, no network). Pull <script src> values out of HTML,
+    resolve them against base_url, keep only http(s), dedupe preserving
+    first-seen order, cap the count.
+
+    Handles all three quoting forms (double, single, bare) because minified and
+    hand-rolled templates use all of them. Protocol-relative `//host/x.js`
+    resolves correctly via urljoin against an https base.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _SCRIPT_SRC_RE.finditer(html or ""):
+        raw = (m.group(1) or m.group(2) or m.group(3) or "").strip()
+        if not raw or raw.lower().startswith(("data:", "javascript:", "blob:")):
+            continue
+        try:
+            absu = urljoin(base_url, raw)
+        except Exception:  # noqa
+            continue
+        if not absu.lower().startswith(("http://", "https://")):
+            continue
+        absu = absu.split("#", 1)[0]
+        if absu in seen:
+            continue
+        seen.add(absu)
+        out.append(absu)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def _fetch_one_js(url: str, out_dir: Path, budget: dict, lock) -> dict | None:
+    """Stream ONE asset under the shared global byte budget. Returns a manifest
+    row, or None if skipped. Streaming (not .content) is what makes the global
+    budget exact rather than approximate — we stop mid-download when it runs
+    out instead of discovering afterwards that we overshot."""
+    import requests  # image dependency (docker/Dockerfile)
+    try:
+        with requests.get(url, stream=True, timeout=_FETCH_REQ_TIMEOUT_S,
+                          headers={"User-Agent": _BROWSER_UA},
+                          allow_redirects=True) as resp:
+            status = resp.status_code
+            if status != 200:
+                return {"url": url, "status": status, "bytes": 0,
+                        "skipped": f"http_{status}"}
+            buf = bytearray()
+            for chunk in resp.iter_content(_FETCH_CHUNK):
+                if not chunk:
+                    continue
+                with lock:
+                    if budget["used"] >= _FETCH_MAX_BYTES:
+                        return {"url": url, "status": status, "bytes": len(buf),
+                                "skipped": "global_budget_exhausted"}
+                    room = min(len(chunk), _FETCH_MAX_BYTES - budget["used"])
+                    budget["used"] += room
+                buf.extend(chunk[:room])
+                if len(buf) >= _FETCH_MAX_ONE_BYTES:
+                    return {"url": url, "status": status, "bytes": len(buf),
+                            "skipped": "per_file_cap"}
+            sha = hashlib.sha256(bytes(buf)).hexdigest()
+            (out_dir / f"{sha[:16]}.js").write_bytes(bytes(buf))
+            return {"url": url, "status": status, "bytes": len(buf),
+                    "sha256": sha, "file": f"{sha[:16]}.js"}
+    except Exception as e:  # noqa
+        return {"url": url, "status": 0, "bytes": 0,
+                "skipped": f"error_{type(e).__name__}"}
+
+
+def run_content_fetch_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
+    """Fetch the homepage, extract <script src>, and pull those assets under a
+    three-axis bound. ADDITIVE + NON-FATAL: any failure marks the tool degraded
+    and RETURNS — it never aborts the tier. INPUT-ONLY: no FindingEvent.
+    """
+    if not _CONTENT_FETCH_ENABLED:
+        # Dark-launched. Return BEFORE touching tools_run so the phase is
+        # invisible to the tool_status invariant and to the note-127 autocloser
+        # — a disabled phase must not register as coverage.
+        log("  content_fetch: DISABLED (dark launch — 4.7 Q1-Q6 corrections pending)")
+        return
+
+    tool_name = "content_fetch"
+    ctx.tools_run.append(tool_name)
+    t0 = time.time()
+
+    base = f"https://{ctx.hostname}/"
+    rc, html, _ = run_cmd(
+        ["curl", "-s", "-L", "--max-time", "15", "-A", _BROWSER_UA, base],
+        timeout=20,
+    )
+    if rc != 0 or not html:
+        log(f"  content_fetch DEGRADED: homepage fetch rc={rc}")
+        mark_tool_degraded(ctx, tool_name, "homepage_fetch_failed")
+        flush_progress(ctx)
+        return
+
+    urls = extract_script_srcs(html, base)
+    if not urls:
+        # NOT degraded — a page with no external JS is a correct, complete
+        # answer, not a failure. Same shape as the non-WordPress skip in
+        # run_light.check_wpvulnerability.
+        log("  content_fetch: homepage references no external JS — nothing to fetch")
+        ctx.artifacts.append((tool_name, "json", json.dumps(
+            {"base": base, "script_srcs": 0, "fetched": [], "bounds_hit": []})))
+        mark_tool_ok(ctx, tool_name)
+        flush_progress(ctx)
+        return
+
+    js_dir = work_dir / "js"
+    js_dir.mkdir(parents=True, exist_ok=True)
+    budget = {"used": 0}
+    lock = threading.Lock()
+    rows: list[dict] = []
+
+    # 🔴 NOT a `with` block, and the as_completed loop IS wrapped. Two ways this
+    # phase could have violated its own "never aborts the tier" contract:
+    #   1. as_completed(timeout=) RAISES TimeoutError when the wall elapses.
+    #      Uncaught, that propagates out of the phase and kills the heavy run.
+    #   2. `with ThreadPoolExecutor(...)` calls shutdown(wait=True) on exit, so
+    #      breaking out of the loop still BLOCKS on every in-flight fetch —
+    #      60 files x 10s / 3 workers ~= 200s, making the 90s wall advisory
+    #      rather than real. shutdown(wait=False, cancel_futures=True) is what
+    #      makes the wall an actual wall.
+    pool = ThreadPoolExecutor(max_workers=_FETCH_WORKERS)
+    wall_hit = False
+    try:
+        futs = {pool.submit(_fetch_one_js, u, js_dir, budget, lock): u
+                for u in urls}
+        try:
+            for fut in as_completed(futs, timeout=_FETCH_WALL_S):
+                try:
+                    r = fut.result()
+                except Exception as e:  # noqa
+                    r = {"url": futs[fut], "status": 0, "bytes": 0,
+                         "skipped": f"error_{type(e).__name__}"}
+                if r:
+                    rows.append(r)
+                if time.time() - t0 > _FETCH_WALL_S:
+                    wall_hit = True
+                    break
+        except FuturesTimeout:
+            wall_hit = True
+    finally:
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except TypeError:      # cancel_futures is 3.9+; degrade, never raise
+            pool.shutdown(wait=False)
+
+    ok = [r for r in rows if r.get("sha256")]
+    bounds_hit = sorted({r["skipped"] for r in rows if r.get("skipped")})
+    if len(urls) >= _FETCH_MAX_FILES:
+        bounds_hit.append("file_cap")
+    if budget["used"] >= _FETCH_MAX_BYTES:
+        bounds_hit.append("byte_budget")
+    if wall_hit or time.time() - t0 > _FETCH_WALL_S:
+        bounds_hit.append("wall_clock")
+
+    ctx.artifacts.append((tool_name, "json", json.dumps({
+        "base": base,
+        "script_srcs": len(urls),
+        "fetched": rows,
+        "bytes_used": budget["used"],
+        "bounds": {"max_files": _FETCH_MAX_FILES,
+                   "max_bytes": _FETCH_MAX_BYTES,
+                   "max_one_bytes": _FETCH_MAX_ONE_BYTES,
+                   "wall_s": _FETCH_WALL_S,
+                   "workers": _FETCH_WORKERS},
+        "bounds_hit": sorted(set(bounds_hit)),
+        "elapsed_s": round(time.time() - t0, 1),
+    })))
+
+    log(f"  content_fetch: {len(ok)}/{len(urls)} asset(s), "
+        f"{budget['used'] // 1024} KiB in {round(time.time() - t0, 1)}s"
+        + (f" — bounds hit: {','.join(sorted(set(bounds_hit)))}" if bounds_hit else ""))
+    mark_tool_ok(ctx, tool_name)
+    flush_progress(ctx)
 
 # ============================================================================
 # Security-stack identification — P0 passive collectors (Obsidian 146; 4.7 R1/R2)
@@ -2487,7 +2840,8 @@ def run(descriptor_path: str, dsn: str) -> int:
         # tool_status keys each phase sets — testssl.sh / httpx — and the
         # net-depth pair credit (naabu / fingerprintx). Best-effort:
         # flush_planned_steps no-ops if dsn unset and swallows failures.
-        ctx.planned_steps = ["testssl.sh", "httpx", "gau", "naabu", "fingerprintx"]
+        ctx.planned_steps = ["testssl.sh", "httpx", "gau", "content_fetch",
+                             "naabu", "fingerprintx"]
         flush_planned_steps(ctx)
 
         # Phase 1 — testssl.sh (P2). The whole point of v1 — clears the
@@ -2505,6 +2859,15 @@ def run(descriptor_path: str, dsn: str) -> int:
         # artifact of harvested URLs and emits NO findings — the surface feeds
         # target selection in a later ship. First heavy-tier depth addition.
         run_gau_phase(ctx, work_dir)
+
+        # content_fetch — bounded JS asset fetch (ADDITIVE, non-fatal,
+        # INPUT-ONLY Ship 2; Obsidian 168, 4.7 sequence gau -> THIS ->
+        # retire-equivalent + trufflehog). FIRST response-body fetch in heavy:
+        # real requests the target receives, which is why it is bounded on
+        # files/bytes/wall-clock, whichever trips first. Bodies land in
+        # work_dir/js for the Ship 3 matcher to read in the SAME run; only a
+        # manifest is persisted. Emits NO findings.
+        run_content_fetch_phase(ctx, work_dir)
 
         # Security-stack identification P0 — passive collectors (Obsidian 146).
         # ADDITIVE, persist-only: appends a `stack_id_passive` artifact and
