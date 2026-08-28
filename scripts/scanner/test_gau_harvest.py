@@ -24,7 +24,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
-from run_heavy import gau_harvest_shape, gau_yield_verdict  # noqa: E402
+from run_heavy import (gau_harvest_shape, gau_yield_verdict,  # noqa: E402
+                       gau_provider_failures)
 
 SRC = (pathlib.Path(__file__).parent / "run_heavy.py").read_text()
 
@@ -173,10 +174,78 @@ def test_helper_actually_executes():
                  "subdomain_urls": 1, "hosts": ["www.x.com"]}
 
 
+# ── provider failures — gau exits 0 even when every archive is down ────────
+# VERBATIM stderr from the 2026-08-28 run on commandcompanies.com. rc was 0
+# and the result was empty. Without this parse, an archives outage is
+# indistinguishable from "this domain has no history".
+REAL_STDERR = (
+    'time="2026-08-28T17:55:16Z" level=warning msg="error reading config: '
+    'Config file /github/home/.gau.toml not found, using default config"\n'
+    'time="2026-08-28T17:56:01Z" level=warning msg="error instantiating '
+    'commoncrawl: dial tcp4 54.237.141.66:80: connect: connection refused\\n"\n'
+    'time="2026-08-28T17:56:01Z" level=info msg="fetching commandcompanies.com" '
+    'page=0 provider=wayback\n'
+    'time="2026-08-28T17:56:08Z" level=warning msg="commandcompanies.com - '
+    'failed to fetch wayback results page 0: API responded with non-200 '
+    'status code" provider=wayback'
+)
+
+
+def test_detects_both_real_provider_failures():
+    f = gau_provider_failures(REAL_STDERR)
+    assert "commoncrawl" in f, f
+    assert "wayback" in f, f
+
+
+def test_clean_stderr_reports_no_failures():
+    clean = ('time="..." level=warning msg="error reading config: Config file '
+             'not found, using default config"')
+    assert gau_provider_failures(clean) == []
+
+
+def test_empty_stderr_is_safe():
+    assert gau_provider_failures("") == []
+    assert gau_provider_failures(None) == []
+
+
+def test_retries_flag_is_passed():
+    """Archives are routinely flaky and rc=0 hides it."""
+    assert "'--retries'" in _fn_code("run_gau_phase")
+
+
+def test_evidence_is_persisted_unconditionally_not_only_on_success():
+    """🔴 The artifact append was originally guarded by `if urls:`, so the FIRST
+    real failure persisted nothing and had to be diagnosed from the Actions log.
+    The append must precede the degradation return."""
+    code = _fn_code("run_gau_phase")
+    append = code.index("ctx.artifacts.append")
+    degrade = code.index("mark_tool_degraded")
+    assert append < degrade, "evidence must be written before any early return"
+
+
+def test_provider_failure_is_a_distinct_reason_from_no_urls():
+    """'the archives were down' and 'this domain has no history' are different
+    facts and must not collapse into one degradation reason."""
+    assert "providers_failed_" in _fn_code("run_gau_phase")
+
+
+def test_provider_parser_is_actually_called_with_real_stderr():
+    """🔴 THIRD TIME THIS PATTERN BIT TODAY. Testing a pure function and
+    separately asserting a string exists proves nothing about whether the
+    caller wires them together — replacing the call with `failed_providers=[]`
+    passed 25/25. Every extracted helper needs a pin that the phase CALLS it,
+    with the right argument.
+
+    Prior instances: gau_yield_verdict (mutation to `if False:` passed),
+    ThreadPoolExecutor shutdown (presence-of-good rather than absence-of-bad)."""
+    code = _fn_code("run_gau_phase")
+    assert "gau_provider_failures(stderr)" in code
+
+
 if __name__ == "__main__":
     tests = [(n, o) for n, o in sorted(globals().items())
              if n.startswith("test_") and callable(o)]
-    assert len(tests) >= 18, f"expected >=15 tests, collected {len(tests)}"
+    assert len(tests) >= 25, f"expected >=15 tests, collected {len(tests)}"
     failed = 0
     for name, fn in tests:
         try:
