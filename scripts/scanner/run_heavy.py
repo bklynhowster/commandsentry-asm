@@ -2025,6 +2025,19 @@ def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> N
         details.update(pd)
         verdict = classify_waf_differential(baseline, payloads)
         waf_present, blocked, reason = verdict["waf_present"], verdict["blocked"], verdict["reason"]
+        if waf_present:
+            # Feed the in-scan WAF context that build_chunk_plan consumes
+            # (4.7 spec 195 finding 3). BEHAVIOURAL evidence — >=2 of 3 payload
+            # classes blocked against a clean baseline — is a STRONGER signal
+            # than wafw00f's fingerprint, so it should soften nuclei's rate.
+            #
+            # Sets waf_detected ONLY, never waf_kind: this probe is presence-only
+            # and names no vendor (4.7 Q3/Q8). needs_softened_rate() keys on
+            # waf_detected, so the gentler rate + intrusive-tag exclusion fire.
+            # The FortiGate SAFE-ONLY branch requires waf_kind=='forti*', which
+            # only wafw00f (or the FORTIGATE_HOSTNAMES allowlist) can establish —
+            # this deliberately does not claim it.
+            ctx.waf_detected = True
         details.update({"baseline_status": baseline["status"], "baseline_size": baseline["size"],
                         "blocked": blocked, "classify_reason": reason,
                         "evidence_class": verdict["evidence_class"]})
