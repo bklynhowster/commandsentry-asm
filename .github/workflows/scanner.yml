@@ -79,6 +79,11 @@ on:
           - light
           - medium
           - heavy
+      cumulative_heavy:
+        description: 'CUMULATIVE HEAVY (step 4). true = a heavy scan additionally runs the REGISTRY phases in ruled order — wafw00f first (so nuclei plans WITH WAF context), then the 9 light checks, httpx[-td], then nuclei/nikto/ffuf — under a 30-min wall-clock ceiling, halting on a harm-condition abort (ban / VPN lost / unreachable). Default false = todays behaviour exactly. Cron/workflow_run runs never set this. NOTE: this sends medium-tier attack-shaped traffic (nuclei/nikto/ffuf) on a HEAVY scan, so treat the first runs as a staged canary.'
+        required: false
+        default: false
+        type: boolean
       authenticated:
         description: 'Run authenticated scan? Only valid for medium/heavy and requires asset_auth_config row.'
         required: false
@@ -575,6 +580,13 @@ jobs:
           # assets.active_probe_authorized. Cron/workflow_run triggers carry no input
           # (empty -> 'false' -> dry-run), so scheduled scans are unchanged.
           ACTIVE_PROBE_LIVE: ${{ github.event.inputs.active_probe_live || 'false' }}
+          # Cumulative heavy (step 4 inc 3c). Same shape as ACTIVE_PROBE_LIVE:
+          # only a manual dispatch can arm it; cron/workflow_run carry no input
+          # so scheduled heavy scans keep today's behaviour exactly.
+          CUMULATIVE_HEAVY_ENABLED: ${{ github.event.inputs.cumulative_heavy || 'false' }}
+          # Wall-clock ceiling for the cumulative run (seconds). 30 min default —
+          # Command holds a single VPN slot, so a longer run starves other scans.
+          CUMULATIVE_WALL_CLOCK_S: ${{ vars.CUMULATIVE_WALL_CLOCK_S || '1800' }}
         run: |
           python scripts/scanner/run_heavy.py /tmp/scan_descriptor.json
 
