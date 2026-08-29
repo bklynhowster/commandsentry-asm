@@ -94,6 +94,7 @@ import threading
 import time
 from concurrent.futures import (ThreadPoolExecutor, as_completed,
                                 TimeoutError as FuturesTimeout)
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -260,6 +261,33 @@ class HeavyScanContext:
     waf_detected: bool = False
     waf_kind: str | None = None
     tech_stack: set[str] = field(default_factory=set)
+
+    # ── medium-tier context fields (CONTEXT UNIFICATION, spec 190 step 2) ──
+    # 🔴 FOUND IN PRODUCTION, run #2620 (first cumulative heavy, 2026-08-29).
+    # nuclei / nikto / ffuf ALL degraded with exception_AttributeError: they are
+    # written against run_medium.ScanContext (34 fields) but a cumulative heavy
+    # hands them HeavyScanContext (24 fields), which is deliberately "slimmer".
+    # The recording proxy forwards attribute access faithfully — it cannot
+    # invent fields that never existed.
+    #
+    # Adding them here rather than constructing a separate medium context: the
+    # medium phases WRITE cross-phase state (waf_kind, tech_stack, counters)
+    # that later phases read, so a parallel object would need write-back
+    # syncing — reintroducing exactly the problem the proxy solved. Converging
+    # the two shapes IS spec 190's "context unification" step.
+    #
+    # Inert for heavy's own phases (nothing reads them); defaults mirror
+    # run_medium.ScanContext exactly so behaviour is identical either side.
+    response_codes: Counter = field(default_factory=Counter)
+    total_requests: int = 0
+    region_idx: int = 0
+    threshold_probe_results: list = field(default_factory=list)
+    ffuf_catchall_redirect: str | None = None
+    ffuf_catchall_count: int = 0
+    ffuf_catchall_status: int | None = None
+    ffuf_catchall_size: int | None = None
+    ffuf_catchall_status_count: int = 0
+    auth_gated: bool = False
 
 
 # ============================================================================

@@ -139,6 +139,46 @@ def test_port_scoped_checks_are_deliberately_unregistered():
         assert absent not in names
 
 
+# ── context compatibility (found in production, run #2620) ──────────────────
+
+def test_heavy_context_is_a_superset_of_medium_context():
+    """🔴 FOUND IN PRODUCTION, NOT BY A TEST. The first cumulative heavy run
+    (#2620, unimacgraphics.com, 2026-08-29) degraded nuclei, nikto AND ffuf with
+    exception_AttributeError: all three are written against
+    run_medium.ScanContext (34 fields) but cumulative heavy hands them
+    HeavyScanContext, which was deliberately 'slimmer' (24 fields). The legacy
+    recording proxy forwards attribute access faithfully — it cannot invent
+    fields that never existed.
+
+    Registering a MEDIUM phase means heavy's context must satisfy medium's
+    contract. Assert the superset property so adding a field to medium without
+    adding it to heavy fails HERE instead of in a live scan."""
+    import dataclasses
+    from run_medium import ScanContext
+    from run_heavy import HeavyScanContext
+    med = {f.name for f in dataclasses.fields(ScanContext)}
+    heavy = {f.name for f in dataclasses.fields(HeavyScanContext)}
+    missing = med - heavy
+    assert not missing, (
+        f"HeavyScanContext is missing {len(missing)} field(s) medium phases "
+        f"read: {sorted(missing)} — a cumulative heavy will AttributeError")
+
+
+def test_the_three_medium_scanners_can_read_every_field_they_need():
+    """Belt and braces on the specific tools that broke: instantiate heavy's
+    context and touch the fields medium's scanners reach for."""
+    from run_heavy import HeavyScanContext
+    ctx = HeavyScanContext(descriptor={}, hostname="x", asset_id="x",
+                           scan_run_id="x", queue_id="x", intensity="heavy",
+                           dsn="")
+    for attr in ("response_codes", "total_requests", "region_idx",
+                 "threshold_probe_results", "ffuf_catchall_redirect",
+                 "ffuf_catchall_count", "ffuf_catchall_status",
+                 "ffuf_catchall_size", "ffuf_catchall_status_count",
+                 "auth_gated", "waf_detected", "waf_kind", "tech_stack"):
+        getattr(ctx, attr)
+
+
 # ── the cumulative-heavy master switch (inc 3c) ─────────────────────────────
 
 def test_cumulative_heavy_defaults_OFF():
@@ -172,7 +212,7 @@ def test_cumulative_block_runs_before_the_heavy_specific_phases():
 if __name__ == "__main__":
     tests = [(n, o) for n, o in sorted(globals().items())
              if n.startswith("test_") and callable(o)]
-    assert len(tests) >= 17, f"expected >=17 tests, collected {len(tests)}"
+    assert len(tests) >= 19, f"expected >=19 tests, collected {len(tests)}"
     failed = 0
     for name, fn in tests:
         try:
