@@ -43,10 +43,25 @@ def test_history_write_gated_and_wired():
 
 
 def test_finding_source_is_tier_scoped_h1():
-    """H1 — findings are tier-scoped (source = commandsentry_{intensity}), so a
-    light finding accumulates only its own light observations. This is
-    intentional; cross-tier identity unification is explicitly out of scope."""
+    """H1 — light findings are tier-scoped: a light finding's source is the
+    DECLARED light tier, so it accumulates only its own light observations.
+
+    As of spec 190 / 4.7 ruling 191 Q1 the source is tagged by declared tier via
+    source_for_tier(LIGHT), NOT derived from run intensity
+    (the old f"commandsentry_{ctx.intensity}"). Same tier-scoping — now invariant
+    to which run invokes the phase, which is the prerequisite for cumulative
+    tiers to dedup correctly (source is part of stable_finding_id). Pin BOTH the
+    new mechanism and the ABSENCE of the old one, so a revert to
+    intensity-derivation fails here."""
     import inspect
-    assert 'f"commandsentry_{ctx.intensity}"' in inspect.getsource(run_light), (
-        "H1: light findings must remain tier-scoped by source"
+    from phase_source import source_for_tier, LIGHT
+    src = inspect.getsource(run_light)
+    assert "source_for_tier(LIGHT)" in src, (
+        "H1: light source must be tagged by declared tier (source_for_tier(LIGHT))"
+    )
+    assert 'f"commandsentry_{ctx.intensity}"' not in src, (
+        "H1: light source must NOT be re-derived from run intensity (spec 190/191 Q1)"
+    )
+    assert source_for_tier(LIGHT) == "commandsentry_light", (
+        "H1: the light tier source value must remain commandsentry_light"
     )
