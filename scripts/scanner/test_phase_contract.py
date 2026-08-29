@@ -318,6 +318,102 @@ def test_heavy_selection_is_cumulative_light_medium_heavy():
         clear_registry()
 
 
+# ── execution ORDER (4.7 Q4 spec 194, corrected 195) ────────────────────────
+
+def test_ban_detection_is_ordered_before_the_attack_shaped_tools():
+    """🔴 THE ORDERING GUARANTEE, asserted on the constants.
+
+    Two independent reasons this must hold:
+      1. ban budget — abort cheaply before nuclei's full ladder fires;
+      2. WAF context — `build_chunk_plan` picks FortiGate-SAFE vs AGGRESSIVE by
+         reading ctx.waf_kind, which only wafw00f sets. Detectors after nuclei
+         ⇒ broad templates at a WAF-fronted host.
+    Registration of the real phases lands in 3b; the guarantee lives here."""
+    assert pc.ORDER_REACHABILITY < pc.ORDER_BAN_DETECT < pc.ORDER_MEDIUM_TOOLS
+    assert pc.ORDER_BAN_DETECT < pc.ORDER_HEAVY_DEPTH
+
+
+def test_light_precedes_medium_tools_so_tech_stack_is_populated():
+    """`httpx -td` (light) populates ctx.tech_stack, which build_chunk_plan
+    reads for its stack-specific chunks."""
+    assert pc.ORDER_LIGHT < pc.ORDER_MEDIUM_TOOLS
+
+
+def test_active_probes_and_heavy_depth_run_last():
+    """Most-aggressive last, so an earlier ABORT_SCAN cuts them off."""
+    assert pc.ORDER_HEAVY_DEPTH == max(
+        pc.ORDER_REACHABILITY, pc.ORDER_BAN_DETECT, pc.ORDER_LIGHT,
+        pc.ORDER_PASSIVE_DEPTH, pc.ORDER_MEDIUM_TOOLS, pc.ORDER_HEAVY_DEPTH)
+
+
+def test_selection_is_sorted_by_order_not_by_tier():
+    """🔴 A MEDIUM phase (wafw00f) must be able to run BEFORE light phases.
+    Sorting by tier would silently undo the ruled interleaving."""
+    clear_registry()
+    try:
+        phase(name="nuclei", tier=MEDIUM, order=pc.ORDER_MEDIUM_TOOLS)(lambda c, w: None)
+        phase(name="dns", tier=LIGHT, order=pc.ORDER_LIGHT)(lambda c, w: None)
+        phase(name="wafw00f", tier=MEDIUM, order=pc.ORDER_BAN_DETECT)(lambda c, w: None)
+        names = [p.name for p in phases_for_tier(HEAVY)]
+        assert names == ["wafw00f", "dns", "nuclei"], names
+        assert names.index("wafw00f") < names.index("nuclei")
+    finally:
+        clear_registry()
+
+
+def test_unordered_selection_preserves_declaration_order():
+    clear_registry()
+    try:
+        phase(name="b", tier=HEAVY, order=pc.ORDER_HEAVY_DEPTH)(lambda c, w: None)
+        phase(name="a", tier=LIGHT, order=pc.ORDER_LIGHT)(lambda c, w: None)
+        assert [p.name for p in phases_for_tier(HEAVY, ordered=False)] == ["b", "a"]
+    finally:
+        clear_registry()
+
+
+def test_phase_without_declared_order_falls_back_to_its_tier_default():
+    assert _spec(lambda c, w: None, tier=LIGHT).effective_order == pc.ORDER_LIGHT
+    assert _spec(lambda c, w: None, tier=MEDIUM).effective_order == pc.ORDER_MEDIUM_TOOLS
+    assert _spec(lambda c, w: None, tier=HEAVY).effective_order == pc.ORDER_HEAVY_DEPTH
+    assert _spec(lambda c, w: None, tier=LIGHT, order=5).effective_order == 5
+
+
+# ── wall-clock budget (4.7 Q3/Q4) ───────────────────────────────────────────
+
+def test_wall_clock_default_is_30_minutes():
+    """NOT the 45 first suggested: VPN_SLOTS_N=1 means a long heavy blocks every
+    other VPN'd scan, and Command's cron ticks every 10 min."""
+    assert pc.CUMULATIVE_WALL_CLOCK_S == 1800
+
+
+def test_wall_clock_reports_exhaustion():
+    t = {"now": 1000.0}
+    wc = pc.WallClock(budget_s=60, now=lambda: t["now"])
+    assert not wc.exhausted() and wc.remaining_s == 60
+    t["now"] = 1059.0
+    assert not wc.exhausted()
+    t["now"] = 1061.0
+    assert wc.exhausted() and wc.remaining_s < 0
+
+
+def test_cutoff_is_degraded_not_skipped():
+    """🔴 THE Q4 RULING. A cut-off phase must be DEGRADED so the autocloser
+    cannot read its silence as 'ran and found nothing' and auto-close prior
+    findings it never looked for."""
+    r = pc.cutoff_result()
+    assert r.outcome == Outcome.DEGRADED
+    assert r.reason == pc.WALL_CLOCK_REASON == "wall_clock_ceiling_reached"
+    assert r.outcome != Outcome.GATE_SKIPPED and r.outcome != Outcome.DISABLED
+
+
+def test_cutoff_phase_is_credited_and_cannot_count_as_coverage():
+    """Set-equality holds (it IS in tools_run) but ok is never true."""
+    _res, ctx = _run(lambda c, w: pc.cutoff_result())
+    assert ctx.tools_run == ["t"]
+    assert ctx.tool_status["t"] == {"degraded": "wall_clock_ceiling_reached"}
+    assert ctx.tool_status["t"].get("ok") is not True
+
+
 def test_double_registration_is_rejected_loudly():
     """4.7 Q3 — a phase in both the registry and a legacy runner double-credits
     and silently breaks the invariant. Fail loud at declaration."""
@@ -366,7 +462,7 @@ def test_elapsed_is_always_recorded():
 if __name__ == "__main__":
     tests = [(n, o) for n, o in sorted(globals().items())
              if n.startswith("test_") and callable(o)]
-    assert len(tests) >= 26, f"expected >=26 tests, collected {len(tests)}"
+    assert len(tests) >= 36, f"expected >=36 tests, collected {len(tests)}"
     failed = 0
     for name, fn in tests:
         try:

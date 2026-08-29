@@ -45,6 +45,7 @@ DEGRADATION TAXONOMY (4.7 ruling Q2 — do NOT collapse these):
 """
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -54,6 +55,36 @@ from phase_source import LIGHT, MEDIUM, HEAVY, source_for_tier
 # Tier ordering — a tier selection is CUMULATIVE: heavy = light ∪ medium ∪ heavy.
 # This single line is what makes heavy ADDITIVE instead of a replacement.
 _TIER_RANK = {LIGHT: 1, MEDIUM: 2, HEAVY: 3}
+
+
+# ── EXECUTION ORDER (4.7 ruling Q4 spec 194, corrected in 195) ──────────────
+#
+# Cheapest ban-detector FIRST, most-aggressive LAST, so an ABORT_SCAN cuts off
+# everything expensive downstream. This ordering is load-bearing for TWO
+# separate reasons and must not be reshuffled casually:
+#
+#  1. BAN BUDGET — do not fire nuclei's full ladder + dalfox + probes at a
+#     target that is going to ban us. Find out first, abort cheaply.
+#  2. 🔴 WAF CONTEXT — `build_chunk_plan` (run_medium) chooses the FortiGate
+#     SAFE-ONLY plan vs the AGGRESSIVE plan by reading IN-SCAN state
+#     (`ctx.waf_kind`, set by wafw00f; `ctx.waf_detected`, also set by
+#     waf_differential). If the detectors run AFTER nuclei plans, heavy fires
+#     broad templates at a WAF-fronted host — the exact self-inflicted ban the
+#     safe-only branch exists to prevent. `httpx -td` populates
+#     `ctx.tech_stack`, which the same plan reads for its stack-specific
+#     chunks, so LIGHT must also precede MEDIUM_TOOLS.
+#
+# Gaps of 10 leave room to slot phases without renumbering.
+ORDER_REACHABILITY = 10    # can we reach it at all; egress health
+ORDER_BAN_DETECT = 20      # fwbbot_check, waf_differential, wafw00f (~5 reqs)
+ORDER_LIGHT = 30           # DNS/TLS/headers/CSP/methods/paths/httpx/wpvuln
+ORDER_PASSIVE_DEPTH = 40   # gau (zero target traffic), content_fetch, stack-id
+ORDER_MEDIUM_TOOLS = 50    # nuclei chunked, nikto, ffuf, katana — attack-shaped
+ORDER_HEAVY_DEPTH = 60     # naabu/fingerprintx + active probes (dalfox, arjun)
+
+# Default order per tier when a phase does not declare one.
+_DEFAULT_ORDER = {LIGHT: ORDER_LIGHT, MEDIUM: ORDER_MEDIUM_TOOLS,
+                  HEAVY: ORDER_HEAVY_DEPTH}
 
 
 # ── outcomes ────────────────────────────────────────────────────────────────
@@ -135,6 +166,14 @@ class PhaseSpec:
     timeout_s: Optional[int] = None
     healthy_yield: Optional[Callable[[dict], Optional[str]]] = None
     enabled: bool = True                 # dark-launch switch
+    order: Optional[int] = None          # execution order; see ORDER_* constants
+
+    @property
+    def effective_order(self) -> int:
+        """Declared order, else the tier default. Ties break on declaration
+        order (Python's sort is stable), which keeps sibling phases in the
+        sequence their authors wrote them."""
+        return self.order if self.order is not None else _DEFAULT_ORDER[self.tier]
 
     @property
     def source(self) -> str:
@@ -149,7 +188,7 @@ def phase(*, name: str, tier: str, requires_binary: str | None = None,
           needs_vpn: bool = False, is_active_probe: bool = False,
           timeout_s: int | None = None,
           healthy_yield: Callable[[dict], Optional[str]] | None = None,
-          enabled: bool = True):
+          enabled: bool = True, order: int | None = None):
     """Declare a phase. Registration is the ONLY wiring — no call-site edit, which
     is how a phase could previously be defined and never invoked."""
     def deco(fn):
@@ -160,18 +199,28 @@ def phase(*, name: str, tier: str, requires_binary: str | None = None,
         REGISTRY.append(PhaseSpec(
             name=name, tier=tier, fn=fn, requires_binary=requires_binary,
             needs_vpn=needs_vpn, is_active_probe=is_active_probe,
-            timeout_s=timeout_s, healthy_yield=healthy_yield, enabled=enabled))
+            timeout_s=timeout_s, healthy_yield=healthy_yield, enabled=enabled,
+            order=order))
         return fn
     return deco
 
 
-def phases_for_tier(requested: str) -> list[PhaseSpec]:
+def phases_for_tier(requested: str, ordered: bool = True) -> list[PhaseSpec]:
     """CUMULATIVE selection — the one line that makes heavy additive.
-    heavy → light ∪ medium ∪ heavy, in declared tier order."""
+    heavy → light ∪ medium ∪ heavy.
+
+    `ordered=True` (the default) sorts by execution order, NOT by tier: the
+    ruled sequence interleaves tiers deliberately — medium's wafw00f runs in the
+    ban-detection group at ORDER_BAN_DETECT, long before medium's own nuclei at
+    ORDER_MEDIUM_TOOLS, because nuclei's plan reads the WAF context wafw00f
+    sets. Sorting by tier would silently undo that."""
     if requested not in _TIER_RANK:
         raise ValueError(f"unknown tier {requested!r}")
     want = _TIER_RANK[requested]
-    return [p for p in REGISTRY if _TIER_RANK[p.tier] <= want]
+    sel = [p for p in REGISTRY if _TIER_RANK[p.tier] <= want]
+    if ordered:
+        sel.sort(key=lambda p: p.effective_order)   # stable: ties keep decl order
+    return sel
 
 
 def get_phase(name: str) -> PhaseSpec:
@@ -309,6 +358,54 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
     else:
         mark_degraded(ctx, spec.name, result.reason or "degraded")
     return result
+
+
+# ── wall-clock budget (4.7 rulings Q3 + Q4, spec 194/195) ───────────────────
+
+# 30 minutes, NOT the 45 first suggested. Command runs VPN_SLOTS_N=1, so a
+# cumulative heavy holds the ONLY VPN slot for its whole duration while cron
+# ticks every 10 min — 45 min blocks 4-5 cycles, 30 blocks 3. Env-var because
+# Prodex's slot capacity may differ.
+#
+# ⚠ DO NOT RAISE THIS TO ACCOMMODATE A SLOW RUN. If a run legitimately needs
+# more, take the honest partial coverage (cut-off phases are recorded DEGRADED);
+# if it is misbehaviour, fix the misbehaviour. Raising the ceiling to hide slow
+# behaviour is the failure mode 4.7 named explicitly.
+CUMULATIVE_WALL_CLOCK_S = int(os.environ.get("CUMULATIVE_WALL_CLOCK_S", "1800"))
+
+WALL_CLOCK_REASON = "wall_clock_ceiling_reached"
+
+
+class WallClock:
+    """Tracks the run's wall-clock budget and decides whether the next phase
+    may start.
+
+    🔴 A PHASE CUT OFF BY THE CEILING IS **DEGRADED, NOT SKIPPED** (4.7 Q4).
+    The autocloser cannot otherwise distinguish "this phase never ran" from
+    "this phase ran and found nothing" — and would auto-close prior findings
+    from a phase that never executed. Degraded is credited (set-equality holds)
+    but can never satisfy the 20260828a `ok='true'` coverage predicate."""
+
+    def __init__(self, budget_s: int | None = None, now=time.time):
+        self.budget_s = CUMULATIVE_WALL_CLOCK_S if budget_s is None else budget_s
+        self._now = now
+        self.started = now()
+
+    @property
+    def elapsed_s(self) -> float:
+        return self._now() - self.started
+
+    @property
+    def remaining_s(self) -> float:
+        return self.budget_s - self.elapsed_s
+
+    def exhausted(self) -> bool:
+        return self.remaining_s <= 0
+
+
+def cutoff_result() -> PhaseResult:
+    """The result recorded for a phase the ceiling prevented from starting."""
+    return PhaseResult.degraded(WALL_CLOCK_REASON)
 
 
 def _probe_authorized(ctx) -> bool:
