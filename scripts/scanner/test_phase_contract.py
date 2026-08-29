@@ -546,6 +546,94 @@ def test_adapter_passes_extra_args_through():
     assert got["port"] == 22
 
 
+# ── run_phases orchestrator (inc 3c) ────────────────────────────────────────
+
+def _ordered(*names_fns):
+    return [_spec(fn, name=n) for n, fn in names_fns]
+
+
+def test_run_phases_executes_in_the_given_order():
+    seen = []
+    specs = _ordered(("a", lambda c, w: seen.append("a")),
+                     ("b", lambda c, w: seen.append("b")),
+                     ("c", lambda c, w: seen.append("c")))
+    ctx = FakeCtx()
+    res, abort = pc.run_phases(specs, ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    assert seen == ["a", "b", "c"] and abort is None
+    assert ctx.tools_run == ["a", "b", "c"]
+
+
+def test_abort_halts_the_run_and_later_phases_never_execute():
+    """🔴 HARM CONDITION. A ban means stop poking — later phases must not fire
+    even one more request."""
+    fired = []
+    specs = _ordered(
+        ("a", lambda c, w: fired.append("a")),
+        ("ban", lambda c, w: PhaseResult.abort("ban_detected")),
+        ("c", lambda c, w: fired.append("c")))
+    ctx = FakeCtx()
+    _res, abort = pc.run_phases(specs, ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    assert fired == ["a"], f"phase ran after abort: {fired}"
+    assert abort is not None and abort.reason == "ban_detected"
+
+
+def test_phases_after_an_abort_are_recorded_not_silent():
+    """They did not establish coverage, so their silence must not read as
+    'ran and found nothing'."""
+    specs = _ordered(
+        ("ban", lambda c, w: PhaseResult.abort("ban_detected")),
+        ("c", lambda c, w: PhaseResult.ok()))
+    ctx = FakeCtx()
+    pc.run_phases(specs, ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    assert ctx.tool_status["c"] == {"degraded": pc.ABORTED_UPSTREAM_REASON}
+    assert set(ctx.tools_run) == set(ctx.tool_status), "invariant broken"
+
+
+def test_wall_clock_cutoff_stops_execution_and_credits_the_rest_degraded():
+    """4.7 Q4: cut-off phases are DEGRADED, credited, never coverage."""
+    t = {"now": 0.0}
+    fired = []
+
+    def slow(c, w):
+        t["now"] += 100.0          # burn the whole budget
+        fired.append("slow")
+
+    specs = _ordered(("slow", slow),
+                     ("next", lambda c, w: fired.append("next")))
+    ctx = FakeCtx()
+    wc = pc.WallClock(budget_s=60, now=lambda: t["now"])
+    pc.run_phases(specs, ctx, pathlib.Path("/tmp"), wall_clock=wc, **_markers(ctx))
+    assert fired == ["slow"], "a phase ran after the ceiling"
+    assert ctx.tool_status["next"] == {"degraded": pc.WALL_CLOCK_REASON}
+    assert set(ctx.tools_run) == set(ctx.tool_status)
+
+
+def test_disabled_phases_stay_invisible_even_when_cut_off():
+    """A dark-launched phase was never in the set that could run, so a ceiling
+    must not suddenly credit it."""
+    t = {"now": 0.0}
+
+    def slow(c, w):
+        t["now"] += 100.0
+
+    specs = [_spec(slow, name="slow"),
+             _spec(lambda c, w: None, name="dark", enabled=False)]
+    ctx = FakeCtx()
+    wc = pc.WallClock(budget_s=60, now=lambda: t["now"])
+    pc.run_phases(specs, ctx, pathlib.Path("/tmp"), wall_clock=wc, **_markers(ctx))
+    assert "dark" not in ctx.tools_run and "dark" not in ctx.tool_status
+
+
+def test_a_degraded_phase_does_not_stop_the_run():
+    """Only harm-conditions abort. One flaky tool must not sink 15 phases."""
+    fired = []
+    specs = _ordered(("bad", lambda c, w: PhaseResult.degraded("boom")),
+                     ("good", lambda c, w: fired.append("good")))
+    ctx = FakeCtx()
+    _res, abort = pc.run_phases(specs, ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    assert fired == ["good"] and abort is None
+
+
 def test_double_registration_is_rejected_loudly():
     """4.7 Q3 — a phase in both the registry and a legacy runner double-credits
     and silently breaks the invariant. Fail loud at declaration."""
@@ -588,7 +676,7 @@ def test_elapsed_is_always_recorded():
 if __name__ == "__main__":
     tests = [(n, o) for n, o in sorted(globals().items())
              if n.startswith("test_") and callable(o)]
-    assert len(tests) >= 44, f"expected >=44 tests, collected {len(tests)}"
+    assert len(tests) >= 50, f"expected >=50 tests, collected {len(tests)}"
     failed = 0
     for name, fn in tests:
         try:

@@ -484,6 +484,69 @@ def cutoff_result() -> PhaseResult:
     return PhaseResult.degraded(WALL_CLOCK_REASON)
 
 
+ABORTED_UPSTREAM_REASON = "scan_aborted_upstream"
+
+
+def run_phases(specs, ctx, work_dir, wall_clock=None, log=None,
+               mark_ok=None, mark_degraded=None, mark_skipped=None):
+    """Execute an ordered phase list under the wall-clock budget.
+
+    Returns (results, abort) — abort is the PhaseAbort that stopped the run, or
+    None. The caller decides how to close out; this owns only the loop.
+
+    THREE WAYS A PHASE DOES NOT PRODUCE COVERAGE, all recorded, none silent:
+      * ran and failed        → DEGRADED (run_phase)
+      * ceiling hit first     → DEGRADED `wall_clock_ceiling_reached` (4.7 Q4)
+      * an earlier phase ABORTED → DEGRADED `scan_aborted_upstream`
+
+    The last one is my extension of 4.7's Q4 reasoning to a case it did not
+    rule on: after a harm-condition abort we stop deliberately, so the remaining
+    phases did not establish coverage either. Crediting them degraded keeps the
+    set-equality invariant true and leaves an honest forensic trail; it can
+    never read as coverage because 20260828a requires ok='true'.
+    """
+    if mark_degraded is None:
+        from run_medium import (mark_tool_ok, mark_tool_degraded,  # noqa: E402
+                                mark_tool_skipped)
+        mark_ok = mark_ok or mark_tool_ok
+        mark_degraded = mark_degraded or mark_tool_degraded
+        mark_skipped = mark_skipped or mark_tool_skipped
+    markers = dict(mark_ok=mark_ok, mark_degraded=mark_degraded,
+                   mark_skipped=mark_skipped)
+    _log = log or (lambda *_a: None)
+
+    wc = wall_clock or WallClock()
+    results, abort = [], None
+
+    for i, spec in enumerate(specs):
+        if abort is not None:
+            _credit_not_run(spec, ctx, mark_degraded, ABORTED_UPSTREAM_REASON)
+            continue
+        if wc.exhausted():
+            _log(f"  wall-clock ceiling ({wc.budget_s}s) reached — "
+                 f"{len(specs) - i} phase(s) cut off")
+            _credit_not_run(spec, ctx, mark_degraded, WALL_CLOCK_REASON)
+            continue
+        try:
+            results.append(run_phase(spec, ctx, work_dir, **markers))
+        except PhaseAbort as e:
+            # Harm condition: ban / VPN lost / unreachable. Stop poking.
+            _log(f"  ABORT_SCAN from {e.phase}: {e.reason} — "
+                 f"halting, {len(specs) - i - 1} phase(s) will not run")
+            abort = e
+    return results, abort
+
+
+def _credit_not_run(spec, ctx, mark_degraded, reason: str) -> None:
+    """Record a phase that never started. Credited (set-equality) + degraded
+    (never coverage). Disabled phases stay invisible — they were never in the
+    set of things that could run."""
+    if not spec.enabled or spec.name in ctx.tools_run:
+        return
+    ctx.tools_run.append(spec.name)
+    mark_degraded(ctx, spec.name, reason)
+
+
 def _probe_authorized(ctx) -> bool:
     """Active-probe gate. Reads the per-asset flag the runner already resolved.
     Defaults to FALSE — an unreadable/absent policy is NOT authorization

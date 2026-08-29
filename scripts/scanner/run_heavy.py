@@ -143,9 +143,17 @@ from waf_differential import classify_waf_differential, INDEPENDENT_CLASSES
 # FIRST CITIZEN — built, dark, and small enough to prove the contract on before
 # any tier migrates to it. The framework owns tools_run crediting (AFTER work),
 # tool_status lockstep, artifacts, declared-tier source, timing and degradation.
-from phase_contract import (phase, run_phase, get_phase,  # noqa: E402
-                            PhaseResult)
+from phase_contract import (phase, run_phase, run_phases, get_phase,  # noqa: E402
+                            phases_for_tier, PhaseResult,
+                            CUMULATIVE_WALL_CLOCK_S)
 from phase_source import HEAVY as TIER_HEAVY  # noqa: E402
+
+# Cumulative heavy master switch (step 4 inc 3c, 4.7 Item B). DEFAULT OFF so the
+# merged code changes nothing in production; flipping it is the ROLLOUT gate,
+# which 4.7 ruled must come AFTER Ship 188's batch is stable so a ban stays
+# attributable to one change.
+_CUMULATIVE_HEAVY_ENABLED = os.environ.get(
+    "CUMULATIVE_HEAVY_ENABLED", "").strip().lower() in ("1", "true", "yes")
 # Pure safe proof-of-exploitation logic (4.7 rulings, Obsidian 150 §6; build-order #2.1).
 # No I/O — run_safe_exploit_phase does the HTTP + guardrails, hands captured responses here.
 import safe_exploit as se
@@ -2978,6 +2986,32 @@ def run(descriptor_path: str, dsn: str) -> int:
                              "naabu", "fingerprintx"]
         flush_planned_steps(ctx)
 
+        # ─── CUMULATIVE HEAVY (step 4 inc 3c) ───────────────────────────────
+        # Registry-driven light ∪ medium phases, ordered so the ban-detectors
+        # run first, under the wall-clock ceiling. DEFAULT OFF: merged code must
+        # not change production behaviour (4.7 Item B — the build gate does not
+        # depend on Ship 188's batch, the ROLLOUT gate does).
+        #
+        # ⚠ SCOPE: this runs the phases declared in phase_registry (9 light +
+        # 5 medium). Heavy's OWN phases below (testssl, httpx, gau, naabu +
+        # fingerprintx, the probes) are NOT yet registered — testssl's
+        # degradation is sometimes a harm-condition needing the step-3
+        # disposition wiring, and naabu/fingerprintx share all-or-nothing pair
+        # crediting that the contract has no shape for. So cumulative mode is
+        # ADDITIVE to the existing block, not a replacement, until those land.
+        # content_fetch is registered, so it is executed by the loop and its
+        # hand-call below is skipped to avoid tripping the double-exec guard.
+        cumulative_abort = None
+        if _CUMULATIVE_HEAVY_ENABLED:
+            import phase_registry  # noqa: F401  — import registers the phases
+            selected = phases_for_tier(TIER_HEAVY)
+            log(f"cumulative heavy ENABLED — {len(selected)} registry phase(s), "
+                f"ceiling {CUMULATIVE_WALL_CLOCK_S}s")
+            _results, cumulative_abort = run_phases(
+                selected, ctx, work_dir, log=log)
+            if cumulative_abort is not None:
+                log(f"cumulative heavy halted: {cumulative_abort.reason}")
+
         # Phase 1 — testssl.sh (P2). The whole point of v1 — clears the
         # stranded backlog so the note-127 auto-closer can reconcile.
         run_testssl_phase(ctx, work_dir)
@@ -3007,7 +3041,10 @@ def run(descriptor_path: str, dsn: str) -> int:
         # call site goes through get_phase() — and get_phase RAISES if the phase
         # never registered, which is the "defined but never invoked" bug made
         # loud instead of silent.
-        run_phase(get_phase("content_fetch"), ctx, work_dir)
+        # Skipped when cumulative mode already executed it from the registry —
+        # a second execution would (correctly) trip DoubleExecutionError.
+        if not _CUMULATIVE_HEAVY_ENABLED:
+            run_phase(get_phase("content_fetch"), ctx, work_dir)
 
         # Security-stack identification P0 — passive collectors (Obsidian 146).
         # ADDITIVE, persist-only: appends a `stack_id_passive` artifact and

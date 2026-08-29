@@ -139,10 +139,40 @@ def test_port_scoped_checks_are_deliberately_unregistered():
         assert absent not in names
 
 
+# ── the cumulative-heavy master switch (inc 3c) ─────────────────────────────
+
+def test_cumulative_heavy_defaults_OFF():
+    """🔴 THE ROLLOUT GATE. Merged code must not change production behaviour;
+    flipping this is a deliberate operational act that 4.7 ruled must come
+    AFTER Ship 188's batch is stable, so a ban stays attributable to ONE
+    change (spec 195 Q6 / Item B)."""
+    import run_heavy
+    assert run_heavy._CUMULATIVE_HEAVY_ENABLED is False, (
+        "cumulative heavy must ship default-OFF")
+
+
+def test_content_fetch_handcall_is_guarded_against_double_execution():
+    """content_fetch is registered, so cumulative mode executes it from the
+    registry. Its legacy hand-call must be skipped in that mode or the
+    double-execution guard fires — correctly, but the scan dies."""
+    src = pathlib.Path(__file__).parent.joinpath("run_heavy.py").read_text()
+    assert "if not _CUMULATIVE_HEAVY_ENABLED:" in src
+    i = src.index("if not _CUMULATIVE_HEAVY_ENABLED:")
+    j = src.index('run_phase(get_phase("content_fetch"), ctx, work_dir)')
+    assert i < j, "the hand-call is not guarded by the flag"
+
+
+def test_cumulative_block_runs_before_the_heavy_specific_phases():
+    """Ban-detectors first: the registry loop (which contains wafw00f) must be
+    positioned before heavy's own attack-shaped work."""
+    src = pathlib.Path(__file__).parent.joinpath("run_heavy.py").read_text()
+    assert src.index("run_phases(") < src.index("run_testssl_phase(ctx, work_dir)")
+
+
 if __name__ == "__main__":
     tests = [(n, o) for n, o in sorted(globals().items())
              if n.startswith("test_") and callable(o)]
-    assert len(tests) >= 14, f"expected >=14 tests, collected {len(tests)}"
+    assert len(tests) >= 17, f"expected >=17 tests, collected {len(tests)}"
     failed = 0
     for name, fn in tests:
         try:
