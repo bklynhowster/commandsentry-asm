@@ -414,6 +414,124 @@ def test_cutoff_phase_is_credited_and_cannot_count_as_coverage():
     assert ctx.tool_status["t"].get("ok") is not True
 
 
+# ── legacy adapter (3b) — the recording proxy ───────────────────────────────
+
+def _legacy_ok(ctx, suffix=""):
+    """Mimics a real light phase: self-bookkeeps exactly like check_dns_posture."""
+    ctx.tools_run.append("dns_posture" + suffix)
+    ctx.tool_status["dns_posture" + suffix] = {"ok": True}
+    ctx.findings.append(FakeFinding())
+    ctx.artifacts.append(("dns", "json", "{}"))
+
+
+def test_legacy_self_bookkeeping_is_captured_not_applied_to_the_real_ctx():
+    """🔴 THE 3b PROBLEM. Legacy phases credit themselves. Run through the
+    adapter, their bookkeeping must land in the RECORDER — the real ctx gets
+    exactly one credit, from run_phase, under the PHASE's name."""
+    res, ctx = _run(pc.legacy_adapter(_legacy_ok), name="dns_posture")
+    assert res.outcome == Outcome.OK
+    assert ctx.tools_run == ["dns_posture"], ctx.tools_run
+    assert ctx.tool_status == {"dns_posture": {"ok": True}}
+    assert len(ctx.findings) == 1 and len(ctx.artifacts) == 1
+
+
+def test_adapter_does_not_trip_the_double_execution_guard():
+    """If the legacy credit reached the real ctx, run_phase's own credit would
+    be the SECOND one and the guard would raise."""
+    ctx = FakeCtx()
+    run_phase(_spec(pc.legacy_adapter(_legacy_ok), name="dns_posture"),
+              ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    assert ctx.tools_run == ["dns_posture"]
+
+
+def test_adapter_forwards_real_state_writes_to_the_real_ctx():
+    """🔴 LOAD-BEARING. wafw00f sets ctx.waf_kind and httpx -td sets
+    ctx.tech_stack; build_chunk_plan reads BOTH later in the run. If the proxy
+    swallowed those writes, cumulative heavy would plan nuclei blind — the exact
+    ban risk increment 2 fixed."""
+    def legacy_wafw00f(ctx):
+        ctx.waf_detected = True
+        ctx.waf_kind = "fortiweb"
+        ctx.tools_run.append("wafw00f")
+        ctx.tool_status["wafw00f"] = {"ok": True}
+
+    ctx = FakeCtx()
+    run_phase(_spec(pc.legacy_adapter(legacy_wafw00f), name="wafw00f"),
+              ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    assert ctx.waf_detected is True, "proxy swallowed a real state write"
+    assert ctx.waf_kind == "fortiweb"
+
+
+def test_adapter_captures_REASSIGNMENT_of_a_bookkeeping_collection():
+    """🔴 FOUND BY MUTATION TESTING. Capture normally works because the proxy
+    owns its own tools_run/findings lists and legacy code APPENDS to them —
+    `ctx.findings.append(...)` is a getattr, so __setattr__ never fires. That
+    left the __setattr__ capture branch untested: a legacy phase that REASSIGNS
+    (`ctx.findings = [...]`) would have clobbered the REAL scan's collection,
+    destroying every finding earlier phases produced."""
+    def legacy_reassigns(ctx):
+        ctx.findings = [FakeFinding()]      # assignment, not append
+        ctx.tools_run = ["clobber"]
+        ctx.tool_status = {"clobber": {"ok": True}}
+
+    ctx = FakeCtx()
+    ctx.findings.append(FakeFinding())      # an earlier phase's finding
+    run_phase(_spec(pc.legacy_adapter(legacy_reassigns), name="p"),
+              ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    assert ctx.tools_run == ["p"], f"legacy reassignment reached real ctx: {ctx.tools_run}"
+    assert "clobber" not in ctx.tool_status
+    assert len(ctx.findings) == 2, "earlier findings were clobbered"
+
+
+def test_adapter_forwards_reads_from_the_real_ctx():
+    seen = {}
+
+    def legacy_reader(ctx):
+        seen["host"] = ctx.hostname
+        ctx.tools_run.append("x")
+        ctx.tool_status["x"] = {"ok": True}
+
+    ctx = FakeCtx()
+    ctx.hostname = "example.com"
+    run_phase(_spec(pc.legacy_adapter(legacy_reader), name="x"),
+              ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    assert seen["host"] == "example.com"
+
+
+def test_adapter_translates_a_legacy_degradation():
+    def legacy_degraded(ctx):
+        ctx.tools_run.append("tls_check")
+        ctx.tool_status["tls_check"] = {"degraded": "target_unreachable_pre_run"}
+
+    res, ctx = _run(pc.legacy_adapter(legacy_degraded), name="tls_check")
+    assert res.outcome == Outcome.DEGRADED
+    assert res.reason == "target_unreachable_pre_run"
+    assert ctx.tool_status["tls_check"] == {"degraded": "target_unreachable_pre_run"}
+
+
+def test_legacy_phase_that_credits_nothing_is_gate_skipped():
+    """A legacy check that decides it does not apply (non-WordPress target for
+    the WP check) credits nothing. That is NOT success — it is 'we did not
+    look', which must be recorded so the autocloser cannot infer coverage."""
+    res, ctx = _run(pc.legacy_adapter(lambda ctx: None), name="wpvulnerability")
+    assert res.outcome == Outcome.GATE_SKIPPED
+    assert res.reason == "legacy_not_applicable"
+    assert ctx.tool_status["wpvulnerability"] == {"skipped": "legacy_not_applicable"}
+
+
+def test_adapter_passes_extra_args_through():
+    """check_ssh(ctx, port) and friends take more than ctx."""
+    got = {}
+
+    def legacy_port(ctx, port):
+        got["port"] = port
+        ctx.tools_run.append("ssh")
+        ctx.tool_status["ssh"] = {"ok": True}
+
+    _res, _ctx = _run(pc.legacy_adapter(legacy_port, 22), name="ssh")
+    assert got["port"] == 22
+
+
 def test_double_registration_is_rejected_loudly():
     """4.7 Q3 — a phase in both the registry and a legacy runner double-credits
     and silently breaks the invariant. Fail loud at declaration."""
@@ -462,7 +580,7 @@ def test_elapsed_is_always_recorded():
 if __name__ == "__main__":
     tests = [(n, o) for n, o in sorted(globals().items())
              if n.startswith("test_") and callable(o)]
-    assert len(tests) >= 36, f"expected >=36 tests, collected {len(tests)}"
+    assert len(tests) >= 44, f"expected >=44 tests, collected {len(tests)}"
     failed = 0
     for name, fn in tests:
         try:

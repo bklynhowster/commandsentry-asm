@@ -360,6 +360,82 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
     return result
 
 
+# ── legacy adapter (3b) ─────────────────────────────────────────────────────
+#
+# 🔴 THE PROBLEM 4.7's Q1 MECHANISM DID NOT ANTICIPATE. The ruling says heavy's
+# runner should "select from the registry and execute via run_phase()", with the
+# legacy runners still hand-calling the same functions. Verified 2026-08-29:
+# EVERY legacy phase SELF-BOOKKEEPS — check_dns_posture, check_tls,
+# check_headers, check_httpx_tech et al. each call ctx.tools_run.append,
+# mark_tool_ok/degraded, ctx.findings.append and ctx.artifacts.append internally.
+# Calling one through run_phase() would credit it TWICE (and trip the
+# DoubleExecutionError guard shipped in inc 1 — the guard earning its keep on
+# day one).
+#
+# THE FIX, without refactoring ~17 legacy functions (which would mean migrating
+# light and medium NOW, violating hard-cut-per-tier / heavy-first):
+# run the legacy function against a RECORDING PROXY. The proxy carries its own
+# empty bookkeeping collections, so the legacy function's self-bookkeeping lands
+# in the recorder instead of the real scan; every OTHER attribute read or write
+# forwards to the real ctx, so genuine cross-phase state still propagates —
+# critically `ctx.waf_detected` / `ctx.waf_kind` (wafw00f) and `ctx.tech_stack`
+# (httpx -td), which build_chunk_plan reads later in the run.
+#
+# The adapter then TRANSLATES what was recorded into a PhaseResult, and
+# run_phase applies the five obligations to the real ctx exactly once.
+
+_RECORDED = ("tools_run", "tool_status", "findings", "artifacts")
+
+
+class _LegacyRecorder:
+    """Proxy ctx: captures bookkeeping, forwards everything else."""
+
+    def __init__(self, real):
+        object.__setattr__(self, "_real", real)
+        object.__setattr__(self, "tools_run", [])
+        object.__setattr__(self, "tool_status", {})
+        object.__setattr__(self, "findings", [])
+        object.__setattr__(self, "artifacts", [])
+
+    def __getattr__(self, name):          # only called when not found locally
+        return getattr(object.__getattribute__(self, "_real"), name)
+
+    def __setattr__(self, name, value):
+        if name in _RECORDED:
+            object.__setattr__(self, name, value)
+        else:
+            # Real state (waf_detected, waf_kind, tech_stack, counters…) must
+            # reach the actual scan or later phases lose it.
+            setattr(object.__getattribute__(self, "_real"), name, value)
+
+
+def legacy_adapter(fn, *args, **kwargs):
+    """Wrap a self-bookkeeping legacy phase function as a contract phase.
+
+    Translation rules — derived from what the legacy functions actually do:
+      * any tool marked degraded  → PhaseResult.degraded(first reason)
+      * nothing credited at all   → GATE_SKIPPED ('legacy_not_applicable'):
+        the function chose not to run (e.g. non-WordPress target for the WP
+        check). Credited-but-skipped, never coverage.
+      * otherwise                 → OK
+    Findings and artifacts are carried across for run_phase to persist."""
+    def _phase(ctx, work_dir):
+        rec = _LegacyRecorder(ctx)
+        fn(rec, *args, **kwargs)
+        degraded = [(t, v.get("degraded")) for t, v in rec.tool_status.items()
+                    if isinstance(v, dict) and "degraded" in v]
+        result_kw = dict(artifacts=list(rec.artifacts), findings=list(rec.findings),
+                         meta={"legacy_tools": list(rec.tools_run)})
+        if degraded:
+            return PhaseResult.degraded(degraded[0][1] or "legacy_degraded", **result_kw)
+        if not rec.tools_run:
+            return PhaseResult.skipped("legacy_not_applicable", **result_kw)
+        return PhaseResult.ok(**result_kw)
+    _phase.__name__ = getattr(fn, "__name__", "legacy_phase")
+    _phase.__doc__ = f"legacy_adapter({getattr(fn, '__name__', '?')})"
+    return _phase
+
+
 # ── wall-clock budget (4.7 rulings Q3 + Q4, spec 194/195) ───────────────────
 
 # 30 minutes, NOT the 45 first suggested. Command runs VPN_SLOTS_N=1, so a
