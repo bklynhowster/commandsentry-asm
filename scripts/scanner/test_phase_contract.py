@@ -114,21 +114,41 @@ def test_every_credited_tool_has_a_tool_status_entry():
 # ── a phase that did not run is NOT coverage ────────────────────────────────
 
 def test_disabled_phase_does_not_enter_tools_run():
-    """Dark launch (content_fetch today). A disabled phase must be invisible to
-    the completeness machinery AND the autocloser."""
+    """DISABLED = dark launch / feature-flag off (content_fetch today). The phase
+    is not operational for ANY asset, so it is not in the set of things that
+    could have run — no tools_run entry, no tool_status entry. Distinct from
+    GATE_SKIPPED below; see the executor comment on why they must not merge."""
     res, ctx = _run(lambda c, w: PhaseResult.ok(), enabled=False)
-    assert res.outcome == Outcome.SKIPPED
+    assert res.outcome == Outcome.DISABLED
     assert ctx.tools_run == [] and ctx.tool_status == {}
 
 
-def test_skipped_phase_does_not_enter_tools_run():
+def test_gate_skipped_phase_IS_credited_with_skipped_status():
+    """🔴 THE Q4 RECONCILIATION (4.7 2026-08-29). A per-asset gate means the
+    phase EXISTS but does not apply HERE — the autocloser must know we did NOT
+    establish coverage, which requires a recorded entry. Safe only because
+    20260828a requires tool_status ok='true' for coverage."""
     res, ctx = _run(lambda c, w: PhaseResult.skipped("not_applicable"))
-    assert ctx.tools_run == [] and ctx.tool_status == {}
+    assert res.outcome == Outcome.GATE_SKIPPED
+    assert ctx.tools_run == ["t"], "gate-skipped phase must be credited"
+    assert ctx.tool_status["t"] == {"skipped": "not_applicable"}
 
 
-def test_unauthorized_active_probe_is_skipped_and_uncredited():
+def test_gate_skipped_cannot_be_read_as_coverage_by_the_autocloser():
+    """The 20260828a predicate is `tool_status -> tool ->> 'ok' = 'true'`.
+    Mirror it here: a skipped entry must NOT satisfy it. This is the enabling
+    condition for crediting a skip at all — if it ever became coverage, a gated
+    phase would auto-close findings it never looked for."""
+    _res, ctx = _run(lambda c, w: PhaseResult.skipped("not_applicable"))
+    entry = ctx.tool_status["t"]
+    assert entry.get("ok") is not True, "gate_skipped must never satisfy ok=true"
+
+
+def test_unauthorized_active_probe_is_gated_credited_but_never_executed():
     """4.7 Q6 — attack-shaped phases (probes, dalfox, arjun) only fire on assets
-    flagged active_probe_authorized. The gate is the ROE boundary."""
+    flagged active_probe_authorized. The gate is the ROE boundary. It must NOT
+    execute, but it IS recorded so the absence of findings is not mistaken for
+    'we looked'."""
     fired = {"n": 0}
 
     def fn(ctx, wd):
@@ -137,7 +157,53 @@ def test_unauthorized_active_probe_is_skipped_and_uncredited():
 
     res, ctx = _run(fn, ctx=FakeCtx(authorized=False), is_active_probe=True)
     assert fired["n"] == 0, "unauthorized active probe MUST NOT execute"
-    assert res.outcome == Outcome.SKIPPED and ctx.tools_run == []
+    assert res.outcome == Outcome.GATE_SKIPPED
+    assert ctx.tools_run == ["t"]
+    assert ctx.tool_status["t"] == {"skipped": "active_probe_not_authorized"}
+
+
+# ── double-EXECUTION guard (4.7 Q1) ─────────────────────────────────────────
+
+def test_double_execution_of_one_phase_raises():
+    """🔴 THE HYBRID-WINDOW GUARD. Registration overlap between registry and a
+    legacy runner is LEGAL (only one path fires per scan); execution overlap is
+    corruption — tools_run credited twice, set-equality silently broken."""
+    ctx = FakeCtx()
+    spec = _spec(lambda c, w: PhaseResult.ok())
+    run_phase(spec, ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    try:
+        run_phase(spec, ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    except pc.DoubleExecutionError:
+        assert ctx.tools_run == ["t"], "guard must fire BEFORE the second credit"
+        return
+    raise AssertionError("second execution of the same phase was allowed")
+
+
+def test_guard_fires_before_any_second_write():
+    """The guard must precede execution, not follow it — otherwise the phase
+    runs twice (double traffic at the target) even if crediting is prevented."""
+    fired = {"n": 0}
+
+    def fn(c, w):
+        fired["n"] += 1
+        return PhaseResult.ok()
+
+    ctx = FakeCtx()
+    spec = _spec(fn)
+    run_phase(spec, ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    try:
+        run_phase(spec, ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    except pc.DoubleExecutionError:
+        pass
+    assert fired["n"] == 1, "phase body executed twice — guard is too late"
+
+
+def test_distinct_phases_do_not_trip_the_guard():
+    ctx = FakeCtx()
+    for name in ("a", "b", "c"):
+        run_phase(_spec(lambda c, w: PhaseResult.ok(), name=name),
+                  ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    assert ctx.tools_run == ["a", "b", "c"]
 
 
 def test_authorized_active_probe_runs():
@@ -300,7 +366,7 @@ def test_elapsed_is_always_recorded():
 if __name__ == "__main__":
     tests = [(n, o) for n, o in sorted(globals().items())
              if n.startswith("test_") and callable(o)]
-    assert len(tests) >= 18, f"expected >=18 tests, collected {len(tests)}"
+    assert len(tests) >= 26, f"expected >=26 tests, collected {len(tests)}"
     failed = 0
     for name, fn in tests:
         try:

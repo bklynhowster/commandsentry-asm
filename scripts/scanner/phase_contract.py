@@ -61,7 +61,9 @@ _TIER_RANK = {LIGHT: 1, MEDIUM: 2, HEAVY: 3}
 class Outcome:
     OK = "ok"
     DEGRADED = "degraded"
-    SKIPPED = "skipped"
+    SKIPPED = "skipped"          # legacy alias — see GATE_SKIPPED
+    GATE_SKIPPED = "skipped"     # phase EXISTS, a per-asset gate says not here
+    DISABLED = "disabled"        # phase not operational for ANY asset
     ABORT_SCAN = "abort_scan"
 
 
@@ -89,6 +91,24 @@ class PhaseResult:
     @classmethod
     def abort(cls, reason: str, **kw) -> "PhaseResult":
         return cls(outcome=Outcome.ABORT_SCAN, reason=reason, **kw)
+
+
+class DoubleExecutionError(Exception):
+    """A phase executed twice in ONE scan (4.7 ruling Q1, spec 194/195).
+
+    assert_no_double_registration() checks REGISTRATION overlap; this checks
+    EXECUTION overlap, and only the second one can actually corrupt a scan. A
+    phase may legitimately be registered in the registry AND still hand-called by
+    a legacy runner during the migration window — that is safe precisely because
+    only one path fires per scan (a scan runs exactly one tier). If both ever
+    fire, tools_run is credited twice and the close_out set-equality invariant
+    silently breaks. Fail LOUD, before the second credit."""
+
+    def __init__(self, phase: str, scan_run_id: str = ""):
+        super().__init__(
+            f"phase {phase!r} already credited in scan {scan_run_id or '<unknown>'} "
+            f"— registry executor AND legacy runner both invoking?")
+        self.phase = phase
 
 
 class PhaseAbort(Exception):
@@ -192,15 +212,46 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
         mark_degraded = mark_degraded or mark_tool_degraded
         mark_skipped = mark_skipped or mark_tool_skipped
 
-    # ── pre-flight gates. NONE of these credit tools_run: a phase that never ran
-    #    must be invisible to the completeness machinery and the autocloser.
+    # ── double-EXECUTION guard (4.7 Q1, spec 195). Registration overlap is legal
+    #    during the migration window; EXECUTION overlap is the corruption. Check
+    #    BEFORE any credit so the failure is loud and nothing is written twice.
+    if spec.name in ctx.tools_run:
+        raise DoubleExecutionError(spec.name, getattr(ctx, "scan_run_id", ""))
+
+    # ── pre-flight gates. TWO DIFFERENT KINDS OF "SKIP" — do not merge them.
+    #
+    #    They answer different questions:
+    #      DISABLED     — "is this phase part of the scanner's tool set at all?"
+    #                     Dark launch / feature-flagged off / config-disabled.
+    #                     Not operational for ANY asset ⇒ NOT credited, no
+    #                     tool_status entry. It is not in the set of things that
+    #                     could have run, so set-equality is unaffected.
+    #      GATE_SKIPPED — "did we look at THIS asset?"  The phase is real and
+    #                     operational; a per-asset gate says it does not apply
+    #                     here (e.g. active_probe_authorized=false). The
+    #                     autocloser NEEDS this recorded: a gated-off phase did
+    #                     NOT establish "we looked and found nothing" ⇒ credited
+    #                     + {"skipped": reason}.
+    #
+    # 🔴 WHY CREDITING A SKIP IS SAFE NOW WHEN IT WAS NOT BEFORE (do not reopen).
+    # Step 2 deliberately credited neither, reasoning "a phase that did not run
+    # is not coverage." That was CORRECT AGAINST THE PRE-FIX AUTOCLOSER, which
+    # read mere presence in tools_run as coverage. Migration 20260828a changed
+    # the predicate to require `tool_status -> tool ->> 'ok' = 'true'`, so a
+    # credited-but-skipped entry can no longer be misread as coverage. That
+    # predicate change is the enabling condition for this reconciliation — and
+    # it restores the pre-existing convention, since mark_tool_skipped's own
+    # docstring already requires callers to append to tools_run first.
     if not spec.enabled:
-        return PhaseResult.skipped("disabled")
+        return PhaseResult(outcome=Outcome.DISABLED, reason="disabled")
 
     if spec.is_active_probe and not _probe_authorized(ctx):
         # ROE boundary AND ban protection (4.7 Q6): attack-shaped traffic only
         # goes to assets explicitly flagged active_probe_authorized.
-        return PhaseResult.skipped("not_active_probe_authorized")
+        ctx.tools_run.append(spec.name)
+        mark_skipped(ctx, spec.name, "active_probe_not_authorized")
+        return PhaseResult(outcome=Outcome.GATE_SKIPPED,
+                           reason="active_probe_not_authorized")
 
     t0 = time.time()
     try:
@@ -245,11 +296,14 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
 
     # ── obligations 1 + 2: credit AFTER the work, and set tool_status in the
     #    same breath so tools_run and tool_status can never diverge.
-    if result.outcome == Outcome.SKIPPED:
-        # A skipped phase is NOT coverage and NOT a failure: no tools_run entry.
-        return result
-
     ctx.tools_run.append(spec.name)
+    if result.outcome == Outcome.GATE_SKIPPED:
+        # The phase RAN and decided it does not apply to this asset (e.g. a
+        # non-WordPress target for a WP check). Same semantics as the gate
+        # above: credited so the autocloser knows we did NOT establish
+        # coverage here, marked skipped so it can never read as 'ok'.
+        mark_skipped(ctx, spec.name, result.reason or "not_applicable")
+        return result
     if result.outcome == Outcome.OK:
         mark_ok(ctx, spec.name)
     else:

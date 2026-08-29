@@ -258,7 +258,12 @@ def test_disabled_phase_does_not_register_as_coverage():
                        mark_ok=lambda c, n: c.tool_status.__setitem__(n, {"ok": True}),
                        mark_degraded=lambda c, n, r, **k: c.tool_status.__setitem__(n, {"degraded": r}),
                        mark_skipped=lambda c, n, r: None)
-    assert res.outcome == "skipped" and res.reason == "disabled"
+    # DISABLED (dark launch) is distinct from GATE_SKIPPED (per-asset gate):
+    # a phase not operational for ANY asset is not in the set of things that
+    # could have run, so it is neither credited nor status-marked. A gated
+    # phase IS credited (4.7 Q4, spec 195) — see
+    # test_phase_contract.py::test_gate_skipped_phase_IS_credited_with_skipped_status.
+    assert res.outcome == "disabled" and res.reason == "disabled"
     assert ctx.tools_run == [] and ctx.tool_status == {}, (
         "a dark-launched phase credited itself as coverage")
 
