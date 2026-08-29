@@ -510,3 +510,87 @@ def delta_close_eligible(tool_status: dict) -> bool:
     if not tool_status:
         return False
     return all("ok" in v for v in tool_status.values())
+
+
+# ============================================================================
+# Typed degradation disposition — the PRODUCER declares the class
+# (audit Obsidian 193; 4.7 correction 2026-08-29)
+# ============================================================================
+#
+# THE AUDIT'S FINDING: whether a degradation should ABORT the scan or merely
+# degrade-and-continue is determined MECHANICALLY by which function produced the
+# reason slug — not by per-site judgement:
+#
+#   ensure_healthy_egress   → egress lost / ban rotations exhausted  → ALWAYS abort
+#   is_tool_output_degraded → all 3 slugs are unreachable/ban        → ALWAYS abort
+#   <tool>_is_degraded      → the tool misbehaved, target reachable  → ALWAYS degrade
+#   testssl_is_degraded     → STRADDLES; split by slug (see run_heavy)
+#
+# WHY THIS IS A TYPE AND NOT A LOOKUP TABLE. The obvious implementation is
+#     ABORT_REASONS = {"target_unreachable_after_run", "no_reach_evidence", ...}
+#     if reason in ABORT_REASONS: abort()
+# and it is exactly the fragility this audit exists to close. Slug-string
+# matching is the same class of error as the raw-text grep that miscounted the
+# raises as 15 (three were comments) and as the stale source-pins: a slug
+# rename, a new reason, or a typo silently misclassifies — and the failure
+# DIRECTION is a harm-condition falling through to "degraded", i.e. a scan that
+# keeps hammering a target that already banned us and records a false-clean.
+#
+# Instead the disposition travels WITH the reason from the function that
+# produced it. A new slug added to a harm-condition producer inherits abort by
+# construction, because that producer can only ever mint abort-class values.
+# Same move as the @phase contract owning the five obligations: push the
+# invariant into the producer so the ~15 call sites cannot each get it wrong.
+
+ABORT_SCAN = "abort_scan"   # harm condition: continuing is HARMFUL, not just useless
+DEGRADED = "degraded"       # tool failure: record it, keep scanning
+_DISPOSITIONS = (ABORT_SCAN, DEGRADED)
+
+
+class Degradation:
+    """A degradation reason carrying its own disposition. Immutable."""
+
+    __slots__ = ("reason", "disposition")
+
+    def __init__(self, reason: str, disposition: str):
+        if disposition not in _DISPOSITIONS:
+            raise ValueError(f"unknown disposition {disposition!r}")
+        object.__setattr__(self, "reason", reason)
+        object.__setattr__(self, "disposition", disposition)
+
+    def __setattr__(self, *_a):
+        raise AttributeError("Degradation is immutable")
+
+    @property
+    def aborts(self) -> bool:
+        return self.disposition == ABORT_SCAN
+
+    def __eq__(self, other):
+        return (isinstance(other, Degradation)
+                and (self.reason, self.disposition) == (other.reason, other.disposition))
+
+    def __repr__(self):
+        return f"Degradation({self.reason!r}, {self.disposition!r})"
+
+
+def egress_degradation(reason: str) -> Degradation:
+    """ensure_healthy_egress reasons. ALWAYS abort: the egress is banned or
+    unhealthy after rotations are exhausted, so any further request scans from
+    a banned/wrong vantage. The artifact these accompany records banned:True."""
+    return Degradation(reason, ABORT_SCAN)
+
+
+def b1_degradation(reason: str) -> Degradation:
+    """is_tool_output_degraded reasons. ALWAYS abort: every slug it can return
+    (target_unreachable_after_run / target_unreachable_pre_run /
+    output_stderr_contains_unreachable_pattern) means we could not reach the
+    target — so "no findings" is not evidence of no findings, and mid-tool
+    unreachability may be a ban in progress."""
+    return Degradation(reason, ABORT_SCAN)
+
+
+def tool_degradation(reason: str) -> Degradation:
+    """<tool>_is_degraded reasons (nikto, ffuf, ...). ALWAYS degrade: the target
+    was reachable and one tool produced unusable output. In a cumulative run
+    that must not discard the other phases' results."""
+    return Degradation(reason, DEGRADED)

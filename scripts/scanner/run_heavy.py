@@ -152,6 +152,9 @@ import safe_exploit as se
 
 # Degradation primitives (SPEC_SCANNER_DEGRADATION_HARDENING.md).
 from degradation import (
+    Degradation,
+    ABORT_SCAN,
+    DEGRADED,
     DegradedRunError,
     VALIDATION_TARGETS,
     assert_tool_status_invariant,
@@ -449,6 +452,44 @@ def testssl_is_degraded(
     # real findings). Zero LOW+ findings is fine — that's the
     # fully-remediated state v1 exists to detect.
     return False, ""
+
+
+# testssl is the ONE degradation producer that straddles both classes (audit
+# Obsidian 193 / 4.7 correction 2026-08-29), so the slug→disposition split lives
+# HERE, co-located with the function that knows what the slugs mean — not in a
+# lookup table at the call site.
+#
+# ABORT: the reachability ANCHOR failing, reported via testssl. Note the anchor
+# is the reachability CONDITION, not testssl-the-tool: testssl dying on a
+# missing binary must never kill a 16-phase cumulative run.
+#   no_reach_evidence / nonzero_rc_no_reach_evidence:N — never reached the host
+#   scan_incomplete — reached but truncated mid-scan. RATIFIED CONSERVATIVE:
+#     on a WAF-fronted host this is a plausible ban signature, and the asymmetry
+#     favours abort (cost of a wrong abort = a slower re-scan; cost of wrongly
+#     continuing = a false-clean recorded + more traffic at a banning target).
+#     Revisit once ordering puts the ban-detector first and this can be
+#     classified with real ban-context.
+_TESTSSL_ABORT_SLUGS = ("no_reach_evidence", "nonzero_rc_no_reach_evidence", "scan_incomplete")
+# DEGRADE: the tool misbehaved; the target's reachability is not in question.
+_TESTSSL_DEGRADE_SLUGS = ("tool_missing", "wall_timeout", "no_jsonfile",
+                          "empty_jsonfile", "unexpected_json_shape",
+                          "stat_failed", "json_parse_failed")
+
+
+def testssl_degradation(reason: str) -> Degradation:
+    """Disposition for a testssl_is_degraded() slug.
+
+    Slugs may carry a suffix (`nonzero_rc_no_reach_evidence:3`,
+    `json_parse_failed:ValueError`), so match on the prefix. An UNRECOGNISED
+    slug returns ABORT — fail-closed on a verdict: a reason we cannot classify
+    is treated as the dangerous case. test_degradation_disposition.py separately
+    asserts every slug testssl can actually emit IS explicitly classified, so a
+    new unclassified slug fails the suite rather than silently riding the
+    conservative default forever."""
+    head = (reason or "").split(":", 1)[0]
+    if head in _TESTSSL_DEGRADE_SLUGS:
+        return Degradation(reason, DEGRADED)
+    return Degradation(reason, ABORT_SCAN)
 
 
 # ============================================================================
