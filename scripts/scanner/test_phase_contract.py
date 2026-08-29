@@ -442,7 +442,7 @@ def test_legacy_self_bookkeeping_is_captured_not_applied_to_the_real_ctx():
     """🔴 THE 3b PROBLEM. Legacy phases credit themselves. Run through the
     adapter, their bookkeeping must land in the RECORDER — the real ctx gets
     exactly one credit, from run_phase, under the PHASE's name."""
-    res, ctx = _run(pc.legacy_adapter(_legacy_ok), name="dns_posture")
+    res, ctx = _run(pc.legacy_adapter(_legacy_ok, HEAVY), name="dns_posture")
     assert res.outcome == Outcome.OK
     assert ctx.tools_run == ["dns_posture"], ctx.tools_run
     assert ctx.tool_status == {"dns_posture": {"ok": True}}
@@ -453,7 +453,7 @@ def test_adapter_does_not_trip_the_double_execution_guard():
     """If the legacy credit reached the real ctx, run_phase's own credit would
     be the SECOND one and the guard would raise."""
     ctx = FakeCtx()
-    run_phase(_spec(pc.legacy_adapter(_legacy_ok), name="dns_posture"),
+    run_phase(_spec(pc.legacy_adapter(_legacy_ok, HEAVY), name="dns_posture"),
               ctx, pathlib.Path("/tmp"), **_markers(ctx))
     assert ctx.tools_run == ["dns_posture"]
 
@@ -470,7 +470,7 @@ def test_adapter_forwards_real_state_writes_to_the_real_ctx():
         ctx.tool_status["wafw00f"] = {"ok": True}
 
     ctx = FakeCtx()
-    run_phase(_spec(pc.legacy_adapter(legacy_wafw00f), name="wafw00f"),
+    run_phase(_spec(pc.legacy_adapter(legacy_wafw00f, MEDIUM), name="wafw00f"),
               ctx, pathlib.Path("/tmp"), **_markers(ctx))
     assert ctx.waf_detected is True, "proxy swallowed a real state write"
     assert ctx.waf_kind == "fortiweb"
@@ -490,7 +490,7 @@ def test_adapter_captures_REASSIGNMENT_of_a_bookkeeping_collection():
 
     ctx = FakeCtx()
     ctx.findings.append(FakeFinding())      # an earlier phase's finding
-    run_phase(_spec(pc.legacy_adapter(legacy_reassigns), name="p"),
+    run_phase(_spec(pc.legacy_adapter(legacy_reassigns, HEAVY), name="p"),
               ctx, pathlib.Path("/tmp"), **_markers(ctx))
     assert ctx.tools_run == ["p"], f"legacy reassignment reached real ctx: {ctx.tools_run}"
     assert "clobber" not in ctx.tool_status
@@ -513,6 +513,97 @@ def test_adapter_suppresses_the_legacy_progress_flush():
     assert real.dsn == "postgres://real", "recorder must not clobber the real DSN"
 
 
+class FakeLightFinding:
+    """Mirrors run_light.LightFinding's shape."""
+    def __init__(self, check_name="dns_posture", cve=None, override=None,
+                 tags=None):
+        self.check_name = check_name
+        self.title = "T"
+        self.severity = "MODERATE"
+        self.category = "config"
+        self.description = "d"
+        self.tags = tags or []
+        self.cwe = []
+        self.cve = cve or []
+        self.references = []
+        self.raw_excerpt = None
+        self.normalized_key_override = override
+
+
+def _convert(f, tier=LIGHT, asset="a.com"):
+    ctx = FakeCtx()
+    ctx.asset_id = asset
+    ctx.scan_run_id = "run-1"
+    return pc._as_finding_event(f, tier, ctx)
+
+
+def test_legacy_finding_is_translated_to_a_FindingEvent():
+    """🔴 THE RUN #2622 CRASH. 28m37s of scanning, all tools green, then
+    AttributeError('LightFinding' object has no attribute 'finding_id') at
+    persistence — every finding discarded."""
+    ev = _convert(FakeLightFinding())
+    assert ev.finding_id and ev.asset_id == "a.com" and ev.scan_id == "run-1"
+    assert ev.source == "commandsentry_light"
+    assert ev.observed_at
+
+
+def test_finding_id_uses_the_DECLARED_TIER_not_heavy():
+    """🔴 IDENTITY MUST MATCH THE LEGACY PATH. run_light writes
+    f"{asset}:light:{check}". If a cumulative heavy wrote ':heavy:' the SAME
+    finding would get two identities depending on which runner found it —
+    exactly the dedup split step 1 exists to prevent."""
+    assert _convert(FakeLightFinding(), tier=LIGHT).finding_id == "a.com:light:dns_posture"
+    assert _convert(FakeLightFinding(check_name="nuclei"), tier=MEDIUM).finding_id \
+        == "a.com:medium:nuclei"
+
+
+def test_normalized_key_override_beats_cve():
+    """migration 20260601a rule 2b/2c — the override MUST win over the CVE join,
+    or cve-populated WP findings re-split per CVE on every re-scan (the P-008
+    regression 20260604c fought)."""
+    ev = _convert(FakeLightFinding(cve=["CVE-2024-1", "CVE-2023-9"],
+                                   override="wpplugin-akismet"))
+    assert ev.normalized_key == "wpplugin-akismet"
+
+
+def test_normalized_key_from_cve_is_sorted_and_lowercased():
+    ev = _convert(FakeLightFinding(cve=["CVE-2024-2", "cve-2023-1"]))
+    assert ev.normalized_key == "cve-2023-1,cve-2024-2"
+
+
+def test_normalized_key_falls_back_to_check_name():
+    assert _convert(FakeLightFinding()).normalized_key == "dns_posture"
+
+
+def test_tags_are_parked_in_params_not_silently_dropped():
+    """Heavy's writer hardcodes tags=[], so a converted finding would lose them."""
+    ev = _convert(FakeLightFinding(tags=["dns", "spf"]))
+    assert ev.params.get("legacy_tags") == ["dns", "spf"]
+
+
+def test_an_existing_FindingEvent_passes_through_untouched():
+    """Heavy's own phases already emit FindingEvent — do not re-wrap them."""
+    already = FakeFinding("testssl")
+    already.finding_id = "x:testssl:y"
+    assert _convert(already) is already
+
+
+def test_adapter_converts_findings_end_to_end():
+    """The executor must receive FindingEvents, not raw LightFindings."""
+    def legacy(ctx):
+        ctx.tools_run.append("dns_posture")
+        ctx.tool_status["dns_posture"] = {"ok": True}
+        ctx.findings.append(FakeLightFinding())
+
+    ctx = FakeCtx()
+    ctx.asset_id = "a.com"
+    ctx.scan_run_id = "run-1"
+    spec = _spec(pc.legacy_adapter(legacy, LIGHT), name="dns_posture", tier=LIGHT)
+    run_phase(spec, ctx, pathlib.Path("/tmp"), **_markers(ctx))
+    assert len(ctx.findings) == 1
+    assert ctx.findings[0].finding_id == "a.com:light:dns_posture"
+
+
 def test_adapter_forwards_reads_from_the_real_ctx():
     seen = {}
 
@@ -523,7 +614,7 @@ def test_adapter_forwards_reads_from_the_real_ctx():
 
     ctx = FakeCtx()
     ctx.hostname = "example.com"
-    run_phase(_spec(pc.legacy_adapter(legacy_reader), name="x"),
+    run_phase(_spec(pc.legacy_adapter(legacy_reader, HEAVY), name="x"),
               ctx, pathlib.Path("/tmp"), **_markers(ctx))
     assert seen["host"] == "example.com"
 
@@ -533,7 +624,7 @@ def test_adapter_translates_a_legacy_degradation():
         ctx.tools_run.append("tls_check")
         ctx.tool_status["tls_check"] = {"degraded": "target_unreachable_pre_run"}
 
-    res, ctx = _run(pc.legacy_adapter(legacy_degraded), name="tls_check")
+    res, ctx = _run(pc.legacy_adapter(legacy_degraded, HEAVY), name="tls_check")
     assert res.outcome == Outcome.DEGRADED
     assert res.reason == "target_unreachable_pre_run"
     assert ctx.tool_status["tls_check"] == {"degraded": "target_unreachable_pre_run"}
@@ -543,7 +634,7 @@ def test_legacy_phase_that_credits_nothing_is_gate_skipped():
     """A legacy check that decides it does not apply (non-WordPress target for
     the WP check) credits nothing. That is NOT success — it is 'we did not
     look', which must be recorded so the autocloser cannot infer coverage."""
-    res, ctx = _run(pc.legacy_adapter(lambda ctx: None), name="wpvulnerability")
+    res, ctx = _run(pc.legacy_adapter(lambda ctx: None, HEAVY), name="wpvulnerability")
     assert res.outcome == Outcome.GATE_SKIPPED
     assert res.reason == "legacy_not_applicable"
     assert ctx.tool_status["wpvulnerability"] == {"skipped": "legacy_not_applicable"}
@@ -558,7 +649,7 @@ def test_adapter_passes_extra_args_through():
         ctx.tools_run.append("ssh")
         ctx.tool_status["ssh"] = {"ok": True}
 
-    _res, _ctx = _run(pc.legacy_adapter(legacy_port, 22), name="ssh")
+    _res, _ctx = _run(pc.legacy_adapter(legacy_port, HEAVY, 22), name="ssh")
     assert got["port"] == 22
 
 
@@ -692,7 +783,7 @@ def test_elapsed_is_always_recorded():
 if __name__ == "__main__":
     tests = [(n, o) for n, o in sorted(globals().items())
              if n.startswith("test_") and callable(o)]
-    assert len(tests) >= 51, f"expected >=51 tests, collected {len(tests)}"
+    assert len(tests) >= 59, f"expected >=59 tests, collected {len(tests)}"
     failed = 0
     for name, fn in tests:
         try:

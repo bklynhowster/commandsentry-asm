@@ -45,7 +45,7 @@ def _register(name, tier, fn, order, **kw):
     """One legacy function → one registry citizen. `name` MUST match the tool
     name the legacy function credits, so tool_status keys stay stable across the
     legacy and registry paths (and so findings reconcile the same either way)."""
-    phase(name=name, tier=tier, order=order, **kw)(legacy_adapter(fn))
+    phase(name=name, tier=tier, order=order, **kw)(legacy_adapter(fn, tier))
 
 
 # ── LIGHT tier — no attack-shaped traffic ───────────────────────────────────

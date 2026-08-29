@@ -48,6 +48,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from phase_source import LIGHT, MEDIUM, HEAVY, source_for_tier
@@ -423,7 +424,71 @@ class _LegacyRecorder:
             setattr(object.__getattribute__(self, "_real"), name, value)
 
 
-def legacy_adapter(fn, *args, **kwargs):
+def _as_finding_event(f, tier, ctx):
+    """Translate a legacy LightFinding-shaped object into a FindingEvent.
+
+    🔴 THE THIRD FACE OF THE SAME ROOT CAUSE (production, run #2622,
+    2026-08-29): legacy phases assume they own the context, the bookkeeping AND
+    the finding TYPE. Heavy's writer consumes FindingEvent (finding_id,
+    asset_id, scan_id, source, observed_at…); light/medium phases emit
+    LightFinding (check_name, tags, normalized_key_override…). The run scanned
+    for 28m37s, all tools green, then died at persistence with
+    `AttributeError("'LightFinding' object has no attribute 'finding_id'")`
+    and discarded every finding.
+
+    IDENTITY MUST MATCH THE LEGACY PATH EXACTLY, or the same finding gets two
+    identities depending on which runner produced it — re-creating the dedup
+    split that step 1 (declared-tier source) exists to prevent. Replicated
+    verbatim from run_light.write_findings_and_artifacts:
+        finding_id     = f"{asset_id}:{TIER}:{check_name}"     (tier, NOT 'heavy')
+        normalized_key = normalized_key_override
+                         else sorted-lowercased-comma-joined CVEs
+                         else check_name
+    (migration 20260601a rule 2b/2c; the override MUST win over the CVE join —
+    see the P-008 regression 20260604c fought.)
+
+    Objects that are already FindingEvent-shaped pass through untouched, so a
+    heavy phase's own findings are unaffected."""
+    if getattr(f, "finding_id", None) is not None:
+        return f                                   # already a FindingEvent
+
+    check = getattr(f, "check_name", None)
+    if check is None:
+        return f            # unknown shape — let the writer surface it loudly
+
+    cve = list(getattr(f, "cve", []) or [])
+    override = getattr(f, "normalized_key_override", None)
+    if override:
+        norm = override
+    elif cve:
+        norm = ",".join(sorted(c.lower() for c in cve))
+    else:
+        norm = check
+
+    from cs_parsers.common import FindingEvent
+    return FindingEvent(
+        finding_id=f"{ctx.asset_id}:{tier}:{check}",
+        asset_id=ctx.asset_id,
+        scan_id=getattr(ctx, "scan_run_id", ""),
+        source=source_for_tier(tier),              # declared tier (step 1)
+        title=getattr(f, "title", check),
+        severity=getattr(f, "severity", "INFO"),
+        category=getattr(f, "category", "config"),
+        observed_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        description=getattr(f, "description", None),
+        cve=cve,
+        cwe=list(getattr(f, "cwe", []) or []),
+        references=list(getattr(f, "references", []) or []),
+        raw_excerpt=getattr(f, "raw_excerpt", None),
+        normalized_key=norm,
+        # Heavy's writer hardcodes tags=[], so tags would be silently dropped.
+        # Park them in params rather than lose them.
+        params={"legacy_tags": list(getattr(f, "tags", []) or [])}
+        if getattr(f, "tags", None) else {},
+    )
+
+
+def legacy_adapter(fn, tier, *args, **kwargs):
     """Wrap a self-bookkeeping legacy phase function as a contract phase.
 
     Translation rules — derived from what the legacy functions actually do:
@@ -438,7 +503,10 @@ def legacy_adapter(fn, *args, **kwargs):
         fn(rec, *args, **kwargs)
         degraded = [(t, v.get("degraded")) for t, v in rec.tool_status.items()
                     if isinstance(v, dict) and "degraded" in v]
-        result_kw = dict(artifacts=list(rec.artifacts), findings=list(rec.findings),
+        # Shape-translate before handing findings to the executor — heavy's
+        # writer consumes FindingEvent, legacy phases emit LightFinding.
+        events = [_as_finding_event(f, tier, ctx) for f in rec.findings]
+        result_kw = dict(artifacts=list(rec.artifacts), findings=events,
                          meta={"legacy_tools": list(rec.tools_run)})
         if degraded:
             return PhaseResult.degraded(degraded[0][1] or "legacy_degraded", **result_kw)
