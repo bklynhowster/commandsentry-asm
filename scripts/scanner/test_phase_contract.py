@@ -70,6 +70,29 @@ def _run(fn, ctx=None, **kw):
     return run_phase(_spec(fn, **kw), ctx, pathlib.Path("/tmp"), **_markers(ctx)), ctx
 
 
+class isolated_registry:
+    """🔴 REGISTRY IS GLOBAL AND SHARED ACROSS TEST MODULES.
+
+    These tests need an empty registry, but phase_registry.py registers the real
+    light/medium phases AT IMPORT — and pytest imports every module during
+    collection, then runs them in file order. A bare clear_registry() here
+    therefore DESTROYED the registrations test_phase_registry.py depends on:
+    both files passed alone and three tests failed when run together.
+
+    Save, clear, restore. A test must never leave global state worse than it
+    found it."""
+
+    def __enter__(self):
+        self._saved = list(pc.REGISTRY)
+        clear_registry()
+        return self
+
+    def __exit__(self, *exc):
+        clear_registry()
+        pc.REGISTRY.extend(self._saved)
+        return False
+
+
 # ── obligation 1: credit tools_run AFTER the work ───────────────────────────
 
 def test_tools_run_is_credited_after_the_work_not_before():
@@ -306,16 +329,13 @@ def test_yield_floor_passes_a_healthy_result():
 def test_heavy_selection_is_cumulative_light_medium_heavy():
     """🔴 THE MEASURED PROBLEM. Today heavy REPLACES light (4.5 vs 12.3 tools).
     Selection must be additive."""
-    clear_registry()
-    try:
+    with isolated_registry():
         phase(name="l", tier=LIGHT)(lambda c, w: PhaseResult.ok())
         phase(name="m", tier=MEDIUM)(lambda c, w: PhaseResult.ok())
         phase(name="h", tier=HEAVY)(lambda c, w: PhaseResult.ok())
         assert [p.name for p in phases_for_tier(HEAVY)] == ["l", "m", "h"]
         assert [p.name for p in phases_for_tier(MEDIUM)] == ["l", "m"]
         assert [p.name for p in phases_for_tier(LIGHT)] == ["l"]
-    finally:
-        clear_registry()
 
 
 # ── execution ORDER (4.7 Q4 spec 194, corrected 195) ────────────────────────
@@ -349,26 +369,20 @@ def test_active_probes_and_heavy_depth_run_last():
 def test_selection_is_sorted_by_order_not_by_tier():
     """🔴 A MEDIUM phase (wafw00f) must be able to run BEFORE light phases.
     Sorting by tier would silently undo the ruled interleaving."""
-    clear_registry()
-    try:
+    with isolated_registry():
         phase(name="nuclei", tier=MEDIUM, order=pc.ORDER_MEDIUM_TOOLS)(lambda c, w: None)
         phase(name="dns", tier=LIGHT, order=pc.ORDER_LIGHT)(lambda c, w: None)
         phase(name="wafw00f", tier=MEDIUM, order=pc.ORDER_BAN_DETECT)(lambda c, w: None)
         names = [p.name for p in phases_for_tier(HEAVY)]
         assert names == ["wafw00f", "dns", "nuclei"], names
         assert names.index("wafw00f") < names.index("nuclei")
-    finally:
-        clear_registry()
 
 
 def test_unordered_selection_preserves_declaration_order():
-    clear_registry()
-    try:
+    with isolated_registry():
         phase(name="b", tier=HEAVY, order=pc.ORDER_HEAVY_DEPTH)(lambda c, w: None)
         phase(name="a", tier=LIGHT, order=pc.ORDER_LIGHT)(lambda c, w: None)
         assert [p.name for p in phases_for_tier(HEAVY, ordered=False)] == ["b", "a"]
-    finally:
-        clear_registry()
 
 
 def test_phase_without_declared_order_falls_back_to_its_tier_default():
@@ -535,28 +549,22 @@ def test_adapter_passes_extra_args_through():
 def test_double_registration_is_rejected_loudly():
     """4.7 Q3 — a phase in both the registry and a legacy runner double-credits
     and silently breaks the invariant. Fail loud at declaration."""
-    clear_registry()
-    try:
+    with isolated_registry():
         phase(name="dup", tier=HEAVY)(lambda c, w: PhaseResult.ok())
         try:
             phase(name="dup", tier=HEAVY)(lambda c, w: PhaseResult.ok())
         except ValueError:
             return
         raise AssertionError("double registration was allowed")
-    finally:
-        clear_registry()
 
 
 def test_unknown_tier_rejected_at_declaration():
-    clear_registry()
-    try:
+    with isolated_registry():
         try:
             phase(name="x", tier="enormous")(lambda c, w: PhaseResult.ok())
         except ValueError:
             return
         raise AssertionError("unknown tier accepted")
-    finally:
-        clear_registry()
 
 
 def test_spec_source_is_declared_tier_not_intensity():
