@@ -7,9 +7,12 @@ http/https variants of the root. Nothing caught it because `ok` means only
 "exit code 0 and a non-empty result".
 
 Two defects, both ours:
-  1. no `--subs`, so gau queried ONLY the exact hostname. We scanned the apex
-     while the real site lives on www — every archived URL for it was excluded
-     by default.
+  1. no `--subs`, so gau queried ONLY the exact hostname; archives index by
+     exact hostname string, so records filed under any other host were skipped.
+     ⚠ This did NOT explain commandcompanies.com's low yield — verified
+     2026-08-28: the apex returns 200 and www 301-redirects TO it, so the apex
+     is canonical and we were querying the right host. --subs remains correct
+     for genuinely separate hosts (mail/portal/insite).
   2. the success log asserted "archives: wayback,commoncrawl,otx,urlscan" — a
      string WE hardcoded. We had no evidence any provider beyond the first
      responded.
@@ -93,24 +96,26 @@ def test_empty_harvest_is_safe():
 
 def test_the_actual_2026_08_28_harvest_would_now_be_flagged():
     """REGRESSION FIXTURE — the real Command harvest that looked healthy.
-    3 of its 4 URLs were root variants. It scraped by with ONE path, which is
-    why a count-based floor would have missed it and why we record
-    distinct_paths as data rather than guessing a threshold now."""
+    3 of its 4 URLs were root variants, scraping by with ONE path. Whether 4 is
+    the TRUE archive count for this domain is still unknown; the point is that
+    nothing distinguished a thin archive from a broken lookup, which is what
+    the yield floor and provider parsing now fix."""
     real = ["http://commandcompanies.com/",
             "https://commandcompanies.com/",
             "https://commandcompanies.com/about/",
             "https://commandcompanies.com/"]
     s = gau_harvest_shape(real, "commandcompanies.com")
     assert s["distinct_paths"] == 1
-    assert s["subdomain_urls"] == 0      # ← the whole www site was missing
+    assert s["subdomain_urls"] == 0      # apex-only harvest
 
 
 # ── invocation pins ────────────────────────────────────────────────────────
 
 def test_subs_flag_is_passed():
-    """🔴 THE FIX. Without --subs gau queries only the exact hostname, so an
-    apex scan silently excludes the entire www site. Five weeks of clean-looking
-    runs came from this one missing argument."""
+    """Without --subs gau queries only the exact hostname, so archive records
+    filed under any other host are skipped. NOT the cause of the
+    commandcompanies.com low yield (apex is canonical there — verified), but
+    correct for assets with genuinely separate hosts."""
     # ast.unparse normalises string quotes to single — assert on the
     # VALUE, not the source's quoting style.
     assert "'--subs'" in _fn_code("run_gau_phase")

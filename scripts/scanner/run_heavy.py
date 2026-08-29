@@ -850,11 +850,16 @@ def run_httpx_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
 # root. It looked healthy because `ok` only means rc==0 with a non-empty result.
 # Two defects, both ours, neither gau's:
 #
-#   1. NO --subs. gau queried ONLY the exact hostname. We scanned the apex
-#      `commandcompanies.com` while the actual site lives on
-#      `www.commandcompanies.com` — so every archived URL for the real site was
-#      excluded BY DEFAULT. We asked the archives about the wrong hostname and
-#      reported the answer as a clean result.
+#   1. NO --subs. gau queried ONLY the exact hostname, so records the archives
+#      filed under any OTHER hostname were excluded by default. Archives index
+#      by exact hostname string, not by "site".
+#      ⚠ CORRECTION 2026-08-28: I first claimed this explained the low yield on
+#      commandcompanies.com, asserting the real site lived on www. VERIFIED
+#      FALSE — the apex returns 200 and www 301-redirects TO IT, so the apex is
+#      canonical and was the right hostname all along. --subs is still correct
+#      (it catches genuinely separate hosts like mail/portal/insite) but it is
+#      NOT why this asset returned 4 URLs. Howie corrected me twice; one curl
+#      would have settled it. Check the redirect direction before theorising.
 #   2. The success log CLAIMED "archives: wayback,commoncrawl,otx,urlscan" — a
 #      string WE hardcoded, not gau reporting what it queried. We had zero
 #      evidence any provider beyond the first responded. --verbose fixes that;
