@@ -138,6 +138,14 @@ from run_light import derive_hostname
 # collector below does the HTTP (benign baseline + payload GETs) and hands the
 # captured responses to the classifier. Same-dir module, imported like run_medium.
 from waf_differential import classify_waf_differential, INDEPENDENT_CLASSES
+
+# @phase contract + registry (spec 190 / 4.7 rulings 191). content_fetch is the
+# FIRST CITIZEN — built, dark, and small enough to prove the contract on before
+# any tier migrates to it. The framework owns tools_run crediting (AFTER work),
+# tool_status lockstep, artifacts, declared-tier source, timing and degradation.
+from phase_contract import (phase, run_phase, get_phase,  # noqa: E402
+                            PhaseResult)
+from phase_source import HEAVY as TIER_HEAVY  # noqa: E402
 # Pure safe proof-of-exploitation logic (4.7 rulings, Obsidian 150 §6; build-order #2.1).
 # No I/O — run_safe_exploit_phase does the HTTP + guardrails, hands captured responses here.
 import safe_exploit as se
@@ -1197,20 +1205,39 @@ def _fetch_one_js(url: str, out_dir: Path, budget: dict, lock) -> dict | None:
                 "skipped": f"error_{type(e).__name__}"}
 
 
-def run_content_fetch_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
-    """Fetch the homepage, extract <script src>, and pull those assets under a
-    three-axis bound. ADDITIVE + NON-FATAL: any failure marks the tool degraded
-    and RETURNS — it never aborts the tier. INPUT-ONLY: no FindingEvent.
-    """
-    if not _CONTENT_FETCH_ENABLED:
-        # Dark-launched. Return BEFORE touching tools_run so the phase is
-        # invisible to the tool_status invariant and to the note-127 autocloser
-        # — a disabled phase must not register as coverage.
-        log("  content_fetch: DISABLED (dark launch — 4.7 Q1-Q6 corrections pending)")
-        return
+def _content_fetch_yield(meta: dict) -> str | None:
+    """Declared healthy yield (4.7 Ship-2 correction: bounds-hit → DEGRADED).
 
-    tool_name = "content_fetch"
-    ctx.tools_run.append(tool_name)
+    A truncated fetch is NOT a clean result: Ship 3 draws an ABSENCE claim from
+    this evidence ("no vulnerable library found"), and absence proven from a
+    partial corpus is a false negative. Under the old hand-wiring this
+    correction meant editing the phase; under the contract it is one
+    declaration, and the framework does the demotion."""
+    hit = meta.get("bounds_hit") or []
+    return ("bounds_hit_" + "+".join(sorted(hit))) if hit else None
+
+
+@phase(
+    name="content_fetch",
+    tier=TIER_HEAVY,
+    enabled=_CONTENT_FETCH_ENABLED,   # dark-launched; a disabled phase never
+                                      # enters tools_run, so it cannot register
+                                      # as coverage for the note-127 autocloser
+    healthy_yield=_content_fetch_yield,
+    timeout_s=_FETCH_WALL_S,
+)
+def run_content_fetch_phase(ctx: HeavyScanContext, work_dir: Path) -> PhaseResult:
+    """Fetch the homepage, extract <script src>, and pull those assets under a
+    three-axis bound. ADDITIVE + NON-FATAL: it REPORTS an outcome and never
+    aborts the tier. INPUT-ONLY: no FindingEvent.
+
+    FIRST CITIZEN of the @phase contract (spec 190 / 4.7 191). This body does
+    ZERO bookkeeping — no tools_run.append, no mark_tool_*, no artifact append,
+    no flush_progress. It returns a PhaseResult and the executor owns the five
+    obligations. That is the whole point: the previous version credited
+    tools_run at the TOP, before any work, which is precisely the bug migration
+    20260828a had to compensate for in SQL.
+    """
     t0 = time.time()
 
     base = f"https://{ctx.hostname}/"
@@ -1220,9 +1247,7 @@ def run_content_fetch_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     )
     if rc != 0 or not html:
         log(f"  content_fetch DEGRADED: homepage fetch rc={rc}")
-        mark_tool_degraded(ctx, tool_name, "homepage_fetch_failed")
-        flush_progress(ctx)
-        return
+        return PhaseResult.degraded("homepage_fetch_failed")
 
     urls = extract_script_srcs(html, base)
     if not urls:
@@ -1230,11 +1255,10 @@ def run_content_fetch_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
         # answer, not a failure. Same shape as the non-WordPress skip in
         # run_light.check_wpvulnerability.
         log("  content_fetch: homepage references no external JS — nothing to fetch")
-        ctx.artifacts.append((tool_name, "json", json.dumps(
-            {"base": base, "script_srcs": 0, "fetched": [], "bounds_hit": []})))
-        mark_tool_ok(ctx, tool_name)
-        flush_progress(ctx)
-        return
+        return PhaseResult.ok(
+            artifacts=[("content_fetch", "json", json.dumps(
+                {"base": base, "script_srcs": 0, "fetched": [], "bounds_hit": []}))],
+            meta={"script_srcs": 0, "bounds_hit": []})
 
     js_dir = work_dir / "js"
     js_dir.mkdir(parents=True, exist_ok=True)
@@ -1285,7 +1309,8 @@ def run_content_fetch_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     if wall_hit or time.time() - t0 > _FETCH_WALL_S:
         bounds_hit.append("wall_clock")
 
-    ctx.artifacts.append((tool_name, "json", json.dumps({
+    bounds_hit = sorted(set(bounds_hit))
+    artifact = ("content_fetch", "json", json.dumps({
         "base": base,
         "script_srcs": len(urls),
         "fetched": rows,
@@ -1295,15 +1320,21 @@ def run_content_fetch_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
                    "max_one_bytes": _FETCH_MAX_ONE_BYTES,
                    "wall_s": _FETCH_WALL_S,
                    "workers": _FETCH_WORKERS},
-        "bounds_hit": sorted(set(bounds_hit)),
+        "bounds_hit": bounds_hit,
         "elapsed_s": round(time.time() - t0, 1),
-    })))
+    }))
 
     log(f"  content_fetch: {len(ok)}/{len(urls)} asset(s), "
         f"{budget['used'] // 1024} KiB in {round(time.time() - t0, 1)}s"
-        + (f" — bounds hit: {','.join(sorted(set(bounds_hit)))}" if bounds_hit else ""))
-    mark_tool_ok(ctx, tool_name)
-    flush_progress(ctx)
+        + (f" — bounds hit: {','.join(bounds_hit)}" if bounds_hit else ""))
+    # Report, don't bookkeep. bounds_hit rides in meta so the DECLARED yield
+    # floor demotes a truncated fetch to degraded (4.7 Ship-2 correction) —
+    # the artifact is persisted either way, because evidence is least
+    # available exactly when it is most needed.
+    return PhaseResult.ok(
+        artifacts=[artifact],
+        meta={"script_srcs": len(urls), "fetched_ok": len(ok),
+              "bytes_used": budget["used"], "bounds_hit": bounds_hit})
 
 # ============================================================================
 # Security-stack identification — P0 passive collectors (Obsidian 146; 4.7 R1/R2)
@@ -2916,7 +2947,13 @@ def run(descriptor_path: str, dsn: str) -> int:
         # files/bytes/wall-clock, whichever trips first. Bodies land in
         # work_dir/js for the Ship 3 matcher to read in the SAME run; only a
         # manifest is persisted. Emits NO findings.
-        run_content_fetch_phase(ctx, work_dir)
+        # FIRST CITIZEN of the @phase contract: invoked through the executor,
+        # which owns crediting/tool_status/artifacts/source/timing. Calling the
+        # function directly would bypass every one of those obligations, so the
+        # call site goes through get_phase() — and get_phase RAISES if the phase
+        # never registered, which is the "defined but never invoked" bug made
+        # loud instead of silent.
+        run_phase(get_phase("content_fetch"), ctx, work_dir)
 
         # Security-stack identification P0 — passive collectors (Obsidian 146).
         # ADDITIVE, persist-only: appends a `stack_id_passive` artifact and

@@ -166,9 +166,14 @@ def test_three_bound_axes_all_exist():
 # ── Wiring / source pins ───────────────────────────────────────────────────
 
 def test_phase_is_actually_called_in_run():
-    """A phase that is defined but never invoked passes every unit test and
-    does nothing in production."""
-    assert "run_content_fetch_phase(ctx, work_dir)" in SRC
+    """A phase that is defined but never invoked passes every unit test and does
+    nothing in production.
+
+    As of the @phase contract the invocation goes through the executor
+    (spec 190/191), so pin THAT call. This is now a stronger guarantee than the
+    old direct-call pin: get_phase() RAISES on an unregistered name, so losing
+    the registration fails loudly at run time instead of silently skipping."""
+    assert 'run_phase(get_phase("content_fetch"), ctx, work_dir)' in SRC
 
 
 def test_phase_is_in_planned_steps():
@@ -235,19 +240,92 @@ def test_phase_is_dark_launched_until_4_7_corrections_land():
 
 
 def test_disabled_phase_does_not_register_as_coverage():
-    """The early return MUST precede tools_run.append — a disabled phase that
-    credits itself would count as coverage for the note-127 autocloser."""
+    """A disabled phase must not count as coverage for the note-127 autocloser.
+
+    This was a source-ORDER pin (early return before tools_run.append). As of
+    the @phase contract (spec 190/191) the property is STRUCTURAL: the executor
+    returns SKIPPED for a disabled phase before the body runs, so it can never
+    reach a credit. Pin the declaration that carries the switch; the executor's
+    guarantee is mutation-tested in
+    test_phase_contract.py::test_disabled_phase_does_not_enter_tools_run."""
+    import phase_contract as pc
+    spec = pc.get_phase("content_fetch")
+    assert spec.enabled is _CONTENT_FETCH_ENABLED, (
+        "the registered phase must carry the dark-launch switch")
+
+    ctx = _CoverageCtx()
+    res = pc.run_phase(spec, ctx, pathlib.Path("/tmp"),
+                       mark_ok=lambda c, n: c.tool_status.__setitem__(n, {"ok": True}),
+                       mark_degraded=lambda c, n, r, **k: c.tool_status.__setitem__(n, {"degraded": r}),
+                       mark_skipped=lambda c, n, r: None)
+    assert res.outcome == "skipped" and res.reason == "disabled"
+    assert ctx.tools_run == [] and ctx.tool_status == {}, (
+        "a dark-launched phase credited itself as coverage")
+
+
+class _CoverageCtx:
+    """Minimal ctx for the coverage assertion above."""
+    def __init__(self):
+        self.tools_run = []
+        self.tool_status = {}
+        self.artifacts = []
+        self.findings = []
+        self.active_probe_authorized = False
+
+
+# ── @phase contract citizen pins (spec 190 / 4.7 191) ───────────────────────
+
+def test_content_fetch_is_a_registered_phase_citizen():
+    """Declaration IS the wiring. If registration is lost the call site's
+    get_phase() raises rather than silently skipping the phase."""
+    import phase_contract as pc
+    spec = pc.get_phase("content_fetch")
+    assert spec.tier == "heavy"
+    assert spec.source == "commandsentry_heavy", spec.source
+
+
+def test_call_site_goes_through_the_executor_not_a_direct_call():
+    """🔴 Calling the phase function directly would bypass ALL five obligations
+    (crediting after work, tool_status lockstep, artifacts, source, timing).
+    Assert the executor call exists AND the bare direct call does not."""
+    assert 'run_phase(get_phase("content_fetch"), ctx, work_dir)' in SRC
+    assert "\n        run_content_fetch_phase(ctx, work_dir)\n" not in SRC, (
+        "call site still invokes the phase directly, bypassing the executor")
+
+
+def test_phase_body_does_no_bookkeeping():
+    """The contract's promise: a phase REPORTS, it does not bookkeep."""
     code = _fn_code("run_content_fetch_phase")
-    gate = code.index("_CONTENT_FETCH_ENABLED")
-    credit = code.index("tools_run.append")
-    assert gate < credit, "gate must come before the tools_run credit"
+    for bad in ("tools_run.append", "mark_tool_ok", "mark_tool_degraded",
+                "flush_progress", "ctx.artifacts.append"):
+        assert bad not in code, f"phase body still hand-wires {bad}"
+    assert "PhaseResult" in code, "phase must return a PhaseResult"
+
+
+def test_bounds_hit_demotes_to_degraded_via_declared_yield():
+    """4.7 Ship-2 correction Q6: a truncated fetch is NOT a clean result —
+    Ship 3 draws an ABSENCE claim from this evidence. Under the contract the
+    correction is one declaration and the framework does the demotion."""
+    from run_heavy import _content_fetch_yield
+    assert _content_fetch_yield({"bounds_hit": []}) is None
+    assert _content_fetch_yield({"bounds_hit": ["wall_clock"]}) == "bounds_hit_wall_clock"
+    assert _content_fetch_yield(
+        {"bounds_hit": ["file_cap", "byte_budget"]}) == "bounds_hit_byte_budget+file_cap"
+
+
+def test_declared_yield_is_actually_wired_to_the_phase():
+    """A yield floor the executor never calls is worse than none — it reads as
+    coverage. (This exact pattern bit three times on 2026-08-28.)"""
+    import phase_contract as pc
+    from run_heavy import _content_fetch_yield
+    assert pc.get_phase("content_fetch").healthy_yield is _content_fetch_yield
 
 
 if __name__ == "__main__":
     tests = [(n, o) for n, o in sorted(globals().items())
              if n.startswith("test_") and callable(o)]
     # Floor: fails loudly if collection silently stops finding tests.
-    assert len(tests) >= 26, f"expected >=21 tests, collected {len(tests)}"
+    assert len(tests) >= 31, f"expected >=31 tests, collected {len(tests)}"
     failed = 0
     for name, fn in tests:
         try:
