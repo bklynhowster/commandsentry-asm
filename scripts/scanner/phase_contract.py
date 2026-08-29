@@ -396,6 +396,20 @@ class _LegacyRecorder:
         object.__setattr__(self, "tool_status", {})
         object.__setattr__(self, "findings", [])
         object.__setattr__(self, "artifacts", [])
+        # 🔴 SUPPRESS THE LEGACY PROGRESS FLUSH. Found in production, run
+        # #2621 (2026-08-29): the live scan_run row went from 11 tools to 1
+        # MID-RUN. Cause — mark_tool_ok/degraded/skipped each call
+        # flush_progress(ctx) internally, which does its own DB UPDATE writing
+        # ctx.tools_run + ctx.tool_status. A legacy phase calls those with the
+        # RECORDER, so the recorder's deliberately-isolated single-entry
+        # bookkeeping was overwriting the real accumulated row.
+        #
+        # flush_progress early-returns on a falsy ctx.dsn, so a None DSN here
+        # makes the legacy phase's internal flush a no-op while the REAL ctx
+        # keeps its DSN for the executor's own flush after the phase returns.
+        # Final close_out is unaffected either way (it uses the real ctx), so
+        # the damage was to live progress + mid-run forensics, not the result.
+        object.__setattr__(self, "dsn", None)
 
     def __getattr__(self, name):          # only called when not found locally
         return getattr(object.__getattribute__(self, "_real"), name)

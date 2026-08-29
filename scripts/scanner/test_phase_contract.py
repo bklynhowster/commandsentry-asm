@@ -497,6 +497,22 @@ def test_adapter_captures_REASSIGNMENT_of_a_bookkeeping_collection():
     assert len(ctx.findings) == 2, "earlier findings were clobbered"
 
 
+def test_adapter_suppresses_the_legacy_progress_flush():
+    """🔴 FOUND IN PRODUCTION, run #2621. mark_tool_ok/degraded/skipped each
+    call flush_progress(ctx) internally, and flush_progress does its OWN DB
+    UPDATE of ctx.tools_run + ctx.tool_status. A legacy phase calls those with
+    the RECORDER, so the recorder's isolated one-entry bookkeeping was
+    overwriting the real accumulated scan_run row mid-run (11 tools → 1).
+
+    flush_progress early-returns on a falsy ctx.dsn, so the recorder must carry
+    dsn=None while the REAL ctx keeps its DSN."""
+    real = FakeCtx()
+    real.dsn = "postgres://real"
+    rec = pc._LegacyRecorder(real)
+    assert rec.dsn is None, "recorder must not carry a DSN — it would flush"
+    assert real.dsn == "postgres://real", "recorder must not clobber the real DSN"
+
+
 def test_adapter_forwards_reads_from_the_real_ctx():
     seen = {}
 
@@ -676,7 +692,7 @@ def test_elapsed_is_always_recorded():
 if __name__ == "__main__":
     tests = [(n, o) for n, o in sorted(globals().items())
              if n.startswith("test_") and callable(o)]
-    assert len(tests) >= 50, f"expected >=50 tests, collected {len(tests)}"
+    assert len(tests) >= 51, f"expected >=51 tests, collected {len(tests)}"
     failed = 0
     for name, fn in tests:
         try:
