@@ -309,7 +309,23 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
         if result is None:                     # a phase that returns nothing = OK
             result = PhaseResult.ok()
     except Exception as e:                     # noqa: BLE001 — see docstring
-        result = PhaseResult.degraded(f"exception_{type(e).__name__}")
+        # Outer operational safety net (4.7 ruling ⑧): a bug inside one phase —
+        # including a mark_tool_partial misuse ValueError — degrades THAT phase
+        # and lets the rest of the scan proceed, rather than killing the run.
+        # The strictness stays at the producer; the recovery lives here.
+        #
+        # Reason slug: keep it low-cardinality and machine-groupable, but stop
+        # throwing away the diagnostic. A DegradedRunError already carries a
+        # stable slug of its own — propagate it instead of flattening every one
+        # to "exception_DegradedRunError", which is what made run #2624's nikto
+        # entry read {"degraded": "exception_DegradedRunError"} and lose the
+        # actual reason. Free-text messages go to meta, never into the slug.
+        reason = getattr(e, "reason", None)
+        slug = reason if isinstance(reason, str) and reason else \
+            f"exception_{type(e).__name__}"
+        result = PhaseResult.degraded(slug)
+        result.meta["exception_type"] = type(e).__name__
+        result.meta["exception_detail"] = str(e)[:500]
     elapsed = round(time.time() - t0, 1)
     result.meta.setdefault("elapsed_s", elapsed)
 
@@ -493,16 +509,36 @@ def legacy_adapter(fn, tier, *args, **kwargs):
 
     Translation rules — derived from what the legacy functions actually do:
       * any tool marked degraded  → PhaseResult.degraded(first reason)
+      * any tool marked PARTIAL   → PhaseResult.degraded(the wall-clock reason).
+        See the note below — this is a deliberate DOWNGRADE, not an oversight.
       * nothing credited at all   → GATE_SKIPPED ('legacy_not_applicable'):
         the function chose not to run (e.g. non-WordPress target for the WP
         check). Credited-but-skipped, never coverage.
       * otherwise                 → OK
-    Findings and artifacts are carried across for run_phase to persist."""
+    Findings and artifacts are carried across for run_phase to persist.
+
+    ⚠ WHY PARTIAL MUST NOT FALL THROUGH TO OK (spec 198, 4.7's "biggest risk").
+    A partial entry is {"ok": False, "partial": True, ...} — it carries no
+    "degraded" key, so the degraded scan below does not see it, and tools_run IS
+    populated, so the skipped branch does not either. Without the explicit check
+    a wall-clock-cut nuclei chunk would return PhaseResult.ok() and the executor
+    would log the phase as clean coverage — re-creating the exact defect one
+    layer up from where we fixed it.
+
+    PhaseResult has no partial state of its own yet. Mapping to `degraded` here
+    is the conservative direction: it is coverage-negative, which is the
+    load-bearing property. The richer partial/coverage detail is NOT lost — it
+    lives in the tool_status entry the recorder copies to the real ctx, which is
+    what actually reaches the DB. A first-class PhaseResult.partial belongs with
+    the ruling-⑤ generalisation, not here.
+    """
     def _phase(ctx, work_dir):
         rec = _LegacyRecorder(ctx)
         fn(rec, *args, **kwargs)
         degraded = [(t, v.get("degraded")) for t, v in rec.tool_status.items()
                     if isinstance(v, dict) and "degraded" in v]
+        partial = [(t, v.get("reason")) for t, v in rec.tool_status.items()
+                   if isinstance(v, dict) and v.get("partial") is True]
         # Shape-translate before handing findings to the executor — heavy's
         # writer consumes FindingEvent, legacy phases emit LightFinding.
         events = [_as_finding_event(f, tier, ctx) for f in rec.findings]
@@ -510,6 +546,27 @@ def legacy_adapter(fn, tier, *args, **kwargs):
                          meta={"legacy_tools": list(rec.tools_run)})
         if degraded:
             return PhaseResult.degraded(degraded[0][1] or "legacy_degraded", **result_kw)
+        if partial:
+            # PARTIAL_OK DELIBERATELY maps to PhaseResult.degraded here.
+            # 4.7 ruling ⑦ (2026-08-29), ratified as the correct interim.
+            #
+            # Rationale: PhaseResult is an IN-FLIGHT representation between the
+            # executor and the legacy runner. It never reaches the DB. Every
+            # consumer that acts on the partial-vs-degraded distinction — the
+            # note-127 autocloser, delta_close_eligible, the portal, reports —
+            # reads tool_status, where the full {"ok": false, "partial": true,
+            # reason, coverage} shape IS preserved. Legacy-adapter consumers
+            # only need coverage-negative semantics, which degraded provides,
+            # and collapsing errs in the safe direction: even a consumer that
+            # treats degraded as "kind of ok" still gets coverage-negative.
+            #
+            # DO NOT "tidy" this by adding a PARTIAL state to PhaseResult. That
+            # touches every PhaseResult consumer and test for the benefit of one
+            # tool, and is disproportionate now.
+            #   PROMOTION TRIGGER: when a SECOND tool family gains PARTIAL_OK
+            #   under ruling ⑤ stages 2-4, promote PhaseResult.PARTIAL to a
+            #   first-class state — at that point multiple consumers benefit.
+            return PhaseResult.degraded(partial[0][1] or "legacy_partial", **result_kw)
         if not rec.tools_run:
             return PhaseResult.skipped("legacy_not_applicable", **result_kw)
         return PhaseResult.ok(**result_kw)

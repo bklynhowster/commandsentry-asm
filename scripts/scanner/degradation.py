@@ -499,9 +499,21 @@ def delta_close_eligible(tool_status: dict) -> bool:
     cosmetic lag; over-close (false-remediating a live finding) is the dangerous
     failure delta-close exists to avoid.
 
-    Empty tool_status -> False (no scan ran, nothing proven). Values are the
-    three-state shape {"ok": true} | {"degraded": "..."} | {"skipped": "..."};
-    'ok' key-membership is the eligibility test.
+    Empty tool_status -> False (no scan ran, nothing proven).
+
+    ⚠ TESTS THE VALUE, NOT THE KEY. This read `all("ok" in v ...)` until
+    2026-08-29, which was safe only while the shapes were mutually exclusive:
+    {"ok": true} | {"degraded": "..."} | {"skipped": "..."} — exactly one of
+    which carried an `ok` key at all. The PARTIAL_OK shape added for spec 198
+    carries {"ok": False, "partial": True, ...}, so key-membership returned
+    True for it and a wall-clock-cut chunk became eligible to delta-close.
+    That is the OVER-CLOSE failure this function exists to prevent: a chunk
+    that never looked at 97% of its templates would have been allowed to
+    false-remediate the live findings it did not look for.
+
+    Key-membership as a proxy for a value is the same class of latent bug as
+    the NULL-safe ratchet inversion. `is True` is deliberate over truthiness —
+    it also rejects a future {"ok": "partial"}-style string shape.
 
     NOTE: this is the FINER gate. The STRUCTURAL guard is that delta-close is
     called only from close_out (the clean exit) — degraded_out never calls it,
@@ -509,7 +521,7 @@ def delta_close_eligible(tool_status: dict) -> bool:
     """
     if not tool_status:
         return False
-    return all("ok" in v for v in tool_status.values())
+    return all(v.get("ok") is True for v in tool_status.values())
 
 
 # ============================================================================
@@ -544,19 +556,66 @@ def delta_close_eligible(tool_status: dict) -> bool:
 
 ABORT_SCAN = "abort_scan"   # harm condition: continuing is HARMFUL, not just useless
 DEGRADED = "degraded"       # tool failure: record it, keep scanning
-_DISPOSITIONS = (ABORT_SCAN, DEGRADED)
+# ── PARTIAL_OK — fourth disposition (4.7 ruling ① on spec 198, 2026-08-29) ──
+# "The tool ran successfully within the bounds WE gave it, and those bounds cut
+# it off before it finished the work we scoped."
+#
+# Distinct from all three others, and the distinction is load-bearing:
+#   * not `ok`       — ok claims COMPLETE coverage. Crediting a wall-clock cut
+#                      as ok is the exact defect spec 198 exists to fix: 4 of 6
+#                      nuclei chunks on Command run #2624 timed out with zero
+#                      retained output and were recorded {"ok": true}.
+#   * not ABORT_SCAN — nothing harmful happened. The target is reachable, we
+#                      are not banned. Aborting would trade fictional coverage
+#                      for ZERO coverage (spec 198 §4.4).
+#   * not DEGRADED   — the tool did not misbehave. nuclei did exactly what it
+#                      was configured to do; the wall clock is OUR knob.
+#
+# Downstream, `ok=false` is what keeps the note-127 autocloser (migration
+# 20260828a predicate `tool ->> 'ok' = 'true'`) from treating a cut-short chunk
+# as evidence a finding is gone. The partial/coverage fields exist so a reader
+# can tell "looked at 3% and found nothing" from "looked at everything and
+# found nothing" — a distinction `degraded` alone destroys.
+PARTIAL_OK = "partial_ok"   # bound cut: WE stopped it; results are a real subset
+_DISPOSITIONS = (ABORT_SCAN, DEGRADED, PARTIAL_OK)
+
+# ── Coverage buckets (4.7 ruling ③) ────────────────────────────────────────
+# Deliberately BUCKETED, not a float ratio. A specific ratio (0.0125 = 40/3200)
+# claims precision the underlying data does not support: nuclei templates fire
+# a variable number of requests each, so "templates attempted" is an estimate
+# built on an estimate. Honest imprecision beats false precision.
+COVERAGE_COMPLETE = "complete"                    # ran the whole scoped set
+COVERAGE_PARTIAL_SIGNIFICANT = "partial_significant"   # >= half attempted
+COVERAGE_PARTIAL_MINIMAL = "partial_minimal"      # < half attempted
+COVERAGE_UNKNOWN = "unknown"                      # tool state opaque; cannot say
+_COVERAGES = (COVERAGE_COMPLETE, COVERAGE_PARTIAL_SIGNIFICANT,
+              COVERAGE_PARTIAL_MINIMAL, COVERAGE_UNKNOWN)
 
 
 class Degradation:
     """A degradation reason carrying its own disposition. Immutable."""
 
-    __slots__ = ("reason", "disposition")
+    __slots__ = ("reason", "disposition", "coverage")
 
-    def __init__(self, reason: str, disposition: str):
+    def __init__(self, reason: str, disposition: str,
+                 coverage: str | None = None):
         if disposition not in _DISPOSITIONS:
             raise ValueError(f"unknown disposition {disposition!r}")
+        # Coverage is meaningful ONLY for PARTIAL_OK. Fail loudly rather than
+        # let an abort/degrade quietly carry a coverage claim it cannot support
+        # — the same fail-closed-on-a-verdict discipline as testssl_degradation.
+        if coverage is not None:
+            if disposition != PARTIAL_OK:
+                raise ValueError(
+                    f"coverage is only meaningful for {PARTIAL_OK!r}, "
+                    f"got disposition {disposition!r}")
+            if coverage not in _COVERAGES:
+                raise ValueError(f"unknown coverage {coverage!r}")
+        elif disposition == PARTIAL_OK:
+            raise ValueError(f"{PARTIAL_OK!r} requires a coverage bucket")
         object.__setattr__(self, "reason", reason)
         object.__setattr__(self, "disposition", disposition)
+        object.__setattr__(self, "coverage", coverage)
 
     def __setattr__(self, *_a):
         raise AttributeError("Degradation is immutable")
@@ -565,12 +624,20 @@ class Degradation:
     def aborts(self) -> bool:
         return self.disposition == ABORT_SCAN
 
+    @property
+    def is_partial(self) -> bool:
+        """True for a bound-cut. Callers use this to take the non-fatal
+        record-and-continue path INSTEAD of raising DegradedRunError."""
+        return self.disposition == PARTIAL_OK
+
     def __eq__(self, other):
         return (isinstance(other, Degradation)
-                and (self.reason, self.disposition) == (other.reason, other.disposition))
+                and (self.reason, self.disposition, self.coverage)
+                    == (other.reason, other.disposition, other.coverage))
 
     def __repr__(self):
-        return f"Degradation({self.reason!r}, {self.disposition!r})"
+        cov = f", coverage={self.coverage!r}" if self.coverage else ""
+        return f"Degradation({self.reason!r}, {self.disposition!r}{cov})"
 
 
 def egress_degradation(reason: str) -> Degradation:
@@ -594,3 +661,27 @@ def tool_degradation(reason: str) -> Degradation:
     was reachable and one tool produced unusable output. In a cumulative run
     that must not discard the other phases' results."""
     return Degradation(reason, DEGRADED)
+
+
+def wall_clock_degradation(wall_clock_s: int,
+                           coverage: str = COVERAGE_UNKNOWN) -> Degradation:
+    """FOURTH producer class (4.7 ruling ① on spec 198). ALWAYS partial_ok.
+
+    The producer is the INVOCATION LAYER, not a tool-output inspector — a
+    wall-clock kill is invisible to the tool (nuclei never learns it is being
+    killed; the OS/subprocess does it), so no amount of stdout/stderr analysis
+    can detect it. The only place that knows is the `except TimeoutExpired`
+    handler. This function is the disposition for exactly that moment.
+
+    Why it can never be ABORT_SCAN: we chose the wall clock. Nothing about the
+    target changed. Routing this through is_tool_output_degraded() — whose every
+    slug is a harm-condition and therefore aborts (see b1_degradation) — would
+    kill the whole scan on the FIRST timed-out chunk. On a WAF-fronted target
+    that is chunk 1, so nikto/ffuf/testssl/gau/naabu and every remaining light
+    phase would never run. That is spec 198 §4.4, ratified by 4.7: it would
+    trade fictional coverage for zero coverage.
+
+    Callers MUST take the non-fatal path on `.is_partial` and MUST NOT raise
+    DegradedRunError. test_wall_clock_partial.py pins both.
+    """
+    return Degradation(f"wall_clock_cut_{wall_clock_s}s", PARTIAL_OK, coverage)

@@ -260,7 +260,15 @@ def run_cmd(cmd: list[str], timeout: int = 30, input_str: str | None = None) -> 
         )
         return p.returncode, p.stdout or "", p.stderr or ""
     except subprocess.TimeoutExpired as e:
-        return 124, "", f"timeout after {timeout}s: {e}"
+        # 4.7 ruling ② on spec 198 — retain partial output rather than discard
+        # it. Kept identical to run_medium.run_cmd (which owns the shared
+        # helper and the full reasoning); light has its own copy of run_cmd, so
+        # parity is by same-edit, not by import. _timeout_stream_as_text is
+        # imported from run_medium so the bytes-under-text=True decode trap is
+        # fixed in exactly one place.
+        return (124,
+                _timeout_stream_as_text(e.stdout),
+                _timeout_stream_as_text(e.stderr) + f"\ntimeout after {timeout}s")
     except FileNotFoundError as e:
         return 127, "", f"command not found: {cmd[0]} — {e}"
     except Exception as e:
@@ -281,7 +289,8 @@ def log(msg: str) -> None:
 # Live scan progress (note 103, #46): reuse run_medium's DB-flush helpers so
 # Light writes tool_status + planned_steps mid-run for the portal ScanProgress
 # card. run_medium imports nothing from run_light, so this is NOT circular.
-from run_medium import flush_progress, flush_planned_steps  # noqa: E402
+from run_medium import (flush_progress, flush_planned_steps,  # noqa: E402
+                        _timeout_stream_as_text)
 # Declared-tier findings.source — single source of truth shared with the @phase
 # registry (spec 190 / 4.7 ruling 191 Q1). Decouples source from run intensity.
 from phase_source import source_for_tier, LIGHT  # noqa: E402

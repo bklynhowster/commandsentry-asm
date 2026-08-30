@@ -75,6 +75,7 @@ from phase_source import source_for_tier, MEDIUM  # noqa: E402  (spec 190/191 Q1
 from degradation import (
     DegradedRunError,
     MAX_BAN_EVENTS,
+    wall_clock_degradation,
     MAX_HEALTHCHECK_FAILURES,
     POST_ROTATE_SETTLE_ATTEMPTS,
     POST_ROTATE_SETTLE_DELAY_S,
@@ -934,6 +935,88 @@ def mark_tool_skipped(ctx: ScanContext, tool_name: str, reason: str) -> None:
     flush_progress(ctx)
 
 
+def mark_tool_partial(
+    ctx: ScanContext,
+    tool_name: str,
+    degradation,
+    *,
+    matches: int = 0,
+    stderr: str | None = None,
+) -> None:
+    """Record a BOUND CUT — the tool ran correctly and OUR wall clock stopped
+    it before it finished the scoped work. 4.7 ruling ① on spec 198.
+
+    Writes the FOURTH tool_status shape:
+
+        {"ok": false, "partial": true,
+         "reason": "wall_clock_cut_180s", "coverage": "unknown", "matches": 3}
+
+    Every field earns its place:
+
+      ok=false     LOAD-BEARING. Migration 20260828a gates note-127 autoclose on
+                   `tool_status -> tool ->> 'ok' = 'true'`. A cut-short chunk
+                   must never license closing a finding it did not look for.
+                   This single field is what fixes the spec-198 defect.
+      partial=true Distinguishes "we cut it off, results are a real subset" from
+                   "the tool failed, results are garbage". Both are ok=false, so
+                   the autocloser treats them identically (correct), but a
+                   portal, report or future rules engine needs to tell them
+                   apart — conflating them destroys the coverage story.
+      reason       Provenance. Names the bound that cut, not a failure.
+      coverage     Bucketed, never a ratio (4.7 ruling ③). See degradation.py.
+      matches      Findings BANKED before the cut. Non-zero here is the honest
+                   record "found N things but did not finish looking" — 4.7
+                   ruling ② confirmed that is coherent, not contradictory.
+
+    Does NOT raise. That is the whole point: raising DegradedRunError here would
+    kill the scan on the first timed-out chunk and lose every later phase.
+    Callers pass a Degradation from wall_clock_degradation(); this asserts the
+    disposition rather than trusting the call site, so a future caller cannot
+    quietly route an abort-class reason through the non-fatal path.
+    """
+    if not getattr(degradation, "is_partial", False):
+        # RAISES, deliberately — 4.7 ruling ⑧. This is a PROGRAMMING error, not
+        # a runtime condition: someone routed an abort- or degrade-class reason
+        # through the one path that does not abort, which is precisely the
+        # laundering the typed-disposition design exists to prevent. Failing
+        # loud catches it in CI or on first run; log-and-continue would ship the
+        # bug silently wearing a legitimate-looking status.
+        #
+        # "But this path's whole purpose is not to abort" — two different
+        # aborts. Scan-abort (production behaviour on a real harm condition) is
+        # what we avoid here. Execution-abort on misuse is wanted everywhere.
+        # Operational safety is the OUTER layer's job: run_phases catches
+        # unexpected exceptions per phase, so a bug here degrades one phase
+        # rather than killing the scan. The check itself stays strict.
+        raise ValueError(
+            f"mark_tool_partial called with a non-PARTIAL_OK disposition "
+            f"({getattr(degradation, 'disposition', degradation)!r}) for "
+            f"{tool_name!r}. This is a programming error: a bound-cut producer "
+            f"must mint PARTIAL_OK via wall_clock_degradation(), and an "
+            f"abort/degrade reason needs mark_tool_degraded() instead.")
+    entry = {
+        "ok": False,
+        "partial": True,
+        "reason": degradation.reason,
+        "coverage": degradation.coverage,
+    }
+    if matches:
+        entry["matches"] = matches
+    ctx.tool_status[tool_name] = entry
+    flush_progress(ctx)
+    if stderr:
+        # Capture stderr on the partial path too. Beyond forensics this is the
+        # instrument for increment 2 (4.7 ruling ④): nuclei runs with -silent,
+        # which suppresses its request/template stats, so we do not yet know
+        # what a killed nuclei actually emits. Persisting it means the NEXT
+        # live run tells us the real format instead of us guessing one.
+        capped_artifact = stderr[:MARK_DEGRADED_STDERR_ARTIFACT_CAP_BYTES]
+        ctx.artifacts.append((f"{tool_name}_stderr", "text", capped_artifact))
+        capped_log = stderr[:MARK_DEGRADED_STDERR_LOG_CAP_BYTES]
+        log(f"{tool_name} partial stderr ({len(stderr)}B, "
+            f"showing first {len(capped_log)}B): {capped_log}")
+
+
 def mark_tool_degraded(
     ctx: ScanContext,
     tool_name: str,
@@ -1153,6 +1236,27 @@ def wafw00f_is_degraded(stdout: str, rc: int) -> tuple[bool, str]:
 
 
 # ─── Subprocess helpers ─────────────────────────────────────────────────
+def _timeout_stream_as_text(raw) -> str:
+    """Decode a TimeoutExpired.stdout/.stderr buffer to str.
+
+    ⚠ THE TRAP THIS EXISTS FOR. `subprocess.run(..., text=True)` decodes the
+    RESULT object, but on timeout it raises TimeoutExpired built from the raw
+    buffered bytes — so `e.stdout` is **bytes even under text=True**. Verified
+    empirically on 2026-08-29, not assumed.
+
+    Returning those bytes unchanged would be a silent-failure of exactly the
+    kind spec 198 is about: the nuclei parser tests `line.startswith("{")`, and
+    every line of a bytes object stringifies as `b'{"template-id": ...'`, which
+    fails that test. Partial parsing would yield ZERO findings and look for all
+    the world like it had worked. test_wall_clock_partial.py pins the decode.
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return str(raw)
+
+
 def run_cmd(cmd: list[str], timeout: int = 30, input_str: str | None = None,
             env_extra: dict | None = None) -> tuple[int, str, str]:
     env = os.environ.copy()
@@ -1164,8 +1268,20 @@ def run_cmd(cmd: list[str], timeout: int = 30, input_str: str | None = None,
             input=input_str, env=env,
         )
         return p.returncode, p.stdout or "", p.stderr or ""
-    except subprocess.TimeoutExpired:
-        return 124, "", f"timeout after {timeout}s"
+    except subprocess.TimeoutExpired as e:
+        # 4.7 ruling ② on spec 198 — RETAIN partial output. subprocess.run
+        # kills the child and re-communicates on timeout, so TimeoutExpired
+        # carries everything the tool wrote before the kill. Discarding it (the
+        # pre-2026-08-29 behaviour, `return 124, "", ...`) threw away real,
+        # already-detected findings — on Command run #2624 that was 4 nuclei
+        # chunks × 180s of scanning, destroyed rather than merely truncated.
+        #
+        # Callers get rc=124 AND the partial stream. A caller that parses
+        # line-oriented output must tolerate a truncated final line; see
+        # parse_nuclei_jsonl().
+        return (124,
+                _timeout_stream_as_text(e.stdout),
+                _timeout_stream_as_text(e.stderr) + f"\ntimeout after {timeout}s")
     except FileNotFoundError as e:
         return 127, "", f"command not found: {cmd[0]} — {e}"
     except Exception as e:
@@ -2475,10 +2591,50 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         if b1_reason:
             mark_tool_degraded(ctx, chunk_name, b1_reason, stderr=chunk_stderr)
             raise DegradedRunError(b1_reason, chunk_name)
-        mark_tool_ok(ctx, chunk_name)
-        # #32 — chunk completed cleanly → tool reached target. Establishes
-        # target_proven_reachable for the prior-tool-success short-circuit.
-        ctx.target_proven_reachable = True
+
+        # ── WALL-CLOCK CUT (spec 198, 4.7 ruling ①) ─────────────────────────
+        # ORDER IS DELIBERATE: the b1 harm-check above runs FIRST and keeps its
+        # abort authority. If the target went unreachable during this chunk that
+        # is a harm condition and still aborts, timeout or not. Only once we
+        # know the target is healthy does rc==124 mean what it says here — that
+        # OUR 180s bound stopped a correctly-behaving tool.
+        #
+        # Before 2026-08-29 this fell straight through to mark_tool_ok, because
+        # is_tool_output_degraded returns None for a timeout against a healthy
+        # target: post_health is True, pre_health is True, and "timeout after
+        # 180s" matches none of the 7 unreachable stderr patterns. Command run
+        # #2624 recorded 4 of 6 chunks that way — cut short, zero retained
+        # output, credited as full coverage, licensing autoclose.
+        #
+        # NO RAISE. On a WAF-fronted target the SOFTENED path makes chunk 1
+        # time out deterministically (180s x 5 req/s vs template sets in the
+        # thousands), so raising here would abort essentially every WAF-fronted
+        # scan before nikto, ffuf, testssl, gau, naabu and the light phases ran.
+        # That is spec 198 §4.4 — trading fictional coverage for zero coverage.
+        if rc == 124:
+            # Coverage stays UNKNOWN for now, on purpose. Bucketing it honestly
+            # needs a request/template count (4.7 ruling ④) and nuclei runs with
+            # -silent, which suppresses its stats. mark_tool_partial persists
+            # stderr so the next live run shows us the real format; guessing a
+            # bucket we cannot evidence would be exactly the false precision
+            # ruling ③ warns against.
+            mark_tool_partial(
+                ctx, chunk_name,
+                wall_clock_degradation(NUCLEI_CHUNK_WALL_S),
+                matches=matches, stderr=chunk_stderr,
+            )
+            log(f"  chunk {i+1} PARTIAL: wall-clock cut at "
+                f"{NUCLEI_CHUNK_WALL_S}s — {matches} finding(s) banked, "
+                f"remaining templates NOT attempted (not counted as coverage)")
+            # The chunk was demonstrably talking to the target when we killed
+            # it, and post_chunk_healthy passed above, so reachability is
+            # established exactly as it is on the clean path.
+            ctx.target_proven_reachable = True
+        else:
+            mark_tool_ok(ctx, chunk_name)
+            # #32 — chunk completed cleanly → tool reached target. Establishes
+            # target_proven_reachable for the prior-tool-success short-circuit.
+            ctx.target_proven_reachable = True
 
         # PROBE/PATIENT: healthcheck on the SAME tunnel BEFORE rotating.
         # In PROBE mode this is data-gathering. In PATIENT mode it gates
@@ -2827,7 +2983,30 @@ def run_nikto(ctx: ScanContext) -> None:
         mark_tool_degraded(ctx, "nikto", b1_reason, stderr=stderr)
         raise DegradedRunError(b1_reason, "nikto")
 
-    mark_tool_ok(ctx, "nikto")
+    # ── WALL-CLOCK CUT (spec 198, 4.7 ruling ⑨ — nikto brought into stage 1) ──
+    # nikto is stdout-based like nuclei, so it has the identical false-ok shape.
+    # It was included in stage 1 not on shape alone but because THIS SHIP'S OWN
+    # partial-retention change makes the exposure live, verified empirically:
+    #
+    #   before retention:  nikto_is_degraded("", ..., rc=124) -> (True, 'no_scan_output')
+    #   after  retention:  nikto_is_degraded(<partial>, ..., rc=124) -> (False, '')
+    #
+    # `no_scan_output` fires on `rc != 0 and "Nikto v" not in stdout`. nikto
+    # prints its version banner FIRST, so any retained partial output contains
+    # "Nikto v" and the guard stops firing — turning a loud degraded-abort into
+    # a silent mark_tool_ok. Retaining partial output without this branch would
+    # have REGRESSED nikto into the exact defect spec 198 exists to remove.
+    #
+    # Note nikto self-limits with `-maxtime NIKTO_WALL_S - 30`, so it normally
+    # finishes 30s inside our wall clock and this branch is a backstop, not the
+    # norm (unlike nuclei's SOFTENED path where the cut is deterministic).
+    if rc == 124:
+        mark_tool_partial(ctx, "nikto", wall_clock_degradation(NIKTO_WALL_S),
+                          matches=len(ctx.findings), stderr=stderr)
+        log(f"  nikto PARTIAL: wall-clock cut at {NIKTO_WALL_S}s — partial "
+            f"output parsed below, but NOT counted as coverage")
+    else:
+        mark_tool_ok(ctx, "nikto")
     # UNCONDITIONAL stderr log. nikto's short-help bail is often rc=0
     # (the gated `if rc not in (0,124)` block below swallowed it on the
     # 2026-06-07 PM testfire re-fire after the -host fix). Perl

@@ -2838,7 +2838,25 @@ def test_delta_close_eligible_empty_is_false():
     assert delta_close_eligible({}) is False
 
 
-def test_delta_close_eligible_ok_value_irrelevant():
-    # Eligibility is key-membership of 'ok', value-blind (matches the
-    # three-state tool_status invariant elsewhere).
-    assert delta_close_eligible({"x": {"ok": True}, "y": {"ok": "whatever"}}) is True
+def test_delta_close_eligible_reads_the_ok_VALUE_not_the_key():
+    # REPLACES test_delta_close_eligible_ok_value_irrelevant (2026-08-29).
+    #
+    # That test pinned key-membership — `"ok" in v`, value-blind — which was a
+    # safe reading only while the three tool_status shapes were mutually
+    # exclusive and exactly one of them ({"ok": true}) carried an `ok` key at
+    # all. Spec 198 adds a fourth shape, {"ok": False, "partial": True, ...},
+    # and under the old reading it satisfied eligibility: a nuclei chunk cut off
+    # by our wall clock after ~3% of its templates would have been allowed to
+    # delta-close (false-remediate) the findings it never looked for. That is
+    # precisely the over-close failure delta_close_eligible exists to prevent.
+    #
+    # New contract: the VALUE must be exactly True.
+    assert delta_close_eligible({"x": {"ok": True}, "y": {"ok": True}}) is True
+    # ...and the old value-blind behaviour is GONE — both of these were True
+    # before the fix.
+    assert delta_close_eligible({"x": {"ok": True}, "y": {"ok": "whatever"}}) is False
+    assert delta_close_eligible(
+        {"x": {"ok": True},
+         "y": {"ok": False, "partial": True,
+               "reason": "wall_clock_cut_180s", "coverage": "unknown"}}
+    ) is False
