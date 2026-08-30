@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-08-30T16:59:45Z_be23b874",
-    "started_at": "2026-08-30T16:59:45Z",
-    "completed_at": "2026-08-30T17:01:06Z",
-    "duration_seconds": 81,
+    "id": "scan_2026-08-30T21:25:40Z_df31d692",
+    "started_at": "2026-08-30T21:25:40Z",
+    "completed_at": "2026-08-30T21:27:05Z",
+    "duration_seconds": 85,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -30,7 +30,7 @@
     "live_subdomain_count": 1,
     "host_count": 1,
     "service_count": 1,
-    "newest_cert_expiry_days": 157,
+    "newest_cert_expiry_days": 156,
     "top_hosting_org": "Cablevision Systems Corp.",
     "platforms": []
   },
@@ -40,8 +40,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-08-30T17:01:07Z",
-      "last_seen": "2026-08-30T17:01:07Z",
+      "first_discovered": "2026-08-30T21:27:05Z",
+      "last_seen": "2026-08-30T21:27:05Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -79,7 +79,7 @@
             "not_before": "2026-01-02T18:09:45Z",
             "not_after": "2027-02-03T18:09:45Z",
             "self_signed": false,
-            "days_to_expiry": 157
+            "days_to_expiry": 156
           }
         }
       ],
@@ -113,7 +113,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-08-30T12:14:30Z_6c90d3e9",
+    "since_scan": "scan_2026-08-30T16:59:45Z_be23b874",
     "added": {
       "subdomains": [],
       "services": [],
@@ -131,26 +131,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-07-30T03:26:41Z_8b94ac33",
-      "started_at": "2026-07-30T03:26:41Z",
-      "completed_at": "2026-07-30T03:28:19Z",
-      "subdomain_count": 1,
-      "live_subdomain_count": 1,
-      "host_count": 1,
-      "service_count": 1,
-      "subdomain_names": [
-        "24.157.51.84"
-      ],
-      "ports_by_sub": {
-        "24.157.51.84": {
-          "24.157.51.84": [
-            443
-          ]
-        }
-      },
-      "tech_versions": {}
-    },
     {
       "scan_id": "scan_2026-07-30T09:13:04Z_3c5d40a8",
       "started_at": "2026-07-30T09:13:04Z",
@@ -2515,6 +2495,26 @@
       "scan_id": "scan_2026-08-30T16:59:45Z_be23b874",
       "started_at": "2026-08-30T16:59:45Z",
       "completed_at": "2026-08-30T17:01:06Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 1,
+      "subdomain_names": [
+        "24.157.51.84"
+      ],
+      "ports_by_sub": {
+        "24.157.51.84": {
+          "24.157.51.84": [
+            443
+          ]
+        }
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-08-30T21:25:40Z_df31d692",
+      "started_at": "2026-08-30T21:25:40Z",
+      "completed_at": "2026-08-30T21:27:05Z",
       "subdomain_count": 1,
       "live_subdomain_count": 1,
       "host_count": 1,
