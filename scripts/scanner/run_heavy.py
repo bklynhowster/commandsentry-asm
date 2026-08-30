@@ -2870,6 +2870,46 @@ def fail_out_heavy(conn, ctx: HeavyScanContext, error: str) -> None:
         cur.execute(FAIL_SCAN_QUEUE_SQL, params)
 
 
+def build_cumulative_planned_steps(heavy_own_steps: list[str]) -> list[str]:
+    """#17 — the ScanProgress denominator for a CUMULATIVE heavy run.
+
+    🔴 NOT COSMETIC. Observed live on Command run #2637: planned_steps held
+    heavy's 6 own steps while tools_run credited 19. The portal card builds its
+    phase list FROM planned_steps, so there was no "Vulnerability scan" row at
+    all — and formatPhaseIssues therefore never inspected the nuclei entry
+    carrying chunks_cut. The "cut short" label shipped in the portal was correct
+    code that could not render. This function is what unblocks that UI.
+
+    Three rules, each load-bearing and each mutation-tested:
+
+    * REGISTRY PHASES FIRST. That is the order run_phases executes them in, and
+      the card derives "current step" from the first planned step with no
+      tool_status entry yet. Reversing it makes the card point at the wrong
+      phase for the whole run.
+    * DISABLED PHASES EXCLUDED. `spec.enabled` is static, and a phase that
+      credits nothing would park the bar one step short forever. content_fetch
+      is the only one today.
+    * OVERLAP REMOVED, not deduped by luck. content_fetch is registered AND in
+      heavy's own list; dropping registry-owned names from heavy's list is what
+      makes the two disjoint.
+
+    Enumerable up front only because run_phase credits spec.name (4.7 ruling ⑱)
+    rather than per-chunk names — chunk names depend on ctx.tech_stack /
+    waf_kind, which are not populated until the ban-detect phases have run. If
+    per-chunk crediting ever returns (ruling ⑬), this plan goes stale mid-run
+    and needs a re-flush instead.
+
+    Pure function — no ctx, no I/O — so tests exercise THIS code rather than a
+    re-implementation of it.
+    """
+    import phase_registry  # noqa: F401 — import registers the phases
+    specs = phases_for_tier(TIER_HEAVY)
+    registry_names = [s.name for s in specs if s.enabled]
+    registry_owned = {s.name for s in specs}
+    return registry_names + [s for s in heavy_own_steps
+                             if s not in registry_owned]
+
+
 # ============================================================================
 # Entry point
 # ============================================================================
@@ -3012,6 +3052,8 @@ def run(descriptor_path: str, dsn: str) -> int:
         # flush_planned_steps no-ops if dsn unset and swallows failures.
         ctx.planned_steps = ["testssl.sh", "httpx", "gau", "content_fetch",
                              "naabu", "fingerprintx"]
+        if _CUMULATIVE_HEAVY_ENABLED:
+            ctx.planned_steps = build_cumulative_planned_steps(ctx.planned_steps)
         flush_planned_steps(ctx)
 
         # ─── CUMULATIVE HEAVY (step 4 inc 3c) ───────────────────────────────
