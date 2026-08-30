@@ -97,6 +97,48 @@ class Outcome:
     GATE_SKIPPED = "skipped"     # phase EXISTS, a per-asset gate says not here
     DISABLED = "disabled"        # phase not operational for ANY asset
     ABORT_SCAN = "abort_scan"
+    # ── PARTIAL / MIXED — 4.7 rulings ⑪ + ⑫ on spec 200 (2026-08-30) ──────────
+    # Ruling ⑦ originally collapsed PARTIAL_OK into DEGRADED here, on a premise I
+    # supplied and that turned out to be FALSE on this path: run_phase re-derives
+    # tool_status from the PhaseResult, and the _LegacyRecorder's rich entries are
+    # never copied to the real ctx. So on the registry path PhaseResult is the
+    # ONLY carrier, and collapsing into it does not merely simplify an in-flight
+    # value — it deletes the distinction from the persisted record. Command run
+    # #2632 proved it live: a cut nuclei phase persisted as
+    # {"degraded": "wall_clock_cut_180s"}, and the portal's "cut short" label was
+    # inert. 4.7 reversed ⑦ on that evidence.
+    PARTIAL = "partial"          # ran, OUR bound cut it, output is a real subset
+    MIXED = "mixed"              # sub-units disagree — see PhaseResult.per_unit_state
+
+
+@dataclass
+class UnitResult:
+    """One sub-invocation of a phase — a nuclei chunk, an ffuf wordlist slice.
+
+    4.7 ruling ⑫: "any chunk cut → PARTIAL" is not enough. A phase where 1 of 30
+    chunks was cut has far more coverage than one where 15 of 30 were, and both
+    would read as bare PARTIAL. MIXED only means anything if the per-unit
+    breakdown travels with it, so the breakdown is the load-bearing half of ⑫.
+
+    Deliberately generic: nuclei chunks are the first case, not the only one —
+    ffuf wordlist slices and any tool run in a loop over parameters have the same
+    shape.
+    """
+    name: str
+    outcome: str = Outcome.OK
+    reason: str = ""
+    coverage: str | None = None
+    matches: int = 0
+
+    def as_dict(self) -> dict:
+        d = {"name": self.name, "outcome": self.outcome}
+        if self.reason:
+            d["reason"] = self.reason
+        if self.coverage:
+            d["coverage"] = self.coverage
+        if self.matches:
+            d["matches"] = self.matches
+        return d
 
 
 @dataclass
@@ -107,6 +149,8 @@ class PhaseResult:
     artifacts: list[tuple] = field(default_factory=list)   # (name, kind, payload)
     findings: list[Any] = field(default_factory=list)      # FindingEvent-likes
     meta: dict = field(default_factory=dict)               # shape for the yield floor
+    coverage: str | None = None                            # bucket, PARTIAL/MIXED only
+    per_unit_state: list = field(default_factory=list)     # list[UnitResult] (⑫)
 
     @classmethod
     def ok(cls, **kw) -> "PhaseResult":
@@ -123,6 +167,24 @@ class PhaseResult:
     @classmethod
     def abort(cls, reason: str, **kw) -> "PhaseResult":
         return cls(outcome=Outcome.ABORT_SCAN, reason=reason, **kw)
+
+    @classmethod
+    def partial(cls, reason: str, coverage: str | None = None, **kw) -> "PhaseResult":
+        """Every sub-unit that ran was cut by our own bound."""
+        return cls(outcome=Outcome.PARTIAL, reason=reason, coverage=coverage, **kw)
+
+    @classmethod
+    def mixed(cls, reason: str, coverage: str | None = None, **kw) -> "PhaseResult":
+        """Sub-units disagree — some clean, some cut/failed. per_unit_state carries
+        the breakdown; the phase-level verdict alone is not sufficient and says so."""
+        return cls(outcome=Outcome.MIXED, reason=reason, coverage=coverage, **kw)
+
+    @property
+    def is_coverage_negative(self) -> bool:
+        """True when this phase must NOT be read as having established coverage.
+        The single question every consumer actually needs answered."""
+        return self.outcome in (Outcome.DEGRADED, Outcome.PARTIAL, Outcome.MIXED,
+                                Outcome.GATE_SKIPPED, Outcome.ABORT_SCAN)
 
 
 class DoubleExecutionError(Exception):
@@ -241,8 +303,52 @@ def clear_registry() -> None:
 
 # ── the executor: the five obligations, in order ────────────────────────────
 
+def _default_mark_partial(ctx, tool_name: str, result: "PhaseResult") -> None:
+    """Write the PARTIAL/MIXED tool_status entry (4.7 ⑪/⑫).
+
+    Shape is the same one mark_tool_partial writes on the legacy medium path, so
+    the two invocation paths agree — plus `per_chunk` when the phase has
+    sub-units, and `mixed` when the sub-units disagree.
+
+        {"ok": false, "partial": true, "reason": ..., "coverage": ...,
+         "matches": N, "mixed": true,
+         "per_chunk": [{"name": "nuclei[critical,high]", "outcome": "partial", ...}, ...]}
+
+    `ok: false` is the load-bearing field — it is what keeps migration
+    20260828a's `tool ->> 'ok' = 'true'` predicate and delta_close_eligible from
+    reading a cut-short phase as coverage. Everything else is diagnostics.
+    """
+    units = list(result.per_unit_state or [])
+    entry = {
+        "ok": False,
+        "partial": True,
+        "reason": result.reason or "wall_clock_cut",
+        "coverage": result.coverage or "unknown",
+    }
+    if result.outcome == Outcome.MIXED:
+        # ⑫ — a bare "partial" cannot distinguish 1-of-30 cut from 15-of-30 cut.
+        # This flag tells a reader the phase-level verdict is NOT sufficient and
+        # per_chunk is where the answer is.
+        entry["mixed"] = True
+    total_matches = sum(getattr(u, "matches", 0) or 0 for u in units)
+    if total_matches:
+        entry["matches"] = total_matches
+    if units:
+        entry["per_chunk"] = [u.as_dict() for u in units]
+        entry["chunks_ok"] = sum(1 for u in units if u.outcome == Outcome.OK)
+        entry["chunks_cut"] = sum(1 for u in units
+                                  if u.outcome in (Outcome.PARTIAL, Outcome.MIXED))
+    ctx.tool_status[tool_name] = entry
+    try:                                   # live progress; no-op without a dsn
+        from run_medium import flush_progress
+        flush_progress(ctx)
+    except Exception:                      # noqa: BLE001 — best-effort only
+        pass
+
+
 def run_phase(spec: PhaseSpec, ctx, work_dir, *,
-              mark_ok=None, mark_degraded=None, mark_skipped=None) -> PhaseResult:
+              mark_ok=None, mark_degraded=None, mark_skipped=None,
+              mark_partial=None) -> PhaseResult:
     """Execute one phase and own ALL of its bookkeeping.
 
     ORDER IS THE POINT. tools_run is credited AFTER fn returns, never before, so
@@ -261,6 +367,7 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
         mark_ok = mark_ok or mark_tool_ok
         mark_degraded = mark_degraded or mark_tool_degraded
         mark_skipped = mark_skipped or mark_tool_skipped
+    mark_partial = mark_partial or _default_mark_partial
 
     # ── double-EXECUTION guard (4.7 Q1, spec 195). Registration overlap is legal
     #    during the migration window; EXECUTION overlap is the corruption. Check
@@ -331,12 +438,22 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
 
     # ── declared yield floor ("ok" is not evidence of yield — the gau lesson).
     #    A tool can exit 0, return something, and still not have done its job.
-    if result.outcome == Outcome.OK and spec.healthy_yield is not None:
+    #
+    #    4.7 ruling ⑲: this MUST also gate PARTIAL and MIXED, not just OK. The two
+    #    checks are orthogonal — "did meaningful work happen?" is a different
+    #    question from "did it finish?". A chunk killed by the wall clock having
+    #    sent 0-3 requests is not partial work; it is a BROKEN chunk that also got
+    #    cut (WAF banned us at chunk start, template load failed, DNS timeout).
+    #    Recording that as PARTIAL would claim partial coverage we never had.
+    #    Yield floor failing therefore wins over the cut: DEGRADED, not PARTIAL.
+    if (result.outcome in (Outcome.OK, Outcome.PARTIAL, Outcome.MIXED)
+            and spec.healthy_yield is not None):
         verdict = spec.healthy_yield(result.meta)
         if verdict:
             result = PhaseResult(outcome=Outcome.DEGRADED, reason=verdict,
                                  artifacts=result.artifacts,
-                                 findings=result.findings, meta=result.meta)
+                                 findings=result.findings, meta=result.meta,
+                                 per_unit_state=result.per_unit_state)
 
     # ── obligation 3: artifacts — persisted for EVERY outcome, because evidence
     #    is least available exactly when it is most needed (the gau `if urls:`
@@ -372,6 +489,24 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
         return result
     if result.outcome == Outcome.OK:
         mark_ok(ctx, spec.name)
+    elif result.outcome in (Outcome.PARTIAL, Outcome.MIXED):
+        # 4.7 rulings ⑪ + ⑫ + ⑱. THE FIX for what run #2632 exposed: write the
+        # full four-field shape here instead of flattening to {"degraded": ...}.
+        #
+        # Keyed on spec.name, NOT on per-chunk names. That is deliberate and is
+        # what makes this ship code-only (⑱): the autocloser's producer patterns
+        # are LIKE patterns ('nuclei%'), which match the phase name fine, and
+        # set-equality with tools_run holds by construction. Restoring per-chunk
+        # KEYS is ruling ⑬ and waits for its own coordinated ship — it drags in
+        # the executed_phases guard rework (⑯) and an all-match predicate
+        # migration (⑰), because with per-chunk keys a clean nuclei[php] would
+        # satisfy the any-match autocloser for a finding only the CUT chunk would
+        # have re-detected.
+        #
+        # The per-chunk breakdown is not lost meanwhile — it rides inside the
+        # entry as `per_chunk`, so an operator can still see 3 cut of 6 rather
+        # than a bare "partial".
+        mark_partial(ctx, spec.name, result)
     else:
         mark_degraded(ctx, spec.name, result.reason or "degraded")
     return result
@@ -504,6 +639,37 @@ def _as_finding_event(f, tier, ctx):
     )
 
 
+def _units_from_recorder(tool_status: dict) -> list:
+    """Translate the recorder's per-sub-invocation tool_status into UnitResults.
+
+    This is where per-chunk detail is RESCUED. Verified empirically 2026-08-30:
+    the recorder does capture per-chunk keys (`nuclei[critical,high]`, …) with
+    the full four-field partial shape — re-derivation was throwing it away, not
+    failing to collect it. Ruling ⑬ will restore these as tool_status KEYS; until
+    then they ride inside the phase entry as `per_chunk`.
+    """
+    units = []
+    for name, v in (tool_status or {}).items():
+        if not isinstance(v, dict):
+            continue
+        if v.get("partial") is True:
+            outcome = Outcome.PARTIAL
+        elif "degraded" in v:
+            outcome = Outcome.DEGRADED
+        elif "skipped" in v:
+            outcome = Outcome.GATE_SKIPPED
+        elif v.get("ok") is True:
+            outcome = Outcome.OK
+        else:                              # unrecognised shape — never call it ok
+            outcome = Outcome.DEGRADED
+        units.append(UnitResult(
+            name=name, outcome=outcome,
+            reason=v.get("reason") or v.get("degraded") or v.get("skipped") or "",
+            coverage=v.get("coverage"), matches=v.get("matches", 0) or 0,
+        ))
+    return units
+
+
 def legacy_adapter(fn, tier, *args, **kwargs):
     """Wrap a self-bookkeeping legacy phase function as a contract phase.
 
@@ -547,26 +713,26 @@ def legacy_adapter(fn, tier, *args, **kwargs):
         if degraded:
             return PhaseResult.degraded(degraded[0][1] or "legacy_degraded", **result_kw)
         if partial:
-            # PARTIAL_OK DELIBERATELY maps to PhaseResult.degraded here.
-            # 4.7 ruling ⑦ (2026-08-29), ratified as the correct interim.
+            # ⑦ REVERSED by 4.7 on 2026-08-30 (spec 200, ruling ⑪). ⑦ collapsed
+            # this to PhaseResult.degraded on the premise — which I supplied and
+            # which was wrong — that the recorder's rich tool_status reaches the
+            # DB. It does not: run_phase re-derives tool_status from the
+            # PhaseResult, so on THIS path PhaseResult is the only carrier and
+            # the collapse deleted the distinction from the record. Run #2632
+            # persisted {"degraded": "wall_clock_cut_180s"} and the portal's
+            # "cut short" label was inert.
             #
-            # Rationale: PhaseResult is an IN-FLIGHT representation between the
-            # executor and the legacy runner. It never reaches the DB. Every
-            # consumer that acts on the partial-vs-degraded distinction — the
-            # note-127 autocloser, delta_close_eligible, the portal, reports —
-            # reads tool_status, where the full {"ok": false, "partial": true,
-            # reason, coverage} shape IS preserved. Legacy-adapter consumers
-            # only need coverage-negative semantics, which degraded provides,
-            # and collapsing errs in the safe direction: even a consumer that
-            # treats degraded as "kind of ok" still gets coverage-negative.
-            #
-            # DO NOT "tidy" this by adding a PARTIAL state to PhaseResult. That
-            # touches every PhaseResult consumer and test for the benefit of one
-            # tool, and is disproportionate now.
-            #   PROMOTION TRIGGER: when a SECOND tool family gains PARTIAL_OK
-            #   under ruling ⑤ stages 2-4, promote PhaseResult.PARTIAL to a
-            #   first-class state — at that point multiple consumers benefit.
-            return PhaseResult.degraded(partial[0][1] or "legacy_partial", **result_kw)
+            # Phase-level verdict is DERIVED from the sub-units, not "any cut
+            # wins" (⑫): all-cut is PARTIAL, some-cut-some-clean is MIXED. A
+            # phase with 1 of 30 chunks cut has far more coverage than one with
+            # 15 of 30, and MIXED plus per_unit_state is what carries that.
+            units = _units_from_recorder(rec.tool_status)
+            all_cut = all(u.outcome != Outcome.OK for u in units) if units else True
+            coverage = next((u.coverage for u in units if u.coverage), None)
+            reason = partial[0][1] or "legacy_partial"
+            ctor = PhaseResult.partial if all_cut else PhaseResult.mixed
+            return ctor(reason, coverage=coverage,
+                        per_unit_state=units, **result_kw)
         if not rec.tools_run:
             return PhaseResult.skipped("legacy_not_applicable", **result_kw)
         return PhaseResult.ok(**result_kw)

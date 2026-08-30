@@ -526,6 +526,154 @@ def test_composition_a_fully_clean_run_still_closes():
     assert_tool_status_invariant(ctx.tools_run, ctx.tool_status)
 
 
+# ── ⑪ ⑫ ⑲ — first-class PARTIAL/MIXED on the REGISTRY path ────────────────
+# Run #2632 shipped with these missing: a cut phase persisted as
+# {"degraded": "wall_clock_cut_180s"} because run_phase re-derives tool_status
+# from the PhaseResult and the recorder's rich entries are never copied across.
+
+def _nuclei_like(cut_names, ok_names):
+    from run_medium import mark_tool_ok, mark_tool_partial
+    from degradation import wall_clock_degradation
+
+    def fn(ctx):
+        for n in cut_names:
+            ctx.tools_run.append(n)
+            mark_tool_partial(ctx, n, wall_clock_degradation(180), matches=0)
+        for n in ok_names:
+            ctx.tools_run.append(n)
+            mark_tool_ok(ctx, n)
+    return fn
+
+
+def _run(fn, name="nuclei", **spec_kw):
+    import phase_contract as PC
+    ctx = types.SimpleNamespace(tools_run=[], tool_status={}, findings=[],
+                               artifacts=[], asset_id="a", scan_run_id="s", dsn=None)
+    spec = PC.PhaseSpec(name=name, tier="medium",
+                        fn=PC.legacy_adapter(fn, "medium"),
+                        order=PC.ORDER_MEDIUM_TOOLS, **spec_kw)
+    return PC.run_phase(spec, ctx, None), ctx
+
+
+def test_registry_path_persists_the_full_partial_shape_not_degraded():
+    """THE run #2632 regression. Before ⑪ this wrote {"degraded": ...}."""
+    _res, ctx = _run(_nuclei_like(["nuclei[a]", "nuclei[b]"], []))
+    e = ctx.tool_status["nuclei"]
+    assert e["ok"] is False and e["partial"] is True
+    assert e["reason"] == "wall_clock_cut_180s"
+    assert e["coverage"] == "unknown"
+    assert "degraded" not in e, "must not flatten to the degraded shape"
+
+
+def test_all_chunks_cut_is_PARTIAL_not_MIXED():
+    import phase_contract as PC
+    res, ctx = _run(_nuclei_like(["nuclei[a]", "nuclei[b]"], []))
+    assert res.outcome == PC.Outcome.PARTIAL
+    assert "mixed" not in ctx.tool_status["nuclei"]
+
+
+def test_some_cut_some_clean_is_MIXED_with_the_breakdown():
+    """⑫ — 'any cut wins' cannot tell 1-of-30 from 15-of-30. MIXED plus the
+    per-unit breakdown is what carries that."""
+    import phase_contract as PC
+    res, ctx = _run(_nuclei_like(["nuclei[a]", "nuclei[b]", "nuclei[c]"],
+                                 ["nuclei[d]", "nuclei[e]", "nuclei[f]"]))
+    assert res.outcome == PC.Outcome.MIXED
+    e = ctx.tool_status["nuclei"]
+    assert e["mixed"] is True
+    assert e["chunks_ok"] == 3 and e["chunks_cut"] == 3
+    names = [c["name"] for c in e["per_chunk"]]
+    assert names == ["nuclei[a]", "nuclei[b]", "nuclei[c]",
+                     "nuclei[d]", "nuclei[e]", "nuclei[f]"]
+    outcomes = {c["name"]: c["outcome"] for c in e["per_chunk"]}
+    assert outcomes["nuclei[a]"] == "partial" and outcomes["nuclei[d]"] == "ok"
+
+
+def test_partial_and_mixed_are_both_coverage_negative_end_to_end():
+    """Both gates must deny for BOTH shapes — the property the whole ship exists
+    for. Composition-level, not per-component."""
+    from degradation import delta_close_eligible
+    for cut, okn in ([["nuclei[a]"], []], [["nuclei[a]"], ["nuclei[b]"]]):
+        _res, ctx = _run(_nuclei_like(cut, okn))
+        e = ctx.tool_status["nuclei"]
+        assert str(e.get("ok")).lower() != "true"      # 20260828a predicate
+        assert delta_close_eligible(ctx.tool_status) is False
+
+
+def test_clean_phase_still_ok_and_still_closes():
+    import phase_contract as PC
+    from degradation import delta_close_eligible
+    res, ctx = _run(_nuclei_like([], ["nuclei[a]", "nuclei[b]"]))
+    assert res.outcome == PC.Outcome.OK
+    assert ctx.tool_status["nuclei"] == {"ok": True}
+    assert delta_close_eligible(ctx.tool_status) is True
+
+
+def test_matches_are_summed_across_units():
+    from run_medium import mark_tool_partial, mark_tool_ok
+    from degradation import wall_clock_degradation
+
+    def fn(ctx):
+        ctx.tools_run.append("nuclei[a]")
+        mark_tool_partial(ctx, "nuclei[a]", wall_clock_degradation(180), matches=2)
+        ctx.tools_run.append("nuclei[b]")
+        mark_tool_ok(ctx, "nuclei[b]")
+    _res, ctx = _run(fn)
+    assert ctx.tool_status["nuclei"]["matches"] == 2
+
+
+def test_set_equality_invariant_still_holds_on_the_partial_path():
+    """⑱ — keying on spec.name (not per-chunk names) is what keeps this ship
+    code-only. If a future change writes per-chunk KEYS without also fixing
+    tools_run, close_out would abort."""
+    from degradation import assert_tool_status_invariant
+    _res, ctx = _run(_nuclei_like(["nuclei[a]"], ["nuclei[b]"]))
+    assert_tool_status_invariant(ctx.tools_run, ctx.tool_status)
+    assert ctx.tools_run == ["nuclei"]
+
+
+def test_yield_floor_also_gates_PARTIAL():
+    """⑲ — a chunk cut having done NO work is broken-and-cut, not partial work.
+    Yield-floor failure must win over the cut and record DEGRADED."""
+    import phase_contract as PC
+    res, ctx = _run(_nuclei_like(["nuclei[a]"], []),
+                    healthy_yield=lambda meta: "zero_requests_sent")
+    assert res.outcome == PC.Outcome.DEGRADED
+    assert res.reason == "zero_requests_sent"
+    assert ctx.tool_status["nuclei"] == {"degraded": "zero_requests_sent"}
+    assert "partial" not in ctx.tool_status["nuclei"], (
+        "a broken-and-cut chunk must not claim partial coverage")
+
+
+def test_yield_floor_passing_leaves_PARTIAL_intact():
+    import phase_contract as PC
+    res, _ctx = _run(_nuclei_like(["nuclei[a]"], []),
+                     healthy_yield=lambda meta: None)
+    assert res.outcome == PC.Outcome.PARTIAL
+
+
+def test_unrecognised_unit_shape_is_never_read_as_ok():
+    """Fail-closed on a verdict: an entry we cannot classify is not coverage."""
+    import phase_contract as PC
+    units = PC._units_from_recorder({"weird": {"something": "else"}})
+    assert units[0].outcome == PC.Outcome.DEGRADED
+
+
+def test_partial_and_mixed_are_distinct_outcome_values():
+    import phase_contract as PC
+    assert PC.Outcome.PARTIAL not in (PC.Outcome.OK, PC.Outcome.DEGRADED,
+                                      PC.Outcome.SKIPPED, PC.Outcome.ABORT_SCAN)
+    assert PC.Outcome.MIXED != PC.Outcome.PARTIAL
+
+
+def test_is_coverage_negative_covers_every_non_ok_outcome():
+    import phase_contract as PC
+    for o in (PC.Outcome.DEGRADED, PC.Outcome.PARTIAL, PC.Outcome.MIXED,
+              PC.Outcome.GATE_SKIPPED, PC.Outcome.ABORT_SCAN):
+        assert PC.PhaseResult(outcome=o).is_coverage_negative is True
+    assert PC.PhaseResult(outcome=PC.Outcome.OK).is_coverage_negative is False
+
+
 def test_subprocess_run_really_does_carry_partial_output():
     """The empirical premise the whole of ruling ② rests on. If a future Python
     stops populating TimeoutExpired.stdout, retention breaks silently — this
