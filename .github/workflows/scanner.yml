@@ -84,6 +84,11 @@ on:
         required: false
         default: false
         type: boolean
+      nuclei_stats:
+        description: 'NUCLEI -stats (increment 2a, OBSERVATION ONLY). true = add `-stats -stats-interval 5` to every nuclei chunk so its progress counts land in stderr, and persist a <chunk>_stats artifact for clean chunks as well as cut ones. There is NO parser yet — this run exists to show us nuclei''s real output format, because #2632 and #2635 both proved -silent emits nothing and a guessed regex would match nothing. ⚠ RISK THIS FLAG EXISTS FOR: is_tool_output_degraded scans stderr for 7 reachability patterns and ABORTS THE SCAN at 3 matches, so if nuclei''s stats text contains phrases like "i/o timeout" this would start killing WAF-fronted scans. Default false until one observation run says otherwise.'
+        required: false
+        default: false
+        type: boolean
       authenticated:
         description: 'Run authenticated scan? Only valid for medium/heavy and requires asset_auth_config row.'
         required: false
@@ -587,6 +592,9 @@ jobs:
           # Wall-clock ceiling for the cumulative run (seconds). 30 min default —
           # Command holds a single VPN slot, so a longer run starves other scans.
           CUMULATIVE_WALL_CLOCK_S: ${{ vars.CUMULATIVE_WALL_CLOCK_S || '1800' }}
+          # nuclei -stats (increment 2a). Manual dispatch only, same shape as
+          # above — an observation flag, not a behaviour change we want on cron.
+          NUCLEI_STATS_ENABLED: ${{ github.event.inputs.nuclei_stats || 'false' }}
         run: |
           python scripts/scanner/run_heavy.py /tmp/scan_descriptor.json
 

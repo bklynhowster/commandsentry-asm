@@ -151,6 +151,26 @@ NUCLEI_TIMEOUT_S = 15
 NUCLEI_CHUNK_WALL_S = 180      # each chunk caps at ~3min (was 90s — too short for real targets)
 NUCLEI_URLS_PER_CHUNK = 40     # ~30-50s of work per chunk
 
+# ── nuclei -stats (increment 2a, 4.7 ruling ⑭) — SHIPS DARK ─────────────────
+# DEFAULT OFF, and the reason is a specific abort risk, not general caution.
+#
+# -stats writes progress to STDERR. is_tool_output_degraded() scans stderr for
+# 7 reachability patterns ("i/o timeout", "connection refused", "connection
+# reset", …) and returns a slug once STDERR_DEGRADED_MATCH_THRESHOLD (3) match.
+# On the nuclei path a non-None b1_reason calls mark_tool_degraded AND RAISES
+# DegradedRunError — which ABORTS THE SCAN. So if nuclei's stats output happens
+# to report errored requests using any of those phrases three times, enabling
+# -stats would start aborting scans on WAF-fronted targets. That is a bigger
+# failure than the one we are instrumenting for.
+#
+# I have not seen nuclei's -stats output (cannot run nuclei in this sandbox),
+# and guessing is what this whole workstream exists to stop. So: flag it off,
+# turn it on for ONE observation run, read the persisted artifact, and only then
+# decide whether the b1 stderr scan needs to exclude stats lines (increment 2b).
+NUCLEI_STATS_ENABLED = os.environ.get(
+    "NUCLEI_STATS_ENABLED", "false").lower() in ("1", "true", "yes")
+NUCLEI_STATS_INTERVAL_S = int(os.environ.get("NUCLEI_STATS_INTERVAL_S", "5"))
+
 NIKTO_PAUSE_S = 1
 NIKTO_WALL_S = 600
 
@@ -2328,7 +2348,33 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
         "-H", f"User-Agent: {ua}",
         "-severity", severity_filter,
         "-silent", "-jsonl", "-no-color",
+        # ── -stats: the INSTRUMENT for coverage bucketing (4.7 ruling ⑭) ──────
+        # Run #2632 and #2635 both proved there is nothing to parse without it:
+        # every cut chunk's persisted stderr was exactly {"raw": "\ntimeout after
+        # 180s"} — our OWN appended text. `-silent` suppresses nuclei's progress
+        # output entirely, so a killed chunk tells us nothing about how much of
+        # its template set it got through.
+        #
+        # That is why `coverage` is still hard-coded "unknown": ruling ③ said
+        # bucket it honestly, and we cannot evidence a bucket we cannot measure.
+        # -stats emits periodic progress to STDERR (stdout stays clean JSONL, so
+        # the finding parser is untouched), and run_cmd now retains partial
+        # stderr on timeout, so the counts survive the kill.
+        #
+        # ⚠ INCREMENT 2a — EMIT ONLY, DELIBERATELY NO PARSER YET. 4.7 required
+        # verifying that nuclei actually emits mid-run under WAF-safe pacing
+        # before we depend on it; if it only emitted at end-of-run, a killed
+        # chunk would emit nothing and the instrument would be worthless. I
+        # cannot run nuclei here, so the next live run reads the artifact and
+        # tells us the real format — then 2b writes the parser against what we
+        # observed, not against a guessed regex. Same discipline that stopped us
+        # shipping a regex for a format that did not exist.
+        #
+        # -stats over -stats-json per ⑭: we need requests/templates counts, and
+        # the smaller instrument is the right one.
     ]
+    if NUCLEI_STATS_ENABLED:
+        cmd += ["-stats", "-stats-interval", str(NUCLEI_STATS_INTERVAL_S)]
     if tag_filter:
         cmd += ["-tags", tag_filter]
     if ctx.waf_detected:
@@ -2337,10 +2383,18 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
         cmd += ["-exclude-tags", "dos"]
 
     rc, stdout, stderr = run_cmd(cmd, timeout=NUCLEI_CHUNK_WALL_S)
-    ctx.artifacts.append((
-        f"nuclei[{severity_filter}{':'+tag_filter if tag_filter else ''}]",
-        "jsonl", stdout,
-    ))
+    chunk_label = f"nuclei[{severity_filter}{':'+tag_filter if tag_filter else ''}]"
+    ctx.artifacts.append((chunk_label, "jsonl", stdout))
+    if NUCLEI_STATS_ENABLED and stderr.strip():
+        # Increment 2a observation capture. mark_tool_partial already persists
+        # stderr on the CUT path, but a cut chunk alone cannot tell us the
+        # denominator — "sent 900 requests" means nothing without knowing what a
+        # COMPLETED chunk of the same plan sends. Capturing both is what makes
+        # ruling ③'s buckets computable rather than guessable.
+        ctx.artifacts.append((
+            f"{chunk_label}_stats", "text",
+            stderr[:MARK_DEGRADED_STDERR_ARTIFACT_CAP_BYTES],
+        ))
 
     matches = 0
     for line in stdout.splitlines():
