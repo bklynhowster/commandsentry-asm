@@ -375,21 +375,38 @@ def _default_mark_partial(ctx, tool_name: str, result: "PhaseResult") -> None:
         pass
 
 
-def _merge_chunk_plan_meta(ctx, tool_name: str) -> None:
-    """Fold ctx.chunk_plan_meta into the phase's tool_status entry (4.7 ⑭′.4).
+def _merge_phase_diagnostics(ctx, tool_name: str) -> None:
+    """Fold a phase's own diagnostics back into its tool_status entry (⑭′.4).
 
-    Called on EVERY outcome path, not just the partial one. A plan shrunk by a
-    blocked tech-detect can complete every chunk it did plan and so reads as a
-    clean, fully-OK run — `chunks_ok`/`chunks_cut` cannot express "two chunks
-    were never planned". planned_chunks > actual_chunks is the only signal that
-    survives, so it has to be written even when nothing was cut.
+    Runs on EVERY outcome path, and it has to, for two separate reasons.
+
+    1. mark_ok/mark_degraded REPLACE the entry wholesale
+       (`ctx.tool_status[tool_name] = {"ok": True}`), so anything the phase
+       body wrote there is gone by the time run_phase returns. Run #2649 lost
+       every tech-detect field this way and persisted a bare `{"ok": true}` —
+       the third time in this workstream that data written upstream was
+       discarded at a translation boundary.
+    2. A plan shrunk upstream can complete every chunk it DID plan, so it
+       reads as a clean fully-OK run. `planned_chunks > actual_chunks` is the
+       only surviving signal, so it must be written even when nothing was cut.
+
+    `ctx.tool_diag` is per-tool and keyed by name. `ctx.chunk_plan_meta`
+    describes the NUCLEI CHUNK PLAN specifically, and is scoped to nuclei
+    here: it lives on ctx for the whole run, so an unguarded merge stamped
+    `planned_chunks` onto nikto and ffuf as well (observed on run #2649).
+    Those tools have no chunks — the field was meaningless on them, and a
+    meaningless field that looks meaningful is how a reader gets misled.
     """
-    meta = getattr(ctx, "chunk_plan_meta", None)
-    if not meta:
-        return
     entry = (getattr(ctx, "tool_status", None) or {}).get(tool_name)
-    if isinstance(entry, dict):
-        entry.update(meta)
+    if not isinstance(entry, dict):
+        return
+    diag = (getattr(ctx, "tool_diag", None) or {}).get(tool_name)
+    if diag:
+        entry.update(diag)
+    if tool_name.startswith("nuclei"):
+        meta = getattr(ctx, "chunk_plan_meta", None)
+        if meta:
+            entry.update(meta)
 
 
 def run_phase(spec: PhaseSpec, ctx, work_dir, *,
@@ -556,7 +573,7 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
     else:
         mark_degraded(ctx, spec.name, result.reason or "degraded")
     # ⑭′.4 — after the entry exists, on whichever path wrote it.
-    _merge_chunk_plan_meta(ctx, spec.name)
+    _merge_phase_diagnostics(ctx, spec.name)
     return result
 
 

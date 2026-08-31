@@ -626,6 +626,15 @@ class ScanContext:
     # path. Without it a plan shrunk by a blocked tech-detect is internally
     # consistent and indistinguishable from a legitimately smaller plan.
     chunk_plan_meta: dict[str, Any] = field(default_factory=dict)
+    # Per-tool diagnostics a phase wants persisted. Needed because mark_tool_ok
+    # REPLACES ctx.tool_status[name], so anything written into that entry by
+    # the phase body is clobbered when run_phase credits the phase afterwards.
+    tool_diag: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Outcome slug from detect_tech_stack: the tech_source on success, or the
+    # failure reason. Read by run_nuclei_chunked to explain a shrunken plan
+    # WITHOUT consulting tool_status, which is not the same dict across the
+    # cumulative-heavy recorder boundary.
+    tech_detect_status: str = ""
     findings: list[MediumFinding] = field(default_factory=list)
     tools_run: list[str] = field(default_factory=list)
     artifacts: list[tuple[str, str, str]] = field(default_factory=list)
@@ -2252,7 +2261,13 @@ def detect_tech_stack(ctx: ScanContext) -> None:
     if used_fallback_candidate:
         diag["unused_prior_techs"] = used_fallback_candidate
 
+    # Stash BEFORE crediting: mark_tool_* replaces the entry, and under the
+    # registry path run_phase credits again after this function returns.
+    # phase_contract._merge_phase_diagnostics re-applies this either way.
+    ctx.tool_diag["httpx[-td]"] = diag
+
     if detected:
+        ctx.tech_detect_status = source
         mark_tool_ok(ctx, "httpx[-td]")
         ctx.tool_status["httpx[-td]"].update(diag)
         log(f"tech detected ({source}): {sorted(techs)}")
@@ -2265,6 +2280,7 @@ def detect_tech_stack(ctx: ScanContext) -> None:
                   else "tech_detect_no_signal" if rows
                   else f"tech_detect_rc_{rc}" if rc != 0
                   else "tech_detect_no_output")
+        ctx.tech_detect_status = reason
         mark_tool_degraded(ctx, "httpx[-td]", reason, stderr=stderr)
         ctx.tool_status["httpx[-td]"].update(diag)
         log(f"tech NOT detected ({reason}) — stack-specific nuclei chunks "
@@ -2744,25 +2760,27 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
     # 4.7 ⑭′.4 — stamp the plan against its upper bound BEFORE running it, so
     # a plan shrunk upstream is visible as planned > actual rather than
     # reading as an ordinary smaller plan. Merged into the nuclei tool_status
-    # entry on every outcome path (see phase_contract._merge_chunk_plan_meta).
+    # entry on every outcome path (see phase_contract._merge_phase_diagnostics).
     _upper = max_possible_chunk_count(ctx)
     ctx.chunk_plan_meta = {
         "planned_chunks": _upper,
         "actual_chunks": len(chunks),
     }
     if len(chunks) < _upper:
-        tech_entry = (ctx.tool_status or {}).get("httpx[-td]") or {}
-        if tech_entry.get("ok") is not True:
-            _why = tech_entry.get("degraded") or "tech_detect_unusable"
-        elif not tech_detection_meets_yield_floor(ctx.tech_stack):
-            _why = "tech_detect_no_stack_signal"
-        else:
-            # Stack detected and usable — the target genuinely has none of
-            # the remaining stack markers. Not a defect.
+        # 🔴 Derive this from ctx, NEVER from tool_status. Run #2649 recorded
+        # `tech_detect_unusable` on a run where detection SUCCEEDED (17 techs)
+        # and the plan was correctly 6 of 9 — the target simply is not
+        # IIS/Drupal/Joomla. Cause: under cumulative heavy the phase writes
+        # through a recording proxy, so ctx.tool_status here is not the dict
+        # detect_tech_stack credited, the lookup missed, and the code fell
+        # through to its failure branch. A field built to surface silent
+        # failure was manufacturing failure on healthy targets instead.
+        if tech_detection_meets_yield_floor(ctx.tech_stack):
             _why = "stack_not_applicable"
+        else:
+            _why = (getattr(ctx, "tech_detect_status", "")
+                    or "tech_detect_no_stack_signal")
         ctx.chunk_plan_meta["plan_delta_reason"] = _why
-        if tech_entry.get("tech_source"):
-            ctx.chunk_plan_meta["tech_source"] = tech_entry["tech_source"]
 
     for i, (sev, tag, desc) in enumerate(chunks):
         # Layer 1: pre-chunk healthcheck

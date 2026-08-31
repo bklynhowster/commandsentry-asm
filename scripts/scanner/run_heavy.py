@@ -266,6 +266,8 @@ class HeavyScanContext:
     # phase_contract. Cumulative heavy runs medium's planner against THIS
     # context, so the field has to exist here too.
     chunk_plan_meta: dict[str, Any] = field(default_factory=dict)
+    tool_diag: dict[str, dict[str, Any]] = field(default_factory=dict)
+    tech_detect_status: str = ""
 
     # ── medium-tier context fields (CONTEXT UNIFICATION, spec 190 step 2) ──
     # 🔴 FOUND IN PRODUCTION, run #2620 (first cumulative heavy, 2026-08-29).

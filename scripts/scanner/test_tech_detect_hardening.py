@@ -64,6 +64,8 @@ def _ctx(**kw) -> ScanContext:
     ctx.artifacts = list(kw.get("artifacts", ()))
     ctx.tool_status = dict(kw.get("tool_status", {}))
     ctx.chunk_plan_meta = {}
+    ctx.tool_diag = {}
+    ctx.tech_detect_status = kw.get("tech_detect_status", "")
     ctx.target_proven_reachable = False
     ctx.dsn = None
     return ctx
@@ -372,17 +374,107 @@ def test_fortigate_bound_matches_its_safe_only_plan():
     assert len(build_chunk_plan(ctx)) == M.SAFE_ONLY_CHUNK_COUNT
 
 
+# ── the three defects run #2649 exposed in the ⑭′ ship itself ─────────────
+
+def test_diag_survives_the_credit_that_replaces_the_entry(monkeypatch):
+    """🔴 DEFECT A, run #2649. mark_tool_ok does
+    `ctx.tool_status[name] = {"ok": True}` — a REPLACEMENT. Under the registry
+    path run_phase credits AGAIN after detect_tech_stack returns, so every
+    tech field was wiped and the entry persisted as a bare {"ok": true}.
+    The fallback would have been invisible the first time it ever fired."""
+    from phase_contract import _merge_phase_diagnostics
+    ctx = _ctx(artifacts=[])
+    _run_detect(monkeypatch, ctx, stdout=json.dumps(CLEAN_ROW))
+
+    # Simulate run_phase crediting the phase a second time.
+    ctx.tool_status["httpx[-td]"] = {"ok": True}
+    _merge_phase_diagnostics(ctx, "httpx[-td]")
+
+    entry = ctx.tool_status["httpx[-td]"]
+    assert entry["tech_source"] == "httpx[-td]", entry
+    assert entry["tech_count"] == 3, entry
+    assert entry["rows_valid"] == 1, entry
+
+
+def test_plan_delta_reason_is_NOT_a_failure_when_detection_succeeded():
+    """🔴 DEFECT B, run #2649 — the worst of the three. The run recorded
+    plan_delta_reason='tech_detect_unusable' while detection had SUCCEEDED
+    with 17 techs and the plan was correctly 6 of 9, because the target is
+    not IIS/Drupal/Joomla.
+
+    A field built to make silent failure visible was manufacturing failure on
+    healthy targets. Every non-IIS WordPress asset in the fleet would have
+    triaged as broken."""
+    ctx = _ctx(tech_stack={"wordpress", "php", "mysql", "nginx"})
+    ctx.tech_detect_status = "httpx[-td]"
+    plan = build_chunk_plan(ctx)
+    upper = M.max_possible_chunk_count(ctx)
+    assert len(plan) < upper, "fixture must actually shrink the plan"
+
+    reason = ("stack_not_applicable"
+              if M.tech_detection_meets_yield_floor(ctx.tech_stack)
+              else ctx.tech_detect_status)
+    assert reason == "stack_not_applicable", reason
+
+
+def test_plan_delta_reason_source_does_not_read_tool_status():
+    """Pins the CAUSE, not just the symptom. Under cumulative heavy the phase
+    writes through a recording proxy, so ctx.tool_status inside
+    run_nuclei_chunked is not the dict detect_tech_stack credited. Deriving
+    the reason from it is unreliable by construction — assert the lookup is
+    gone from the source rather than trusting it stays gone.
+
+    Comment lines are stripped first: the comments here DISCUSS tool_status
+    at length while explaining why it must not be read."""
+    src = (pathlib.Path(__file__).parent / "run_medium.py").read_text()
+    body = src.split("def run_nuclei_chunked(")[1].split("\ndef ")[0]
+    code = "\n".join(ln for ln in body.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    plan_meta = code.split("chunk_plan_meta")[1][:1200]
+    assert 'tool_status' not in plan_meta, (
+        "plan_delta_reason must not be derived from tool_status — it is not "
+        "the same dict across the recorder boundary (run #2649)")
+
+
+def test_a_genuinely_blocked_detection_still_reports_the_failure():
+    """The other half of B: when detection really did fail, the reason must
+    be the failure slug, not the benign one."""
+    ctx = _ctx(tech_stack=set())
+    ctx.tech_detect_status = "tech_detect_blocked"
+    reason = ("stack_not_applicable"
+              if M.tech_detection_meets_yield_floor(ctx.tech_stack)
+              else ctx.tech_detect_status)
+    assert reason == "tech_detect_blocked", reason
+
+
+def test_chunk_plan_meta_does_not_leak_onto_tools_without_chunks():
+    """🔴 DEFECT C, run #2649. ctx.chunk_plan_meta lives on ctx for the whole
+    run, so the unguarded merge stamped planned_chunks=9 onto nikto AND ffuf.
+    Neither has chunks. A meaningless field that looks meaningful is how a
+    reader gets misled."""
+    from phase_contract import _merge_phase_diagnostics
+    ctx = _ctx()
+    ctx.chunk_plan_meta = {"planned_chunks": 9, "actual_chunks": 6}
+    for tool in ("nuclei", "nikto", "ffuf"):
+        ctx.tool_status[tool] = {"ok": True}
+        _merge_phase_diagnostics(ctx, tool)
+
+    assert ctx.tool_status["nuclei"]["planned_chunks"] == 9
+    assert "planned_chunks" not in ctx.tool_status["nikto"], ctx.tool_status["nikto"]
+    assert "planned_chunks" not in ctx.tool_status["ffuf"], ctx.tool_status["ffuf"]
+
+
 def test_plan_meta_merges_into_the_entry_on_the_OK_path():
     """🔴 THE POINT OF FIX 4. A plan shrunk upstream can complete every chunk
     it did plan, so it reports ok with nothing cut. chunks_ok/chunks_cut
     cannot express 'two chunks were never planned' — planned > actual is the
     only surviving signal, so it has to be written when nothing was cut."""
-    from phase_contract import _merge_chunk_plan_meta
+    from phase_contract import _merge_phase_diagnostics
     ctx = _ctx()
     ctx.chunk_plan_meta = {"planned_chunks": 9, "actual_chunks": 4,
                            "plan_delta_reason": "tech_detect_blocked"}
     ctx.tool_status["nuclei"] = {"ok": True}
-    _merge_chunk_plan_meta(ctx, "nuclei")
+    _merge_phase_diagnostics(ctx, "nuclei")
     entry = ctx.tool_status["nuclei"]
     assert entry["ok"] is True
     assert entry["planned_chunks"] == 9 and entry["actual_chunks"] == 4
@@ -390,10 +482,10 @@ def test_plan_meta_merges_into_the_entry_on_the_OK_path():
 
 
 def test_plan_meta_merge_is_a_noop_without_an_entry():
-    from phase_contract import _merge_chunk_plan_meta
+    from phase_contract import _merge_phase_diagnostics
     ctx = _ctx()
     ctx.chunk_plan_meta = {"planned_chunks": 9}
-    _merge_chunk_plan_meta(ctx, "nuclei")          # must not raise
+    _merge_phase_diagnostics(ctx, "nuclei")          # must not raise
     assert "nuclei" not in ctx.tool_status
 
 
@@ -405,12 +497,12 @@ def test_run_phase_merges_plan_meta_on_every_outcome_path():
     code = "\n".join(ln for ln in src.splitlines()
                      if not ln.lstrip().startswith("#"))
     body = code.split("def run_phase(")[1]
-    assert "_merge_chunk_plan_meta(ctx, spec.name)" in body, (
+    assert "_merge_phase_diagnostics(ctx, spec.name)" in body, (
         "run_phase must merge the plan meta after the outcome branch")
     # The merge must sit AFTER the whole outcome branch (so it sees the entry
     # whichever marker wrote it) and BEFORE the function returns.
     branch = body.split("if result.outcome == Outcome.OK")[1]
-    merge_at = branch.index("_merge_chunk_plan_meta")
+    merge_at = branch.index("_merge_phase_diagnostics")
     assert merge_at < branch.rindex("return result"), (
         "the merge must run before run_phase returns")
     for marker in ("mark_ok(ctx, spec.name)", "mark_partial(ctx, spec.name",
