@@ -122,10 +122,17 @@ def test_plain_stats_lines_do_not_trip_the_detector():
         pre_health=True, post_health=True) is None
 
 
-def test_no_parser_exists_yet_on_purpose():
-    """2a EMITS, 2b PARSES. Ruling ⑭ required verifying nuclei emits mid-run
-    under WAF-safe pacing before we depend on the format; writing a regex now
-    would be exactly the guess that #2632/#2635 disproved. If someone adds a
-    parser, they should also remove this test and say why."""
+def test_parser_arrived_in_2b_against_observed_output():
+    """REPLACES test_no_parser_exists_yet_on_purpose (2026-08-31).
+
+    That test asserted no parser existed, and said whoever added one should
+    remove it and say why. This is the why: runs #2637 and #2640 armed -stats
+    and showed the real emission — JSON, not the "Requests sent: N" text a blind
+    regex would have hunted. 2a's emit-only staging did its job; the parser in
+    2b is written against observed bytes, and its fixtures in
+    test_nuclei_stats_parse.py are verbatim from those runs.
+    """
     import run_medium
-    assert not hasattr(run_medium, "parse_nuclei_stats")
+    assert hasattr(run_medium, "parse_nuclei_stats")
+    assert hasattr(run_medium, "coverage_bucket_from_stats")
+    assert hasattr(run_medium, "nuclei_yield_floor_failed")

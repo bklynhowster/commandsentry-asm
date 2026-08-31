@@ -252,11 +252,22 @@ def test_source_wall_clock_branch_does_not_raise():
     src = inspect.getsource(run_medium.run_nuclei_chunked)
     assert "if rc == 124:" in src, "wall-clock branch missing from the chunk loop"
     head, _, tail = src.partition("if rc == 124:")
-    branch = tail.split("else:")[0]
-    assert "mark_tool_partial" in branch
-    assert "raise" not in branch, (
+    branch = tail.split("\n        else:")[0]
+    # STRIP COMMENTS before checking for control-flow keywords. The branch's
+    # comments legitimately discuss `raise` and `continue` (they document two
+    # drafts that used each and why both were wrong), and a naive substring
+    # search matched that prose — a false positive that briefly looked like a
+    # real regression. Assert on code, never on prose.
+    code = "\n".join(l for l in branch.splitlines()
+                     if not l.strip().startswith("#"))
+    assert "mark_tool_partial" in code
+    assert "raise" not in code, (
         "the wall-clock branch must not raise — raising aborts the scan on "
         "chunk 1 of every WAF-fronted target (spec 198 §4.4)")
+    assert "continue" not in code, (
+        "the wall-clock branch must not `continue` either — that skips the "
+        "inter-chunk VPN rotation, so the next chunk runs from the same "
+        "possibly-banned egress")
     # And the harm-check must still come first and still abort.
     assert head.index("if b1_reason:") < len(head)
     assert "raise DegradedRunError(b1_reason, chunk_name)" in head

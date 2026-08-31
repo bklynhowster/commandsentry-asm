@@ -73,6 +73,10 @@ from typing import Any
 # See SPEC_SCANNER_DEGRADATION_HARDENING.md. 2026-06-12.
 from phase_source import source_for_tier, MEDIUM  # noqa: E402  (spec 190/191 Q1: declared-tier source)
 from degradation import (
+    COVERAGE_COMPLETE,
+    COVERAGE_PARTIAL_MINIMAL,
+    COVERAGE_PARTIAL_SIGNIFICANT,
+    COVERAGE_UNKNOWN,
     DegradedRunError,
     MAX_BAN_EVENTS,
     wall_clock_degradation,
@@ -167,9 +171,22 @@ NUCLEI_URLS_PER_CHUNK = 40     # ~30-50s of work per chunk
 # and guessing is what this whole workstream exists to stop. So: flag it off,
 # turn it on for ONE observation run, read the persisted artifact, and only then
 # decide whether the b1 stderr scan needs to exclude stats lines (increment 2b).
+#
+# ── DEFAULT FLIPPED ON, 2026-08-31 (increment 2b) ───────────────────────────
+# The abort risk above was measured, not assumed away. Across the full logs of
+# runs #2637 and #2640, with -stats armed on every chunk: ZERO matches on all
+# seven reachability patterns. nuclei's stats output is JSON whose only
+# error-ish field is a COUNT (`"errors":"0"`), which contains none of the
+# vocabulary is_tool_output_degraded looks for. No stderr filter is needed.
+# Set NUCLEI_STATS_ENABLED=false to turn it back off if that ever changes.
 NUCLEI_STATS_ENABLED = os.environ.get(
-    "NUCLEI_STATS_ENABLED", "false").lower() in ("1", "true", "yes")
+    "NUCLEI_STATS_ENABLED", "true").lower() in ("1", "true", "yes")
 NUCLEI_STATS_INTERVAL_S = int(os.environ.get("NUCLEI_STATS_INTERVAL_S", "5"))
+# Yield floor (4.7 ⑲/④). Below this many requests a cut chunk is BROKEN, not
+# partial. Generous on purpose: observed rps on real cut chunks is 4-7 and the
+# smallest legitimately-complete chunk seen is 10 requests (medium:tech, #2637),
+# so 5 sits under every real run and over zero. Calibrate from observed data.
+NUCLEI_YIELD_MIN_REQUESTS = int(os.environ.get("NUCLEI_YIELD_MIN_REQUESTS", "5"))
 
 NIKTO_PAUSE_S = 1
 NIKTO_WALL_S = 600
@@ -962,6 +979,7 @@ def mark_tool_partial(
     *,
     matches: int = 0,
     stderr: str | None = None,
+    stats: dict | None = None,
 ) -> None:
     """Record a BOUND CUT — the tool ran correctly and OUR wall clock stopped
     it before it finished the scoped work. 4.7 ruling ① on spec 198.
@@ -1022,6 +1040,18 @@ def mark_tool_partial(
     }
     if matches:
         entry["matches"] = matches
+    if stats:
+        # EVIDENCE alongside the verdict (increment 2b). The bucket is what
+        # consumers branch on — 4.7 ruling ③ was explicit that a raw ratio must
+        # not BE the verdict. But bucketing alone collapses "92%, a hundred
+        # requests from finishing" into the same value as 51%, and on run #2637
+        # that 92% chunk was `medium:wordpress,cms` against a WordPress target:
+        # the single most actionable number in the run. Keeping the counts means
+        # a reader can see WHICH cut chunks were nearly done — that is the whole
+        # basis of the wall-clock proposal.
+        for k in ("requests", "total", "percent", "rps"):
+            if stats.get(k) is not None:
+                entry[k] = stats[k]
     ctx.tool_status[tool_name] = entry
     flush_progress(ctx)
     if stderr:
@@ -1275,6 +1305,115 @@ def _timeout_stream_as_text(raw) -> str:
     if isinstance(raw, bytes):
         return raw.decode("utf-8", errors="replace")
     return str(raw)
+
+
+def parse_nuclei_stats(stderr: str) -> dict | None:
+    """Extract nuclei's LAST progress emission from stderr. Increment 2b.
+
+    Written against the REAL format, observed on runs #2637/#2640 — not guessed.
+    `-stats` emits JSON (not the human-readable "Requests sent: N" a blind regex
+    would have looked for, which is exactly why 2a shipped emit-only first):
+
+        {"duration":"0:02:35","errors":"0","hosts":"1","matched":"0",
+         "percent":"9","requests":"687","rps":"4",
+         "startedAt":"...","templates":"3799","total":"7255"}
+
+    ⚠ TWO TRAPS, both found in live data:
+
+    1. The LAST LINE IS NOT THE LAST STATS LINE. run_cmd appends its own
+       "\\ntimeout after 180s" to stderr on the cut path, so naive
+       `splitlines()[-1]` gets our text and json.loads raises. Take the last
+       line that starts with '{'.
+    2. Values are STRINGS, not numbers — "requests":"687". int() them.
+
+    Returns None when no stats line is present at all (flag off, nuclei too
+    fast to emit, or a genuinely empty stderr) — the caller must treat that as
+    "cannot say", never as zero.
+    """
+    if not stderr:
+        return None
+    for line in reversed(stderr.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            raw = json.loads(line)
+        except Exception:
+            continue                      # ragged/truncated line — keep looking
+        out = {}
+        for k in ("requests", "total", "percent", "templates", "matched",
+                  "errors", "rps"):
+            v = raw.get(k)
+            if v is None:
+                continue
+            try:
+                out[k] = int(v)
+            except (TypeError, ValueError):
+                pass
+        if raw.get("duration"):
+            out["duration"] = raw["duration"]
+        return out or None
+    return None
+
+
+def coverage_bucket_from_stats(stats: dict | None) -> str:
+    """Bucket a chunk's coverage (4.7 ruling ③) from parsed stats.
+
+    Ruling ③ said BUCKET, never a raw ratio, because our counts were estimates
+    built on estimates. That reasoning is weaker here — `percent` is nuclei's
+    own number, not ours — but the bucket stays the verdict because it is what
+    consumers should branch on. The raw counts ride ALONGSIDE as evidence (see
+    the call site), because bucketing alone flattens "92%, a hundred requests
+    from finishing" into the same value as 51%, and on run #2637 that 92% chunk
+    was the WordPress one on a WordPress target — operationally the single most
+    actionable number we have.
+
+    Prefers nuclei's own `percent`; falls back to requests/total. Returns
+    UNKNOWN when neither is available — never guesses.
+    """
+    if not stats:
+        return COVERAGE_UNKNOWN
+    pct = stats.get("percent")
+    if pct is None:
+        req, total = stats.get("requests"), stats.get("total")
+        if not req or not total:
+            return COVERAGE_UNKNOWN
+        pct = (req * 100) // total
+    if pct >= 100:
+        return COVERAGE_COMPLETE
+    if pct >= 50:
+        return COVERAGE_PARTIAL_SIGNIFICANT
+    return COVERAGE_PARTIAL_MINIMAL
+
+
+def nuclei_yield_floor_failed(stats: dict | None) -> str | None:
+    """4.7 ruling ⑲/④ — did the chunk do MEANINGFUL WORK, or was it broken?
+
+    Orthogonal to "did it finish". A chunk killed by the wall clock having sent
+    ~0 requests is not partial work; it is a BROKEN chunk that also got cut —
+    WAF banned us at chunk start, template load failed, DNS timed out. Recording
+    that as PARTIAL would claim partial coverage we never had, so yield-floor
+    failure WINS over the cut and the caller records DEGRADED instead.
+
+    Floor is deliberately generous. Observed rps on real cut chunks is 4–7
+    (#2637), so a 180s chunk that did any work at all sends hundreds of
+    requests; the smallest legitimately-complete chunk we have seen is 10
+    (`medium:tech`). NUCLEI_YIELD_MIN_REQUESTS=5 sits below every observed real
+    run and above zero — it catches "nothing happened", not "slow".
+    Recalibrate from data, not from the configured rate: rps observed is not
+    the rps we ask for.
+
+    Returns a reason slug, or None when the floor is met / cannot be judged.
+    Absent stats -> None: unmeasurable is not the same as failed.
+    """
+    if not stats:
+        return None
+    req = stats.get("requests")
+    if req is None:
+        return None
+    if req < NUCLEI_YIELD_MIN_REQUESTS:
+        return f"yield_floor_failed_{req}_requests"
+    return None
 
 
 def run_cmd(cmd: list[str], timeout: int = 30, input_str: str | None = None,
@@ -2666,20 +2805,63 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # scan before nikto, ffuf, testssl, gau, naabu and the light phases ran.
         # That is spec 198 §4.4 — trading fictional coverage for zero coverage.
         if rc == 124:
-            # Coverage stays UNKNOWN for now, on purpose. Bucketing it honestly
-            # needs a request/template count (4.7 ruling ④) and nuclei runs with
-            # -silent, which suppresses its stats. mark_tool_partial persists
-            # stderr so the next live run shows us the real format; guessing a
-            # bucket we cannot evidence would be exactly the false precision
-            # ruling ③ warns against.
-            mark_tool_partial(
-                ctx, chunk_name,
-                wall_clock_degradation(NUCLEI_CHUNK_WALL_S),
-                matches=matches, stderr=chunk_stderr,
-            )
-            log(f"  chunk {i+1} PARTIAL: wall-clock cut at "
-                f"{NUCLEI_CHUNK_WALL_S}s — {matches} finding(s) banked, "
-                f"remaining templates NOT attempted (not counted as coverage)")
+            # ── increment 2b — coverage is now MEASURED, not "unknown" ────────
+            # 2a shipped -stats emit-only so a live run could show us the real
+            # format; it did (JSON, not the "Requests sent: N" text a blind
+            # regex would have hunted for). This is the parser written against
+            # that observation.
+            stats = parse_nuclei_stats(chunk_stderr)
+
+            # ⑲/④ — yield floor WINS over the cut. A chunk killed having sent
+            # ~no requests is broken-and-cut (WAF banned us at chunk start,
+            # templates failed to load), not partial work. Calling that PARTIAL
+            # would claim coverage we never had, so it degrades instead.
+            # ⚠ RECORDS, DOES NOT RAISE. My first draft raised DegradedRunError
+            # here and test_source_wall_clock_branch_does_not_raise (written in
+            # ship 1) caught it. Raising would re-open the §4.4 trap by the back
+            # door: a chunk-1 yield-floor failure on a WAF-fronted target would
+            # abort the whole scan before nikto/ffuf/testssl/gau/naabu ran —
+            # exactly the "fictional coverage traded for zero coverage" 4.7
+            # rejected. Note 193's taxonomy agrees: this is a TOOL failure
+            # (tool_degradation ⇒ DEGRADED ⇒ record and keep scanning), not a
+            # harm condition. A genuine ban would have been caught by the b1
+            # post-run healthcheck above, which passed.
+            # ⚠ NEITHER BRANCH RAISES OR `continue`s — both fall through to the
+            # inter-chunk VPN rotation below. My first draft raised
+            # DegradedRunError (caught by ship 1's
+            # test_source_wall_clock_branch_does_not_raise: raising re-opens the
+            # §4.4 trap, aborting the scan on chunk 1 of every WAF-fronted
+            # target). My second used `continue`, which skipped the rotation and
+            # would have run the next chunk from the same — possibly banned —
+            # egress. Structure it as a plain if/else so control flow is
+            # identical to the clean path.
+            floor = nuclei_yield_floor_failed(stats)
+            if floor:
+                # Note 193 taxonomy: a yield-floor failure is a TOOL failure
+                # (record and keep scanning), not a harm condition. A genuine
+                # ban would have been caught by the b1 post-run healthcheck
+                # above, which passed.
+                mark_tool_degraded(ctx, chunk_name, floor, stderr=chunk_stderr)
+                log(f"  chunk {i+1} DEGRADED: {floor} — cut at "
+                    f"{NUCLEI_CHUNK_WALL_S}s having done no meaningful work "
+                    f"(broken AND cut; NOT recorded as partial coverage)")
+            else:
+                coverage = coverage_bucket_from_stats(stats)
+                mark_tool_partial(
+                    ctx, chunk_name,
+                    wall_clock_degradation(NUCLEI_CHUNK_WALL_S, coverage),
+                    matches=matches, stderr=chunk_stderr, stats=stats,
+                )
+                if stats and stats.get("total"):
+                    log(f"  chunk {i+1} PARTIAL [{coverage}]: "
+                        f"{stats.get('requests')}/{stats['total']} requests "
+                        f"({stats.get('percent')}%) at {stats.get('rps')} rps — "
+                        f"{matches} finding(s) banked, remainder NOT attempted "
+                        f"(not counted as coverage)")
+                else:
+                    log(f"  chunk {i+1} PARTIAL [{coverage}]: wall-clock cut at "
+                        f"{NUCLEI_CHUNK_WALL_S}s — {matches} finding(s) banked, "
+                        f"remainder NOT attempted (not counted as coverage)")
             # The chunk was demonstrably talking to the target when we killed
             # it, and post_chunk_healthy passed above, so reachability is
             # established exactly as it is on the clean path.
