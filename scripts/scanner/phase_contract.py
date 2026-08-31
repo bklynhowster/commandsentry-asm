@@ -375,6 +375,23 @@ def _default_mark_partial(ctx, tool_name: str, result: "PhaseResult") -> None:
         pass
 
 
+def _merge_chunk_plan_meta(ctx, tool_name: str) -> None:
+    """Fold ctx.chunk_plan_meta into the phase's tool_status entry (4.7 ⑭′.4).
+
+    Called on EVERY outcome path, not just the partial one. A plan shrunk by a
+    blocked tech-detect can complete every chunk it did plan and so reads as a
+    clean, fully-OK run — `chunks_ok`/`chunks_cut` cannot express "two chunks
+    were never planned". planned_chunks > actual_chunks is the only signal that
+    survives, so it has to be written even when nothing was cut.
+    """
+    meta = getattr(ctx, "chunk_plan_meta", None)
+    if not meta:
+        return
+    entry = (getattr(ctx, "tool_status", None) or {}).get(tool_name)
+    if isinstance(entry, dict):
+        entry.update(meta)
+
+
 def run_phase(spec: PhaseSpec, ctx, work_dir, *,
               mark_ok=None, mark_degraded=None, mark_skipped=None,
               mark_partial=None) -> PhaseResult:
@@ -538,6 +555,8 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
         mark_partial(ctx, spec.name, result)
     else:
         mark_degraded(ctx, spec.name, result.reason or "degraded")
+    # ⑭′.4 — after the entry exists, on whichever path wrote it.
+    _merge_chunk_plan_meta(ctx, spec.name)
     return result
 
 

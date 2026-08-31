@@ -72,6 +72,12 @@ from typing import Any
 # Scanner degradation primitives — fail-closed on "we didn't actually scan."
 # See SPEC_SCANNER_DEGRADATION_HARDENING.md. 2026-06-12.
 from phase_source import source_for_tier, MEDIUM  # noqa: E402  (spec 190/191 Q1: declared-tier source)
+from tech_detect import (  # noqa: E402  (4.7 ⑭′ — shared with run_light)
+    merge_tech_detection,
+    parse_httpx_rows,
+    tech_detection_meets_yield_floor,
+    tech_rows_from_artifacts,
+)
 from degradation import (
     COVERAGE_COMPLETE,
     COVERAGE_PARTIAL_MINIMAL,
@@ -615,6 +621,11 @@ class ScanContext:
     waf_detected: bool = False
     waf_kind: str | None = None  # 'fortiweb', 'cloudflare', 'akamai', etc. — from wafw00f
     tech_stack: set[str] = field(default_factory=set)  # lowercased techs from httpx -td
+    # 4.7 ⑭′.4 — what the nuclei plan COULD have been vs what it was, set at
+    # plan time and merged into the nuclei tool_status entry on every outcome
+    # path. Without it a plan shrunk by a blocked tech-detect is internally
+    # consistent and indistinguishable from a legitimately smaller plan.
+    chunk_plan_meta: dict[str, Any] = field(default_factory=dict)
     findings: list[MediumFinding] = field(default_factory=list)
     tools_run: list[str] = field(default_factory=list)
     artifacts: list[tuple[str, str, str]] = field(default_factory=list)
@@ -2187,31 +2198,77 @@ def detect_tech_stack(ctx: ScanContext) -> None:
     if b1_reason:
         mark_tool_degraded(ctx, "httpx[-td]", b1_reason, stderr=stderr)
         raise DegradedRunError(b1_reason, "httpx[-td]")
-    mark_tool_ok(ctx, "httpx[-td]")
-
-    if rc != 0:
-        log(f"httpx tech-detect rc={rc} — skipping (chunk plan stays default)")
-        log(f"  stderr: {stderr[:200]}")
-        return
-    # httpx -json emits one JSON object per line; we asked for a single URL
-    line = stdout.strip().splitlines()[0] if stdout.strip() else ""
-    if not line:
-        log("httpx tech-detect: no output")
-        return
-    try:
-        data = json.loads(line)
-        techs = data.get("tech") or data.get("technologies") or []
-        ctx.tech_stack = {t.lower() for t in techs if isinstance(t, str)}
-        ctx.artifacts.append(("httpx_tech", "json", line))
-        log(f"tech detected: {sorted(ctx.tech_stack) if ctx.tech_stack else '<none>'}")
-        # #32 — httpx tech-detect produced parseable JSON → got a real
-        # HTTP response from target. Strong evidence the target is
-        # reachable via the Go stack nuclei shares. Establishes
-        # target_proven_reachable for the prior-tool-success
-        # short-circuit in ensure_healthy_egress.
+    # NOTE (4.7 ⑭′): crediting happens AFTER the parse, not before it.
+    # "ok" previously meant "httpx ran", which a WAF block satisfies.
+    rows = parse_httpx_rows(stdout) if rc == 0 else []
+    if rows:
+        # #32 — parseable JSON means a real HTTP response came back from
+        # the target, even if that response was a block page. Reachability
+        # via the Go stack nuclei shares is established either way, and
+        # feeds the prior-tool-success short-circuit in
+        # ensure_healthy_egress.
         ctx.target_proven_reachable = True
-    except Exception as e:
-        log(f"httpx tech-detect parse failed: {e!r}")
+        ctx.artifacts.append(("httpx_tech", "json", "\n".join(
+            json.dumps(r, separators=(",", ":")) for r in rows)))
+
+    techs, n_valid, rejects = merge_tech_detection(rows)
+    source = "httpx[-td]"
+
+    if rejects:
+        log(f"  tech-detect rejected {len(rejects)} row(s): {sorted(set(rejects))}")
+
+    # Fix 3 — our own probe was blocked or yielded only a server banner.
+    # Reuse the detection an earlier phase already banked this run rather
+    # than planning nuclei against a stack we never actually saw.
+    used_fallback_candidate = None
+    if not tech_detection_meets_yield_floor(techs):
+        prior_rows = tech_rows_from_artifacts(ctx.artifacts)
+        prior_techs, _prior_valid, _prior_rejects = merge_tech_detection(prior_rows)
+        if tech_detection_meets_yield_floor(prior_techs):
+            log(f"  tech-detect fallback: own probe yielded "
+                f"{sorted(techs) or '<none>'} ({n_valid} valid row(s)); using "
+                f"{len(prior_techs)} tech(s) already observed this run")
+            techs = prior_techs
+            source = "artifact_fallback"
+    else:
+        # Own detection stands. Record whether an earlier phase saw MORE
+        # than we are about to use — the union-across-sources question is
+        # open with 4.7, so measure it rather than assume either way.
+        prior_techs, _n, _r = merge_tech_detection(tech_rows_from_artifacts(ctx.artifacts))
+        if len(prior_techs - techs) > 0:
+            used_fallback_candidate = sorted(prior_techs - techs)
+
+    ctx.tech_stack = techs
+    detected = tech_detection_meets_yield_floor(techs)
+
+    diag: dict[str, Any] = {
+        "tech_source": source,
+        "tech_count": len(techs),
+        "rows_seen": len(rows),
+        "rows_valid": n_valid,
+    }
+    if rejects:
+        diag["rows_rejected"] = sorted(set(rejects))
+    if used_fallback_candidate:
+        diag["unused_prior_techs"] = used_fallback_candidate
+
+    if detected:
+        mark_tool_ok(ctx, "httpx[-td]")
+        ctx.tool_status["httpx[-td]"].update(diag)
+        log(f"tech detected ({source}): {sorted(techs)}")
+    else:
+        # No usable stack from anywhere. Non-fatal by design — the scan
+        # continues on the default plan — but recorded ok:false so the
+        # shrunken plan cannot read as coverage, and so delta_close
+        # cannot treat this run as evidence of remediation.
+        reason = ("tech_detect_blocked" if rows and n_valid == 0
+                  else "tech_detect_no_signal" if rows
+                  else f"tech_detect_rc_{rc}" if rc != 0
+                  else "tech_detect_no_output")
+        mark_tool_degraded(ctx, "httpx[-td]", reason, stderr=stderr)
+        ctx.tool_status["httpx[-td]"].update(diag)
+        log(f"tech NOT detected ({reason}) — stack-specific nuclei chunks "
+            f"will not be planned this run")
 
 
 # ─── Target routing — FortiGate detection (P1) ─────────────────────────
@@ -2262,6 +2319,56 @@ def is_fortigate_target(ctx: ScanContext) -> bool:
     return False
 
 
+# ─── Chunk plan tables ─────────────────────────────────────────────────
+#
+# Module-level so max_possible_chunk_count() bounds the plan from the SAME
+# tables build_chunk_plan builds it from. A stack chunk added to one and
+# missed by the other would make the recorded upper bound wrong in the one
+# direction that matters — hiding a shrunken plan.
+
+# Chunks that fire regardless of detected stack.
+BASE_CHUNKS: list[tuple[str, str | None, str]] = [
+    ("critical,high", None,  "critical + high severity (broad)"),
+    ("medium",        "cve", "medium CVE templates"),
+]
+
+# (stack markers, tags, label) — fired only when the marker is in tech_stack,
+# so we don't spend requests on templates that cannot possibly match.
+STACK_CHUNKS: list[tuple[tuple[str, ...], str, str]] = [
+    (("wordpress", "wp"),
+     "wordpress,cms", "WordPress/CMS misconfig"),
+    (("iis", "asp.net", "aspnet", "asp", "dotnet", ".net", "microsoft-iis"),
+     "iis,asp,aspnet,dotnet,microsoft,windows", "IIS/.NET stack"),
+    (("php",),    "php",        "PHP stack"),
+    (("drupal",), "drupal,cms", "Drupal/CMS misconfig"),
+    (("joomla",), "joomla,cms", "Joomla/CMS misconfig"),
+]
+
+CLOSER_CHUNKS: list[tuple[str, str | None, str]] = [
+    ("medium", "exposure,config", "config + secret exposure"),
+    ("medium", "tech",            "tech-stack-specific"),
+]
+
+# FortiGate / safe-only targets get breadth via IP rotation instead of
+# breadth via templates: five identical safe chunks.
+SAFE_ONLY_CHUNK_COUNT = 5
+
+
+def max_possible_chunk_count(ctx: ScanContext) -> int:
+    """Upper bound on this target's plan, had tech detection succeeded.
+
+    4.7 ⑭′.4 ruled the recorded `planned_chunks` should be the UPPER BOUND
+    rather than the post-detection plan: a plan shrunk by a blocked
+    tech-detect is otherwise internally consistent and reads as a
+    legitimate smaller plan. planned_chunks > actual_chunks is the signal.
+    """
+    if THRESHOLD_PROBE_MODE and THRESHOLD_PROBE_SAFE_ONLY:
+        return SAFE_ONLY_CHUNK_COUNT
+    if is_fortigate_target(ctx):
+        return SAFE_ONLY_CHUNK_COUNT
+    return len(BASE_CHUNKS) + len(STACK_CHUNKS) + len(CLOSER_CHUNKS)
+
+
 # ─── Chunk plan builder (P1 + P2.5 combined) ───────────────────────────
 def build_chunk_plan(ctx: ScanContext) -> list[tuple[str, str | None, str]]:
     """Return the list of (severity_filter, tag_filter, description) for
@@ -2300,26 +2407,20 @@ def build_chunk_plan(ctx: ScanContext) -> list[tuple[str, str | None, str]]:
 
     # P2.5: stack-aware plan for non-FortiGate targets
     stack = ctx.tech_stack
-    chunks: list[tuple[str, str | None, str]] = [
-        ("critical,high", None,            "critical + high severity (broad)"),
-        ("medium",        "cve",           "medium CVE templates"),
-    ]
+    chunks: list[tuple[str, str | None, str]] = list(BASE_CHUNKS)
     # Stack-specific chunks — only fire templates that could possibly match
-    if any(t in stack for t in ("wordpress", "wp")):
-        chunks.append(("medium", "wordpress,cms", "WordPress/CMS misconfig"))
-    if any(t in stack for t in ("iis", "asp.net", "aspnet", "asp", "dotnet", ".net", "microsoft-iis")):
-        chunks.append(("medium", "iis,asp,aspnet,dotnet,microsoft,windows", "IIS/.NET stack"))
-    if "php" in stack:
-        chunks.append(("medium", "php", "PHP stack"))
-    if "drupal" in stack:
-        chunks.append(("medium", "drupal,cms", "Drupal/CMS misconfig"))
-    if "joomla" in stack:
-        chunks.append(("medium", "joomla,cms", "Joomla/CMS misconfig"))
-    # Always-on closers
-    chunks.append(("medium", "exposure,config", "config + secret exposure"))
-    chunks.append(("medium", "tech",            "tech-stack-specific"))
+    for markers, tags, label in STACK_CHUNKS:
+        if any(t in stack for t in markers):
+            chunks.append(("medium", tags, label))
+    chunks.extend(CLOSER_CHUNKS)
+    upper = max_possible_chunk_count(ctx)
     log(f"  target_class=standard (stack={sorted(stack) or '<unknown>'}) → "
-        f"{len(chunks)}-chunk plan")
+        f"{len(chunks)}-chunk plan (of {upper} possible)")
+    if len(chunks) < upper and not tech_detection_meets_yield_floor(stack):
+        # Visible in the log as well as in tool_status: this plan is small
+        # because we never saw a stack, not because the target has none.
+        log(f"  ⚠ plan shrunk: no usable tech signal, so "
+            f"{upper - len(chunks)} stack-specific chunk(s) were not planned")
     return chunks
 
 
@@ -2639,6 +2740,29 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
     # for routing logic. PROBE+SAFE_ONLY still gets its diagnostic-specific
     # 5-chunk plan inside the builder.
     chunks = build_chunk_plan(ctx)
+
+    # 4.7 ⑭′.4 — stamp the plan against its upper bound BEFORE running it, so
+    # a plan shrunk upstream is visible as planned > actual rather than
+    # reading as an ordinary smaller plan. Merged into the nuclei tool_status
+    # entry on every outcome path (see phase_contract._merge_chunk_plan_meta).
+    _upper = max_possible_chunk_count(ctx)
+    ctx.chunk_plan_meta = {
+        "planned_chunks": _upper,
+        "actual_chunks": len(chunks),
+    }
+    if len(chunks) < _upper:
+        tech_entry = (ctx.tool_status or {}).get("httpx[-td]") or {}
+        if tech_entry.get("ok") is not True:
+            _why = tech_entry.get("degraded") or "tech_detect_unusable"
+        elif not tech_detection_meets_yield_floor(ctx.tech_stack):
+            _why = "tech_detect_no_stack_signal"
+        else:
+            # Stack detected and usable — the target genuinely has none of
+            # the remaining stack markers. Not a defect.
+            _why = "stack_not_applicable"
+        ctx.chunk_plan_meta["plan_delta_reason"] = _why
+        if tech_entry.get("tech_source"):
+            ctx.chunk_plan_meta["tech_source"] = tech_entry["tech_source"]
 
     for i, (sev, tag, desc) in enumerate(chunks):
         # Layer 1: pre-chunk healthcheck

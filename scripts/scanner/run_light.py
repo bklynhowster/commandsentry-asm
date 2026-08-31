@@ -294,6 +294,10 @@ from run_medium import (flush_progress, flush_planned_steps,  # noqa: E402
 # Declared-tier findings.source — single source of truth shared with the @phase
 # registry (spec 190 / 4.7 ruling 191 Q1). Decouples source from run intensity.
 from phase_source import source_for_tier, LIGHT  # noqa: E402
+from tech_detect import (  # noqa: E402  (4.7 ⑭′ — shared with run_medium)
+    merge_tech_detection,
+    parse_httpx_rows,
+)
 
 
 def build_light_planned_steps(ctx: ScanContext) -> list[str]:
@@ -1194,16 +1198,36 @@ def check_httpx_tech(ctx: ScanContext) -> None:
         mark_tool_degraded(ctx, "httpx_tech", reason)
         return
 
-    try:
-        data = json.loads(stdout.splitlines()[0])
-    except Exception as e:
-        log(f"httpx_tech: JSON parse failed: {e}")
+    # 4.7 ⑭′ — parse EVERY row, not splitlines()[0]. httpx emits one object
+    # per probed URL, so first-wins made the outcome depend on line order.
+    rows = parse_httpx_rows(stdout)
+    if not rows:
+        log("httpx_tech: no JSON rows in output")
         mark_tool_degraded(ctx, "httpx_tech", "json_parse_failed")
         return
 
-    ctx.artifacts.append(("httpx_tech", "json", json.dumps(data)))
+    # Persist ALL rows, valid or not. run_medium's detect_tech_stack reads
+    # this artifact back as its fallback when its own probe is blocked, and
+    # it re-applies the same validity filter — so keeping the rejected rows
+    # here costs nothing and preserves the evidence trail.
+    ctx.artifacts.append(("httpx_tech", "json", "\n".join(
+        json.dumps(r, separators=(",", ":")) for r in rows)))
 
-    tech = data.get("tech") or data.get("technologies") or []
+    techs, n_valid, rejects = merge_tech_detection(rows)
+
+    if n_valid == 0:
+        # Every row was a block page or a redirect. Previously this emitted a
+        # `tech-disclosure` finding announcing the WAF's own banner as the
+        # asset's technology — measured at 22 light runs in 30 days.
+        log(f"httpx_tech: all {len(rows)} row(s) rejected "
+            f"({sorted(set(rejects))}) — no tech signal, no finding emitted")
+        mark_tool_degraded(ctx, "httpx_tech", "tech_detect_blocked")
+        return
+
+    if rejects:
+        log(f"httpx_tech: rejected {len(rejects)} row(s): {sorted(set(rejects))}")
+
+    tech = sorted(techs)
     if tech:
         ctx.findings.append(LightFinding(
             check_name="tech-disclosure",
@@ -1213,11 +1237,16 @@ def check_httpx_tech(ctx: ScanContext) -> None:
             description=f"Active tech fingerprinting on {ctx.hostname} identified: "
                         f"{', '.join(tech)}. This is informational — useful for asset "
                         f"profiling and CVE matching, not a defect by itself.",
-            tags=["tech", "fingerprint"] + [t.lower().replace(" ", "-") for t in tech[:6]],
-            raw_excerpt=json.dumps(data, indent=2)[:2000],
+            tags=["tech", "fingerprint"] + [t.replace(" ", "-") for t in tech[:6]],
+            raw_excerpt=json.dumps(rows, indent=2)[:2000],
         ))
 
     mark_tool_ok(ctx, "httpx_tech")
+    ctx.tool_status["httpx_tech"].update({
+        "tech_count": len(techs),
+        "rows_seen": len(rows),
+        "rows_valid": n_valid,
+    })
 
 
 # ─── WordPress version-CVE lookup via wpvulnerability.net (Plan C day 1) ──

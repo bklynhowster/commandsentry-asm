@@ -261,6 +261,11 @@ class HeavyScanContext:
     waf_detected: bool = False
     waf_kind: str | None = None
     tech_stack: set[str] = field(default_factory=set)
+    # 4.7 ⑭′.4 — planned vs actual nuclei chunk counts, stamped by
+    # run_nuclei_chunked and merged into the nuclei tool_status entry by
+    # phase_contract. Cumulative heavy runs medium's planner against THIS
+    # context, so the field has to exist here too.
+    chunk_plan_meta: dict[str, Any] = field(default_factory=dict)
 
     # ── medium-tier context fields (CONTEXT UNIFICATION, spec 190 step 2) ──
     # 🔴 FOUND IN PRODUCTION, run #2620 (first cumulative heavy, 2026-08-29).
