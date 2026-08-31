@@ -43,17 +43,39 @@ def _restore_run_medium():
     importlib.reload(run_medium)
 
 
-def test_stats_is_off_by_default():
-    """Merged dark. A scheduled scan must behave exactly as it did before."""
-    rm = _reload_with(NUCLEI_STATS_ENABLED="")
-    assert rm.NUCLEI_STATS_ENABLED is False
+def test_empty_env_means_unset_and_uses_the_default():
+    """THE 2b WIRING BUG. The workflow sets this env var on EVERY run, so a
+    set-but-empty value (cron, where github.event.inputs is null) must fall back
+    to the code default — not read as False. With `os.environ.get(k, "true")`
+    the default was unreachable and "default ON" was on for nobody."""
+    assert _reload_with(NUCLEI_STATS_ENABLED="").NUCLEI_STATS_ENABLED is True
+    assert _reload_with(NUCLEI_STATS_ENABLED="   ").NUCLEI_STATS_ENABLED is True
+
+
+def test_explicit_false_is_still_honoured():
+    """An operator who unchecks the box sends the string 'false' and must be
+    obeyed — the empty-means-default rule must not swallow that."""
+    for v in ("false", "FALSE", "0", "no"):
+        assert _reload_with(NUCLEI_STATS_ENABLED=v).NUCLEI_STATS_ENABLED is False
 
 
 def test_stats_flag_parses_truthy_forms():
     for v in ("1", "true", "TRUE", "yes"):
         assert _reload_with(NUCLEI_STATS_ENABLED=v).NUCLEI_STATS_ENABLED is True
-    for v in ("0", "false", "no", "", "maybe"):
-        assert _reload_with(NUCLEI_STATS_ENABLED=v).NUCLEI_STATS_ENABLED is False
+
+
+def test_workflow_passes_the_raw_input_with_no_false_fallback():
+    """Pinned against the real workflow. `|| 'false'` there makes the code-side
+    default unreachable on every cron run — the bug this test exists to stop
+    from coming back."""
+    import pathlib
+    wf = pathlib.Path(__file__).resolve().parents[2] / ".github/workflows/scanner.yml"
+    line = [l for l in wf.read_text().splitlines()
+            if "NUCLEI_STATS_ENABLED:" in l]
+    assert len(line) == 1, f"expected one env line, got {len(line)}"
+    assert "|| 'false'" not in line[0], (
+        "the `|| 'false'` fallback disables stats on every scheduled scan")
+    assert "github.event.inputs.nuclei_stats" in line[0]
 
 
 def test_stats_flags_absent_from_cmd_when_disabled():

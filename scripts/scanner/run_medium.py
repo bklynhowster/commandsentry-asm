@@ -179,8 +179,14 @@ NUCLEI_URLS_PER_CHUNK = 40     # ~30-50s of work per chunk
 # error-ish field is a COUNT (`"errors":"0"`), which contains none of the
 # vocabulary is_tool_output_degraded looks for. No stderr filter is needed.
 # Set NUCLEI_STATS_ENABLED=false to turn it back off if that ever changes.
-NUCLEI_STATS_ENABLED = os.environ.get(
-    "NUCLEI_STATS_ENABLED", "true").lower() in ("1", "true", "yes")
+# ⚠ EMPTY MEANS "UNSET", NOT "FALSE". The workflow passes this env var on every
+# run, so `os.environ.get(..., "true")` would NEVER see its default — a set-but-
+# empty value returns "" and the flag reads False. That is exactly how the first
+# 2b draft shipped a "default ON" that was off on every cron and every manual
+# run with the box unchecked. Distinguish absent/empty (use the default) from an
+# explicit "false" (honour the operator unchecking it).
+_stats_env = os.environ.get("NUCLEI_STATS_ENABLED", "").strip().lower()
+NUCLEI_STATS_ENABLED = (_stats_env in ("1", "true", "yes")) if _stats_env else True
 NUCLEI_STATS_INTERVAL_S = int(os.environ.get("NUCLEI_STATS_INTERVAL_S", "5"))
 # Yield floor (4.7 ⑲/④). Below this many requests a cut chunk is BROKEN, not
 # partial. Generous on purpose: observed rps on real cut chunks is 4-7 and the

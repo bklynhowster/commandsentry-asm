@@ -594,7 +594,15 @@ jobs:
           CUMULATIVE_WALL_CLOCK_S: ${{ vars.CUMULATIVE_WALL_CLOCK_S || '1800' }}
           # nuclei -stats (increment 2a). Manual dispatch only, same shape as
           # above — an observation flag, not a behaviour change we want on cron.
-          NUCLEI_STATS_ENABLED: ${{ github.event.inputs.nuclei_stats || 'false' }}
+          # NO `|| 'false'` FALLBACK, deliberately (2b). That fallback made the
+          # code-side default unreachable: cron and any dispatch with the box
+          # unchecked both passed 'false', so "default ON" was on for nobody.
+          # Passing the raw input means cron sends "" (empty) and run_medium
+          # treats empty as unset and applies its own default; an operator who
+          # explicitly unchecks still sends "false" and is still honoured.
+          # Do not "tidy" this back into a `||` — it silently disables coverage
+          # measurement on every scheduled scan.
+          NUCLEI_STATS_ENABLED: ${{ github.event.inputs.nuclei_stats }}
         run: |
           python scripts/scanner/run_heavy.py /tmp/scan_descriptor.json
 
