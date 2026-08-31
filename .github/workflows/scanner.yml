@@ -85,9 +85,9 @@ on:
         default: false
         type: boolean
       nuclei_stats:
-        description: 'NUCLEI -stats (increment 2a, OBSERVATION ONLY). true = add `-stats -stats-interval 5` to every nuclei chunk so its progress counts land in stderr, and persist a <chunk>_stats artifact for clean chunks as well as cut ones. There is NO parser yet — this run exists to show us nuclei''s real output format, because #2632 and #2635 both proved -silent emits nothing and a guessed regex would match nothing. ⚠ RISK THIS FLAG EXISTS FOR: is_tool_output_degraded scans stderr for 7 reachability patterns and ABORTS THE SCAN at 3 matches, so if nuclei''s stats text contains phrases like "i/o timeout" this would start killing WAF-fronted scans. Default false until one observation run says otherwise.'
+        description: 'NUCLEI -stats. true = add `-stats -stats-interval 5` to every nuclei chunk, so a cut chunk records MEASURED coverage (requests/total/percent, bucketed per 4.7 ruling ③) instead of "unknown", and a <chunk>_stats artifact is persisted for clean chunks as well as cut ones — a cut chunk''s request count is meaningless without knowing what a completed chunk of the same plan sends. Also feeds the yield floor (ruling ⑲): a chunk cut having sent under 5 requests is broken AND cut, so it records DEGRADED rather than PARTIAL. DEFAULT TRUE since 2026-08-31 — the abort risk this shipped dark for (is_tool_output_degraded scans stderr for 7 reachability patterns and aborts at 3 matches) was MEASURED at 0/7 across the full logs of runs #2637 and #2640; nuclei''s stats output is JSON whose only error-ish field is a count ("errors":"0"). Uncheck to turn it off for one run.'
         required: false
-        default: false
+        default: true
         type: boolean
       authenticated:
         description: 'Run authenticated scan? Only valid for medium/heavy and requires asset_auth_config row.'

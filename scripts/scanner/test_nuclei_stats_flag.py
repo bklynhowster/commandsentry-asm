@@ -64,6 +64,37 @@ def test_stats_flag_parses_truthy_forms():
         assert _reload_with(NUCLEI_STATS_ENABLED=v).NUCLEI_STATS_ENABLED is True
 
 
+def test_workflow_input_default_matches_the_code_default():
+    """Both arrival paths must agree. Before 2026-08-31 they did not: cron got
+    the code default (on) while a manual dispatch with the box unchecked sent
+    'false' and got stats off — the same class of split-brain default as the
+    `|| 'false'` bug, just one layer up. A reader should not have to know HOW a
+    run was triggered to know whether coverage is being measured."""
+    import pathlib
+    import run_medium
+    wf = pathlib.Path(__file__).resolve().parents[2] / ".github/workflows/scanner.yml"
+    lines = wf.read_text().splitlines()
+    i = next(n for n, l in enumerate(lines) if l.strip() == "nuclei_stats:")
+    block = "\n".join(lines[i:i + 6])
+    assert "default: true" in block, (
+        "workflow input default must match run_medium's code default")
+    assert run_medium.NUCLEI_STATS_ENABLED is True
+
+
+def test_workflow_description_is_not_stale():
+    """The description said 'OBSERVATION ONLY' and 'There is NO parser yet'.
+    Both became false in 2b. Operator-facing text is the only documentation
+    most people read at the moment they decide whether to tick a box."""
+    import pathlib
+    wf = pathlib.Path(__file__).resolve().parents[2] / ".github/workflows/scanner.yml"
+    lines = wf.read_text().splitlines()
+    i = next(n for n, l in enumerate(lines) if l.strip() == "nuclei_stats:")
+    desc = lines[i + 1]
+    assert "OBSERVATION ONLY" not in desc
+    assert "NO parser yet" not in desc
+    assert "Default false" not in desc
+
+
 def test_workflow_passes_the_raw_input_with_no_false_fallback():
     """Pinned against the real workflow. `|| 'false'` there makes the code-side
     default unreachable on every cron run — the bug this test exists to stop
