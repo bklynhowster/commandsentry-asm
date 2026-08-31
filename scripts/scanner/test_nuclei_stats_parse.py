@@ -174,6 +174,128 @@ def test_evidence_counts_ride_alongside_the_bucket():
     assert (e["requests"], e["total"], e["percent"]) == (1199, 1299, 92)
 
 
+# ── evidence survives the recorder → UnitResult → PhaseResult boundary ─────
+# Run #2645 persisted correct BUCKETS but no counts: mark_tool_partial wrote
+# them into the recorder's per-chunk entries and UnitResult had nowhere to put
+# them, so _units_from_recorder dropped them. Same shape as the ⑦ premise —
+# data present upstream, discarded at a boundary — which is why these assert on
+# the END of the chain, not on any single hop.
+
+_RUN_2637 = [  # verbatim per-chunk figures
+    ("nuclei[critical,high]", 687, 7255, 9, 4, True),
+    ("nuclei[medium:cve]", 1249, 2711, 46, 7, True),
+    ("nuclei[medium:wordpress,cms]", 1199, 1299, 92, 6, True),
+    ("nuclei[medium:php]", 29, 29, 100, 3, False),
+    ("nuclei[medium:exposure,config]", 923, 1899, 48, 5, True),
+    ("nuclei[medium:tech]", 10, 10, 100, 2, False),
+]
+
+
+def _replay_2637():
+    import types
+    import phase_contract as PC
+    from degradation import wall_clock_degradation
+    from run_medium import mark_tool_ok, mark_tool_partial
+
+    def fn(ctx):
+        for n, req, tot, pct, rps, cut in _RUN_2637:
+            ctx.tools_run.append(n)
+            if cut:
+                cov = (COVERAGE_PARTIAL_SIGNIFICANT if pct >= 50
+                       else COVERAGE_PARTIAL_MINIMAL)
+                mark_tool_partial(ctx, n, wall_clock_degradation(180, cov),
+                                  stats={"requests": req, "total": tot,
+                                         "percent": pct, "rps": rps})
+            else:
+                mark_tool_ok(ctx, n)
+
+    ctx = types.SimpleNamespace(tools_run=[], tool_status={}, findings=[],
+                                artifacts=[], asset_id="a", scan_run_id="s",
+                                dsn=None)
+    spec = PC.PhaseSpec(name="nuclei", tier="medium",
+                        fn=PC.legacy_adapter(fn, "medium"),
+                        order=PC.ORDER_MEDIUM_TOOLS)
+    return PC.run_phase(spec, ctx, None), ctx.tool_status["nuclei"]
+
+
+def test_per_chunk_evidence_reaches_the_persisted_entry():
+    _res, e = _replay_2637()
+    by_name = {c["name"]: c for c in e["per_chunk"]}
+    wp = by_name["nuclei[medium:wordpress,cms]"]
+    assert (wp["requests"], wp["total"], wp["percent"]) == (1199, 1299, 92), (
+        "the 'a hundred requests short' signal was lost in translation")
+    ch = by_name["nuclei[critical,high]"]
+    assert (ch["requests"], ch["total"], ch["percent"]) == (687, 7255, 9)
+
+
+def test_phase_level_coverage_is_an_aggregate_not_the_first_chunk():
+    """Was `next(u.coverage for u in units if u.coverage)` — the FIRST unit's
+    bucket. On #2645 that read partial_minimal only because critical,high sorts
+    first. A phase whose first chunk finished and whose last four were cut would
+    have reported `complete`."""
+    _res, e = _replay_2637()
+    assert e["requests"] == 687 + 1249 + 1199 + 923      # measurable units only
+    assert e["total"] == 7255 + 2711 + 1299 + 1899
+    assert e["percent"] == 30
+    assert e["coverage"] == COVERAGE_PARTIAL_MINIMAL
+
+
+def test_first_chunk_complete_does_not_make_the_phase_complete():
+    """THE DISCRIMINATING CASE. My #2637 fixture had the first chunk and the
+    aggregate agree, so mutation M29 (revert to 'first chunk with a coverage
+    wins') survived its first run — the test passed for the wrong reason. Here
+    chunk 1 FINISHED and the rest were badly cut, so first-chunk-wins would
+    report `complete` for a phase that covered 3%."""
+    import types
+    import phase_contract as PC
+    from degradation import wall_clock_degradation
+    from run_medium import mark_tool_ok, mark_tool_partial
+
+    def fn(ctx):
+        ctx.tools_run.append("nuclei[tiny]")
+        mark_tool_ok(ctx, "nuclei[tiny]")          # complete, 10 requests
+        ctx.tool_status["nuclei[tiny]"] = {"ok": True}
+        for n in ("nuclei[huge_a]", "nuclei[huge_b]"):
+            ctx.tools_run.append(n)
+            mark_tool_partial(ctx, n,
+                              wall_clock_degradation(180, COVERAGE_COMPLETE),
+                              stats={"requests": 150, "total": 10000, "percent": 1})
+
+    ctx = types.SimpleNamespace(tools_run=[], tool_status={}, findings=[],
+                                artifacts=[], asset_id="a", scan_run_id="s",
+                                dsn=None)
+    spec = PC.PhaseSpec(name="nuclei", tier="medium",
+                        fn=PC.legacy_adapter(fn, "medium"),
+                        order=PC.ORDER_MEDIUM_TOOLS)
+    PC.run_phase(spec, ctx, None)
+    e = ctx.tool_status["nuclei"]
+    assert e["percent"] == 1
+    assert e["coverage"] == COVERAGE_PARTIAL_MINIMAL, (
+        "phase verdict must come from the aggregate, not from any one chunk "
+        "or from whatever the caller passed in")
+
+
+def test_aggregate_weights_by_requests_not_by_chunk_count():
+    """Denominators differ 250x (7255 vs 29). Averaging percentages would let a
+    29-request chunk finishing outvote a 7255-request chunk stalling at 9%."""
+    from phase_contract import UnitResult, aggregate_coverage, Outcome
+    units = [UnitResult(name="big", outcome=Outcome.PARTIAL,
+                        requests=100, total=10000, percent=1),
+             UnitResult(name="tiny", outcome=Outcome.OK,
+                        requests=10, total=10, percent=100)]
+    bucket, agg = aggregate_coverage(units)
+    assert agg["percent"] == 1                      # not the 50% a mean gives
+    assert bucket == COVERAGE_PARTIAL_MINIMAL
+
+
+def test_aggregate_returns_none_when_nothing_measurable():
+    """Keep 'unknown' rather than inventing a bucket."""
+    from phase_contract import UnitResult, aggregate_coverage, Outcome
+    bucket, agg = aggregate_coverage(
+        [UnitResult(name="x", outcome=Outcome.PARTIAL)])
+    assert bucket is None and agg == {}
+
+
 def test_partial_entry_without_stats_still_valid():
     """Flag off / nuclei too fast to emit — the entry must still be coherent."""
     import types

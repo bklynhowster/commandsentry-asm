@@ -51,6 +51,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
+from degradation import (COVERAGE_COMPLETE, COVERAGE_PARTIAL_MINIMAL,
+                         COVERAGE_PARTIAL_SIGNIFICANT)
 from phase_source import LIGHT, MEDIUM, HEAVY, source_for_tier
 
 # Tier ordering — a tier selection is CUMULATIVE: heavy = light ∪ medium ∪ heavy.
@@ -129,6 +131,17 @@ class UnitResult:
     reason: str = ""
     coverage: str | None = None
     matches: int = 0
+    # ── EVIDENCE (increment 2b) ─────────────────────────────────────────────
+    # The bucket is the verdict; these are what let a reader see WHICH cut
+    # chunks were nearly done. Run #2645 shipped without them and the counts
+    # were silently lost in translation — mark_tool_partial wrote them into the
+    # recorder's per-chunk entries, but UnitResult had nowhere to put them, so
+    # _units_from_recorder dropped them on the floor. Same shape of failure as
+    # the ⑦ premise: data present upstream, discarded at a boundary.
+    requests: int | None = None
+    total: int | None = None
+    percent: int | None = None
+    rps: int | None = None
 
     def as_dict(self) -> dict:
         d = {"name": self.name, "outcome": self.outcome}
@@ -138,6 +151,10 @@ class UnitResult:
             d["coverage"] = self.coverage
         if self.matches:
             d["matches"] = self.matches
+        for k in ("requests", "total", "percent", "rps"):
+            v = getattr(self, k)
+            if v is not None:
+                d[k] = v
         return d
 
 
@@ -334,6 +351,18 @@ def _default_mark_partial(ctx, tool_name: str, result: "PhaseResult") -> None:
     if total_matches:
         entry["matches"] = total_matches
     if units:
+        # Summed evidence at phase level — see aggregate_coverage for why this
+        # sums requests rather than averaging buckets.
+        #
+        # ONE SOURCE OF TRUTH for the bucket: the ADAPTER derives it (it owns
+        # the units and builds the PhaseResult, which is the carrier), and this
+        # writer trusts result.coverage. A first attempt had BOTH compute the
+        # aggregate — which looked like belt-and-braces but actually meant
+        # mutating either one left the other correct, so neither mutation was
+        # detectable. Redundancy that masks mutations is worse than a single
+        # path, because it converts a real regression into a silent one.
+        _bucket, agg = aggregate_coverage(units)
+        entry.update(agg)
         entry["per_chunk"] = [u.as_dict() for u in units]
         entry["chunks_ok"] = sum(1 for u in units if u.outcome == Outcome.OK)
         entry["chunks_cut"] = sum(1 for u in units
@@ -666,8 +695,41 @@ def _units_from_recorder(tool_status: dict) -> list:
             name=name, outcome=outcome,
             reason=v.get("reason") or v.get("degraded") or v.get("skipped") or "",
             coverage=v.get("coverage"), matches=v.get("matches", 0) or 0,
+            requests=v.get("requests"), total=v.get("total"),
+            percent=v.get("percent"), rps=v.get("rps"),
         ))
     return units
+
+
+def aggregate_coverage(units: list) -> tuple[str | None, dict]:
+    """Phase-level coverage from the sub-units, plus the summed evidence.
+
+    ⚠ REPLACES `next((u.coverage for u in units if u.coverage), None)`, which
+    took the FIRST unit's bucket and called it the phase's. On run #2645 that
+    happened to read partial_minimal because `critical,high` sorts first — the
+    right answer for the wrong reason. A phase whose first chunk finished and
+    whose last four were cut would have reported `complete`.
+
+    Aggregate over REQUESTS, not over buckets: chunk denominators differ by
+    250x (7255 vs 29 on #2637), so averaging percentages would let a 29-request
+    chunk finishing outvote a 7255-request chunk stalling at 9%.
+
+    Returns (bucket | None, evidence) — None when no unit carried a count, so
+    the caller keeps 'unknown' rather than inventing one.
+    """
+    req = sum(u.requests for u in units if u.requests is not None)
+    tot = sum(u.total for u in units if u.total is not None)
+    if not tot:
+        # No measurable unit. Fall back to a bucket only if some unit had one.
+        return next((u.coverage for u in units if u.coverage), None), {}
+    pct = (req * 100) // tot
+    if pct >= 100:
+        bucket = COVERAGE_COMPLETE
+    elif pct >= 50:
+        bucket = COVERAGE_PARTIAL_SIGNIFICANT
+    else:
+        bucket = COVERAGE_PARTIAL_MINIMAL
+    return bucket, {"requests": req, "total": tot, "percent": pct}
 
 
 def legacy_adapter(fn, tier, *args, **kwargs):
@@ -728,7 +790,7 @@ def legacy_adapter(fn, tier, *args, **kwargs):
             # 15 of 30, and MIXED plus per_unit_state is what carries that.
             units = _units_from_recorder(rec.tool_status)
             all_cut = all(u.outcome != Outcome.OK for u in units) if units else True
-            coverage = next((u.coverage for u in units if u.coverage), None)
+            coverage, _agg = aggregate_coverage(units)
             reason = partial[0][1] or "legacy_partial"
             ctor = PhaseResult.partial if all_cut else PhaseResult.mixed
             return ctor(reason, coverage=coverage,
