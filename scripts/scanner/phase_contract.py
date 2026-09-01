@@ -870,6 +870,33 @@ def legacy_adapter(fn, tier, *args, **kwargs):
 # more, take the honest partial coverage (cut-off phases are recorded DEGRADED);
 # if it is misbehaviour, fix the misbehaviour. Raising the ceiling to hide slow
 # behaviour is the failure mode 4.7 named explicitly.
+#
+# ── 4.7 rulings ㉖/㉗/㉘, 2026-09-01 — READ BEFORE PROPOSING A RAISE ──────────
+#
+# This ceiling was tested against a real aspiration and HELD. nuclei's
+# `critical,high` chunk is 7255 counter-units at a measured 3.8 units/sec, so it
+# needs ~1909s to complete — for that ONE chunk. With the other five (~1000s
+# combined) a complete scan needs ~2900s against this 1800s ceiling. Splitting
+# it into sub-chunks (⑰′) does NOT reduce the work; it only moves where the cut
+# lands, at ANY sub-chunk count. So ⑰′ was SHELVED and `critical,high` is
+# ACCEPTED as permanently PARTIAL, honestly recorded. ⑮ (400s per chunk) already
+# lifted it from ~9% to ~22% for free; everything beyond that trades a real
+# constraint for marginal coverage.
+#
+# REVISIT this number only when a CONSTRAINT changes:
+#   * VPN slot capacity changes (Command VPN_SLOTS_N=1, Prodex=2 — the env var
+#     exists precisely so the instances can differ)
+#   * cron cadence changes
+#   * phases become able to yield the VPN slot mid-run
+#
+# DO NOT revisit for:
+#   * "critical,high is tantalisingly close to complete"
+#   * one asset or one tier wanting more time
+#   * any coverage aspiration unaccompanied by a constraint change
+#
+# Coverage aspirations do not override fleet-level constraints. If you are here
+# because a number looks nearly achievable, that is the exact itch this comment
+# exists to stop. See Obsidian 205.
 CUMULATIVE_WALL_CLOCK_S = int(os.environ.get("CUMULATIVE_WALL_CLOCK_S", "1800"))
 
 WALL_CLOCK_REASON = "wall_clock_ceiling_reached"
