@@ -242,7 +242,6 @@ class PhaseSpec:
     fn: Callable
     requires_binary: Optional[str] = None
     needs_vpn: bool = False
-    is_active_probe: bool = False        # gated on assets.active_probe_authorized
     timeout_s: Optional[int] = None
     healthy_yield: Optional[Callable[[dict], Optional[str]]] = None
     enabled: bool = True                 # dark-launch switch
@@ -265,7 +264,7 @@ REGISTRY: list[PhaseSpec] = []
 
 
 def phase(*, name: str, tier: str, requires_binary: str | None = None,
-          needs_vpn: bool = False, is_active_probe: bool = False,
+          needs_vpn: bool = False,
           timeout_s: int | None = None,
           healthy_yield: Callable[[dict], Optional[str]] | None = None,
           enabled: bool = True, order: int | None = None):
@@ -278,7 +277,7 @@ def phase(*, name: str, tier: str, requires_binary: str | None = None,
             raise ValueError(f"phase {name!r}: unknown tier {tier!r}")
         REGISTRY.append(PhaseSpec(
             name=name, tier=tier, fn=fn, requires_binary=requires_binary,
-            needs_vpn=needs_vpn, is_active_probe=is_active_probe,
+            needs_vpn=needs_vpn,
             timeout_s=timeout_s, healthy_yield=healthy_yield, enabled=enabled,
             order=order))
         return fn
@@ -448,7 +447,8 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
     #                     could have run, so set-equality is unaffected.
     #      GATE_SKIPPED — "did we look at THIS asset?"  The phase is real and
     #                     operational; a per-asset gate says it does not apply
-    #                     here (e.g. active_probe_authorized=false). The
+    #                     here (e.g. the legacy adapter's
+    #                     'legacy_not_applicable'). The
     #                     autocloser NEEDS this recorded: a gated-off phase did
     #                     NOT establish "we looked and found nothing" ⇒ credited
     #                     + {"skipped": reason}.
@@ -465,13 +465,33 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
     if not spec.enabled:
         return PhaseResult(outcome=Outcome.DISABLED, reason="disabled")
 
-    if spec.is_active_probe and not _probe_authorized(ctx):
-        # ROE boundary AND ban protection (4.7 Q6): attack-shaped traffic only
-        # goes to assets explicitly flagged active_probe_authorized.
-        ctx.tools_run.append(spec.name)
-        mark_skipped(ctx, spec.name, "active_probe_not_authorized")
-        return PhaseResult(outcome=Outcome.GATE_SKIPPED,
-                           reason="active_probe_not_authorized")
+    # REMOVED 2026-09-01 (4.7 ruling ㉓) — the is_active_probe gate.
+    #
+    # A PhaseSpec.is_active_probe flag used to gate a phase here on
+    # assets.active_probe_authorized, under the comment "attack-shaped traffic
+    # only goes to assets explicitly flagged active_probe_authorized."
+    #
+    # That claim was FALSE. No registered phase ever set is_active_probe=True —
+    # it appeared only in the dataclass, the factory signature, and this check.
+    # All 14 phases ran with the default False, so nuclei/nikto/ffuf (which ARE
+    # attack-shaped) were ungated regardless of the asset's flag, while the code
+    # documented a per-asset ROE control that never operated. A control that is
+    # described but does not run is worse than an absent one: it survives code
+    # review and audit as evidence of protection it does not provide.
+    #
+    # Deleted rather than wired: wiring it would have halted scanning on every
+    # asset until each was individually opted in (all 66 Prodex assets are
+    # flagged false), which is an operational decision, not a cleanup.
+    #
+    # NOT affected, verified before deletion:
+    #   * assets.active_probe_authorized — still the real gate for Ship 188's
+    #     fwbbot / waf_differential / safe_exploit probes, which are NOT
+    #     registered phases and gate themselves (run_heavy L1726, L1833:
+    #     `fire = authorized and _ACTIVE_PROBE_LIVE`).
+    #   * Outcome.GATE_SKIPPED — still produced by the legacy adapter
+    #     ('legacy_not_applicable') and still consumed below.
+    #
+    # Do not re-add this pattern without wiring a phase to it in the same commit.
 
     t0 = time.time()
     try:
@@ -950,8 +970,3 @@ def _credit_not_run(spec, ctx, mark_degraded, reason: str) -> None:
     mark_degraded(ctx, spec.name, reason)
 
 
-def _probe_authorized(ctx) -> bool:
-    """Active-probe gate. Reads the per-asset flag the runner already resolved.
-    Defaults to FALSE — an unreadable/absent policy is NOT authorization
-    (fail-closed on a verdict, per the fail-closed-gates rule)."""
-    return bool(getattr(ctx, "active_probe_authorized", False))

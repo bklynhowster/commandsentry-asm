@@ -693,3 +693,38 @@ def test_subprocess_run_really_does_carry_partial_output():
     with pytest.raises(subprocess.TimeoutExpired) as ei:
         subprocess.run(cmd, capture_output=True, text=True, timeout=1)
     assert ei.value.stdout, "TimeoutExpired carries no partial stdout"
+
+
+# ── ⑮ — the wall-clock budget itself (4.7 ruling ⑮, shipped 2026-09-01) ──────
+
+def test_nuclei_chunk_wall_is_400s_not_180():
+    """🔴 PINS THE ⑮ SHIP. Reverting this constant to 180 silently undoes the
+    whole wall-clock ship and nothing else would notice — verified: mutating
+    400 -> 180 left the entire suite green before this test existed.
+
+    400s is calibrated, not arbitrary. Measured across runs #2637/#2640/#2645/
+    #2649, three of the four cut chunks complete inside 400s and only
+    critical,high (7255 counter-units, ~1909s at its measured 3.8 units/sec)
+    does not. Completing chunks exit early, so this is a ceiling, not a cost.
+
+    If you change it, change spec 204 §2 and the ⑰′ sub-chunk arithmetic in the
+    same commit — the split count is derived from THIS number.
+    """
+    import run_medium as M
+    assert M.NUCLEI_CHUNK_WALL_S == 400, (
+        f"NUCLEI_CHUNK_WALL_S is {M.NUCLEI_CHUNK_WALL_S}, expected 400 (4.7 ⑮)")
+
+
+def test_wall_clock_budget_fits_the_cumulative_ceiling():
+    """The 400s ceiling must not let one phase eat the whole run.
+
+    Six chunks x 400s = 2400s would exceed the 1800s cumulative ceiling if every
+    chunk ran the full budget. It does not, because completing chunks exit early
+    — but the RELATIONSHIP is what matters, so assert the ceiling still dominates
+    a single chunk by a sane margin rather than asserting a fragile total.
+    """
+    import run_medium as M
+    ceiling = 1800
+    assert M.NUCLEI_CHUNK_WALL_S < ceiling / 4, (
+        "a single chunk may not claim more than a quarter of the cumulative "
+        f"ceiling ({M.NUCLEI_CHUNK_WALL_S}s of {ceiling}s)")

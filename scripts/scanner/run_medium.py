@@ -158,7 +158,26 @@ def pick_ua() -> str:
 NUCLEI_RATE_LIMIT = 30
 NUCLEI_CONCURRENCY = 5
 NUCLEI_TIMEOUT_S = 15
-NUCLEI_CHUNK_WALL_S = 180      # each chunk caps at ~3min (was 90s — too short for real targets)
+# 4.7 ruling ⑮ (2026-08-31), shipped 2026-09-01 UNGATED per ruling ㉑.
+#
+# 180 → 400. Measured on runs #2637/#2640/#2645/#2649, per chunk:
+#     critical,high            9%   CUT   (7255 units — needs ~1909s, see ⑰′)
+#     medium:cve              44%   CUT   → completes at 400s
+#     medium:exposure,config  40%   CUT   → completes at 400s
+#     medium:wordpress,cms    90%   CUT   → completes at 400s  ← 92/90/90 three runs
+#     medium:php / tech      100%   ok    (29 and 10 units — seconds, not coverage)
+#
+# 400s completes THREE of the four cut chunks. Completing chunks exit early, so
+# this is a ceiling not a cost: 30d baseline avg run is 917s against the 1800s
+# cumulative ceiling, leaving ~880s of headroom.
+#
+# ⚠ The seconds above are derived by dividing nuclei's COUNTER units by its
+# counter-units/sec. Those units cancel, so the seconds are real. Do NOT redo
+# this arithmetic with a network req/s figure — nuclei's `requests` is ~3x
+# actual sends (measured: 148 real vs 457 counted). Real contact is ~2.4 req/s
+# against a configured cap of 5, which is why ruling ㉑ dropped ⑱′'s gate: the
+# ban-exposure this was gated on was sized against a rate we never sent.
+NUCLEI_CHUNK_WALL_S = 400
 NUCLEI_URLS_PER_CHUNK = 40     # ~30-50s of work per chunk
 
 # ── nuclei -stats (increment 2a, 4.7 ruling ⑭) — SHIPS DARK ─────────────────

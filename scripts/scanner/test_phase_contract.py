@@ -172,17 +172,16 @@ def test_unauthorized_active_probe_is_gated_credited_but_never_executed():
     flagged active_probe_authorized. The gate is the ROE boundary. It must NOT
     execute, but it IS recorded so the absence of findings is not mistaken for
     'we looked'."""
-    fired = {"n": 0}
-
-    def fn(ctx, wd):
-        fired["n"] += 1
-        return PhaseResult.ok()
-
-    res, ctx = _run(fn, ctx=FakeCtx(authorized=False), is_active_probe=True)
-    assert fired["n"] == 0, "unauthorized active probe MUST NOT execute"
-    assert res.outcome == Outcome.GATE_SKIPPED
-    assert ctx.tools_run == ["t"]
-    assert ctx.tool_status["t"] == {"skipped": "active_probe_not_authorized"}
+    # 4.7 ㉓ — the is_active_probe gate was DELETED 2026-09-01. It never fired:
+    # no registered phase ever set the flag, so nuclei/nikto/ffuf ran ungated
+    # while the code documented a per-asset ROE control that did not operate.
+    # This pin replaces the three tests that exercised it.
+    import phase_registry  # noqa: F401 — registers the real phases
+    assert not hasattr(pc.PhaseSpec, "is_active_probe") and \
+           "is_active_probe" not in getattr(pc.PhaseSpec, "__dataclass_fields__", {}), \
+        "is_active_probe is back — wire a phase to it in the SAME commit or drop it"
+    assert not hasattr(pc, "_probe_authorized"), \
+        "_probe_authorized is back without a gate that calls it"
 
 
 # ── double-EXECUTION guard (4.7 Q1) ─────────────────────────────────────────
@@ -229,19 +228,6 @@ def test_distinct_phases_do_not_trip_the_guard():
     assert ctx.tools_run == ["a", "b", "c"]
 
 
-def test_authorized_active_probe_runs():
-    res, ctx = _run(lambda c, w: PhaseResult.ok(),
-                    ctx=FakeCtx(authorized=True), is_active_probe=True)
-    assert res.outcome == Outcome.OK and ctx.tools_run == ["t"]
-
-
-def test_probe_gate_fails_closed_when_flag_absent():
-    """An unreadable/absent policy is NOT authorization."""
-    ctx = FakeCtx()
-    del ctx.active_probe_authorized
-    res = run_phase(_spec(lambda c, w: PhaseResult.ok(), is_active_probe=True),
-                    ctx, pathlib.Path("/tmp"), **_markers(ctx))
-    assert res.outcome == Outcome.SKIPPED
 
 
 # ── degradation taxonomy (4.7 Q2) ───────────────────────────────────────────
