@@ -144,6 +144,10 @@ def main() -> int:
     ap.add_argument("--stale-hours", type=int, default=DEFAULT_STALE_HOURS)
     ap.add_argument("--max-sweep", type=int, default=DEFAULT_MAX_SWEEP)
     ap.add_argument("--dsn", default=os.environ.get("SUPABASE_DSN", ""))
+    ap.add_argument("--expect-instance", metavar="SUBSTR",
+                    help="abort unless the connected DB's host contains SUBSTR. "
+                         "Use it: a shell SUPABASE_DSN pointing at the OTHER "
+                         "instance produces a confident 'nothing to do'.")
     args = ap.parse_args()
 
     if not args.dsn:
@@ -153,6 +157,27 @@ def main() -> int:
     import psycopg                                          # noqa: PLC0415
     cutoff = datetime.now(timezone.utc) - timedelta(hours=args.stale_hours)
 
+    # 🔴 SAY WHICH DATABASE. Added 2026-09-02 after this tool reported
+    # "no scans stuck in 'running' beyond 4h" against COMMANDsentry while the
+    # operator was in the prodexsentry-asm directory intending to sweep Prodex.
+    # Command genuinely had zero stale rows, so the wrong-target run looked
+    # exactly like success. A destructive tool that does not name its target is
+    # one stale shell variable away from a confident no-op — or a confident
+    # write against the wrong instance. cwd does NOT determine the DSN.
+    host = ""
+    try:
+        for part in args.dsn.split("@", 1)[-1].split("/")[0].split(","):
+            host = part.split(":")[0]
+            break
+    except Exception:                                       # noqa: BLE001
+        host = "<unparseable>"
+    print(f"target host: {host or '<unknown>'}")
+    if args.expect_instance and args.expect_instance not in host:
+        print(f"::warning::ABORT — host {host!r} does not contain "
+              f"{args.expect_instance!r}. Refusing to act on a database you "
+              f"did not name. Check SUPABASE_DSN.", file=sys.stderr)
+        return 2
+
     with psycopg.connect(args.dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(FIND_SQL, {"cutoff": cutoff})
@@ -160,7 +185,10 @@ def main() -> int:
             stale = [dict(zip(cols, r)) for r in cur.fetchall()]
 
         if not stale:
-            print(f"no scans stuck in 'running' beyond {args.stale_hours}h")
+            print(f"no scans stuck in 'running' beyond {args.stale_hours}h "
+                  f"on {host or 'this database'}")
+            print("  (if you expected rows here, check SUPABASE_DSN points at "
+                  "the instance you meant — cwd does not determine it)")
             return 0
 
         print(f"found {len(stale)} stale running scan(s) "
