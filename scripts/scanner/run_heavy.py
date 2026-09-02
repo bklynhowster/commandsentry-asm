@@ -149,12 +149,40 @@ from phase_contract import (phase, run_phase, run_phases, get_phase,  # noqa: E4
                             CUMULATIVE_WALL_CLOCK_S)
 from phase_source import HEAVY as TIER_HEAVY  # noqa: E402
 
-# Cumulative heavy master switch (step 4 inc 3c, 4.7 Item B). DEFAULT OFF so the
-# merged code changes nothing in production; flipping it is the ROLLOUT gate,
-# which 4.7 ruled must come AFTER Ship 188's batch is stable so a ban stays
-# attributable to one change.
-_CUMULATIVE_HEAVY_ENABLED = os.environ.get(
-    "CUMULATIVE_HEAVY_ENABLED", "").strip().lower() in ("1", "true", "yes")
+# ── HEAVY IS ALWAYS CUMULATIVE (4.7 ruling ㉙, 2026-09-02) ──────────────────
+#
+# There is no flag. Heavy MEANS light ∪ medium ∪ heavy-depth, on every trigger
+# path — manual dispatch, cron, workflow_run, and the self-chain alike.
+#
+# WHY THE FLAG WAS DELETED RATHER THAN CARRIED ON THE QUEUE ROW.
+# It used to be `CUMULATIVE_HEAVY_ENABLED`, fed by
+# `${{ github.event.inputs.cumulative_heavy || 'false' }}`. github.event.inputs
+# is EMPTY on cron, on workflow_run, and on the self-chain (which re-dispatches
+# with no inputs), so the flag lived only for one manual dispatch — and because
+# a dispatch claims the OLDEST queued row rather than its own asset, it could
+# hand its flag to a different scan entirely.
+#
+# Measured 2026-09-01: six Prodex assets enqueued heavy within six minutes. The
+# two claimed by their own dispatch ran 19 tools; the four claimed by cron ran
+# 5. Four of six silently ran plain heavy, and nothing recorded that the flag
+# had been lost — a plain heavy is a VALID run, just not the one asked for.
+#
+# The alternative was a `scan_queue.cumulative_heavy` column mirroring
+# `authenticated`. 4.7 ruled against it: any flag can be lost, mis-propagated,
+# or drift between sources of truth, and preserving an escape hatch nobody uses
+# is complexity without value. Deleting the flag deletes the bug class.
+#
+# 🔴 THERE IS NO PLAIN-HEAVY MODE AND IT CANNOT BE SELECTED. That is a
+# deliberate commitment (4.7 ㉛), made on evidence: 30-day tier counts were
+# light 187, heavy 15 (all manual), medium 0 — no operational demand for plain
+# heavy existed. Do NOT re-add an env kill-switch; that recreates the
+# two-sources-of-truth condition that caused the original bug.
+# ROLLBACK is a code revert of this ship, not a flag.
+# Reintroducing plain heavy is a design decision requiring its own argument.
+#
+# Canary that licensed this: ~11 cumulative runs, all `complete` — Command
+# #2624/2632/2635/2637/2640/2645/2647/2649/2659, Prodex prodexlabs + tour.
+# See Obsidian 206.
 # Pure safe proof-of-exploitation logic (4.7 rulings, Obsidian 150 §6; build-order #2.1).
 # No I/O — run_safe_exploit_phase does the HTTP + guardrails, hands captured responses here.
 import safe_exploit as se
@@ -3059,8 +3087,7 @@ def run(descriptor_path: str, dsn: str) -> int:
         # flush_planned_steps no-ops if dsn unset and swallows failures.
         ctx.planned_steps = ["testssl.sh", "httpx", "gau", "content_fetch",
                              "naabu", "fingerprintx"]
-        if _CUMULATIVE_HEAVY_ENABLED:
-            ctx.planned_steps = build_cumulative_planned_steps(ctx.planned_steps)
+        ctx.planned_steps = build_cumulative_planned_steps(ctx.planned_steps)
         flush_planned_steps(ctx)
 
         # ─── CUMULATIVE HEAVY (step 4 inc 3c) ───────────────────────────────
@@ -3079,15 +3106,14 @@ def run(descriptor_path: str, dsn: str) -> int:
         # content_fetch is registered, so it is executed by the loop and its
         # hand-call below is skipped to avoid tripping the double-exec guard.
         cumulative_abort = None
-        if _CUMULATIVE_HEAVY_ENABLED:
-            import phase_registry  # noqa: F401  — import registers the phases
-            selected = phases_for_tier(TIER_HEAVY)
-            log(f"cumulative heavy ENABLED — {len(selected)} registry phase(s), "
-                f"ceiling {CUMULATIVE_WALL_CLOCK_S}s")
-            _results, cumulative_abort = run_phases(
-                selected, ctx, work_dir, log=log)
-            if cumulative_abort is not None:
-                log(f"cumulative heavy halted: {cumulative_abort.reason}")
+        import phase_registry  # noqa: F401  — import registers the phases
+        selected = phases_for_tier(TIER_HEAVY)
+        log(f"cumulative heavy — {len(selected)} registry phase(s), "
+            f"ceiling {CUMULATIVE_WALL_CLOCK_S}s")
+        _results, cumulative_abort = run_phases(
+            selected, ctx, work_dir, log=log)
+        if cumulative_abort is not None:
+            log(f"cumulative heavy halted: {cumulative_abort.reason}")
 
         # Phase 1 — testssl.sh (P2). The whole point of v1 — clears the
         # stranded backlog so the note-127 auto-closer can reconcile.
@@ -3120,8 +3146,10 @@ def run(descriptor_path: str, dsn: str) -> int:
         # loud instead of silent.
         # Skipped when cumulative mode already executed it from the registry —
         # a second execution would (correctly) trip DoubleExecutionError.
-        if not _CUMULATIVE_HEAVY_ENABLED:
-            run_phase(get_phase("content_fetch"), ctx, work_dir)
+        # content_fetch is a REGISTERED phase, so the cumulative loop above always
+        # executes it. The old hand-call here ran only when cumulative was off;
+        # with cumulative unconditional it would be a second execution and would
+        # (correctly) raise DoubleExecutionError. Deleted with the flag.
 
         # Security-stack identification P0 — passive collectors (Obsidian 146).
         # ADDITIVE, persist-only: appends a `stack_id_passive` artifact and

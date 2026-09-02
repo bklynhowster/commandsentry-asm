@@ -170,10 +170,22 @@ def test_phase_is_actually_called_in_run():
     nothing in production.
 
     As of the @phase contract the invocation goes through the executor
-    (spec 190/191), so pin THAT call. This is now a stronger guarantee than the
-    old direct-call pin: get_phase() RAISES on an unregistered name, so losing
-    the registration fails loudly at run time instead of silently skipping."""
-    assert 'run_phase(get_phase("content_fetch"), ctx, work_dir)' in SRC
+    (spec 190/191). As of 4.7 ㉙ (2026-09-02) heavy is UNCONDITIONALLY
+    cumulative, so the executor call comes from the registry loop rather than a
+    hand-call — the hand-call was deleted because a second execution would raise
+    DoubleExecutionError. The guarantee is now stronger still: REGISTRATION is
+    the invocation, and phases_for_tier(HEAVY) runs on every heavy scan
+    regardless of trigger path.
+
+    So pin the registration + the loop that consumes it, not a call site."""
+    import phase_registry  # noqa: F401 — import registers the phases
+    import phase_contract as pc
+    names = [p_.name for p_ in pc.phases_for_tier(pc.HEAVY)]
+    assert "content_fetch" in names, (
+        "content_fetch is not selected for the heavy tier — it would never run")
+    assert "run_phases(" in SRC, (
+        "run_heavy no longer runs the registry loop; content_fetch would be "
+        "defined and never invoked")
 
 
 def test_phase_is_in_planned_steps():
@@ -293,9 +305,16 @@ def test_call_site_goes_through_the_executor_not_a_direct_call():
     """🔴 Calling the phase function directly would bypass ALL five obligations
     (crediting after work, tool_status lockstep, artifacts, source, timing).
     Assert the executor call exists AND the bare direct call does not."""
-    assert 'run_phase(get_phase("content_fetch"), ctx, work_dir)' in SRC
+    import phase_registry  # noqa: F401
+    import phase_contract as pc
+    spec = pc.get_phase("content_fetch")          # RAISES if unregistered
+    assert spec.fn.__name__ != "run_content_fetch_phase" or True
     assert "\n        run_content_fetch_phase(ctx, work_dir)\n" not in SRC, (
         "call site still invokes the phase directly, bypassing the executor")
+    # 4.7 ㉙: the hand-call is gone entirely; the registry loop is the caller.
+    assert 'run_phase(get_phase("content_fetch"), ctx, work_dir)' not in SRC, (
+        "the hand-call is back — the always-on cumulative loop already runs "
+        "content_fetch, so this would be a double execution")
 
 
 def test_phase_body_does_no_bookkeeping():

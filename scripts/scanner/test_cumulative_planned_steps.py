@@ -95,11 +95,14 @@ def test_pure_function_does_not_touch_ctx():
     assert list(sig.parameters) == ["heavy_own_steps"]
 
 
-def test_expansion_is_gated_on_the_cumulative_flag():
-    """Non-cumulative heavy must keep today's 6-step plan exactly."""
+def test_expansion_is_unconditional_no_flag():
+    """4.7 ㉙ — heavy is always cumulative, so the planned_steps expansion is
+    no longer gated. It must run before flush_planned_steps or the portal's
+    ScanProgress denominator is the pre-expansion 6."""
     src = inspect.getsource(run_heavy)
     i = src.index('ctx.planned_steps = ["testssl.sh"')
     seg = src[i:i + 400]
-    assert "if _CUMULATIVE_HEAVY_ENABLED:" in seg
     assert "build_cumulative_planned_steps(ctx.planned_steps)" in seg
+    assert "_CUMULATIVE_HEAVY_ENABLED" not in seg, (
+        "the expansion is gated on a flag again — see Obsidian 206")
     assert src.index("flush_planned_steps(ctx)") > i

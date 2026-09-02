@@ -181,25 +181,52 @@ def test_the_three_medium_scanners_can_read_every_field_they_need():
 
 # ── the cumulative-heavy master switch (inc 3c) ─────────────────────────────
 
-def test_cumulative_heavy_defaults_OFF():
-    """🔴 THE ROLLOUT GATE. Merged code must not change production behaviour;
-    flipping this is a deliberate operational act that 4.7 ruled must come
-    AFTER Ship 188's batch is stable, so a ban stays attributable to ONE
-    change (spec 195 Q6 / Item B)."""
+def test_heavy_is_unconditionally_cumulative_no_flag():
+    """🔴 4.7 ㉙ — THE FLAG IS GONE AND MUST STAY GONE.
+
+    It used to be _CUMULATIVE_HEAVY_ENABLED, fed by
+    `${{ github.event.inputs.cumulative_heavy || 'false' }}`. That expression is
+    empty on cron, workflow_run and the self-chain, so the flag survived only
+    one manual dispatch. Measured 2026-09-01: of six Prodex assets enqueued
+    heavy, the two claimed by their own dispatch ran 19 tools and the four
+    claimed by cron ran 5 — four silently ran plain heavy with nothing recording
+    the loss.
+
+    Re-adding ANY flag (env var, queue column, kill-switch) re-creates the
+    two-sources-of-truth condition that caused it. Rollback is a code revert.
+    """
     import run_heavy
-    assert run_heavy._CUMULATIVE_HEAVY_ENABLED is False, (
-        "cumulative heavy must ship default-OFF")
-
-
-def test_content_fetch_handcall_is_guarded_against_double_execution():
-    """content_fetch is registered, so cumulative mode executes it from the
-    registry. Its legacy hand-call must be skipped in that mode or the
-    double-execution guard fires — correctly, but the scan dies."""
+    assert not hasattr(run_heavy, "_CUMULATIVE_HEAVY_ENABLED"), (
+        "the cumulative-heavy flag is back — 4.7 ㉙/㉛ deleted it deliberately; "
+        "rollback is a code revert, not a flag. See Obsidian 206.")
     src = pathlib.Path(__file__).parent.joinpath("run_heavy.py").read_text()
-    assert "if not _CUMULATIVE_HEAVY_ENABLED:" in src
-    i = src.index("if not _CUMULATIVE_HEAVY_ENABLED:")
-    j = src.index('run_phase(get_phase("content_fetch"), ctx, work_dir)')
-    assert i < j, "the hand-call is not guarded by the flag"
+    code = "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    assert "CUMULATIVE_HEAVY_ENABLED" not in code, (
+        "CUMULATIVE_HEAVY_ENABLED referenced in run_heavy code (not comment)")
+
+
+def test_no_trigger_path_can_disable_cumulative_heavy():
+    """The workflow must not carry the input or the env var either — the flag
+    was lost BECAUSE it came from github.event.inputs. Assert on the file an
+    operator actually gets."""
+    wf = pathlib.Path(__file__).parents[2] / ".github/workflows/scanner.yml"
+    text = wf.read_text()
+    assert "cumulative_heavy" not in text, (
+        "scanner.yml still references cumulative_heavy")
+    assert "CUMULATIVE_HEAVY_ENABLED" not in text, (
+        "scanner.yml still exports CUMULATIVE_HEAVY_ENABLED")
+
+
+def test_content_fetch_handcall_is_gone_not_merely_guarded():
+    """content_fetch is a REGISTERED phase, so the always-on cumulative loop
+    executes it. The old hand-call ran only when the flag was off; leaving it
+    would be a second execution and would raise DoubleExecutionError."""
+    src = pathlib.Path(__file__).parent.joinpath("run_heavy.py").read_text()
+    code = "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    assert 'run_phase(get_phase("content_fetch"), ctx, work_dir)' not in code, (
+        "the content_fetch hand-call is back — the registry loop already runs it")
 
 
 def test_cumulative_block_runs_before_the_heavy_specific_phases():

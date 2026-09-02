@@ -79,11 +79,6 @@ on:
           - light
           - medium
           - heavy
-      cumulative_heavy:
-        description: 'CUMULATIVE HEAVY (step 4). true = a heavy scan additionally runs the REGISTRY phases in ruled order — wafw00f first (so nuclei plans WITH WAF context), then the 9 light checks, httpx[-td], then nuclei/nikto/ffuf — under a 30-min wall-clock ceiling, halting on a harm-condition abort (ban / VPN lost / unreachable). Default false = todays behaviour exactly. Cron/workflow_run runs never set this. NOTE: this sends medium-tier attack-shaped traffic (nuclei/nikto/ffuf) on a HEAVY scan, so treat the first runs as a staged canary.'
-        required: false
-        default: false
-        type: boolean
       nuclei_stats:
         description: 'NUCLEI -stats. true = add `-stats -stats-interval 5` to every nuclei chunk, so a cut chunk records MEASURED coverage (requests/total/percent, bucketed per 4.7 ruling ③) instead of "unknown", and a <chunk>_stats artifact is persisted for clean chunks as well as cut ones — a cut chunk''s request count is meaningless without knowing what a completed chunk of the same plan sends. Also feeds the yield floor (ruling ⑲): a chunk cut having sent under 5 requests is broken AND cut, so it records DEGRADED rather than PARTIAL. DEFAULT TRUE since 2026-08-31 — the abort risk this shipped dark for (is_tool_output_degraded scans stderr for 7 reachability patterns and aborts at 3 matches) was MEASURED at 0/7 across the full logs of runs #2637 and #2640; nuclei''s stats output is JSON whose only error-ish field is a count ("errors":"0"). Uncheck to turn it off for one run.'
         required: false
@@ -588,7 +583,6 @@ jobs:
           # Cumulative heavy (step 4 inc 3c). Same shape as ACTIVE_PROBE_LIVE:
           # only a manual dispatch can arm it; cron/workflow_run carry no input
           # so scheduled heavy scans keep today's behaviour exactly.
-          CUMULATIVE_HEAVY_ENABLED: ${{ github.event.inputs.cumulative_heavy || 'false' }}
           # Wall-clock ceiling for the cumulative run (seconds). 30 min default —
           # Command holds a single VPN slot, so a longer run starves other scans.
           CUMULATIVE_WALL_CLOCK_S: ${{ vars.CUMULATIVE_WALL_CLOCK_S || '1800' }}
