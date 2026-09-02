@@ -698,7 +698,21 @@ jobs:
       # '7-57/10 * * * *' (every 10 min), so a 42-asset sweep needs ~7h AT BEST
       # — and GitHub throttles scheduled crons hard, so the real figure is
       # worse and unpredictable. Observed 2026-08-27: the queue sat idle with
-      # 40 queued and nothing running. Until the Command secret is set this
+      # 40 queued and nothing running.
+      #
+      # 🔴 NOW MEASURED, 2026-09-02 — "worse and unpredictable" is 2-5 HOURS.
+      # Gaps between Command's last ten SCHEDULED runs, via the public Actions
+      # API (/actions/workflows/scanner.yml/runs?event=schedule):
+      #   173m · 204m · 244m · 284m · 279m · 109m · 129m · 164m · 204m
+      # On a cron configured for 10 minutes. 1040 scheduled runs lifetime.
+      # Prodex measures the same (and its Jul 3 '*/5' window produced 6 runs in
+      # 6h15m, ~75 expected) — this is GitHub, not an instance divergence.
+      #
+      # So the ~7h sweep figure above is roughly 20x optimistic if cron is the
+      # only driver. DO NOT try to fix this by shortening the interval; Jul 3
+      # proves */5 is throttled identically. Real drain comes from this
+      # self-chain, the portal /api/scan-tick heartbeat and the ASM Discover
+      # chain — cron is occasional idle cover only. Until the Command secret is set this
       # step logs "self-chain disabled" and exits 0 — landing it is safe alone.
       - name: Self-chain if queue has more work
         if: ${{ always() && steps.poll.outputs.has_work == 'true' }}
