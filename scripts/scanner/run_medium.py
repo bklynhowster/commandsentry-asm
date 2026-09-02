@@ -870,6 +870,48 @@ def flush_progress(ctx: "ScanContext") -> None:
             pass
 
 
+def _emit_chunk_progress(ctx, chunks_total: int) -> None:
+    """A′ — push a provisional progress snapshot for the running nuclei phase.
+
+    Best-effort in the same sense as flush_progress: a progress write must
+    never fail a scan. Silently no-ops when the phase is not running under the
+    registry executor (direct legacy invocation, validate-mode, unit tests),
+    because only the executor installs the callback.
+
+    Counting is deliberately derived from the recorder's OWN accumulated
+    tool_status rather than from the loop index: entries appear there exactly
+    when a chunk terminates, so "resolved" cannot drift into meaning "started".
+    """
+    emit = getattr(ctx, "emit_chunk_progress", None)
+    if emit is None:            # not the recorder ⇒ not under the executor
+        return
+    try:
+        from phase_contract import ProgressPayload
+        entries = [(k, v) for k, v in (getattr(ctx, "tool_status", {}) or {}).items()
+                   if isinstance(v, dict) and k.startswith("nuclei")]
+        ok = sum(1 for _k, v in entries if v.get("ok") is True)
+        cut = sum(1 for _k, v in entries if v.get("partial") is True)
+        resolved = ok + cut
+        if resolved == 0 or resolved > chunks_total:
+            # Nothing terminated yet, or the plan grew past its snapshot —
+            # either way do not render a denominator we cannot stand behind.
+            return
+        emit(ProgressPayload(
+            phase_name="nuclei",
+            chunks_resolved=resolved,
+            chunks_total=chunks_total,
+            chunks_ok=ok,
+            chunks_cut=cut,
+            per_chunk=tuple(
+                {"name": k,
+                 "outcome": "ok" if v.get("ok") is True else "partial"}
+                for k, v in entries),
+        ))
+    except Exception as e:      # noqa: BLE001 — progress never fails a scan
+        log(f"  chunk progress emit failed (non-fatal): "
+            f"{type(e).__name__}: {e}")
+
+
 def flush_planned_steps(ctx: "ScanContext") -> None:
     """Best-effort one-shot write of ctx.planned_steps to scan_run.
     Called once after Phase 1 (detect_waf + detect_tech_stack) when
@@ -2801,6 +2843,21 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
                     or "tech_detect_no_stack_signal")
         ctx.chunk_plan_meta["plan_delta_reason"] = _why
 
+    # A′ (4.7 (55)) — the progress DENOMINATOR, snapshotted at loop entry.
+    #
+    # NOT planned_chunks. Those two answer different questions and conflating
+    # them misreports the bar:
+    #   planned_chunks (⑭′ fix 4) = what the plan INTENDED, kept for post-hoc
+    #       shrinkage analysis. It can exceed what was ever attempted — e.g. a
+    #       WAF 403 to tech-detect silently shrinks the plan, so planned_chunks
+    #       may say 6 while this loop only ever runs 4.
+    #   _chunks_total (here)      = what this run actually intends to EXECUTE.
+    # Using planned_chunks would render "3 of 6" while 2 chunks were never in
+    # the plan at all, and an operator would go looking for work that does not
+    # exist. Tuple, so a later mutation of `chunks` cannot move the denominator
+    # mid-phase.
+    _chunk_snapshot = tuple(chunks)
+    _chunks_total = len(_chunk_snapshot)
     for i, (sev, tag, desc) in enumerate(chunks):
         # Layer 1: pre-chunk healthcheck
         # Rate resolution: PROBE ladder always wins (it's a diagnostic test).
@@ -3079,6 +3136,19 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
                 "cooldown_s": PATIENT_BAN_COOLDOWN_S,
             })
             time.sleep(PATIENT_BAN_COOLDOWN_S)
+
+        # ── A′ (4.7 ㊾/(51)): this chunk has TERMINATED — report progress ────
+        #
+        # Placed HERE, before the inter-chunk VPN rotation and any PATIENT
+        # cooldown, so the bar moves the moment work resolves rather than after
+        # a delay that can run tens of seconds.
+        #
+        # RESOLVED means TERMINATED, never STARTED (4.7 ㊾ correction). The
+        # recorder's tool_status gains a chunk entry only when that chunk
+        # finishes — clean via mark_tool_ok, cut via mark_tool_partial — so
+        # counting entries counts terminations by construction. Deriving this
+        # from `i` instead would count the IN-FLIGHT chunk and over-report.
+        _emit_chunk_progress(ctx, _chunks_total)
 
         # Layer 3 + 4: planned rotation between chunks
         if i < len(chunks) - 1:

@@ -45,7 +45,13 @@ def _register(name, tier, fn, order, **kw):
     """One legacy function → one registry citizen. `name` MUST match the tool
     name the legacy function credits, so tool_status keys stay stable across the
     legacy and registry paths (and so findings reconcile the same either way)."""
-    phase(name=name, tier=tier, order=order, **kw)(legacy_adapter(fn, tier))
+    # _phase_name is keyword-only and underscore-prefixed BECAUSE legacy_adapter
+    # forwards *args/**kwargs straight through to the legacy function — a plain
+    # `phase_name=` would land in fn(rec, ...) and break it. It carries the
+    # REGISTRY name (the tool_status key), which is what A′'s progress merge
+    # must write; fn.__name__ ("run_nuclei_chunked") would key the wrong entry.
+    phase(name=name, tier=tier, order=order, **kw)(
+        legacy_adapter(fn, tier, _phase_name=name))
 
 
 # ── LIGHT tier — no attack-shaped traffic ───────────────────────────────────

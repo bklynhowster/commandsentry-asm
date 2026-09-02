@@ -158,6 +158,87 @@ class UnitResult:
         return d
 
 
+@dataclass(frozen=True)
+class ProgressPayload:
+    """A′ (4.7 (53)/(54)) — the ONLY thing a legacy phase may push through the
+    recorder's isolation, and only while that phase is executing.
+
+    🔴 WHY THIS TYPE EXISTS AT ALL. `_LegacyRecorder` sets `dsn = None` on
+    purpose to SUPPRESS the legacy progress flush, because in production run
+    #2621 a legacy phase's internal `flush_progress(recorder)` overwrote the
+    real accumulated scan_run row — 11 tools to 1, mid-run. That isolation is
+    load-bearing and is NOT being relaxed.
+
+    ⑮ then raised NUCLEI_CHUNK_WALL_S 180 → 400, so nuclei can hold the run for
+    up to 2400s while the portal's bar shows nothing, because `tool_status`
+    gains its `nuclei` key only when the phase ENDS. A′ threads a narrow,
+    single-purpose channel through the isolation instead of removing it.
+
+    NARROWNESS IS STRUCTURAL, NOT CONVENTIONAL (4.7 (54)). The failure this
+    guards against is the ⑭′ family: `"ok" in entry` passed `{"ok": False}` and
+    bit three consumers at once. Documentation did not prevent that; a type can.
+
+      * frozen — a payload cannot be mutated after validation.
+      * `in_progress` is ALWAYS True and is validated. A payload can therefore
+        never carry a final verdict, which makes it structurally impossible for
+        this channel to become the authoritative write path. Verdicts flow only
+        through run_phase.
+      * `chunks_resolved` counts chunks that have TERMINATED (ok or cut), never
+        chunks that have STARTED. A started-but-running chunk would over-report
+        progress. 4.7 ㊾ correction.
+    """
+    phase_name: str
+    chunks_resolved: int
+    chunks_total: int
+    chunks_ok: int
+    chunks_cut: int
+    per_chunk: tuple = ()
+    in_progress: bool = True
+
+    def __post_init__(self):
+        if self.in_progress is not True:
+            raise ValueError(
+                "ProgressPayload must carry in_progress=True. This channel is "
+                "provisional-only; final verdicts go through run_phase.")
+        if not self.phase_name:
+            raise ValueError("ProgressPayload requires a phase_name")
+        if self.chunks_total <= 0:
+            raise ValueError("chunks_total must be positive")
+        if self.chunks_resolved > self.chunks_total:
+            raise ValueError(
+                f"chunks_resolved ({self.chunks_resolved}) cannot exceed "
+                f"chunks_total ({self.chunks_total})")
+        if self.chunks_ok + self.chunks_cut != self.chunks_resolved:
+            raise ValueError(
+                f"chunks_ok ({self.chunks_ok}) + chunks_cut ({self.chunks_cut}) "
+                f"must equal chunks_resolved ({self.chunks_resolved}) — "
+                "resolved means TERMINATED, not started")
+
+    def as_entry(self) -> dict:
+        """The provisional tool_status entry. `ok: False` is deliberate and
+        matches the PARTIAL shape, so every existing coverage consumer that
+        tests `ok == true` already refuses it even before it checks
+        `in_progress`. Fail-safe by default, marker as the explicit signal."""
+        return {
+            "ok": False,
+            "in_progress": True,
+            "chunks_resolved": self.chunks_resolved,
+            "chunks_total": self.chunks_total,
+            "chunks_ok": self.chunks_ok,
+            "chunks_cut": self.chunks_cut,
+            "per_chunk": list(self.per_chunk),
+        }
+
+
+def entry_is_provisional(entry) -> bool:
+    """True when a tool_status entry is a mid-phase A′ progress snapshot and
+    carries NO verdict. Every coverage/verdict consumer must exclude these.
+
+    VALUE test, never key membership — `"in_progress" in entry` would be the
+    same bug as `"ok" in entry` passing `{"ok": False}`."""
+    return isinstance(entry, dict) and entry.get("in_progress") is True
+
+
 @dataclass
 class PhaseResult:
     """What a phase returns. The phase does NO bookkeeping — it reports."""
@@ -569,6 +650,7 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
         # above: credited so the autocloser knows we did NOT establish
         # coverage here, marked skipped so it can never read as 'ok'.
         mark_skipped(ctx, spec.name, result.reason or "not_applicable")
+        _strip_provisional_marker(ctx, spec.name)
         return result
     if result.outcome == Outcome.OK:
         mark_ok(ctx, spec.name)
@@ -594,6 +676,7 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
         mark_degraded(ctx, spec.name, result.reason or "degraded")
     # ⑭′.4 — after the entry exists, on whichever path wrote it.
     _merge_phase_diagnostics(ctx, spec.name)
+    _strip_provisional_marker(ctx, spec.name)
     return result
 
 
@@ -647,6 +730,41 @@ class _LegacyRecorder:
         # Final close_out is unaffected either way (it uses the real ctx), so
         # the damage was to live progress + mid-run forensics, not the result.
         object.__setattr__(self, "dsn", None)
+        # ── A′ (4.7 (53)/(54)): the ONE narrow channel out of this isolation.
+        # Installed by the executor via _install_chunk_progress_cb, never by
+        # phase code. Stays None unless the executor wires it, so the default
+        # behaviour of this class is unchanged and #2621 stays fixed.
+        object.__setattr__(self, "_chunk_progress_cb", None)
+        object.__setattr__(self, "_executing_phase", None)
+
+    def _install_chunk_progress_cb(self, phase_name: str, cb) -> None:
+        """Executor-only. Deliberately NOT a general `install_callback(fn)` —
+        4.7 (54): multiple narrow, specifically-named callbacks are preferred
+        over one general one, so this channel cannot be widened by future
+        feature pressure into the back-door that recreates #2621."""
+        object.__setattr__(self, "_chunk_progress_cb", cb)
+        object.__setattr__(self, "_executing_phase", phase_name)
+
+    def emit_chunk_progress(self, payload: "ProgressPayload") -> None:
+        """Called by a legacy phase after a sub-unit TERMINATES.
+
+        No-ops when no callback is installed, so a legacy phase that calls this
+        outside the executor path (tests, validate-mode) is harmless.
+        """
+        if not isinstance(payload, ProgressPayload):
+            raise TypeError(
+                "emit_chunk_progress accepts only a ProgressPayload — the type "
+                "IS the contract (4.7 (54)); a bare dict would let this channel "
+                "carry arbitrary state through the recorder's isolation.")
+        cb = object.__getattribute__(self, "_chunk_progress_cb")
+        if cb is None:
+            return
+        executing = object.__getattribute__(self, "_executing_phase")
+        if payload.phase_name != executing:
+            raise ValueError(
+                f"progress for {payload.phase_name!r} but the executing phase "
+                f"is {executing!r} — a phase may only report its own progress")
+        cb(payload)
 
     def __getattr__(self, name):          # only called when not found locally
         return getattr(object.__getattribute__(self, "_real"), name)
@@ -788,7 +906,59 @@ def aggregate_coverage(units: list) -> tuple[str | None, dict]:
     return bucket, {"requests": req, "total": tot, "percent": pct}
 
 
-def legacy_adapter(fn, tier, *args, **kwargs):
+def _strip_provisional_marker(ctx, tool_name: str) -> None:
+    """A′ (4.7 ㊿) — EXPLICIT STRIP on the authoritative write.
+
+    Every branch in run_phase today rebinds ctx.tool_status[name] to a fresh
+    dict, so a leftover in_progress marker is already impossible. This exists
+    because that is an INCIDENTAL property of how those branches happen to be
+    written, not a guaranteed one: a future path that MUTATES the entry instead
+    of replacing it would ship a provisional marker on an authoritative verdict
+    — a record asserting "no verdict yet" while being read as one.
+
+    ⚠ CALLED FROM TWO PLACES, and it has to be. run_phase's GATE_SKIPPED branch
+    RETURNS EARLY (it does not reach the main tail), so a single call at the end
+    misses it. I wrote it as one call first and
+    test_run_phase_strips_in_progress_from_every_outcome[skipped] caught it —
+    the test uses MUTATING markers precisely so it fails when the strip is
+    absent, rather than passing on the rebinding that masks it.
+
+    Any future early return in run_phase must call this too.
+    """
+    entry = ctx.tool_status.get(tool_name)
+    if isinstance(entry, dict):
+        entry.pop("in_progress", None)
+
+
+def _merge_chunk_progress(ctx, payload: "ProgressPayload") -> None:
+    """A′ executor side — merge ONE provisional key into the REAL ctx.
+
+    🔴 THE WHOLE POINT. The recorder cannot do this itself: its `tool_status`
+    is deliberately isolated and its `dsn` is None, because a legacy phase
+    flushing the recorder's single-entry bookkeeping over the real row is
+    production bug #2621 (11 tools → 1, mid-run). So the merge happens HERE,
+    against the real ctx, and touches exactly one key.
+
+    Independent re-validation of the invariant (4.7 (54)): even if the
+    recorder's own check were bypassed, this refuses a non-provisional payload.
+    Two layers, because the ⑭′ lesson is that one layer gets edited away.
+    """
+    if not isinstance(payload, ProgressPayload) or payload.in_progress is not True:
+        raise ValueError(
+            "_merge_chunk_progress accepts only provisional ProgressPayloads; "
+            "authoritative verdicts are written by run_phase, never here.")
+    entry = payload.as_entry()
+    if not entry_is_provisional(entry):     # belt-and-braces on as_entry()
+        raise ValueError("as_entry() produced a non-provisional entry")
+    ctx.tool_status[payload.phase_name] = entry
+    try:                                    # real ctx ⇒ real dsn ⇒ real flush
+        from run_medium import flush_progress
+        flush_progress(ctx)
+    except Exception:                       # noqa: BLE001 — best-effort only
+        pass
+
+
+def legacy_adapter(fn, tier, *args, _phase_name=None, **kwargs):
     """Wrap a self-bookkeeping legacy phase function as a contract phase.
 
     Translation rules — derived from what the legacy functions actually do:
@@ -818,6 +988,10 @@ def legacy_adapter(fn, tier, *args, **kwargs):
     """
     def _phase(ctx, work_dir):
         rec = _LegacyRecorder(ctx)
+        if _phase_name:
+            rec._install_chunk_progress_cb(
+                _phase_name,
+                lambda payload: _merge_chunk_progress(ctx, payload))
         fn(rec, *args, **kwargs)
         degraded = [(t, v.get("degraded")) for t, v in rec.tool_status.items()
                     if isinstance(v, dict) and "degraded" in v]
