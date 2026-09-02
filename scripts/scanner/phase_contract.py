@@ -861,10 +861,24 @@ def legacy_adapter(fn, tier, *args, **kwargs):
 
 # ── wall-clock budget (4.7 rulings Q3 + Q4, spec 194/195) ───────────────────
 
-# 30 minutes, NOT the 45 first suggested. Command runs VPN_SLOTS_N=1, so a
-# cumulative heavy holds the ONLY VPN slot for its whole duration while cron
-# ticks every 10 min — 45 min blocks 4-5 cycles, 30 blocks 3. Env-var because
-# Prodex's slot capacity may differ.
+# 30 minutes, NOT the 45 first suggested. A cumulative heavy holds a VPN slot for
+# its WHOLE duration while cron ticks every 10 min, so this ceiling is a function
+# of THIS INSTANCE'S slot count: at VPN_SLOTS_N=1 a 30-min hold blocks every other
+# VPN'd scan for 3 cron cycles (45 min would block 4-5).
+#
+# ⚠ BOTH THE CEILING AND THE CONSTRAINT BEHIND IT ARE PER-INSTANCE, and both are
+# GitHub repo VARIABLES rather than code:
+#     CUMULATIVE_WALL_CLOCK_S: ${{ vars.CUMULATIVE_WALL_CLOCK_S || '1800' }}
+#     VPN_SLOTS_N:             ${{ vars.VPN_SLOTS_N || '1' }}
+# So raising the ceiling on one instance is a settings change, not a ship — but it
+# is only JUSTIFIED by that instance's real slot count.
+#
+# 🔴 DO NOT reason from vpn_slot.py's docstring. It says Command=1, Prodex=2
+# against a shared Mullvad 5-device account, but BOTH repos default to 1 and the
+# docstring is only true if the repo variable is actually set. An earlier version
+# of this comment asserted "Command runs VPN_SLOTS_N=1" and parity copied that
+# sentence verbatim into the Prodex repo, where it cited the wrong instance
+# entirely. Read the variable, not the prose.
 #
 # ⚠ DO NOT RAISE THIS TO ACCOMMODATE A SLOW RUN. If a run legitimately needs
 # more, take the honest partial coverage (cut-off phases are recorded DEGRADED);
