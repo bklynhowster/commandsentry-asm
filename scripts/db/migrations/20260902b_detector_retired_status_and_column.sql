@@ -1,0 +1,129 @@
+-- 20260902b_detector_retired_status_and_column.sql
+--
+-- 4.7 rulings (57) + (58). PART 1 OF 2 — ADDS ONLY, USES NOTHING.
+--
+-- 🔴 WHY THIS IS SPLIT FROM 20260902c AND MUST BE APPLIED FIRST.
+-- `current_status` is a Postgres ENUM (`public.finding_status_t`), NOT a CHECK
+-- constraint. PostgreSQL forbids USING a newly-added enum value in the same
+-- transaction that ADDs it ("unsafe use of new value of enum type"). So the
+-- value is added here, alone, and everything that REFERENCES it — the invariant
+-- CHECK, the autoclose predicate — lives in 20260902c.
+--
+-- Apply b, let it COMMIT, then apply c. Applying them in one transaction fails.
+--
+-- ⚠ 4.7's sketch proposed `ALTER TABLE findings DROP CONSTRAINT
+-- chk_finding_status` / re-ADD with a CHECK(... IN ...). **That constraint does
+-- not exist.** Verified 2026-09-02: the only CHECK on public.findings is
+-- `chk_cvss_score_range`. Same trap as findings.source being an enum rather
+-- than text. Do not reintroduce a CHECK-based status vocabulary — the enum IS
+-- the vocabulary.
+--
+-- ============================================================================
+-- WHY A NEW STATUS AT ALL (4.7 (57))
+-- ============================================================================
+-- A finding whose only detector has left the scan plan is in neither state the
+-- model offers:
+--   * NOT open       — we will never look for it again. Leaving it open
+--                      overstates our surveillance and permanently inflates the
+--                      open count with rows nobody can ever verify.
+--   * NOT remediated — nobody established it was fixed. Closing it is an
+--                      absence-of-evidence claim from a place we stopped
+--                      looking, which is the exact failure this workstream has
+--                      spent the week deleting.
+--
+-- Nor is it any existing terminal value:
+--   false_positive       the observation was never valid. It WAS valid.
+--   closed_reclassified  the observation moved elsewhere. Nothing moved.
+--   wont_fix / accepted_risk   a DECISION about a known-present issue. No
+--                              decision was made; we merely stopped measuring.
+--
+-- `detector_retired` names what actually happened: the detector that watched
+-- this stopped watching.
+--
+-- MEASURED SCOPE (audit, Obsidian 212 §6): exactly ONE class qualifies today —
+-- nuclei INFO, 71 open findings across 4 assets, newest observation 2026-03-30.
+-- The scanner's chunk plan (run_medium.py L2407-2426) contains only
+-- `critical,high` and `medium:*` chunks; no INFO chunk exists on any tier, so
+-- these can never be re-observed. Eight other autoclose-eligible classes — 805
+-- findings — were observed the day of the audit. This is not systemic.
+--
+-- ============================================================================
+-- TRANSITIONS ARE DELIBERATE, NEVER AUTOMATIC (4.7 (57) correction)
+-- ============================================================================
+-- Nothing in this migration moves any finding. No trigger, no default, no
+-- backfill. A finding reaches `detector_retired` only via an explicit, audited
+-- batch run by a human when a detector is knowingly removed from the plan.
+-- An automatic absence-based transition would be the same defect wearing a new
+-- status name.
+--
+-- CRITERIA — `detector_retired` is appropriate ONLY when BOTH hold:
+--   1. a specific detector has been removed from the scan plan, AND
+--   2. the finding's producing check has NO remaining detector in the current
+--      plan (so it can never be re-observed).
+-- It is NOT a general "we have stopped looking" bucket, and NOT a way to clear
+-- findings we would rather not triage. Anything that fails (2) stays open.
+
+ALTER TYPE public.finding_status_t ADD VALUE IF NOT EXISTS 'detector_retired';
+
+-- Separate timestamp, NOT remediated_at (4.7 (58), option B).
+--
+-- Note 126's invariant is: status in {remediated, validated_remediated} iff
+-- remediated_at IS NOT NULL. `detector_retired` is not a remediation, so
+-- reusing remediated_at would either break that invariant or force it to be
+-- relaxed into meaning two different things. A separate column keeps
+-- remediated_at meaning exactly "we established remediation" and gives the new
+-- concept its own field. The matching invariant is enforced in 20260902c
+-- (it references the enum value, so it cannot live here).
+ALTER TABLE public.findings
+  ADD COLUMN IF NOT EXISTS detector_retired_at timestamptz;
+
+COMMENT ON COLUMN public.findings.detector_retired_at IS
+  'Set iff current_status = detector_retired (enforced by chk_detector_retired_at '
+  'in 20260902c). The moment a human transitioned this finding because its '
+  'producing detector left the scan plan. NOT a remediation timestamp — '
+  'remediated_at keeps note 126''s meaning untouched.';
+
+-- ============================================================================
+-- VERIFY AFTER APPLYING (before applying 20260902c)
+-- ============================================================================
+-- 1) Enum value present (expect 1):
+--      SELECT count(*) FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+--       WHERE t.typname = 'finding_status_t' AND e.enumlabel = 'detector_retired';
+--
+-- 2) Column present, and NOTHING transitioned (expect 0 — this migration moves
+--    no rows):
+--      SELECT count(*) FROM public.findings WHERE detector_retired_at IS NOT NULL;
+--      SELECT count(*) FROM public.findings WHERE current_status::text = 'detector_retired';
+--
+-- 3) Open counts unchanged. The portal filters active findings by ALLOWLIST
+--    (`["detected","confirmed","open","regressed"]`, dashboard/page.tsx L105 +
+--    L342, and OPEN_STATUSES in FindingsClient.tsx), so a new status is
+--    excluded from open views automatically. Confirm anyway:
+--      SELECT count(*) FROM public.findings
+--       WHERE current_status IN ('detected','confirmed','open','regressed');
+--
+-- ROLLBACK: the column drops cleanly (`ALTER TABLE public.findings DROP COLUMN
+-- detector_retired_at`). ⚠ THE ENUM VALUE CANNOT BE REMOVED — PostgreSQL has no
+-- DROP VALUE. An unused enum label is harmless, but this is one-way; that is
+-- the reason to apply b only when c is ready to follow.
+--
+-- ============================================================================
+-- RECORD THE LEDGER ROW (run after the SQL above, before pushing)
+-- ============================================================================
+--   INSERT INTO public.schema_migrations
+--     (filename, applied_by, content_sha256, git_commit_sha, notes)
+--   VALUES ('20260902b_detector_retired_status_and_column.sql', 'manual',
+--           '<SHA256_OF_THIS_FILE>', NULL,
+--           'Manual apply: enum ADD VALUE cannot be used in the adding txn, so '
+--           'this is part 1 of 2. Apply b, commit, then c. 4.7 rulings 57+58.')
+--   ON CONFLICT (filename) DO NOTHING;
+--
+-- MIGRATION-META:
+-- idempotent: true
+-- transactional: false
+-- safe_auto_apply: false
+-- requires_backup: false
+-- estimated_duration_ms: 50
+-- risk: low
+-- notes: PART 1 OF 2. Adds enum value detector_retired to finding_status_t and column findings.detector_retired_at. ADDS ONLY — references nothing, moves no rows, transitions nothing. MUST COMMIT BEFORE 20260902c, which uses the value (PostgreSQL forbids using a new enum value in the transaction that adds it). transactional:false because ALTER TYPE ADD VALUE should not share a transaction with dependent DDL. MANUAL APPLY on BOTH instances, ledger row, THEN push. Enum value removal is impossible in PostgreSQL — apply only when c is ready.
+-- END-META
