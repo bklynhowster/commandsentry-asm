@@ -238,7 +238,11 @@ jobs:
             select queue_id || '|' || status
               from public.scan_queue
              where asset_id = '$ASSET_ID'
-               and status in ('queued', 'running')
+               -- 4.7 ㊲ — age-bound 'running'; see enqueue-fleet.yml for why.
+               -- Without this a dead runner's row blocks this asset forever.
+               and (status = 'queued'
+                    or (status = 'running'
+                        and started_at > now() - (interval '1 hour' * ${STALE_RUN_HOURS:-8})))
              order by triggered_at desc
              limit 1;
           ")

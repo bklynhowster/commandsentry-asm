@@ -102,9 +102,24 @@ jobs:
                  select a.asset_id from public.assets a
                   where a.discovery_status = 'confirmed_live'
                     and a.ownership = 'owned'
+                    -- 4.7 ㊲ (2026-09-02) — AGE-BOUND the 'running' arm.
+                    -- An unbounded 'running' check treats a row abandoned by a
+                    -- dead runner as an active scan FOREVER, so that asset is
+                    -- silently excluded from every sweep. Found live:
+                    -- cooked.prodexlabs.com wedged 53.6 days. poll_queue.py
+                    -- promised a "liveness sweeper (separate cron, M11)" that
+                    -- was never built.
+                    -- Fixed at the READ layer, not with a scheduled writer:
+                    -- a wrong threshold here costs a redundant enqueue (the VPN
+                    -- slot gates it); a wrong threshold in a writer corrupts
+                    -- state by failing a live scan. Stale rows also survive as
+                    -- evidence instead of being silently rewritten.
+                    -- 8h = 8x the longest completed run in 90 days (1.00h).
                     and not exists (select 1 from public.scan_queue q
                                      where q.asset_id = a.asset_id
-                                       and q.status in ('queued','running'))
+                                       and (q.status = 'queued'
+                                            or (q.status = 'running'
+                                                and q.started_at > now() - (interval '1 hour' * ${STALE_RUN_HOURS:-8}))))
                   order by (select max(r.completed_at)
                               from public.scan_run r
                              where r.asset_id = a.asset_id

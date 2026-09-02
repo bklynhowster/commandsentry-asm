@@ -60,7 +60,11 @@ jobs:
 
           # Self-pacing: don't add onto a still-draining heavy backlog (anti-stranding).
           BACKLOG=$(psql "$SUPABASE_DSN" -t -A -v ON_ERROR_STOP=1 \
-            -c "select count(*) from public.scan_queue where status in ('queued','running') and intensity='heavy';")
+            -c "select count(*) from public.scan_queue
+                 where intensity='heavy'
+                   and (status = 'queued'
+                        or (status = 'running'
+                            and started_at > now() - (interval '1 hour' * ${STALE_RUN_HOURS:-8})));")
           BACKLOG="${BACKLOG:-0}"
           if [ "$BACKLOG" -ge 10 ]; then
             echo "::notice::heavy backlog=${BACKLOG} still draining — skipping this run (self-pacing)"
@@ -103,9 +107,13 @@ jobs:
                                       join public.scan_run r on r.scan_run_id = art.scan_run_id
                                      where r.asset_id = a.asset_id
                                        and art.tool_name ilike 'stack_id_passive%')
+                    -- 4.7 ㊲ — age-bound 'running'. An abandoned row would
+                    -- otherwise exclude its asset from seeding forever.
                     and not exists (select 1 from public.scan_queue q
                                      where q.asset_id = a.asset_id
-                                       and q.status in ('queued','running'))
+                                       and (q.status = 'queued'
+                                            or (q.status = 'running'
+                                                and q.started_at > now() - (interval '1 hour' * ${STALE_RUN_HOURS:-8}))))
                   order by (select max(r.completed_at) from public.scan_run r
                              where r.asset_id = a.asset_id
                                and r.intensity = 'heavy' and r.status = 'complete') asc nulls first,
