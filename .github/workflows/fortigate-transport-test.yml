@@ -1,0 +1,127 @@
+name: FortiGate transport-fingerprint test
+
+# ONE-OFF DIAGNOSTIC — not a scanner. Closes 4.7 task #66: does a real-Chrome
+# TLS fingerprint pass FortiWeb on commandcommcentral.com from the SAME Mullvad
+# datacenter egress that the cloud scanner's Go-nuclei gets banned on?
+#
+# It brings up Mullvad exactly like scanner.yml, then runs
+# scripts/diag/fortigate_transport_test.py — two arms (curl_cffi Chrome vs
+# httpx PD-Go), interleaved, benign URLs only, same egress/rate. Verdict lands
+# in the run's job summary.
+#
+# SELF-FIRING: runs automatically on push of this workflow or its driver, so no
+# manual "Run workflow" dispatch is needed. workflow_dispatch is kept as a
+# manual re-run handle.
+#
+# Benign GETs only, Command-owned FortiGate apex only (the driver fail-closes on
+# a target allowlist). Full Command authorization; no attack payloads.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fortigate-transport-test.yml'
+      - 'scripts/diag/fortigate_transport_test.py'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Command FortiGate apex to test (allowlisted in the driver)'
+        required: false
+        default: 'commandcommcentral.com'
+        type: string
+      region:
+        description: 'Mullvad region config to raise'
+        required: false
+        default: 'us-nyc'
+        type: string
+      n_per_arm:
+        description: 'Max requests per arm'
+        required: false
+        default: '60'
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  transport-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: ghcr.io/bklynhowster/commandsentry-scanner:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: >-
+        --cap-add=NET_ADMIN
+        --device=/dev/net/tun
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify baked-in toolchain
+        run: |
+          for t in wireguard-go wg gh curl jq python3 httpx; do
+            command -v "$t" >/dev/null 2>&1 \
+              || { echo "::error::missing baked tool: $t"; exit 1; }
+          done
+          echo "✓ baked toolchain present (httpx = nuclei's PD-Go sibling stack)"
+
+      - name: Install curl_cffi (Chrome-impersonation arm)
+        run: |
+          python3 -m pip install --quiet curl_cffi \
+            || python3 -m pip install --quiet --break-system-packages curl_cffi
+          python3 -c "from curl_cffi import requests; print('curl_cffi ready')"
+
+      - name: Fetch + patch WireGuard configs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/wg-download
+          gh release download vpn-tools \
+            --repo bklynhowster/commandsentry-asm \
+            --pattern 'mullvad-wg-configs.tar.gz' \
+            --dir /tmp/wg-download
+          sudo mkdir -p /etc/wireguard
+          sudo tar xzf /tmp/wg-download/mullvad-wg-configs.tar.gz -C /tmp/wg-download
+          sudo cp /tmp/wg-download/wg-configs/*.conf /etc/wireguard/
+          sudo chmod 600 /etc/wireguard/*.conf
+          sudo python3 scripts/scanner/patch_wg_configs.py
+          sudo ls -la /etc/wireguard/
+
+      - name: Make VPN scripts executable
+        run: chmod +x scripts/scanner/*.sh
+
+      - name: Raise Mullvad, run the two-arm test, tear down
+        env:
+          FGT_TARGET: ${{ inputs.target || 'commandcommcentral.com' }}
+          FGT_N: ${{ inputs.n_per_arm || '60' }}
+          REGION: ${{ inputs.region || 'us-nyc' }}
+        run: |
+          set -uo pipefail
+
+          echo "pre-VPN egress: $(curl -s --max-time 8 https://api.ipify.org || echo '<unknown>')"
+
+          sudo chmod 0644 "/etc/wireguard/${REGION}.conf"
+          if ! sudo scripts/scanner/wg_up_userspace.sh "$REGION" 2>&1 | sed 's/^/  [wg-up] /'; then
+            echo "::error::wg_up_userspace.sh failed for $REGION — cannot run on Mullvad egress"
+            exit 1
+          fi
+
+          echo "post-VPN egress: $(curl -s --max-time 8 https://api.ipify.org || echo '<unknown>')"
+
+          # Run the test; ALWAYS tear the tunnel down afterward.
+          set +e
+          python3 scripts/diag/fortigate_transport_test.py
+          rc=$?
+          set -e
+
+          sudo scripts/scanner/vpn_teardown.sh 2>&1 | sed 's/^/  [teardown] /' || \
+            echo "  ⚠ teardown returned nonzero (continuing)"
+
+          exit $rc
