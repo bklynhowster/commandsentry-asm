@@ -324,6 +324,18 @@ class HeavyScanContext:
     ffuf_catchall_status_count: int = 0
     auth_gated: bool = False
 
+    # Canonical host for HTTP-layer phases (4.7 rulings 77-82). Medium's
+    # phases run against THIS context under cumulative heavy, so the field and
+    # the web_host property must exist here too — that is precisely what the
+    # superset test in test_phase_registry.py enforces (it caught this).
+    http_host: str = ""
+    canonical_diag: dict = field(default_factory=dict)
+
+    @property
+    def web_host(self) -> str:
+        """Host for phases that send HTTP requests. Falls back to hostname."""
+        return self.http_host or self.hostname
+
 
 # ============================================================================
 # testssl.sh — invocation, parse, degraded-detector

@@ -60,6 +60,7 @@ import json
 import os
 import random
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -72,6 +73,10 @@ from typing import Any
 # Scanner degradation primitives — fail-closed on "we didn't actually scan."
 # See SPEC_SCANNER_DEGRADATION_HARDENING.md. 2026-06-12.
 from phase_source import source_for_tier, MEDIUM  # noqa: E402  (spec 190/191 Q1: declared-tier source)
+from canonical_host import (  # noqa: E402  (4.7 77-82 — shared decision module)
+    USE_CANONICAL,
+    resolve_canonical_host,
+)
 from tech_detect import (  # noqa: E402  (4.7 ⑭′ — shared with run_light)
     merge_tech_detection,
     parse_httpx_rows,
@@ -637,6 +642,20 @@ class ScanContext:
     scan_run_id: str
     queue_id: str
     intensity: str
+    # ─── Canonical host for HTTP-layer phases (4.7 rulings 77-82) ────────
+    # Empty means "no canonical redirect resolved" -> web_host falls back to
+    # hostname, i.e. exactly the pre-change behaviour. Only ever set when
+    # canonical_host.resolve_canonical_host() AUTHORISED a rewrite: the target
+    # is in the same registrable domain AND resolves to an identical IP set.
+    #
+    # Deliberately NOT a rename of `hostname`. `hostname` remains the asset's
+    # own name and is what identity, logging, finding attribution, the
+    # FortiGate fingerprint match and the validate-mode allowlist all use.
+    # Only the phases that actually send HTTP requests read `web_host`.
+    http_host: str = ""
+    # Diagnostics from the resolution, merged into tool_status so a rewritten
+    # Host is never invisible in the record.
+    canonical_diag: dict[str, Any] = field(default_factory=dict)
     waf_detected: bool = False
     waf_kind: str | None = None  # 'fortiweb', 'cloudflare', 'akamai', etc. — from wafw00f
     tech_stack: set[str] = field(default_factory=set)  # lowercased techs from httpx -td
@@ -763,6 +782,126 @@ class ScanContext:
     # default: False (run everything) when the asset_surface read fails
     # or no row exists.
     auth_gated: bool = False
+
+    @property
+    def web_host(self) -> str:
+        """Host for phases that actually send HTTP requests (4.7 ruling 77-79).
+
+        Falls back to `hostname`, so every uncertain or unauthorised canonical
+        resolution behaves exactly as it did before this existed. Only a
+        resolution that PASSED the two-condition boundary sets `http_host`.
+
+        Use this for wafw00f / httpx[-td] / nuclei / nikto / ffuf targets.
+        Do NOT use it for identity, logging, finding attribution, the
+        FortiGate hostname match, or the validate-mode allowlist — those are
+        statements about the ASSET, not about which vhost answers.
+        """
+        return self.http_host or self.hostname
+
+
+# ─── Canonical-host resolution (4.7 rulings 77-82) ──────────────────────
+#
+# One cheap HEAD at scan start decides which Host the HTTP-layer phases
+# should use. See canonical_host.py for the full rationale and the
+# authorisation boundary; this is only the IO half.
+#
+# Re-resolved EVERY scan and never persisted (ruling 79): a stored
+# canonical_host would repeat the device-class-flip failure class of
+# stamping a derived value that then goes stale silently.
+
+CANONICAL_PROBE_TIMEOUT_S = 12
+
+
+def _canonical_probe(host: str) -> tuple[int, str | None] | None:
+    """HEAD the host; return (status, Location) or None on any failure.
+
+    Deliberately does NOT follow redirects (-L absent) — we want to observe
+    the redirect, not chase it. Returning None fails closed upstream.
+    """
+    rc, stdout, _stderr = run_cmd(
+        ["curl", "-sS", "-o", os.devnull, "-D", "-", "-A", BROWSER_UA,
+         "--max-time", str(CANONICAL_PROBE_TIMEOUT_S), f"https://{host}/"],
+        timeout=CANONICAL_PROBE_TIMEOUT_S + 5,
+    )
+    if rc != 0 or not stdout:
+        return None
+    status = None
+    location = None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if line.upper().startswith("HTTP/") and status is None:
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                status = int(parts[1])
+        elif line.lower().startswith("location:"):
+            location = line.split(":", 1)[1].strip()
+    if status is None:
+        return None
+    return status, location
+
+
+def _resolve_a_records(host: str) -> list[str] | None:
+    """A/AAAA set for `host`, or None if it cannot be resolved."""
+    try:
+        infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return None
+    ips = sorted({i[4][0] for i in infos if i and i[4]})
+    return ips or None
+
+
+def resolve_web_host(ctx: "ScanContext") -> None:
+    """Set ctx.http_host when a canonical redirect is AUTHORISED.
+
+    Every other outcome leaves ctx.http_host empty, so ctx.web_host falls
+    back to the asset hostname — byte-for-byte the pre-change behaviour.
+    """
+    known_assets = _known_asset_hosts(ctx)
+    verdict = resolve_canonical_host(
+        ctx.hostname,
+        probe=_canonical_probe,
+        resolve_ips=_resolve_a_records,
+        is_known_asset=lambda h: h in known_assets,
+    )
+    ctx.canonical_diag = {
+        "outcome": verdict.outcome,
+        "reason": verdict.reason,
+        **({"redirect_to": verdict.redirect_to} if verdict.redirect_to else {}),
+        **verdict.diag,
+    }
+    if verdict.outcome == USE_CANONICAL:
+        ctx.http_host = verdict.http_host
+        log(f"  canonical host: {ctx.hostname} → {verdict.http_host} "
+            f"({verdict.reason}) — HTTP phases will use the canonical vhost")
+    elif verdict.redirect_to:
+        log(f"  canonical host: staying on {ctx.hostname} "
+            f"(redirects to {verdict.redirect_to}; {verdict.reason})")
+    else:
+        log(f"  canonical host: staying on {ctx.hostname} ({verdict.reason})")
+
+
+def _known_asset_hosts(ctx: "ScanContext") -> set[str]:
+    """Owned+confirmed_live asset hostnames, for boundary condition 1.
+
+    Best-effort: an unavailable DB yields an EMPTY set, which only makes the
+    boundary STRICTER (condition 1 can never be satisfied), so a lookup
+    failure cannot authorise a redirect it otherwise would not.
+    """
+    dsn = ctx.dsn or os.environ.get("SUPABASE_DSN")
+    if not dsn:
+        return set()
+    try:
+        psycopg, _dict_row, _Json = _import_deps()
+        with psycopg.connect(dsn, connect_timeout=10) as conn:
+            rows = conn.execute(
+                "select asset_id from public.assets "
+                "where ownership='owned' and discovery_status='confirmed_live'"
+            ).fetchall()
+        return {r[0].strip().lower() for r in rows if r and r[0]}
+    except Exception as exc:  # noqa: BLE001 — stricter-on-failure by design
+        log(f"  canonical host: asset lookup failed ({type(exc).__name__}); "
+            f"boundary condition 1 unavailable this run")
+        return set()
 
 
 # ─── Tool-status helpers (ADR-001 Step 4) ───────────────────────────────
@@ -1690,7 +1829,7 @@ def healthcheck(ctx: ScanContext) -> tuple[bool, int]:
          "-silent", "-status-code", "-no-color",
          "-timeout", "10",
          "-H", f"User-Agent: {ua}",
-         "-u", f"https://{ctx.hostname}/"],
+         "-u", f"https://{ctx.web_host}/"],
         timeout=15,
     )
     if rc != 0:
@@ -1923,7 +2062,7 @@ def _probe_calibration_path_once(ctx: ScanContext) -> tuple[int, str | None, int
          "-silent", "-status-code", "-location", "-json", "-no-color",
          "-timeout", "10",
          "-H", f"User-Agent: {pick_ua()}",
-         "-u", f"https://{ctx.hostname}/{random_path}"],
+         "-u", f"https://{ctx.web_host}/{random_path}"],
         timeout=15,
     )
     if rc != 0:
@@ -2171,7 +2310,7 @@ def detect_waf(ctx: ScanContext) -> None:
     # 2026-06-15: capture stderr instead of `_` so the A′ stderr-into-
     # mark_tool_degraded path (run_medium.py:445) has it available.
     rc, stdout, stderr = run_cmd(
-        ["wafw00f", f"https://{ctx.hostname}/", "-a"],
+        ["wafw00f", f"https://{ctx.web_host}/", "-a"],
         timeout=60,
     )
     ctx.artifacts.append(("wafw00f", "text", stdout))
@@ -2246,7 +2385,7 @@ def detect_tech_stack(ctx: ScanContext) -> None:
     rc, stdout, stderr = run_cmd(
         [
             "httpx",
-            "-u", f"https://{ctx.hostname}",
+            "-u", f"https://{ctx.web_host}",
             "-td",
             "-silent",
             "-json",
@@ -2558,7 +2697,7 @@ def discover_target_urls(ctx: ScanContext) -> list[str]:
     # against the root URL once per chunk with different template
     # filters. Future enhancement: discover sub-paths via katana/ffuf
     # first and feed those as the chunked URL list.
-    base = f"https://{ctx.hostname}"
+    base = f"https://{ctx.web_host}"
     return [base]
 
 
@@ -2799,7 +2938,7 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
     if STEALTH_UA:
         log(f"  STEALTH_UA on: pinned UA + rate {STEALTH_RATE_LIMIT} req/s "
             f"(overrides chunk rate unless probe-mode active)")
-    base_url = f"https://{ctx.hostname}"
+    base_url = f"https://{ctx.web_host}"
 
     # CRAWL_FIRST_MODE: run katana once at scan start, then pass the URL
     # list to every nuclei chunk via -list. Skips template-driven path
@@ -3394,7 +3533,7 @@ def run_nikto(ctx: ScanContext) -> None:
                   "Chrome/131.0.0.0 Safari/537.36")
     cmd = [
         "nikto",
-        "-host", f"https://{ctx.hostname}",
+        "-host", f"https://{ctx.web_host}",
         "-Pause", str(NIKTO_PAUSE_S),
         "-nointeractive", "-ask", "no",
         "-Tuning", "x6",
@@ -3570,7 +3709,7 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str],
     out_path = f"/tmp/commandsentry-ffuf-out-{random.randint(1000,9999)}.json"
     cmd = [
         "ffuf",
-        "-u", f"https://{ctx.hostname}/FUZZ",
+        "-u", f"https://{ctx.web_host}/FUZZ",
         "-w", wl_path,
         "-rate", str(FFUF_RATE),
         "-p", FFUF_DELAY_RANGE,
@@ -4803,6 +4942,16 @@ def run(descriptor_path: str, dsn: str) -> int:
         assert_validate_mode_target_allowed(ctx.hostname, skip_vpn)
         if skip_vpn:
             log(f"validate_mode pre-flight OK — {ctx.hostname!r} in allowlist")
+
+        # ─── Phase 0b: canonical-host resolution (4.7 rulings 77-79) ───
+        # Runs AFTER the VPN is up (so the probe shares the scan's egress)
+        # and BEFORE detect_waf — the first target-bound op — because every
+        # HTTP-layer phase downstream reads ctx.web_host.
+        #
+        # NOTE the allowlist assert above deliberately stays on ctx.hostname:
+        # validate-mode is a safety allowlist about which ASSET may be
+        # scanned at all, and must not be satisfied by a derived host.
+        resolve_web_host(ctx)
 
         # ─── Phase 1: WAF detection ─────────────────────────────────
         log("→ detect_waf")
