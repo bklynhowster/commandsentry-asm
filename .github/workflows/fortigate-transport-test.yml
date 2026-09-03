@@ -29,9 +29,9 @@ on:
         default: 'commandcommcentral.com'
         type: string
       region:
-        description: 'Mullvad region config to raise'
+        description: 'Mullvad relay config to raise, e.g. us-chi-wg-201 (must match /etc/wireguard/<name>.conf). Leave BLANK to auto-pick the first available config, like the real scanner.'
         required: false
-        default: 'us-nyc'
+        default: ''
         type: string
       n_per_arm:
         description: 'Max requests per arm'
@@ -101,15 +101,20 @@ jobs:
         env:
           FGT_TARGET: ${{ inputs.target || 'commandcommcentral.com' }}
           FGT_N: ${{ inputs.n_per_arm || '60' }}
-          REGION: ${{ inputs.region || 'us-nyc' }}
+          # Empty → vpn_bringup.sh falls back to the first available config, the
+          # same auto-pick the real scanner uses. The configs are named for
+          # Mullvad relays (us-atl-wg-001.conf, …), not bare city labels, so we
+          # never hardcode a filename that may not exist.
+          VPN_REGION: ${{ inputs.region || '' }}
         run: |
           set -uo pipefail
 
           echo "pre-VPN egress: $(curl -s --max-time 8 https://api.ipify.org || echo '<unknown>')"
 
-          sudo chmod 0644 "/etc/wireguard/${REGION}.conf"
-          if ! sudo scripts/scanner/wg_up_userspace.sh "$REGION" 2>&1 | sed 's/^/  [wg-up] /'; then
-            echo "::error::wg_up_userspace.sh failed for $REGION — cannot run on Mullvad egress"
+          # Identical bring-up to scanner.yml — vpn_bringup.sh picks a relay,
+          # raises the userspace tunnel, sets routing, and records egress.
+          if ! scripts/scanner/vpn_bringup.sh; then
+            echo "::error::vpn_bringup.sh failed — cannot run on Mullvad egress"
             exit 1
           fi
 
@@ -121,7 +126,7 @@ jobs:
           rc=$?
           set -e
 
-          sudo scripts/scanner/vpn_teardown.sh 2>&1 | sed 's/^/  [teardown] /' || \
+          scripts/scanner/vpn_teardown.sh 2>&1 | sed 's/^/  [teardown] /' || \
             echo "  ⚠ teardown returned nonzero (continuing)"
 
           exit $rc
