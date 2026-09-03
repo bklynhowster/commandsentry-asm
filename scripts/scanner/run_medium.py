@@ -72,6 +72,7 @@ from typing import Any
 
 # Scanner degradation primitives — fail-closed on "we didn't actually scan."
 # See SPEC_SCANNER_DEGRADATION_HARDENING.md. 2026-06-12.
+from tool_evidence import Evidence  # noqa: E402  (4.7 83-87 — spec 220)
 from phase_source import source_for_tier, MEDIUM  # noqa: E402  (spec 190/191 Q1: declared-tier source)
 from canonical_host import (  # noqa: E402  (4.7 77-82 — shared decision module)
     USE_CANONICAL,
@@ -1146,8 +1147,45 @@ def build_planned_steps(ctx: "ScanContext") -> list[str]:
 
 
 def mark_tool_ok(ctx: ScanContext, tool_name: str) -> None:
-    """Record that a tool produced real output."""
+    """DEPRECATED (4.7 ruling 84, spec 220) — credits success with NO evidence.
+
+    This docstring used to read "Record that a tool produced real output",
+    which the signature cannot check: there is no parameter through which
+    output could be supplied. Measured 2026-09-03, both instances, all
+    history: 211 of 211 clean-completion nuclei chunks claimed ok with zero
+    evidence.
+
+    Migrate call sites to mark_tool_ok_evidenced(). This function is deleted
+    once the last one moves — that deletion is the GATE that makes evidence
+    structurally required, not aspirational.
+    """
     ctx.tool_status[tool_name] = {"ok": True}
+    # Live scan progress (note 103): best-effort flush so the portal's
+    # ScanProgress poller sees this step complete. No-op if ctx.dsn unset.
+    flush_progress(ctx)
+
+
+def mark_tool_ok_evidenced(
+    ctx: ScanContext, tool_name: str, evidence: Evidence
+) -> None:
+    """Record tool success WITH the evidence for it. 4.7 rulings 83-87.
+
+    `evidence` is REQUIRED and has no default — a caller cannot skip the
+    decision. Where a tool genuinely exposes no yield signal, the caller must
+    say so explicitly via Evidence.unmeasurable(reason), which records the gap
+    in tool_status instead of hiding it behind a bare ok:true.
+    `grep unmeasurable` over the call sites IS the enumerable list of tools
+    still lacking a floor.
+
+    ⚠ PHASE 1 RECORDS ONLY — no floor, no DEGRADED, no behaviour change. The
+    clean-path ratio floor (ruling 85) cannot be calibrated yet because
+    history holds zero clean-path counts; measurement must ship first and
+    supply the calibration data. The verdict stays `ok` here regardless of how
+    poor the evidence looks.
+    """
+    entry: dict = {"ok": True}
+    entry.update(evidence.to_status())
+    ctx.tool_status[tool_name] = entry
     # Live scan progress (note 103): best-effort flush so the portal's
     # ScanProgress poller sees this step complete. No-op if ctx.dsn unset.
     flush_progress(ctx)
@@ -3178,13 +3216,20 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # thousands), so raising here would abort essentially every WAF-fronted
         # scan before nikto, ffuf, testssl, gau, naabu and the light phases ran.
         # That is spec 198 §4.4 — trading fictional coverage for zero coverage.
+        # ── spec 220 / 4.7 (83)-(87): parse stats for BOTH branches ──────
+        # This lived inside `if rc == 124` — so a chunk that COMPLETED never
+        # had its stderr read, even though chunk_stderr was in scope. That is
+        # why 211 of 211 clean-completion nuclei records carry zero evidence:
+        # not because the data was unavailable, but because we only looked on
+        # the failure path.
+        stats = parse_nuclei_stats(chunk_stderr)
+
         if rc == 124:
             # ── increment 2b — coverage is now MEASURED, not "unknown" ────────
             # 2a shipped -stats emit-only so a live run could show us the real
             # format; it did (JSON, not the "Requests sent: N" text a blind
             # regex would have hunted for). This is the parser written against
             # that observation.
-            stats = parse_nuclei_stats(chunk_stderr)
 
             # ⑲/④ — yield floor WINS over the cut. A chunk killed having sent
             # ~no requests is broken-and-cut (WAF banned us at chunk start,
@@ -3241,7 +3286,18 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
             # established exactly as it is on the clean path.
             ctx.target_proven_reachable = True
         else:
-            mark_tool_ok(ctx, chunk_name)
+            # spec 220: a completion CLAIM now carries the evidence for it.
+            # No floor yet (4.7 (85) cannot be calibrated until these counts
+            # exist) — the verdict is still `ok` however poor the ratio looks.
+            evidence = Evidence.from_nuclei_stats(stats)
+            mark_tool_ok_evidenced(ctx, chunk_name, evidence)
+            if evidence.is_measured:
+                log(f"  chunk {i+1} complete: {evidence.requests}/{evidence.total} "
+                    f"requests ({evidence.percent}%) — {matches} finding(s)")
+            else:
+                log(f"  chunk {i+1} complete: NO YIELD EVIDENCE "
+                    f"({evidence.reason}) — {matches} finding(s). Completion "
+                    f"claim is unverified.")
             # #32 — chunk completed cleanly → tool reached target. Establishes
             # target_proven_reachable for the prior-tool-success short-circuit.
             ctx.target_proven_reachable = True

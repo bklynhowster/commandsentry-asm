@@ -144,7 +144,21 @@ def test_cut_path_measures_coverage_and_gates_on_the_floor():
     # test_wall_clock_partial.
     code = "\n".join(l for l in branch.splitlines()
                      if not l.strip().startswith("#"))
-    assert "parse_nuclei_stats(chunk_stderr)" in code
+    # ⚠ CHANGED by spec 220 (4.7 83-87). This used to assert
+    # `parse_nuclei_stats(chunk_stderr)` appeared INSIDE this branch — which was
+    # true, and was the defect: the parse lived here ONLY, so a chunk that
+    # COMPLETED never had its stderr read (211 of 211 clean-completion records
+    # carry zero evidence as a result). The parse is now hoisted ABOVE the
+    # branch so both paths see it.
+    #
+    # The property this line protected — the cut path has real stats to gate on
+    # — is unchanged and asserted below via the floor + coverage calls. That the
+    # parse is hoisted rather than deleted is pinned, with indentation, by
+    # test_clean_path_evidence.test_stats_are_parsed_for_BOTH_branches.
+    assert "parse_nuclei_stats" not in code, (
+        "the parse belongs ABOVE the rc==124 branch now — a copy in here means "
+        "the hoist was additive and the two can drift")
+    assert "(stats)" in code, "the cut branch must still consume the stats"
     assert code.index("nuclei_yield_floor_failed") < code.index("mark_tool_partial"), (
         "yield floor must be evaluated before recording PARTIAL (⑲)")
     assert "coverage_bucket_from_stats(stats)" in code
