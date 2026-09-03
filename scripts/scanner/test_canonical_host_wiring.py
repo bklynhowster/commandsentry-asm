@@ -298,3 +298,52 @@ def test_resolve_a_records_returns_none_for_bogus_host():
     assert run_medium._resolve_a_records(
         "nx-does-not-exist.invalid"
     ) is None
+
+
+# ─── The verdict must be QUERYABLE, not just log-visible ─────────────────
+#
+# The run #459 probe_raised bug was invisible to every DB query — the only
+# place the canonical decision appeared was the workflow log. "Captured in the
+# database properly" is a standing requirement, so the verdict rides along on
+# the tech-detect tool_status entry: that is the phase the redirect breaks, and
+# where someone asking "why only 4 of 9 chunks?" will look.
+
+
+def test_canonical_verdict_is_attached_to_tech_detect_diag():
+    """Source pin: detect_tech_stack must persist ctx.canonical_diag."""
+    assert re.search(r'diag\["canonical"\]\s*=\s*ctx\.canonical_diag', CODE), (
+        "canonical verdict is not merged into the httpx[-td] diagnostics — "
+        "it would exist only in the workflow log, unqueryable"
+    )
+
+
+def test_canonical_diag_is_populated_for_every_outcome(monkeypatch):
+    """Every path through resolve_web_host must leave something persistable."""
+    cases = [
+        ((301, "https://www.prodexlabs.com/"),
+         {"prodexlabs.com": ["1.1.1.1"], "www.prodexlabs.com": ["1.1.1.1"]}),
+        ((301, "https://www.prodexlabs.com/"),
+         {"prodexlabs.com": ["1.1.1.1"], "www.prodexlabs.com": ["2.2.2.2"]}),
+        ((200, None), {}),
+        (None, {}),
+    ]
+    for probe, ips in cases:
+        ctx = mkctx()
+        _patch(monkeypatch, probe=probe, ips=ips)
+        run_medium.resolve_web_host(ctx)
+        assert ctx.canonical_diag, f"empty diag for probe={probe}"
+        assert "outcome" in ctx.canonical_diag
+        assert "reason" in ctx.canonical_diag
+
+
+def test_canonical_diag_records_the_rejected_target(monkeypatch):
+    """A refusal must say WHAT it refused, not just that it refused."""
+    ctx = mkctx("myordersauth.unimacgraphics.com")
+    _patch(
+        monkeypatch,
+        probe=(301, "https://login.microsoftonline.com/x/authorize"),
+        ips={"myordersauth.unimacgraphics.com": ["1.1.1.1"]},
+    )
+    run_medium.resolve_web_host(ctx)
+    assert ctx.canonical_diag["redirect_to"] == "login.microsoftonline.com"
+    assert ctx.canonical_diag["reason"] == "target_off_registrable_domain"

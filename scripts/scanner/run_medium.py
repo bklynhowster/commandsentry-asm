@@ -2464,6 +2464,13 @@ def detect_tech_stack(ctx: ScanContext) -> None:
         diag["rows_rejected"] = sorted(set(rejects))
     if used_fallback_candidate:
         diag["unused_prior_techs"] = used_fallback_candidate
+    # Canonical-host verdict rides along on the tech-detect entry (4.7 77-79).
+    # This is the phase the redirect actually breaks, so it is where someone
+    # asking "why did this plan only 4 of 9 chunks?" will look. Without it the
+    # decision existed ONLY in the workflow log — which is how the run #459
+    # probe_raised bug stayed invisible to every DB query.
+    if getattr(ctx, "canonical_diag", None):
+        diag["canonical"] = ctx.canonical_diag
 
     # Stash BEFORE crediting: mark_tool_* replaces the entry, and under the
     # registry path run_phase credits again after this function returns.
