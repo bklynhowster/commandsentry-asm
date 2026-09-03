@@ -213,3 +213,88 @@ def test_probe_does_not_follow_redirects():
     assert '"-L"' not in body and "'-L'" not in body, (
         "canonical probe must NOT follow redirects"
     )
+
+
+# ─── The probe body itself ───────────────────────────────────────────────
+#
+# 🔴 FOUND IN A LIVE RUN, NOT BY A TEST. Run #459 (prodexlabs.com,
+# 2026-09-03) logged `canonical host: staying on prodexlabs.com
+# (probe_raised)`. _canonical_probe referenced BROWSER_UA, which is NOT a
+# module global in run_medium — it is a LOCAL inside the nikto function. So
+# every call raised NameError, the caller swallowed it as probe_raised, and
+# the feature silently did nothing.
+#
+# Neither the decision tests nor the wiring tests caught it, because BOTH
+# monkeypatch _canonical_probe and never execute its body. Same shape as the
+# ⑭′ post-mortem. These tests call the REAL probe with only run_cmd faked, so
+# every name it references must actually resolve.
+
+
+def _fake_run_cmd(headers: str, rc: int = 0):
+    calls = {}
+
+    def run_cmd(cmd, timeout=30, input_str=None, env_extra=None):
+        calls["cmd"] = cmd
+        return rc, headers, ""
+
+    return run_cmd, calls
+
+
+def test_probe_body_executes_and_resolves_every_name(monkeypatch):
+    """Would have caught the BROWSER_UA NameError."""
+    run_cmd, calls = _fake_run_cmd(
+        "HTTP/2 301\r\nlocation: https://www.prodexlabs.com:443/\r\n\r\n"
+    )
+    monkeypatch.setattr(run_medium, "run_cmd", run_cmd)
+    result = run_medium._canonical_probe("prodexlabs.com")
+    assert result == (301, "https://www.prodexlabs.com:443/")
+    # and it really did shell out to curl for the right host
+    assert "curl" in calls["cmd"][0]
+    assert "https://prodexlabs.com/" in calls["cmd"]
+
+
+def test_probe_sends_a_non_empty_user_agent(monkeypatch):
+    run_cmd, calls = _fake_run_cmd("HTTP/2 200\r\n\r\n")
+    monkeypatch.setattr(run_medium, "run_cmd", run_cmd)
+    run_medium._canonical_probe("example.com")
+    cmd = calls["cmd"]
+    ua = cmd[cmd.index("-A") + 1]
+    assert isinstance(ua, str) and ua.strip(), "UA must be a real string"
+    assert "Mozilla" in ua
+
+
+def test_probe_parses_200_with_no_location(monkeypatch):
+    run_cmd, _ = _fake_run_cmd("HTTP/2 200\r\ncontent-type: text/html\r\n\r\n")
+    monkeypatch.setattr(run_medium, "run_cmd", run_cmd)
+    assert run_medium._canonical_probe("example.com") == (200, None)
+
+
+def test_probe_takes_the_FIRST_status_line(monkeypatch):
+    """curl -D - emits one block per hop; the first is the asset's own."""
+    run_cmd, _ = _fake_run_cmd(
+        "HTTP/2 301\r\nlocation: https://www.example.com/\r\n\r\n"
+        "HTTP/2 200\r\n\r\n"
+    )
+    monkeypatch.setattr(run_medium, "run_cmd", run_cmd)
+    status, loc = run_medium._canonical_probe("example.com")
+    assert status == 301
+    assert loc == "https://www.example.com/"
+
+
+def test_probe_returns_none_on_curl_failure(monkeypatch):
+    run_cmd, _ = _fake_run_cmd("", rc=6)
+    monkeypatch.setattr(run_medium, "run_cmd", run_cmd)
+    assert run_medium._canonical_probe("example.com") is None
+
+
+def test_probe_returns_none_when_no_status_line(monkeypatch):
+    run_cmd, _ = _fake_run_cmd("garbage output with no status")
+    monkeypatch.setattr(run_medium, "run_cmd", run_cmd)
+    assert run_medium._canonical_probe("example.com") is None
+
+
+def test_resolve_a_records_returns_none_for_bogus_host():
+    """Real resolver, no network dependency on success."""
+    assert run_medium._resolve_a_records(
+        "nx-does-not-exist.invalid"
+    ) is None

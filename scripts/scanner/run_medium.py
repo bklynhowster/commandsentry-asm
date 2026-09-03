@@ -818,8 +818,12 @@ def _canonical_probe(host: str) -> tuple[int, str | None] | None:
     Deliberately does NOT follow redirects (-L absent) — we want to observe
     the redirect, not chase it. Returning None fails closed upstream.
     """
+    # pick_ua() is the module's UA helper. BROWSER_UA is NOT a module global
+    # here — it is a LOCAL inside the nikto function, so referencing it raised
+    # NameError, which the caller swallowed as `probe_raised`. Live run #459
+    # failed closed on exactly that: correct behaviour, zero benefit.
     rc, stdout, _stderr = run_cmd(
-        ["curl", "-sS", "-o", os.devnull, "-D", "-", "-A", BROWSER_UA,
+        ["curl", "-sS", "-o", os.devnull, "-D", "-", "-A", pick_ua(),
          "--max-time", str(CANONICAL_PROBE_TIMEOUT_S), f"https://{host}/"],
         timeout=CANONICAL_PROBE_TIMEOUT_S + 5,
     )
