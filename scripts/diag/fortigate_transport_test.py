@@ -68,8 +68,16 @@ def egress_ip() -> str:
 
 
 def harvest_urls() -> list[str]:
-    """Benign same-origin static assets from the homepage, via the Chrome arm
-    (so the harvest itself isn't blocked). Falls back to the bare homepage."""
+    """Benign same-origin static assets from the homepage, via the Chrome arm.
+
+    🔴 KNOWN-200 FILTER (added after run #2): the first cloud run cycled a raw
+    harvested list, and one asset returned 403 for BOTH arms on every hit — 5
+    identical blocks at the same positions — which the coarse verdict misread
+    as 'reputation'. A per-URL 403 is neither transport nor reputation. So each
+    candidate is probed ONCE here and only true 200s are kept: any block during
+    the interleaved run is then attributable to fingerprint / reputation / rate,
+    never to a URL that was gated to begin with.
+    """
     from curl_cffi import requests
     try:
         html = requests.get(BASE + "/", impersonate="chrome",
@@ -77,7 +85,7 @@ def harvest_urls() -> list[str]:
     except Exception:  # noqa: BLE001
         return [BASE + "/"]
     refs = re.findall(r'(?:href|src)="([^"]+)"', html)
-    seen, urls = set(), []
+    seen, cands = set(), []
     for h in refs:
         p = None
         if h.startswith("/") and not h.startswith("//"):
@@ -86,8 +94,22 @@ def harvest_urls() -> list[str]:
             p = h[len(BASE):].split("#")[0].split("?")[0]
         if p and p not in seen:
             seen.add(p)
-            urls.append(BASE + p)
-    return urls[:12] or [BASE + "/"]
+            cands.append(BASE + p)
+
+    good, dropped = [], []
+    for u in cands:
+        if len(good) >= 12:
+            break
+        v = chrome_probe(u)
+        (good if v == "ok:200" else dropped).append((u, v))
+        time.sleep(0.3)
+    good_urls = [u for u, _ in good]
+    if dropped:
+        print(f"harvest: dropped {len(dropped)} non-200 candidate(s) so a "
+              f"pre-gated URL cannot masquerade as a block:")
+        for u, v in dropped:
+            print(f"    DROP {v:12s} {u}")
+    return good_urls or [BASE + "/"]
 
 
 def chrome_probe(url: str) -> str:
@@ -165,8 +187,10 @@ def main() -> int:
     for u in urls:
         print("   ", u)
 
+    import collections
     arms = ("chrome", "scanner")
     tally = {a: {"ok": 0, "block": 0, "err": 0, "first_block": None} for a in arms}
+    blocked_urls = {a: collections.Counter() for a in arms}
     probe = {"chrome": chrome_probe, "scanner": scanner_probe}
     stop = None
 
@@ -176,8 +200,10 @@ def main() -> int:
             v = probe[a](url)
             c = classify(v)
             tally[a][c] += 1
-            if c == "block" and tally[a]["first_block"] is None:
-                tally[a]["first_block"] = tally[a]["ok"] + tally[a]["block"]
+            if c == "block":
+                blocked_urls[a][url] += 1
+                if tally[a]["first_block"] is None:
+                    tally[a]["first_block"] = tally[a]["ok"] + tally[a]["block"]
             time.sleep(SPACING)
         ch, sc = tally["chrome"], tally["scanner"]
         if (i + 1) % 10 == 0:
@@ -194,22 +220,31 @@ def main() -> int:
             stop = "BOTH blocking (reputation, not transport)"
             break
 
-    # ── verdict ──
+    # ── verdict — compares the SET of URLs each arm was blocked on, so a
+    #    pre-gated URL cannot be mistaken for a transport/reputation signal.
+    #    (URLs are pre-filtered to 200 at harvest, so any block here is real.)
     ch, sc = tally["chrome"], tally["scanner"]
-    if sc["block"] > 0 and ch["block"] == 0:
-        verdict = ("✅ TRANSPORT CONFIRMED ON MULLVAD — Chrome fingerprint passes, "
-                   "PD-Go (nuclei sibling) is blocked, same datacenter egress. "
-                   "Browser-transport port is necessary AND sufficient. BUILD IT.")
-    elif ch["block"] > 0 and sc["block"] > 0:
-        verdict = ("⚠ BOTH BLOCKED ON MULLVAD — reputation is also in play. Browser "
-                   "transport alone is not enough from datacenter egress; the port "
-                   "must add residential/rotating egress too.")
+    ch_set, sc_set = set(blocked_urls["chrome"]), set(blocked_urls["scanner"])
+    scanner_only = sc_set - ch_set
+    shared = sc_set & ch_set
+
+    if scanner_only and not (ch_set - sc_set):
+        verdict = (f"✅ TRANSPORT SIGNAL — the scanner (PD-Go) arm was blocked on "
+                   f"{len(scanner_only)} URL(s) the Chrome arm was NOT, same egress. "
+                   f"Browser transport helps here. scanner-only: {sorted(scanner_only)}")
     elif ch["block"] == 0 and sc["block"] == 0:
-        verdict = ("❓ NEITHER BLOCKED — no ban reproduced this run (clean tunnel IP, "
-                   "or too few requests). Re-run with higher FGT_N or a warmed egress.")
+        verdict = ("❓ NEITHER BLOCKED — no block reproduced on this egress at this "
+                   "rate. Transport indistinguishable here; re-run with higher FGT_N "
+                   "or a warmed/known-burned relay to force the reputation case.")
+    elif shared and ch_set == sc_set:
+        verdict = (f"⚠ REPUTATION / RATE (NOT transport) — BOTH arms blocked on the "
+                   f"SAME {len(shared)} URL(s), which all passed at harvest. Fingerprint "
+                   f"makes no difference on this egress; the block is IP/rate-driven. "
+                   f"⇒ browser transport alone won't get through from this egress. "
+                   f"shared: {sorted(shared)}")
     else:
-        verdict = ("❓ INVERSE/UNEXPECTED — chrome blocked while scanner clean. "
-                   "Investigate before drawing conclusions.")
+        verdict = (f"❓ MIXED — chrome-blocked={sorted(ch_set)} scanner-blocked="
+                   f"{sorted(sc_set)}. Inspect before concluding.")
 
     def row(a):
         t = tally[a]
@@ -230,6 +265,14 @@ def main() -> int:
         row("scanner"),
         "",
         f"**Stopped:** {stop or 'completed full N'}",
+        "",
+        "**Blocked URLs (all passed at harvest):**",
+        ("- chrome: " + (", ".join(f"`{u.replace(BASE,'')}`×{n}"
+                                   for u, n in blocked_urls['chrome'].most_common())
+                         or "_none_")),
+        ("- scanner: " + (", ".join(f"`{u.replace(BASE,'')}`×{n}"
+                                    for u, n in blocked_urls['scanner'].most_common())
+                          or "_none_")),
         "",
         f"### Verdict\n\n{verdict}",
         "",
