@@ -33,10 +33,18 @@ on:
         required: false
         default: ''
         type: string
+      mode:
+        description: 'attack = replay nuclei-shaped attack paths (decisive: signature vs transport); benign = static-asset GETs'
+        required: false
+        default: 'attack'
+        type: choice
+        options:
+          - attack
+          - benign
       n_per_arm:
         description: 'Max requests per arm'
         required: false
-        default: '60'
+        default: '40'
         type: string
 
 permissions:
@@ -100,7 +108,8 @@ jobs:
       - name: Raise Mullvad, run the two-arm test, tear down
         env:
           FGT_TARGET: ${{ inputs.target || 'commandcommcentral.com' }}
-          FGT_N: ${{ inputs.n_per_arm || '60' }}
+          FGT_MODE: ${{ inputs.mode || 'attack' }}
+          FGT_N: ${{ inputs.n_per_arm || '40' }}
           # Empty → vpn_bringup.sh falls back to the first available config, the
           # same auto-pick the real scanner uses. The configs are named for
           # Mullvad relays (us-atl-wg-001.conf, …), not bare city labels, so we

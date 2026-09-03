@@ -49,13 +49,38 @@ import sys
 import time
 
 TARGET = os.environ.get("FGT_TARGET", "commandcommcentral.com")
-N = int(os.environ.get("FGT_N", "60"))            # max requests PER ARM
+MODE = os.environ.get("FGT_MODE", "attack").lower()   # "attack" | "benign"
+N = int(os.environ.get("FGT_N", "40" if MODE == "attack" else "60"))  # requests PER ARM
 SPACING = float(os.environ.get("FGT_SPACING", "0.5"))  # seconds between requests (~rate 2)
-DIVERGE = int(os.environ.get("FGT_DIVERGE", "8"))  # early-stop: one arm blocked N, other 0
+DIVERGE = int(os.environ.get("FGT_DIVERGE", "6"))  # early-stop: one arm refused N, other 0
 
 BASE = f"https://{TARGET}"
 BLOCK_MARKERS = ("fortinet", "fortiweb", "web page blocked", "blocked",
                  "fwbbot", "challenge")
+
+# nuclei-shaped attack paths — the requests that actually trip FortiWeb
+# signatures and get the scanner banned (benign GETs do not, per runs #2/#3).
+# GET-only; we are fully authorized to scan this asset. A WAF REFUSAL is
+# 403/406/429/block-page/connection-reset; a request that REACHED THE APP is
+# 200/404/3xx/5xx. The question: does the Go transport get refused on paths the
+# Chrome transport reaches the app on?
+ATTACK_PATHS = [
+    "/.env",
+    "/.git/config",
+    "/.git/HEAD",
+    "/.aws/credentials",
+    "/server-status",
+    "/actuator/env",
+    "/web.config",
+    "/wp-config.php.bak",
+    "/phpinfo.php",
+    "/config.json",
+    "/?id=1'%20OR%20'1'='1",
+    "/?q=<script>alert(1)</script>",
+    "/..%2f..%2f..%2f..%2fetc%2fpasswd",
+    "/index.php?file=../../../../etc/passwd",
+    "/'",
+]
 
 
 def egress_ip() -> str:
@@ -158,6 +183,13 @@ def classify(v: str) -> str:
         return "ok"
     if v.startswith("BLOCK"):
         return "block"
+    # ERR:* — a connection-level failure (reset / timeout) IS a WAF/IP refusal
+    # when we're firing attack traffic, so it counts as a block there. In benign
+    # mode it stays 'err' (likely transient). Instrument errors never count.
+    if v == "ERR:httpx_missing":
+        return "err"
+    if MODE == "attack":
+        return "block"
     return "err"
 
 
@@ -182,8 +214,15 @@ def main() -> int:
         return 2
 
     eip = egress_ip()
-    urls = harvest_urls()
-    print(f"egress={eip}  target={TARGET}  urls={len(urls)}  N={N}/arm  spacing={SPACING}s")
+    if MODE == "attack":
+        # Fixed nuclei-shaped attack paths — deterministic, no harvest confound.
+        # These will 404 if the WAF lets them reach the app, or 403/reset if it
+        # refuses them. Same list both arms; only transport differs.
+        urls = [BASE + p for p in ATTACK_PATHS]
+    else:
+        urls = harvest_urls()
+    print(f"mode={MODE}  egress={eip}  target={TARGET}  urls={len(urls)}  "
+          f"N={N}/arm  spacing={SPACING}s")
     for u in urls:
         print("   ", u)
 
@@ -217,7 +256,9 @@ def main() -> int:
             stop = "INVERSE (chrome blocked, scanner clean) — unexpected"
             break
         if ch["block"] >= DIVERGE and sc["block"] >= DIVERGE:
-            stop = "BOTH blocking (reputation, not transport)"
+            stop = ("BOTH blocking — " +
+                    ("payload-signature, transport-independent" if MODE == "attack"
+                     else "reputation, not transport"))
             break
 
     # ── verdict — compares the SET of URLs each arm was blocked on, so a
@@ -228,23 +269,27 @@ def main() -> int:
     scanner_only = sc_set - ch_set
     shared = sc_set & ch_set
 
+    def _paths(s):
+        return sorted(u.replace(BASE, "") for u in s)
+
     if scanner_only and not (ch_set - sc_set):
-        verdict = (f"✅ TRANSPORT SIGNAL — the scanner (PD-Go) arm was blocked on "
-                   f"{len(scanner_only)} URL(s) the Chrome arm was NOT, same egress. "
-                   f"Browser transport helps here. scanner-only: {sorted(scanner_only)}")
+        verdict = (f"✅ TRANSPORT SIGNAL — the scanner (PD-Go) arm was refused on "
+                   f"{len(scanner_only)} path(s) the Chrome arm got through, same "
+                   f"egress. Browser transport is the lever — a browser-carried nuclei "
+                   f"would land these. scanner-only: {_paths(scanner_only)}")
     elif ch["block"] == 0 and sc["block"] == 0:
-        verdict = ("❓ NEITHER BLOCKED — no block reproduced on this egress at this "
-                   "rate. Transport indistinguishable here; re-run with higher FGT_N "
-                   "or a warmed/known-burned relay to force the reputation case.")
+        verdict = ("❓ NEITHER REFUSED — the WAF let these attack paths reach the app "
+                   "for both transports (all 404/200). No signature block reproduced "
+                   "on this relay; raise FGT_N or add harder payloads.")
     elif shared and ch_set == sc_set:
-        verdict = (f"⚠ REPUTATION / RATE (NOT transport) — BOTH arms blocked on the "
-                   f"SAME {len(shared)} URL(s), which all passed at harvest. Fingerprint "
-                   f"makes no difference on this egress; the block is IP/rate-driven. "
-                   f"⇒ browser transport alone won't get through from this egress. "
-                   f"shared: {sorted(shared)}")
+        verdict = (f"⚠ PAYLOAD-SIGNATURE (NOT transport) — BOTH arms refused on the "
+                   f"SAME {len(shared)} path(s). FortiWeb blocks these by request "
+                   f"CONTENT, regardless of fingerprint. ⇒ swapping transport will NOT "
+                   f"get nuclei's template probes through; the Mac's answer applies — "
+                   f"crawl-first so we never send these. shared: {_paths(shared)}")
     else:
-        verdict = (f"❓ MIXED — chrome-blocked={sorted(ch_set)} scanner-blocked="
-                   f"{sorted(sc_set)}. Inspect before concluding.")
+        verdict = (f"❓ MIXED — chrome-refused={_paths(ch_set)} scanner-refused="
+                   f"{_paths(sc_set)}. Inspect before concluding.")
 
     def row(a):
         t = tally[a]
@@ -256,7 +301,7 @@ def main() -> int:
     summary = "\n".join([
         "## FortiGate transport-fingerprint test — Mullvad egress",
         "",
-        f"**Target:** `{TARGET}`  **Egress:** `{eip}`  "
+        f"**Mode:** `{MODE}`  **Target:** `{TARGET}`  **Egress:** `{eip}`  "
         f"**Rate:** ~{1/SPACING:.0f}/s  **Interleaved:** yes",
         "",
         "| Arm | passed | blocked | err | first block @ |",
