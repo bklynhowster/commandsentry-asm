@@ -431,7 +431,23 @@ def test_legacy_self_bookkeeping_is_captured_not_applied_to_the_real_ctx():
     res, ctx = _run(pc.legacy_adapter(_legacy_ok, HEAVY), name="dns_posture")
     assert res.outcome == Outcome.OK
     assert ctx.tools_run == ["dns_posture"], ctx.tools_run
-    assert ctx.tool_status == {"dns_posture": {"ok": True}}
+    # ⚠ LOOSENED from `== {"dns_posture": {"ok": True}}` by spec 220. The
+    # property this guards is stated in the docstring — the real ctx gets
+    # EXACTLY ONE credit, under the PHASE's name, with the legacy phase's own
+    # per-tool bookkeeping confined to the recorder. That is about the KEY SET
+    # and the verdict, and both still hold. The old whole-entry equality also
+    # froze the entry's contents, which is stricter than the claim and blocks
+    # any additive record — here, the clean-path evidence.
+    assert set(ctx.tool_status) == {"dns_posture"}
+    entry = ctx.tool_status["dns_posture"]
+    assert entry["ok"] is True
+    for verdict_key in ("degraded", "partial", "skipped", "mixed"):
+        assert verdict_key not in entry, "verdict must be untouched by evidence"
+    # A phase with no countable units says so explicitly rather than staying
+    # silent — `grep unmeasurable` is the enumerable gap list (4.7 (84)).
+    assert entry["evidence"] == {"kind": "unmeasurable",
+                                 "reason": "no_unit_carried_a_count"}
+    assert "per_chunk" not in entry, "a single unit that IS the phase is not a breakdown"
     assert len(ctx.findings) == 1 and len(ctx.artifacts) == 1
 
 

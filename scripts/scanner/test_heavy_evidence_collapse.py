@@ -149,3 +149,108 @@ def test_partial_percent_only_evidence_still_lands():
     entry = {"ok": True}
     entry.update(Evidence.measured(percent=73).to_status())
     assert _units_from_recorder({"n": entry})[0].percent == 73
+
+
+# ─── the OK path: an ALL-CLEAN phase must still carry evidence ───────────
+#
+# The collapse widening above is necessary but NOT sufficient. run_phase's OK
+# branch calls mark_ok(), which defaults to the deprecated bare mark_tool_ok;
+# only the PARTIAL/MIXED branch ever consulted the units. So 5-of-5 clean —
+# exactly commandcommcentral.com — recorded {"ok": true, actual_chunks: 5,
+# planned_chunks: 5} both before spec 220 and after it.
+
+
+def _res(units):
+    from phase_contract import PhaseResult
+    return PhaseResult.ok(per_unit_state=units)
+
+
+def _ctx(entry=None):
+    import types
+    return types.SimpleNamespace(
+        tool_status={"nuclei": dict(entry or {"ok": True})}, tool_diag={})
+
+
+def test_all_clean_phase_records_summed_evidence():
+    from phase_contract import _merge_phase_evidence
+    units = _units_from_recorder({
+        "nuclei[a]": _clean(requests=8225, total=9039),
+        "nuclei[b]": _clean(requests=10, total=10),
+    })
+    ctx = _ctx()
+    _merge_phase_evidence(ctx, "nuclei", _res(units))
+    e = ctx.tool_status["nuclei"]
+    assert e["ok"] is True, "phase 1 changes no verdicts"
+    assert e["evidence"]["requests"] == 8235
+    assert e["evidence"]["total"] == 9049
+    assert e["chunks_ok"] == 2
+    assert [u["name"] for u in e["per_chunk"]] == ["nuclei[a]", "nuclei[b]"]
+
+
+def test_all_clean_phase_with_no_counts_says_unmeasurable():
+    from phase_contract import _merge_phase_evidence
+    entry = {"ok": True}
+    entry.update(Evidence.unmeasurable("nuclei_stats_absent").to_status())
+    ctx = _ctx()
+    _merge_phase_evidence(ctx, "nuclei", _res(_units_from_recorder({"nuclei[a]": entry})))
+    ev = ctx.tool_status["nuclei"]["evidence"]
+    assert ev["kind"] == "unmeasurable"
+    assert ev["reason"] == "no_unit_carried_a_count"
+    assert "requests" not in ev, "must not fabricate a zero"
+
+
+def test_merge_is_additive_and_touches_no_verdict_key():
+    """⑰ all-match reads tool_status->tool->>'ok'. Widening must not disturb it."""
+    from phase_contract import _merge_phase_evidence
+    ctx = _ctx({"ok": True, "actual_chunks": 5, "planned_chunks": 5})
+    units = _units_from_recorder({"nuclei[a]": _clean(requests=1, total=2)})
+    _merge_phase_evidence(ctx, "nuclei", _res(units))
+    e = ctx.tool_status["nuclei"]
+    assert e["ok"] is True
+    assert e["actual_chunks"] == 5 and e["planned_chunks"] == 5
+    for k in ("degraded", "partial", "mixed", "skipped", "coverage"):
+        assert k not in e
+
+
+def test_single_unit_named_for_the_phase_gets_no_per_chunk():
+    """A per_chunk of length 1 that IS the phase implies chunking that never
+    happened — same harm as ⑭′.4's meaningless planned_chunks."""
+    from phase_contract import _merge_phase_evidence
+    ctx = _ctx()
+    _merge_phase_evidence(ctx, "nuclei", _res(_units_from_recorder({"nuclei": _clean(items=3)})))
+    assert "per_chunk" not in ctx.tool_status["nuclei"]
+    assert "chunks_ok" not in ctx.tool_status["nuclei"]
+
+
+def test_no_units_is_a_no_op():
+    from phase_contract import _merge_phase_evidence
+    ctx = _ctx()
+    _merge_phase_evidence(ctx, "nuclei", _res([]))
+    assert ctx.tool_status["nuclei"] == {"ok": True}
+
+
+def test_legacy_adapter_carries_units_on_the_CLEAN_path():
+    """PhaseResult is the only carrier between recorder and run_phase (the ⑪
+    lesson). A clean phase returning empty per_unit_state has thrown the
+    evidence away before run_phase can write it."""
+    import re
+    from pathlib import Path
+    src = Path(__file__).with_name("phase_contract.py").read_text()
+    body = re.search(r"def legacy_adapter\(.*?\n(?=def |# ── )", src, re.S).group(0)
+    code = "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
+    assert "PhaseResult.ok(per_unit_state=_units_from_recorder(rec.tool_status)" in code, (
+        "legacy_adapter's clean path must carry the units")
+    assert "coverage=" not in code.split("PhaseResult.ok(")[1][:200], (
+        "coverage is the PARTIAL/MIXED bucket — an OK result must not assert one")
+
+
+def test_run_phase_ok_branch_merges_evidence():
+    import re
+    from pathlib import Path
+    src = Path(__file__).with_name("phase_contract.py").read_text()
+    body = re.search(r"if result\.outcome == Outcome\.OK:.*?elif result\.outcome",
+                     src, re.S).group(0)
+    code = "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
+    assert "_merge_phase_evidence(ctx, spec.name, result)" in code, (
+        "the OK branch writes a bare {'ok': True} without this — the exact "
+        "shape commandcommcentral recorded before AND after spec 220")

@@ -616,7 +616,17 @@ def test_clean_phase_still_ok_and_still_closes():
     from degradation import delta_close_eligible
     res, ctx = _run(_nuclei_like([], ["nuclei[a]", "nuclei[b]"]))
     assert res.outcome == PC.Outcome.OK
-    assert ctx.tool_status["nuclei"] == {"ok": True}
+    # ⚠ LOOSENED from `== {"ok": True}` by spec 220. The claim in the name is
+    # "still ok and still closes" — the verdict and close-eligibility, which
+    # are asserted here and below. The clean phase now ALSO records the
+    # evidence for its cleanliness, which is additive: no verdict key changes,
+    # so the ⑰ all-match predicate reads exactly what it read before.
+    entry = ctx.tool_status["nuclei"]
+    assert entry["ok"] is True
+    for verdict_key in ("degraded", "partial", "mixed", "coverage"):
+        assert verdict_key not in entry
+    assert entry["chunks_ok"] == 2
+    assert [u["name"] for u in entry["per_chunk"]] == ["nuclei[a]", "nuclei[b]"]
     assert delta_close_eligible(ctx.tool_status) is True
 
 

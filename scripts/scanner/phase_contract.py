@@ -54,6 +54,7 @@ from typing import Any, Callable, Optional
 from degradation import (COVERAGE_COMPLETE, COVERAGE_PARTIAL_MINIMAL,
                          COVERAGE_PARTIAL_SIGNIFICANT)
 from phase_source import LIGHT, MEDIUM, HEAVY, source_for_tier
+from tool_evidence import Evidence  # 4.7 83-87 / spec 220 — clean-path evidence
 
 # Tier ordering — a tier selection is CUMULATIVE: heavy = light ∪ medium ∪ heavy.
 # This single line is what makes heavy ADDITIVE instead of a replacement.
@@ -455,6 +456,55 @@ def _default_mark_partial(ctx, tool_name: str, result: "PhaseResult") -> None:
         pass
 
 
+def _merge_phase_evidence(ctx, tool_name: str, result) -> None:
+    """OK path — fold the sub-units' evidence into the phase entry (spec 220).
+
+    🔴 THE GAP THE LIVE RUN EXPOSED. run_phase's OK branch calls
+    `mark_ok(ctx, spec.name)`, which defaults to `mark_tool_ok` — the
+    deprecated primitive that writes a bare `{"ok": True}`. Only the
+    PARTIAL/MIXED branch ever consulted the units.
+
+    So on an ALL-CLEAN phase, per-chunk evidence was collected, collapsed, and
+    then never read: commandcommcentral.com's heavy recorded
+
+        {"ok": true, "actual_chunks": 5, "planned_chunks": 5}
+
+    both before spec 220 and after it. Widening _units_from_recorder was
+    necessary but not sufficient — it only fires when at least one chunk is
+    PARTIAL, and 5-of-5 clean is precisely the case in question.
+
+    Additive by construction: the verdict stays whatever mark_ok wrote, no key
+    is removed, and the entry's KEY is untouched, so the tools_run/tool_status
+    set-equality invariant and the ⑰ all-match predicate are unaffected. Phase
+    1 records; it does not judge.
+
+    Mirrors the _merge_phase_diagnostics seam deliberately — same shape, same
+    place in run_phase, so there is one obvious spot to look for "things folded
+    into the entry after the verdict was written".
+    """
+    units = getattr(result, "per_unit_state", None) or []
+    if not units:
+        return
+    entry = (getattr(ctx, "tool_status", None) or {}).get(tool_name)
+    if not isinstance(entry, dict):
+        return
+    _bucket, agg = aggregate_coverage(units)
+    # Reuse Evidence rather than hand-rolling the shape here: it owns
+    # completion_ratio, it refuses to fabricate a zero, and a second
+    # implementation of the same shape is how the two drift.
+    ev = (Evidence.measured(**agg) if agg
+          else Evidence.unmeasurable("no_unit_carried_a_count"))
+    entry.update(ev.to_status())
+    # Per-unit breakdown only where there IS one. A single unit whose name is
+    # the phase's own name is not a breakdown, and a `per_chunk` of length 1
+    # invites a reader to believe chunking happened when it did not — the same
+    # class of harm as the meaningless planned_chunks that ⑭′.4 stopped
+    # stamping on unchunked tools.
+    if len(units) > 1 or (units and units[0].name != tool_name):
+        entry["per_chunk"] = [u.as_dict() for u in units]
+        entry["chunks_ok"] = sum(1 for u in units if u.outcome == Outcome.OK)
+
+
 def _merge_phase_diagnostics(ctx, tool_name: str) -> None:
     """Fold a phase's own diagnostics back into its tool_status entry (⑭′.4).
 
@@ -654,6 +704,12 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
         return result
     if result.outcome == Outcome.OK:
         mark_ok(ctx, spec.name)
+        # spec 220 — a clean phase must carry the evidence for its cleanliness.
+        # mark_ok is injectable and defaults to the bare mark_tool_ok, so the
+        # evidence is folded in AFTER it rather than by replacing the marker:
+        # that keeps the injected-marker contract intact for every caller and
+        # test that supplies its own.
+        _merge_phase_evidence(ctx, spec.name, result)
     elif result.outcome in (Outcome.PARTIAL, Outcome.MIXED):
         # 4.7 rulings ⑪ + ⑫ + ⑱. THE FIX for what run #2632 exposed: write the
         # full four-field shape here instead of flattening to {"degraded": ...}.
@@ -1058,7 +1114,17 @@ def legacy_adapter(fn, tier, *args, _phase_name=None, **kwargs):
                         per_unit_state=units, **result_kw)
         if not rec.tools_run:
             return PhaseResult.skipped("legacy_not_applicable", **result_kw)
-        return PhaseResult.ok(**result_kw)
+        # spec 220 — carry the units on the CLEAN path too. PhaseResult is the
+        # only carrier between the recorder and run_phase (the ⑪ lesson: the
+        # recorder's rich tool_status does NOT reach the DB), so a clean phase
+        # that leaves per_unit_state empty has thrown its evidence away exactly
+        # like run #2632 threw away the cut distinction.
+        #
+        # coverage is deliberately NOT set: it is the PARTIAL/MIXED bucket, and
+        # putting one on an OK result would assert a verdict this phase is not
+        # entitled to make. Evidence travels; the judgement does not.
+        return PhaseResult.ok(per_unit_state=_units_from_recorder(rec.tool_status),
+                              **result_kw)
     _phase.__name__ = getattr(fn, "__name__", "legacy_phase")
     _phase.__doc__ = f"legacy_adapter({getattr(fn, '__name__', '?')})"
     return _phase
