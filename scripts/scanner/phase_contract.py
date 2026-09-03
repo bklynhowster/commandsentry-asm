@@ -855,6 +855,32 @@ def _units_from_recorder(tool_status: dict) -> list:
     for name, v in (tool_status or {}).items():
         if not isinstance(v, dict):
             continue
+        # ── spec 220 / 4.7 (83)-(87) — read the namespaced clean-path evidence ──
+        # 🔴 FOUND BEFORE SHIPPING, by tracing the motivating run rather than
+        # trusting the medium-path tests. mark_tool_ok_evidenced() writes its
+        # counts under `evidence` (namespaced so it cannot collide with the
+        # verdict keys the ⑰ all-match predicate reads). This adapter, written
+        # for the CUT path, only ever looked at FLAT requests/total/percent —
+        # which mark_tool_partial(stats=…) happens to write.
+        #
+        # Consequence without this: a cumulative heavy runs medium's
+        # run_nuclei_chunked, the per-chunk evidence lands in the recorder, and
+        # then aggregate_coverage sums u.requests over units that are all None
+        # → tot == 0 → no bucket, empty evidence. commandcommcentral's 5.2-min
+        # heavy would have looked byte-identical after the fix that exists to
+        # explain it. Exactly ⑭′ defect A: run_phase dropping what a phase
+        # recorded because the collapse didn't know the key.
+        #
+        # Flat wins where present — it is the established cut-path shape and
+        # this must stay a pure widening. UNMEASURABLE evidence carries no
+        # counts, so it contributes nothing here, correctly.
+        ev = v.get("evidence")
+        ev = ev if isinstance(ev, dict) else {}
+
+        def _count(key, _v=v, _ev=ev):
+            flat = _v.get(key)
+            return flat if flat is not None else _ev.get(key)
+
         if v.get("partial") is True:
             outcome = Outcome.PARTIAL
         elif "degraded" in v:
@@ -869,8 +895,13 @@ def _units_from_recorder(tool_status: dict) -> list:
             name=name, outcome=outcome,
             reason=v.get("reason") or v.get("degraded") or v.get("skipped") or "",
             coverage=v.get("coverage"), matches=v.get("matches", 0) or 0,
-            requests=v.get("requests"), total=v.get("total"),
-            percent=v.get("percent"), rps=v.get("rps"),
+            requests=_count("requests"), total=_count("total"),
+            percent=_count("percent"),
+            # rps stays FLAT-only and deliberately un-widened: nuclei's rps is
+            # not a network rate (148 real sends against a counter claiming
+            # 457), so Evidence refuses to carry it. Reading it out of
+            # `evidence` would resurrect a number we already struck.
+            rps=v.get("rps"),
         ))
     return units
 
