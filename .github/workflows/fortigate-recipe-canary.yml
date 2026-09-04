@@ -3,7 +3,7 @@ name: FortiGate faithful-recipe canary
 # ONE-OFF DIAGNOSTIC — tests whether the Mac's proven active-FortiGate nuclei
 # recipe ports to the cloud's Mullvad egress. The Mac's scan-ccc-triple got
 # through commandcommcentral (apex/www/test all ACTIVELY block signature paths,
-# confirmed 2026-09-04) using: --rate-limit 2 --bulk-size 1 --interactsh-disable,
+# confirmed 2026-09-04) using: --rate-limit 2 --bulk-size 1 -ni,
 # split severity passes, cooldowns. The cloud's nuclei NEVER sets --bulk-size
 # (defaults 25) — the "tested rate, never concurrency" gap (note 76).
 #
@@ -134,11 +134,11 @@ jobs:
 
           # ── THE FAITHFUL RECIPE — exact Mac PROD flags. -u target (path-enum;
           # signature paths WILL 403, harmlessly). bulk-size 1 is the change.
-          echo "running: nuclei -u https://${TARGET} -severity ${SEV} --interactsh-disable --rate-limit 2 --bulk-size 1"
+          echo "running: nuclei -u https://${TARGET} -severity ${SEV} -ni --rate-limit 2 --bulk-size 1"
           set +e
           timeout "${MIN}m" nuclei -u "https://${TARGET}" \
             -severity "${SEV}" \
-            --interactsh-disable \
+            -ni \
             --rate-limit 2 --bulk-size 1 -timeout 10 \
             -stats -stats-interval 15 \
             -jsonl -o /tmp/findings.jsonl -silent \
@@ -162,7 +162,7 @@ jobs:
           {
             echo "## FortiGate faithful-recipe canary — \`${TARGET}\`"
             echo ""
-            echo "**Recipe:** \`nuclei -u https://${TARGET} -severity ${SEV} --interactsh-disable --rate-limit 2 --bulk-size 1\` (the Mac's PROD flags; cloud default is bulk-size 25)"
+            echo "**Recipe:** \`nuclei -u https://${TARGET} -severity ${SEV} -ni --rate-limit 2 --bulk-size 1\` (the Mac's PROD flags; cloud default is bulk-size 25)"
             echo ""
             echo "| field | value |"
             echo "|---|---|"
@@ -180,7 +180,7 @@ jobs:
               echo "nuclei fired its template set at --bulk-size 1. Signature paths took their "
               echo "harmless per-request 403s, but the connection was never killed — bulk-size 1 "
               echo "+ rate 2 stayed under the hard-ban threshold that bulk-size 25 crossed. "
-              echo "⇒ wire --bulk-size 1 + split passes + --interactsh-disable into the FortiGate "
+              echo "⇒ wire --bulk-size 1 + split passes + -ni into the FortiGate "
               echo "scan path; this is the faithful port."
             else
               echo "### ⚠ HARD IP-BAN FIRED even at --bulk-size 1"
