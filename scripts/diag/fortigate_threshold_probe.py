@@ -91,15 +91,12 @@ def egress_ip() -> str:
 
 
 def current_wg_iface() -> str | None:
-    """The wireguard-go interface currently up (named by region)."""
-    rc, out, _ = run(["pgrep", "-af", "wireguard-go"], timeout=8)
-    if rc != 0:
-        return None
-    # "PID /path/wireguard-go <iface>"
-    for line in out.splitlines():
-        parts = line.split()
-        if parts:
-            return parts[-1]
+    """The active WireGuard interface. Uses `wg show interfaces` (the real up
+    interfaces) — NOT pgrep, which picked up a `<defunct>` zombie wireguard-go
+    process after a rotation and returned a dead iface name (run 33886646762)."""
+    rc, out, _ = run(["sudo", "wg", "show", "interfaces"], timeout=8)
+    if rc == 0 and out.strip():
+        return out.split()[-1]  # the up interface (last if more than one)
     return None
 
 
@@ -206,22 +203,31 @@ def run_burst(target: str, sev: str, rate: int, wall_s: int,
         stdout=subprocess.DEVNULL,
         stderr=open(stats_path, "w"),
     )
-    deadline = time.time() + wall_s
+    t0 = time.time()
+    deadline = t0 + wall_s
     result = {"relay": iface, "egress": ip, "banned_state": None,
               "requests_to_ban": None, "note": ""}
+
+    def est() -> int:
+        # requests estimate: prefer nuclei -stats, else rate x elapsed (the
+        # fallback the bash version had; its absence gave requests_to_ban=null
+        # in run 33886646762).
+        r = latest_requests(stats_path)
+        return r if r is not None else int(rate * (time.time() - t0))
+
     try:
         while time.time() < deadline:
             time.sleep(monitor_every_s)
             if proc.poll() is not None:
-                reqs = latest_requests(stats_path)
+                reqs = est()
                 result.update(banned_state="none", requests_to_ban=None,
                               requests_total=reqs,
-                              note=f"burst completed without ban ({reqs} reqs)")
+                              note=f"burst completed without ban (~{reqs} reqs)")
                 log(f"  burst finished, no ban after ~{reqs} reqs")
                 return result
             state, code = classify(target, iface)
-            reqs = latest_requests(stats_path)
-            log(f"  monitor: homepage={state}({code}) nuclei_reqs={reqs}")
+            reqs = est()
+            log(f"  monitor: homepage={state}({code}) ~reqs={reqs}")
             if state in ("banned", "transport"):
                 result.update(banned_state=state, requests_to_ban=reqs,
                               homepage_code=code,
@@ -230,9 +236,9 @@ def run_burst(target: str, sev: str, rate: int, wall_s: int,
                 log(f"  → {result['note']} at ~{reqs} requests (homepage {state}/{code})")
                 return result
         # wall-clock hit without ban
-        reqs = latest_requests(stats_path)
+        reqs = est()
         result.update(banned_state="none", requests_to_ban=None, requests_total=reqs,
-                      note=f"burst wall-clock {wall_s}s elapsed, no ban ({reqs} reqs)")
+                      note=f"burst wall-clock {wall_s}s elapsed, no ban (~{reqs} reqs)")
         return result
     finally:
         if proc.poll() is None:
@@ -255,8 +261,9 @@ def main() -> int:
                     help="per-relay hard cap")
     ap.add_argument("--total-wall-s", type=int, default=1080,
                     help="whole-run hard cap (18 min)")
-    ap.add_argument("--monitor-every-s", type=int, default=12,
-                    help="benign-monitor cadence (low, so it doesn't add ban budget)")
+    ap.add_argument("--monitor-every-s", type=int, default=6,
+                    help="benign-monitor cadence (finer = tighter requests-to-ban "
+                         "resolution; still low enough not to add material ban budget)")
     args = ap.parse_args()
 
     # Fail-closed allowlist.
