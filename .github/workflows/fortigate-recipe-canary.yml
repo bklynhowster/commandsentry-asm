@@ -39,6 +39,11 @@ on:
         required: false
         default: 'critical,high'
         type: string
+      region:
+        description: 'Mullvad relay config to pin (e.g. us-chi-wg-201). Blank = auto-pick first. Use a FRESH relay — us-atl-wg-001 is reputation-burned from a day of testing.'
+        required: false
+        default: 'us-chi-wg-201'
+        type: string
 
 permissions:
   contents: read
@@ -96,6 +101,11 @@ jobs:
           TARGET: ${{ inputs.target || 'commandcommcentral.com' }}
           MIN: ${{ inputs.minutes || '10' }}
           SEV: ${{ inputs.severity || 'critical,high' }}
+          # FRESH relay — us-atl-wg-001 (vpn_bringup's alphabetical fallback) is
+          # reputation-burned from a day of testing. Pin a clean one so the ban
+          # result reflects the recipe, not a pre-banned IP. vpn_bringup reads
+          # VPN_REGION and raises /etc/wireguard/<VPN_REGION>.conf.
+          VPN_REGION: ${{ inputs.region || 'us-chi-wg-201' }}
         run: |
           set -uo pipefail
 
@@ -126,7 +136,8 @@ jobs:
           (
             for i in $(seq 1 $((MIN*4 + 4))); do
               c="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://${TARGET}/" 2>/dev/null || echo 000)"
-              echo "T+$((i*15))s benign=$c" >> "$PROBE"
+              # tee to console so the live log has a heartbeat (not a silent freeze)
+              echo "[heartbeat] T+$((i*15))s benign=$c" | tee -a "$PROBE"
               sleep 15
             done
           ) &
@@ -142,7 +153,7 @@ jobs:
             --rate-limit 2 --bulk-size 1 -timeout 10 \
             -stats -stats-interval 15 \
             -jsonl -o /tmp/findings.jsonl -silent \
-            2> /tmp/nuclei.stats
+            2> >(tee /tmp/nuclei.stats >&2)
           NRC=$?
           set -e
           kill "$PROBE_PID" 2>/dev/null || true
