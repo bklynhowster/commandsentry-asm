@@ -453,6 +453,12 @@ CRAWL_FIRST_MODE = os.environ.get("CRAWL_FIRST_MODE", "").lower() in ("true", "1
 CRAWL_DEPTH = int(os.environ.get("CRAWL_DEPTH", "3"))
 # katana wall (seconds). Crawl runs once at scan start, so budget enough.
 CRAWL_WALL_S = int(os.environ.get("CRAWL_WALL_S", "300"))
+# Spec 221 ruling ①: crawl-empty is DEGRADED, never a silent fall-back to
+# path-enum. The crawl must yield at least this many URLs or the run degrades.
+# Start conservative (floor=1 → only a truly-empty crawl degrades); tighten from
+# OBSERVED healthy-crawl yields once the viability canary calibrates it — better
+# to under-DEGRADE a thin-but-real crawl than over-DEGRADE a small legit site.
+CRAWL_MIN_URLS = int(os.environ.get("CRAWL_MIN_URLS", "1"))
 # Match the regions for which we've shipped WireGuard configs in the
 # vpn-tools GH release. Add more by generating + uploading more confs.
 
@@ -2756,8 +2762,13 @@ def run_katana_crawl(ctx: ScanContext, base_url: str) -> str | None:
     (no template-driven path enumeration that would hit /wp-login,
     /admin, /.env and trip FortiGate bot-trap signatures).
 
-    Returns the path to a file containing one URL per line, or None on
-    failure (caller falls back to template-driven scanning).
+    Returns the path to a file containing one URL per line (>= CRAWL_MIN_URLS).
+
+    Spec 221 ruling ①: there is NO path-enum fall-back. A failed / blocked /
+    empty crawl raises DegradedRunError — it never returns None to let the caller
+    run `-u target` (which would re-introduce the /.env, /wp-login path probes
+    crawl-first exists to avoid, tripping the ban). Evidence-mandatory: real URL
+    surface or DEGRADED.
     """
     ctx.tools_run.append("katana")
     ua = pick_ua()
@@ -2790,26 +2801,42 @@ def run_katana_crawl(ctx: ScanContext, base_url: str) -> str | None:
     if b1_reason:
         mark_tool_degraded(ctx, "katana", b1_reason, stderr=stderr)
         raise DegradedRunError(b1_reason, "katana")
-    mark_tool_ok(ctx, "katana")
-
+    # Ruling ① — crawl-empty / crawl-failed is DEGRADED, NEVER a silent fall-back
+    # to path-enum. The old code returned None on any of these, and the caller
+    # then ran nuclei `-u target`, re-introducing the exact signature paths
+    # crawl-first exists to avoid (tripping the FortiGate ban). Each failure mode
+    # stamps tool_status (degraded) and raises; mark_tool_ok moves to the success
+    # path so the stamp is never both ok AND degraded.
     if rc != 0:
-        log(f"  katana rc={rc} — crawl failed, falling back to template-driven mode")
+        reason = "crawl_failed"
+        log(f"  katana rc={rc} — crawl FAILED; DEGRADING (no path-enum fall-back)")
         log(f"  stderr: {stderr[:300]}")
-        return None
-    # Count URLs discovered + log a preview
+        mark_tool_degraded(ctx, "katana", reason, stderr=stderr)
+        raise DegradedRunError(reason, "katana")
     try:
         with open(out_file) as f:
             urls = [u.strip() for u in f if u.strip()]
-        log(f"  katana discovered {len(urls)} URL(s)")
-        if len(urls) == 0:
-            log("  empty crawl — falling back to template-driven mode")
-            return None
-        # Persist as artifact for forensics
-        ctx.artifacts.append(("katana", "text", "\n".join(urls)))
-        return out_file
     except Exception as e:
-        log(f"  could not read katana output: {e}")
-        return None
+        reason = "crawl_output_unreadable"
+        log(f"  could not read katana output: {e} — DEGRADING")
+        mark_tool_degraded(ctx, "katana", reason)
+        raise DegradedRunError(reason, "katana")
+
+    log(f"  katana discovered {len(urls)} URL(s) (floor CRAWL_MIN_URLS={CRAWL_MIN_URLS})")
+    if len(urls) < CRAWL_MIN_URLS:
+        # crawl-empty on a FortiGate asset = the FortiGate blocked the crawl
+        # (Trap B). Surface it as DEGRADED; that's the diagnostic signal, not a
+        # false ok hiding zero coverage.
+        reason = "crawl_empty_no_surface"
+        log(f"  crawl below floor ({len(urls)} < {CRAWL_MIN_URLS}) — DEGRADING "
+            f"(never falls back to path-enum on a ban-on-signature WAF)")
+        mark_tool_degraded(ctx, "katana", reason)
+        raise DegradedRunError(reason, "katana")
+
+    # Real URL surface discovered — record evidence + stamp ok on the success path.
+    ctx.artifacts.append(("katana", "text", "\n".join(urls)))
+    mark_tool_ok(ctx, "katana")
+    return out_file
 
 
 def run_nuclei_chunk(ctx: ScanContext, target_url: str,
@@ -2995,11 +3022,11 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
     url_list_file = None
     if CRAWL_FIRST_MODE:
         log("→ CRAWL_FIRST_MODE on — running katana preflight to build URL list")
+        # Ruling ①: run_katana_crawl returns a real URL surface (>= CRAWL_MIN_URLS)
+        # or raises DegradedRunError. It never returns None to trigger a path-enum
+        # fall-back, so there is no longer a "fell back to -u target" branch.
         url_list_file = run_katana_crawl(ctx, base_url)
-        if url_list_file:
-            log(f"  nuclei chunks will run against -list {url_list_file}")
-        else:
-            log("  katana failed or empty — chunks will fall back to -u target_url")
+        log(f"  nuclei chunks will run against -list {url_list_file}")
 
     # P1 + P2.5: target-class + stack-aware chunk plan. See build_chunk_plan()
     # for routing logic. PROBE+SAFE_ONLY still gets its diagnostic-specific
