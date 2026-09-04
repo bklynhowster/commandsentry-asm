@@ -1,0 +1,157 @@
+name: FortiGate real-template threshold probe (GO/NO-GO)
+
+# GO/NO-GO MEASUREMENT for the rotate-on-ban port (spec 222, 4.7 ruling 2026-09-04).
+#
+# The rotate-on-ban design has never been tested against REAL template volume at
+# CCC — production only ever fires the 5x safe-only medium:tech plan there, and
+# THRESHOLD_PROBE_MODE is neutered to safe-only by the same is_fortigate_target
+# override. This isolated diagnostic fires a BOUNDED real-template slice at CCC,
+# watches a benign homepage probe for the hard IP-ban, records requests-to-ban,
+# rotates to a fresh relay, and checks whether rotation RECOVERS.
+#
+# CONSERVATISM (Howie's directive):
+#   • workflow_dispatch ONLY — NOT on:push, NOT scheduled. A human fires this,
+#     deliberately. It is the first real attack-volume the cloud sends at CCC.
+#   • Fail-closed apex allowlist (driver + this file). CCC / sciimage apexes only.
+#   • Hard caps: max-rotations, per-burst wall-clock, total wall-clock, low rate.
+#   • Does NOT touch run_medium.py or the production plan. Measure-only, no DB writes.
+#
+# The verdict (go / rethink / no-go) is advisory text for a human — never an
+# automated go-ahead to build or scan.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Command FortiGate apex (commandcommcentral.com / www / test / sciimage.com). NOT api.* (monitor mode).'
+        required: false
+        default: 'commandcommcentral.com'
+        type: string
+      severity:
+        description: 'Bounded real-template severity slice'
+        required: false
+        default: 'critical,high'
+        type: string
+      rate:
+        description: 'nuclei rate-limit (low)'
+        required: false
+        default: '5'
+        type: string
+      max_rotations:
+        description: 'Max relay rotations (recovery tests)'
+        required: false
+        default: '3'
+        type: string
+      burst_wall_s:
+        description: 'Per-relay hard wall-clock cap (seconds)'
+        required: false
+        default: '180'
+        type: string
+      total_wall_s:
+        description: 'Whole-run hard wall-clock cap (seconds)'
+        required: false
+        default: '1080'
+        type: string
+      region:
+        description: 'Initial Mullvad relay to bring up (blank = first available). Fresh relays are picked automatically for rotation.'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  threshold-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/bklynhowster/commandsentry-scanner:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: >-
+        --cap-add=NET_ADMIN
+        --device=/dev/net/tun
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify baked-in toolchain
+        run: |
+          for t in wireguard-go wg gh curl jq python3 nuclei httpx pgrep; do
+            command -v "$t" >/dev/null 2>&1 \
+              || { echo "::error::missing baked tool: $t"; exit 1; }
+          done
+          echo "✓ toolchain present ($(nuclei -version 2>&1 | head -1))"
+
+      - name: Fetch + patch WireGuard configs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/wg-download
+          gh release download vpn-tools \
+            --repo bklynhowster/commandsentry-asm \
+            --pattern 'mullvad-wg-configs.tar.gz' \
+            --dir /tmp/wg-download
+          sudo mkdir -p /etc/wireguard
+          sudo tar xzf /tmp/wg-download/mullvad-wg-configs.tar.gz -C /tmp/wg-download
+          sudo cp /tmp/wg-download/wg-configs/*.conf /etc/wireguard/
+          sudo chmod 600 /etc/wireguard/*.conf
+          sudo python3 scripts/scanner/patch_wg_configs.py
+          echo "pool size: $(ls /etc/wireguard/*.conf | wc -l) configs"
+
+      - name: Make VPN scripts executable
+        run: chmod +x scripts/scanner/*.sh
+
+      - name: Bring up initial Mullvad relay, run the probe, tear down
+        env:
+          TARGET: ${{ inputs.target || 'commandcommcentral.com' }}
+          SEV: ${{ inputs.severity || 'critical,high' }}
+          RATE: ${{ inputs.rate || '5' }}
+          MAXROT: ${{ inputs.max_rotations || '3' }}
+          BURSTWALL: ${{ inputs.burst_wall_s || '180' }}
+          TOTALWALL: ${{ inputs.total_wall_s || '1080' }}
+          VPN_REGION: ${{ inputs.region || '' }}
+        run: |
+          set -uo pipefail
+
+          # Fail-closed apex allowlist (defence in depth — the driver checks too).
+          case "$TARGET" in
+            api.commandcommcentral.com)
+              echo "::error::api.* does NOT actively block — meaningless target"; exit 2 ;;
+            commandcommcentral.com|www.commandcommcentral.com|test.commandcommcentral.com|sciimage.com|www.sciimage.com) : ;;
+            *) echo "::error::TARGET '$TARGET' is not a Command FortiGate apex — refusing"; exit 2 ;;
+          esac
+
+          echo "pre-VPN egress: $(curl -s --max-time 8 https://api.ipify.org || echo '<unknown>')"
+          if ! scripts/scanner/vpn_bringup.sh; then
+            echo "::error::vpn_bringup.sh failed — cannot run on Mullvad egress"; exit 1
+          fi
+          echo "post-VPN egress: $(curl -s --max-time 8 https://api.ipify.org || echo '<unknown>')"
+
+          set +e
+          python3 scripts/diag/fortigate_threshold_probe.py \
+            --target "$TARGET" \
+            --severity "$SEV" \
+            --rate "$RATE" \
+            --max-rotations "$MAXROT" \
+            --burst-wall-s "$BURSTWALL" \
+            --total-wall-s "$TOTALWALL"
+          PRC=$?
+          set -e
+          echo "probe exit: $PRC"
+
+          scripts/scanner/vpn_teardown.sh 2>&1 | sed 's/^/  [teardown] /' || \
+            echo "  ⚠ teardown returned nonzero (continuing)"
+
+      - name: Teardown safety net (always)
+        if: always()
+        run: |
+          scripts/scanner/vpn_teardown.sh 2>&1 | sed 's/^/  [teardown] /' || true
