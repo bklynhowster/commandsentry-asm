@@ -1,0 +1,197 @@
+name: FortiGate faithful-recipe canary
+
+# ONE-OFF DIAGNOSTIC — tests whether the Mac's proven active-FortiGate nuclei
+# recipe ports to the cloud's Mullvad egress. The Mac's scan-ccc-triple got
+# through commandcommcentral (apex/www/test all ACTIVELY block signature paths,
+# confirmed 2026-09-04) using: --rate-limit 2 --bulk-size 1 --interactsh-disable,
+# split severity passes, cooldowns. The cloud's nuclei NEVER sets --bulk-size
+# (defaults 25) — the "tested rate, never concurrency" gap (note 76).
+#
+# THE QUESTION: at --bulk-size 1 --rate-limit 2, does nuclei take the harmless
+# per-request 403s on signature paths but AVOID the hard IP-ban that bulk-size-25
+# hit? A benign homepage probe runs alongside; if the connection dies mid-scan,
+# the IP got hard-banned. If it stays 200 throughout, bulk-size 1 is under the
+# ban threshold and the recipe ports.
+#
+# Time-boxed — the ban (if it fires) crosses at 30-150 requests (~1-2 min at
+# rate 2), so a short run answers the viability question even without finishing
+# the template set. Command active-blocking apex ONLY (guarded). Full Command
+# authorization. Self-fires on push.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fortigate-recipe-canary.yml'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Command ACTIVE-blocking FortiGate endpoint (apex/www/test — NOT api, which does not block)'
+        required: false
+        default: 'commandcommcentral.com'
+        type: string
+      minutes:
+        description: 'Time-box for the nuclei run'
+        required: false
+        default: '10'
+        type: string
+      severity:
+        description: 'nuclei severities (pass 1 = critical,high)'
+        required: false
+        default: 'critical,high'
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  recipe-canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    container:
+      image: ghcr.io/bklynhowster/commandsentry-scanner:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: >-
+        --cap-add=NET_ADMIN
+        --device=/dev/net/tun
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify baked-in toolchain
+        run: |
+          for t in wireguard-go wg gh curl jq python3 nuclei; do
+            command -v "$t" >/dev/null 2>&1 \
+              || { echo "::error::missing baked tool: $t"; exit 1; }
+          done
+          echo "✓ toolchain present ($(nuclei -version 2>&1 | head -1))"
+
+      - name: Fetch + patch WireGuard configs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/wg-download
+          gh release download vpn-tools \
+            --repo bklynhowster/commandsentry-asm \
+            --pattern 'mullvad-wg-configs.tar.gz' \
+            --dir /tmp/wg-download
+          sudo mkdir -p /etc/wireguard
+          sudo tar xzf /tmp/wg-download/mullvad-wg-configs.tar.gz -C /tmp/wg-download
+          sudo cp /tmp/wg-download/wg-configs/*.conf /etc/wireguard/
+          sudo chmod 600 /etc/wireguard/*.conf
+          sudo python3 scripts/scanner/patch_wg_configs.py
+
+      - name: Make VPN scripts executable
+        run: chmod +x scripts/scanner/*.sh
+
+      - name: Raise Mullvad, run the faithful recipe, watch for the hard ban, tear down
+        env:
+          TARGET: ${{ inputs.target || 'commandcommcentral.com' }}
+          MIN: ${{ inputs.minutes || '10' }}
+          SEV: ${{ inputs.severity || 'critical,high' }}
+        run: |
+          set -uo pipefail
+
+          # Fail-closed: ACTIVE-blocking Command endpoints ONLY. api.* does NOT
+          # block (404s everything) so a pass there would be meaningless — refuse it.
+          case "$TARGET" in
+            api.commandcommcentral.com)
+              echo "::error::api.commandcommcentral.com does NOT actively block — meaningless target, refusing"; exit 2 ;;
+            commandcommcentral.com|www.commandcommcentral.com|test.commandcommcentral.com|*.sciimage.com|sciimage.com) : ;;
+            *) echo "::error::TARGET '$TARGET' is not a Command FortiGate apex — refusing"; exit 2 ;;
+          esac
+
+          echo "pre-VPN egress: $(curl -s --max-time 8 https://api.ipify.org || echo '<unknown>')"
+          if ! scripts/scanner/vpn_bringup.sh; then
+            echo "::error::vpn_bringup.sh failed — cannot run on Mullvad egress"; exit 1
+          fi
+          EGRESS="$(curl -s --max-time 8 https://api.ipify.org || echo '<unknown>')"
+          echo "post-VPN egress: $EGRESS"
+
+          # Baseline benign homepage (NOT a signature path — should be 200).
+          BASE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://${TARGET}/" || echo 000)"
+          echo "baseline GET https://${TARGET}/ -> $BASE"
+
+          # ── hard-ban detector: benign homepage every 15s in the background.
+          # A hard IP-ban shows up as the benign probe dying (000/reset), even
+          # though signature paths 403 harmlessly. That transition is the signal.
+          PROBE=/tmp/benign_probe.log; : > "$PROBE"
+          (
+            for i in $(seq 1 $((MIN*4 + 4))); do
+              c="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://${TARGET}/" 2>/dev/null || echo 000)"
+              echo "T+$((i*15))s benign=$c" >> "$PROBE"
+              sleep 15
+            done
+          ) &
+          PROBE_PID=$!
+
+          # ── THE FAITHFUL RECIPE — exact Mac PROD flags. -u target (path-enum;
+          # signature paths WILL 403, harmlessly). bulk-size 1 is the change.
+          echo "running: nuclei -u https://${TARGET} -severity ${SEV} --interactsh-disable --rate-limit 2 --bulk-size 1"
+          set +e
+          timeout "${MIN}m" nuclei -u "https://${TARGET}" \
+            -severity "${SEV}" \
+            --interactsh-disable \
+            --rate-limit 2 --bulk-size 1 -timeout 10 \
+            -stats -stats-interval 15 \
+            -jsonl -o /tmp/findings.jsonl -silent \
+            2> /tmp/nuclei.stats
+          NRC=$?
+          set -e
+          kill "$PROBE_PID" 2>/dev/null || true
+
+          FINDINGS=$( ( [ -f /tmp/findings.jsonl ] && grep -c . /tmp/findings.jsonl ) || echo 0 )
+          # post-run benign probe: is the IP hard-banned NOW?
+          POST="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://${TARGET}/" 2>/dev/null || echo 000)"
+          # any benign probe that was NOT 2xx/3xx during the run == hard ban moment
+          BAD_PROBES="$(grep -oE 'benign=[0-9]+' "$PROBE" | grep -vE 'benign=(2[0-9][0-9]|3[0-9][0-9])' | wc -l | tr -d ' ')"
+          TOTAL_PROBES="$(grep -c 'benign=' "$PROBE" || echo 0)"
+          REQS="$(grep -oE 'Requests: ?[0-9]+' /tmp/nuclei.stats | tail -1 | grep -oE '[0-9]+' || echo '?')"
+
+          echo "nuclei rc=$NRC  findings=$FINDINGS  benign_bad=$BAD_PROBES/$TOTAL_PROBES  post=$POST"
+          echo "--- benign probe timeline ---"; cat "$PROBE"
+          echo "--- nuclei stats tail ---"; tail -5 /tmp/nuclei.stats 2>/dev/null || true
+
+          {
+            echo "## FortiGate faithful-recipe canary — \`${TARGET}\`"
+            echo ""
+            echo "**Recipe:** \`nuclei -u https://${TARGET} -severity ${SEV} --interactsh-disable --rate-limit 2 --bulk-size 1\` (the Mac's PROD flags; cloud default is bulk-size 25)"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| egress (Mullvad) | \`$EGRESS\` |"
+            echo "| baseline homepage | HTTP $BASE |"
+            echo "| nuclei requests sent | $REQS |"
+            echo "| findings | $FINDINGS |"
+            echo "| benign probes non-2xx/3xx | **$BAD_PROBES / $TOTAL_PROBES** |"
+            echo "| homepage AFTER run | HTTP $POST |"
+            echo ""
+            if [ "$BAD_PROBES" -eq 0 ] && [ "$POST" != "000" ] && [ "$POST" -lt 400 ] 2>/dev/null; then
+              echo "### ✅ NO HARD IP-BAN — the recipe ports"
+              echo ""
+              echo "The benign homepage stayed reachable throughout and after the run, while "
+              echo "nuclei fired its template set at --bulk-size 1. Signature paths took their "
+              echo "harmless per-request 403s, but the connection was never killed — bulk-size 1 "
+              echo "+ rate 2 stayed under the hard-ban threshold that bulk-size 25 crossed. "
+              echo "⇒ wire --bulk-size 1 + split passes + --interactsh-disable into the FortiGate "
+              echo "scan path; this is the faithful port."
+            else
+              echo "### ⚠ HARD IP-BAN FIRED even at --bulk-size 1"
+              echo ""
+              echo "The benign homepage stopped responding mid/after the run ($BAD_PROBES bad "
+              echo "probes; post=$POST). bulk-size 1 alone did NOT keep us under the threshold "
+              echo "from this Mullvad relay. The recipe needs the other layers too — split "
+              echo "passes + cooldowns + ban-recovery via relay rotation (the Mac's human step), "
+              echo "or a cleaner egress. Not a one-flag fix."
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          scripts/scanner/vpn_teardown.sh 2>&1 | sed 's/^/  [teardown] /' || \
+            echo "  ⚠ teardown returned nonzero (continuing)"
