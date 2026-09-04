@@ -1,0 +1,160 @@
+name: FortiGate crawl viability
+
+# ONE-OFF DIAGNOSTIC — the spec-221 ⑥ VIABILITY TEST, and the gate for the whole
+# crawl-first design. The attack-replay proved the FortiGate block is content-
+# signature, not transport (browser-transport port is dead). The Mac got through
+# by CRAWL-FIRST: crawl real URLs (katana), scan only those, never fire bot-trap
+# paths. But the Mac crawled from the Mac's egress; the cloud scanner runs from a
+# Mullvad datacenter IP the FortiGate may treat differently.
+#
+# THE QUESTION THIS ANSWERS: does katana crawl THROUGH the FortiGate from the
+# Mullvad egress, and discover a real URL surface? If yes → crawl-first is viable
+# and we build it. If katana comes back empty/blocked → crawl-first doesn't work
+# from our vantage and the answer is egress, not crawl. It also yields the URL
+# counts to calibrate ①'s CRAWL_MIN_URLS floor from OBSERVED data, not intuition.
+#
+# Crawl-only — NO templates, no attack paths. katana requests real discovered
+# links. Command FortiGate apex only (guarded). Full Command authorization.
+# workflow_dispatch ONLY — you fire it deliberately (conservative; katana crawl is
+# benign real-link traffic, but the first crawl at CCC is a deliberate act, not a
+# side effect of a push).
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Command FortiGate apex to crawl (guarded to commandcommcentral.com / sciimage.com)'
+        required: false
+        default: 'commandcommcentral.com'
+        type: string
+      depth:
+        description: 'katana crawl depth'
+        required: false
+        default: '3'
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  crawl-viability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: ghcr.io/bklynhowster/commandsentry-scanner:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: >-
+        --cap-add=NET_ADMIN
+        --device=/dev/net/tun
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify baked-in toolchain
+        run: |
+          for t in wireguard-go wg gh curl jq python3 katana; do
+            command -v "$t" >/dev/null 2>&1 \
+              || { echo "::error::missing baked tool: $t"; exit 1; }
+          done
+          echo "✓ baked toolchain present (katana version: $(katana -version 2>&1 | head -1))"
+
+      - name: Fetch + patch WireGuard configs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/wg-download
+          gh release download vpn-tools \
+            --repo bklynhowster/commandsentry-asm \
+            --pattern 'mullvad-wg-configs.tar.gz' \
+            --dir /tmp/wg-download
+          sudo mkdir -p /etc/wireguard
+          sudo tar xzf /tmp/wg-download/mullvad-wg-configs.tar.gz -C /tmp/wg-download
+          sudo cp /tmp/wg-download/wg-configs/*.conf /etc/wireguard/
+          sudo chmod 600 /etc/wireguard/*.conf
+          sudo python3 scripts/scanner/patch_wg_configs.py
+
+      - name: Make VPN scripts executable
+        run: chmod +x scripts/scanner/*.sh
+
+      - name: Raise Mullvad, crawl, tear down
+        env:
+          TARGET: ${{ inputs.target || 'commandcommcentral.com' }}
+          DEPTH: ${{ inputs.depth || '3' }}
+        run: |
+          set -uo pipefail
+
+          # Fail-closed: Command FortiGate apexes ONLY (this bypasses the
+          # scanner's ROE gate, so it carries its own allowlist).
+          case "$TARGET" in
+            commandcommcentral.com|*.commandcommcentral.com|sciimage.com|*.sciimage.com) : ;;
+            *) echo "::error::TARGET '$TARGET' is not a Command FortiGate apex — refusing"; exit 2 ;;
+          esac
+
+          echo "pre-VPN egress: $(curl -s --max-time 8 https://api.ipify.org || echo '<unknown>')"
+          if ! scripts/scanner/vpn_bringup.sh; then
+            echo "::error::vpn_bringup.sh failed — cannot run on Mullvad egress"; exit 1
+          fi
+          EGRESS="$(curl -s --max-time 8 https://api.ipify.org || echo '<unknown>')"
+          echo "post-VPN egress: $EGRESS"
+
+          # Baseline: is the target even reachable through the tunnel?
+          BASE_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://${TARGET}/" || echo 000)"
+          echo "baseline GET https://${TARGET}/ -> HTTP $BASE_CODE"
+
+          # THE CRAWL — real links only, no template/path enumeration.
+          OUT=/tmp/katana_urls.txt
+          set +e
+          katana -u "https://${TARGET}/" -d "$DEPTH" -jc -silent \
+                 -rate-limit 10 -timeout 15 -o "$OUT" 2> /tmp/katana.err
+          KRC=$?
+          set -e
+          N=$( ( [ -f "$OUT" ] && grep -c . "$OUT" ) || echo 0 )
+          echo "katana rc=$KRC  urls_discovered=$N"
+          echo "--- first 25 URLs ---"; ( [ -f "$OUT" ] && head -25 "$OUT" ) || echo "(none)"
+          echo "--- katana stderr tail ---"; tail -5 /tmp/katana.err 2>/dev/null || true
+
+          # Verdict → job summary.
+          {
+            echo "## FortiGate crawl viability — \`${TARGET}\`"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| egress (Mullvad) | \`$EGRESS\` |"
+            echo "| baseline homepage | HTTP $BASE_CODE |"
+            echo "| katana rc | $KRC |"
+            echo "| **URLs discovered** | **$N** |"
+            echo "| crawl depth | $DEPTH |"
+            echo ""
+            if [ "$N" -eq 0 ]; then
+              echo "### ❌ CRAWL EMPTY — crawl-first is NOT viable from Mullvad"
+              echo ""
+              echo "katana discovered zero URLs. Either the FortiGate blocked the crawl "
+              echo "from this datacenter egress, or the tool failed. Per ruling ①  this is "
+              echo "DEGRADED (crawl_empty_no_surface), NOT a clean scan. ⇒ crawl-first from "
+              echo "the scanner's vantage does not work; the answer is egress, not crawl. "
+              echo "Re-run from a different relay, or reconsider a residential/rotating egress."
+            elif [ "$N" -lt 5 ]; then
+              echo "### ⚠ THIN CRAWL ($N URLs) — viable but marginal"
+              echo ""
+              echo "A real web app should surface more. Could be a mostly-JS site needing a "
+              echo "rendering crawl (spec-221 ②), or partial FortiGate interference. Usable "
+              echo "as a floor-calibration data point; investigate the low yield."
+            else
+              echo "### ✅ CRAWL VIABLE — $N URLs discovered through the FortiGate from Mullvad"
+              echo ""
+              echo "katana crawled the real surface from the datacenter egress. crawl-first is "
+              echo "viable from the scanner's vantage. This URL count calibrates ①'s "
+              echo "CRAWL_MIN_URLS floor (set it at a fraction of observed healthy yield)."
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          scripts/scanner/vpn_teardown.sh 2>&1 | sed 's/^/  [teardown] /' || \
+            echo "  ⚠ teardown returned nonzero (continuing)"
