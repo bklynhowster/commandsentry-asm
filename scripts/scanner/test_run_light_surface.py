@@ -131,6 +131,11 @@ def test_upsert_casts_blob_to_jsonb():
     sql = run_light.SCANNER_SURFACE_UPSERT
     assert "%(blob)s::jsonb" in sql, "blob param must be cast ::jsonb (json has no jsonb_set overload)"
     assert "jsonb_set(" in sql
+    # AmbiguousParameter guard: jsonb_build_object is VARIADIC "any", so an untyped param key
+    # can't have its type inferred — the tier param must be cast ::text (caught live 2026-09-05).
+    assert "%(tier)s::text" in sql, "tier param must be cast ::text inside jsonb_build_object"
+    # No bare %(blob)s / %(tier)s feeding a jsonb builder (every such param must carry a ::cast).
+    assert "jsonb_build_object(%(tier)s," not in sql and "jsonb_build_object(%(tier)s)" not in sql
 
 
 # ── wiring: close_out actually calls the surface write-back ───────────────────────────────────────

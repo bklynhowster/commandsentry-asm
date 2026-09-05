@@ -2774,7 +2774,7 @@ INSERT INTO public.asset_surface
   (asset_id, surface_data, service_count, discovered_via, first_discovered, last_seen, updated_by)
 VALUES
   (%(asset_id)s,
-   jsonb_build_object('_scanner', jsonb_build_object(%(tier)s, %(blob)s::jsonb)),
+   jsonb_build_object('_scanner', jsonb_build_object(%(tier)s::text, %(blob)s::jsonb)),
    %(svc_count)s, 'scanner', now(), now(), %(updated_by)s)
 ON CONFLICT (asset_id) DO UPDATE SET
   -- %(blob)s::jsonb — psycopg's Json adapts to `json`; jsonb_set needs `jsonb` (no json
