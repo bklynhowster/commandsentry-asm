@@ -2774,15 +2774,17 @@ INSERT INTO public.asset_surface
   (asset_id, surface_data, service_count, discovered_via, first_discovered, last_seen, updated_by)
 VALUES
   (%(asset_id)s,
-   jsonb_build_object('_scanner', jsonb_build_object(%(tier)s, %(blob)s)),
+   jsonb_build_object('_scanner', jsonb_build_object(%(tier)s, %(blob)s::jsonb)),
    %(svc_count)s, 'scanner', now(), now(), %(updated_by)s)
 ON CONFLICT (asset_id) DO UPDATE SET
+  -- %(blob)s::jsonb — psycopg's Json adapts to `json`; jsonb_set needs `jsonb` (no json
+  -- overload → the whole statement fails to plan without the cast). Verified live 2026-09-05.
   surface_data = jsonb_set(
     CASE WHEN public.asset_surface.surface_data ? '_scanner'
          THEN public.asset_surface.surface_data
          ELSE public.asset_surface.surface_data || jsonb_build_object('_scanner', '{}'::jsonb)
     END,
-    ARRAY['_scanner', %(tier)s], %(blob)s, true),
+    ARRAY['_scanner', %(tier)s], %(blob)s::jsonb, true),
   service_count    = GREATEST(public.asset_surface.service_count, EXCLUDED.service_count),
   last_seen        = GREATEST(public.asset_surface.last_seen, EXCLUDED.last_seen),
   first_discovered = COALESCE(public.asset_surface.first_discovered, EXCLUDED.first_discovered),

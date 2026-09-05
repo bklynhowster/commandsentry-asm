@@ -122,6 +122,17 @@ def test_naabu_failed_suppresses_close():
     assert not any(e["event_type"] == "port_closed" for e in _events(cur)), "fail-closed on naabu failure"
 
 
+# ── SQL type-cast pin (caught LIVE 2026-09-05) ───────────────────────────────────────────────────
+def test_upsert_casts_blob_to_jsonb():
+    # psycopg's Json adapts a dict to type `json`, but jsonb_set() has no `json` overload — so
+    # WITHOUT an explicit ::jsonb cast the whole UPSERT fails to PLAN (UndefinedFunction), even on
+    # the plain-INSERT path (Postgres resolves the ON CONFLICT branch at plan time). The fake-cursor
+    # tests can't see this (no real Postgres), so pin the cast here.
+    sql = run_light.SCANNER_SURFACE_UPSERT
+    assert "%(blob)s::jsonb" in sql, "blob param must be cast ::jsonb (json has no jsonb_set overload)"
+    assert "jsonb_set(" in sql
+
+
 # ── wiring: close_out actually calls the surface write-back ───────────────────────────────────────
 def test_close_out_calls_surface_writeback():
     src = inspect.getsource(run_light.close_out)
