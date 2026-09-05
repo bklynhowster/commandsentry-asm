@@ -68,6 +68,14 @@ from typing import Any
 from degradation import delta_close_eligible
 from finding_history_writer import write_finding_history_for_scan_run
 
+# Shared discovery_status verdict (Obsidian 224): the confirmed_live/dns_only/ct_ghost
+# rule lives in scripts/db/asset_liveness.py — the ONE liveness SSOT, also used by the
+# ASM ingestion (import_asm_to_surface.py). It's pure-Python (datetime only, no psycopg),
+# so importing it here does NOT break run_light's lazy-psycopg pattern. Add scripts/db to
+# the path so the sibling-package import resolves whether run as a script or imported.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "db"))
+from asset_liveness import discovery_status_from_service_count  # noqa: E402
+
 
 # ─── Lazy import psycopg ────────────────────────────────────────────────
 def _import_deps() -> Any:
@@ -2766,6 +2774,30 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
         }
         cur.execute(CLOSE_SCAN_RUN_SQL, params)
         cur.execute(CLOSE_SCAN_QUEUE_SQL, params)
+
+        # Obsidian 224 — light-scan liveness write-back. The portal surfaces ONLY
+        # assets with discovery_status='confirmed_live'. A MANUAL portal-add inserts
+        # the row as 'unverified' and queues THIS light scan, but nothing ran the ASM
+        # ingestion that promotes discovery_status, so manual-adds stayed invisible
+        # forever. naabu open ports ARE the same service signal the ingestion uses
+        # (service_count>0 → confirmed_live), so reuse that EXACT rule via the shared
+        # verdict. PROMOTE-ONLY, gated on svc>0: only from {ct_ghost,unverified,dns_only};
+        # never touch confirmed_live or went_dark — mirrors the UPSERT_ASSET no-downgrade
+        # CASE so a naabu-firewalled rescan seeing 0 ports can never demote a live asset.
+        svc_count = len(getattr(ctx, "open_ports", None) or [])
+        if discovery_status_from_service_count(
+                svc_count, host_count=svc_count, is_apex=False) == "confirmed_live":
+            cur.execute(
+                "UPDATE public.assets "
+                "SET discovery_status = 'confirmed_live', "
+                "    last_alive_at = GREATEST(last_alive_at, now()) "
+                "WHERE asset_id = %s "
+                "  AND discovery_status IN ('ct_ghost', 'unverified', 'dns_only')",
+                (ctx.asset_id,),
+            )
+            if cur.rowcount:
+                log(f"liveness: promoted {ctx.asset_id} → confirmed_live "
+                    f"(svc_count={svc_count} open port(s) from light scan)")
 
         # 4.7 H2/H3 (LIGHT_SCAN_FINDING_HISTORY_SPEC) — per-finding observation
         # history. Runs AFTER the scan_run is marked complete (completed_at set)

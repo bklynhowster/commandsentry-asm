@@ -16,6 +16,7 @@ from asset_liveness import (
     select_probe_ports,
     gate_dark_decision,
     apply_liveness_gate,
+    discovery_status_from_service_count,
     SAFE_DEFAULT_PORTS,
     DEFAULT_VERDICT_MAX_AGE_H,
 )
@@ -71,6 +72,57 @@ def test_verdict_booleans_match_the_two_semantics():
         assert is_open == any(r == "open" for r in pr)
     # the unimac shape: responded but not open
     assert verdict_booleans(["refused", "refused"]) == (True, False)
+
+
+# ── discovery_status verdict — the ONE rule shared by ASM ingestion + light-scan write-back ───────
+def test_discovery_status_service_count_wins():
+    # svc>0 -> confirmed_live, regardless of the other inputs (a service answered).
+    assert discovery_status_from_service_count(1) == "confirmed_live"
+    assert discovery_status_from_service_count(5, host_count=0, is_apex=False) == "confirmed_live"
+    # DNS infra shape (ns01/ns02: one service, alive=False): still confirmed_live — svc is the signal.
+    assert discovery_status_from_service_count(1, host_count=1, is_apex=True) == "confirmed_live"
+
+
+def test_discovery_status_zero_service_split():
+    # 0 service, but resolved to a host OR is a scoped apex -> dns_only
+    assert discovery_status_from_service_count(0, host_count=1, is_apex=False) == "dns_only"
+    assert discovery_status_from_service_count(0, host_count=0, is_apex=True) == "dns_only"
+    # 0 service, never resolved, not an apex -> ct_ghost (passive/CT phantom)
+    assert discovery_status_from_service_count(0, host_count=0, is_apex=False) == "ct_ghost"
+
+
+def test_discovery_status_matches_ingestion_gate():
+    # Pin equivalence to import_asm_to_surface.py's inlined gate (note 93). If the ingestion
+    # rule is ever changed without changing this shared fn, this catches the drift.
+    def ingestion_gate(svc_count, host_count, is_apex):
+        if svc_count > 0:
+            return "confirmed_live"
+        if is_apex or host_count > 0:
+            return "dns_only"
+        return "ct_ghost"
+    for svc in (0, 1, 3):
+        for hc in (0, 1):
+            for apex in (False, True):
+                assert discovery_status_from_service_count(svc, host_count=hc, is_apex=apex) \
+                    == ingestion_gate(svc, hc, apex)
+
+
+def test_discovery_status_none_safe():
+    # defensive: None counts coerce to 0 (the scanner passes len(open_ports); belt-and-suspenders)
+    assert discovery_status_from_service_count(None) == "ct_ghost"
+    assert discovery_status_from_service_count(None, host_count=None, is_apex=True) == "dns_only"
+
+
+def test_ingestion_calls_shared_verdict_no_local_def():
+    # SSOT: import_asm_to_surface must CALL the shared fn, not re-inline the if/elif ladder.
+    # (mirrors test_single_source_of_truth_no_drift for the demotion path)
+    import inspect
+    import import_asm_to_surface as ing
+    src = inspect.getsource(ing)
+    assert "discovery_status_from_service_count" in src, \
+        "ingestion must call the shared verdict"
+    assert 'disc = "confirmed_live"' not in src, \
+        "ingestion re-inlined the verdict — drift risk; call asset_liveness instead"
 
 
 # ── 4.7 Q4 — stale-verdict guard ──────────────────────────────────────────────────

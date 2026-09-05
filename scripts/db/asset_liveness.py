@@ -108,6 +108,30 @@ def verdict_booleans(port_results) -> tuple[bool, bool]:
             any(r == "open" for r in (port_results or [])))
 
 
+# ── discovery_status verdict — ASM ingestion + light-scan write-back share ONE rule (Obsidian 224)
+# The confirmed_live / dns_only / ct_ghost verdict, hoisted out of import_asm_to_surface.py so the
+# light-scan completion write-back (run_light.close_out) can promote on the EXACT same rule the ASM
+# ingestion uses — no drift between "discovery said live" and "a scan said live". This closes the
+# manual-add invisibility bug: a portal manual-add inserts the asset as 'unverified' and queues a
+# LIGHT scan, but nothing ran the ASM ingestion, so discovery_status was never promoted and the
+# portal (which surfaces only confirmed_live) filtered the asset out forever.
+def discovery_status_from_service_count(svc_count: int, host_count: int = 0,
+                                        is_apex: bool = False) -> str:
+    """PURE discovery_status verdict (mirrors import_asm_to_surface.py's Gate #1, note 93).
+    SIGNAL = service_count (naabu open ports), NOT HTTP-reachability: DNS-only infra
+    (ns01/ns02: svc=1, alive=False) must stay confirmed_live, so a service answering wins.
+      * svc_count > 0                    -> 'confirmed_live'  (a service answered — wins outright)
+      * else is_apex OR host_count > 0   -> 'dns_only'        (resolved to a host, no service)
+      * else                             -> 'ct_ghost'        (never resolved — passive/CT phantom)
+    Promote-only consumers (the light-scan write-back) check `== 'confirmed_live'` and act only
+    then, so the dns_only/ct_ghost split is irrelevant to — and safe on — the promote-only path."""
+    if int(svc_count or 0) > 0:
+        return "confirmed_live"
+    if is_apex or int(host_count or 0) > 0:
+        return "dns_only"
+    return "ct_ghost"
+
+
 # ── Shared verdict read path (4.7 Q4 stale-guard) ───────────────────────────────────────────────
 DEFAULT_VERDICT_MAX_AGE_H = 12
 

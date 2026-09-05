@@ -1552,12 +1552,11 @@ def import_one(
             # surfaced as a live-IP asset. Apexes stay dns_only even at
             # host_count=0 (scoped real domains, e.g. sciimage.com). svc>0
             # always wins (keeps DNS infra like ns01/ns02 confirmed_live).
-            if svc_count > 0:
-                disc = "confirmed_live"
-            elif is_apex or host_count > 0:
-                disc = "dns_only"
-            else:
-                disc = "ct_ghost"
+            # Rule hoisted into asset_liveness so the light-scan write-back
+            # (run_light.close_out) promotes on the SAME logic — no drift
+            # between "discovery said live" and "a scan said live" (Obsidian 224).
+            disc = asset_liveness.discovery_status_from_service_count(
+                svc_count, host_count=host_count, is_apex=is_apex)
             if is_apex:
                 cur.execute(UPSERT_ASSET, {
                     "asset_id": bucket_id,
