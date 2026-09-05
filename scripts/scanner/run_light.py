@@ -75,6 +75,12 @@ from finding_history_writer import write_finding_history_for_scan_run
 # the path so the sibling-package import resolves whether run as a script or imported.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "db"))
 from asset_liveness import discovery_status_from_service_count  # noqa: E402
+# Obsidian 225 — shared ASM-surface diff (psycopg-free; safe for the lazy-psycopg pattern).
+from surface_diff import (  # noqa: E402
+    build_scanner_surface_blob,
+    compute_events,
+    EVENT_INSERT_SQL,
+)
 
 
 # ─── Lazy import psycopg ────────────────────────────────────────────────
@@ -2755,6 +2761,76 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
     return inserted, updated
 
 
+# ── Obsidian 225 — light-scan ASM surface write-back (4.7 Option B) ──────────────────────────────
+# The scanner records the surface it observed (naabu ports) so a manual-add gets an ASM surface
+# inventory (asset_surface) like discovered assets. ISOLATED under surface_data->'_scanner'->'light'
+# so asm-discover's top-level surface + its own port-event diff are NEVER touched (4.7 Q6 per-
+# producer baseline). Events diff against THIS tier's OWN prior blob (empty on first write →
+# asset_first_seen, NO false port_closed — the fleet-wide guard for the 28 already-discovered
+# assets that also get light scans). Per-field authority on derived cols: NO-DOWNGRADE
+# service_count (a thin light scan must never shrink a fuller discover's count).
+SCANNER_SURFACE_UPSERT = """
+INSERT INTO public.asset_surface
+  (asset_id, surface_data, service_count, discovered_via, first_discovered, last_seen, updated_by)
+VALUES
+  (%(asset_id)s,
+   jsonb_build_object('_scanner', jsonb_build_object(%(tier)s, %(blob)s)),
+   %(svc_count)s, 'scanner', now(), now(), %(updated_by)s)
+ON CONFLICT (asset_id) DO UPDATE SET
+  surface_data = jsonb_set(
+    CASE WHEN public.asset_surface.surface_data ? '_scanner'
+         THEN public.asset_surface.surface_data
+         ELSE public.asset_surface.surface_data || jsonb_build_object('_scanner', '{}'::jsonb)
+    END,
+    ARRAY['_scanner', %(tier)s], %(blob)s, true),
+  service_count    = GREATEST(public.asset_surface.service_count, EXCLUDED.service_count),
+  last_seen        = GREATEST(public.asset_surface.last_seen, EXCLUDED.last_seen),
+  first_discovered = COALESCE(public.asset_surface.first_discovered, EXCLUDED.first_discovered),
+  updated_at       = now(),
+  updated_by       = EXCLUDED.updated_by;
+"""
+
+# Baseline read: THIS producer/tier's own prior blob only (never cross-producer, never cross-tier).
+SCANNER_SURFACE_BASELINE_SQL = (
+    "SELECT surface_data->'_scanner'->%s AS prior "
+    "FROM public.asset_surface WHERE asset_id = %s"
+)
+
+
+def write_scanner_surface(conn, ctx: ScanContext, tier: str, coverage: str,
+                          source_tag: str, Json) -> None:
+    """225 Option B: persist the surface THIS scan observed + emit port events, isolated to this
+    producer/tier so the two-writer timeline never corrupts (4.7 Q6). Caller wraps this in a
+    savepoint + try/except so a surface error can NEVER roll back the scan close-out."""
+    naabu_ok = (ctx.tool_status.get("naabu") or {}).get("ok") is True
+    open_ports = getattr(ctx, "open_ports", None) or []
+    blob = build_scanner_surface_blob(
+        hostname=ctx.hostname,
+        open_ports=open_ports,
+        naabu_ok=naabu_ok,
+        coverage=coverage,
+        source_tag=source_tag,
+    )
+    with conn.cursor() as cur:
+        # per-tier baseline — THIS tier's own prior blob; None (no row / never written) →
+        # compute_events emits asset_first_seen and NO port_closed (the fleet-wide guard).
+        cur.execute(SCANNER_SURFACE_BASELINE_SQL, (tier, ctx.asset_id))
+        row = cur.fetchone()
+        prior = (row["prior"] if row else None)
+        events = compute_events(ctx.asset_id, prior, blob, source_tag, json_wrap=Json)
+        if events:
+            cur.executemany(EVENT_INSERT_SQL, events)
+        cur.execute(SCANNER_SURFACE_UPSERT, {
+            "asset_id":   ctx.asset_id,
+            "tier":       tier,
+            "blob":       Json(blob),
+            "svc_count":  len(open_ports),
+            "updated_by": source_tag,
+        })
+    log(f"surface: wrote _scanner.{tier} ({len(open_ports)} port(s), coverage={coverage}, "
+        f"{len(events)} event(s), naabu_ok={naabu_ok}) for {ctx.asset_id}")
+
+
 def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None:
     """Mark scan_run + scan_queue as 'complete'. Writes per-tool
     completeness map (S1 2026-06-09) so downstream reports can see
@@ -2798,6 +2874,16 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
             if cur.rowcount:
                 log(f"liveness: promoted {ctx.asset_id} → confirmed_live "
                     f"(svc_count={svc_count} open port(s) from light scan)")
+
+        # Obsidian 225 — light-scan ASM surface write-back (4.7 Option B). SAVEPOINT-isolated +
+        # best-effort: a surface-write error must NEVER roll back the scan close-out above.
+        # conn.transaction() nested in the caller's txn = a savepoint; on error it rolls back
+        # only the surface writes. Light coverage = naabu top-100 = 'partial' (4.7 Q5).
+        try:
+            with conn.transaction():
+                write_scanner_surface(conn, ctx, "light", "partial", "scanner_light", Json)
+        except Exception as e:
+            log(f"surface write-back failed (non-fatal): {e!r}")
 
         # 4.7 H2/H3 (LIGHT_SCAN_FINDING_HISTORY_SPEC) — per-finding observation
         # history. Runs AFTER the scan_run is marked complete (completed_at set)
