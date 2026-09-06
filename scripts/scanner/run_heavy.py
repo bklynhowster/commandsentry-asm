@@ -212,6 +212,20 @@ if str(_NORMALIZE_PATH) not in sys.path:
 from cs_parsers.testssl import parse_testssl_file  # noqa: E402
 from cs_parsers.common import FindingEvent, stable_finding_id  # noqa: E402
 
+# 226 — shared scanner-surface builder + per-producer event diff (spec 225 Option B).
+# EXPLICIT path insert: `from run_light import derive_hostname` above happens to put
+# scripts/db on sys.path as a side effect, but depending on another module's import-time
+# side effect for our own import is exactly the "defaults that differ by arrival path" trap.
+# Mirror run_light's own insert so this import stands on its own.
+_DB_PATH = _REPO_ROOT / "scripts" / "db"
+if str(_DB_PATH) not in sys.path:
+    sys.path.insert(0, str(_DB_PATH))
+from surface_diff import (  # noqa: E402
+    build_scanner_surface_blob,
+    compute_events,
+    EVENT_INSERT_SQL,
+)
+
 
 # ─── Scanner version override for tests (mirrors run_medium pattern) ────
 # heavy uses the same env var run_medium uses; both stamp findings with
@@ -296,6 +310,17 @@ class HeavyScanContext:
     chunk_plan_meta: dict[str, Any] = field(default_factory=dict)
     tool_diag: dict[str, dict[str, Any]] = field(default_factory=dict)
     tech_detect_status: str = ""
+
+    # ── 226 — net-depth results carried to close_out_heavy for the surface write ──
+    # run_naabu_phase / run_fingerprintx_phase return their results to run() as LOCALS;
+    # close_out_heavy only receives (conn, ctx, inserted, updated, Json), so the surface
+    # write can't see them unless they're stashed on ctx. naabu_ok defaults FALSE so a
+    # crash/abort before the net-depth phase can never be read as "naabu succeeded, 0 ports"
+    # (which would be a false full-coverage observation). fpx_services enriches the blob's
+    # `service` field per 4.7 Q2 — {(port, proto): service} from fingerprintx.
+    open_ports: list[dict] = field(default_factory=list)
+    naabu_ok: bool = False
+    fpx_services: dict = field(default_factory=dict)
 
     # ── medium-tier context fields (CONTEXT UNIFICATION, spec 190 step 2) ──
     # 🔴 FOUND IN PRODUCTION, run #2620 (first cumulative heavy, 2026-08-29).
@@ -2644,6 +2669,10 @@ def run_fingerprintx_phase(ctx: HeavyScanContext, work_dir: Path,
         return False
 
     svc = _parse_fingerprintx(stdout)
+    # 226 / 4.7 Q2 — stash for the surface write so _scanner.heavy carries real service
+    # names (light leaves `service` null). Detail only: the blob's port set still comes
+    # from naabu, so a fingerprintx miss degrades the label, never the port inventory.
+    ctx.fpx_services = dict(svc)
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     for (port, proto), service in svc.items():
         mid = f"{ctx.hostname}:{port}/{proto}"
@@ -2816,6 +2845,109 @@ def write_event_findings_and_artifacts(
 # Close-out variants — heavy mirrors of run_medium's close_out/degraded_out/fail_out
 # ============================================================================
 
+# ════════════════════════════════════════════════════════════════════════════════════════
+# 226 — heavy-tier ASM surface write-back (spec 225 Option B, 4.7 ruling 2026-09-05)
+#
+# D3 IS NOT REPEALED — IT IS SATISFIED. The ruling above run_naabu_phase ("heavy MUST NOT
+# write asset_surface — the discovery importer owns service_count, which the P2 went-dark
+# writer reads; a heavy dual-writer could feed a false zero-service into that lifecycle")
+# states an INVARIANT: never feed the went-dark lifecycle a false service reduction. This
+# write satisfies it three ways, verified 2026-09-05:
+#
+#   1. ISOLATION (the strongest guarantee). P2's reader is demotion_writer.known_ports(),
+#      which does `surface_data.get("subdomains")` — the TOP-LEVEL key. We write to
+#      surface_data._scanner.heavy, a sibling key. P2 literally cannot see this blob.
+#      (D3's premise is also slightly off on the facts: P2 does NOT read service_count.)
+#   2. NO-DOWNGRADE on service_count. The one field we do touch outside _scanner is written
+#      GREATEST(existing, EXCLUDED) — monotonic UP only. The only consumer that reads it is
+#      import_asm_to_surface's dark-detection filter (`AND s.service_count > 0`), and a
+#      monotonic-up write can never push an asset under that threshold. ACCEPTED TRADE:
+#      heavy therefore can NEVER lower service_count, so a genuine service REMOVAL is
+#      invisible to this writer. The importer remains the only writer that can lower it.
+#   3. FAIL-CLOSED. naabu_ok False => we do not write at all (see write_scanner_surface).
+#
+# ⚠ If anyone ever loosens the no-downgrade to a plain assignment, D3 reopens. Keep #2.
+# ════════════════════════════════════════════════════════════════════════════════════════
+
+# Byte-identical to run_light.SCANNER_SURFACE_UPSERT — pinned equal by
+# test_run_heavy_surface.test_upsert_identical_to_light so the two tiers can never drift.
+SCANNER_SURFACE_UPSERT = """
+INSERT INTO public.asset_surface
+  (asset_id, surface_data, service_count, discovered_via, first_discovered, last_seen, updated_by)
+VALUES
+  (%(asset_id)s,
+   jsonb_build_object('_scanner', jsonb_build_object(%(tier)s::text, %(blob)s::jsonb)),
+   %(svc_count)s, 'scanner', now(), now(), %(updated_by)s)
+ON CONFLICT (asset_id) DO UPDATE SET
+  -- %(blob)s::jsonb — psycopg's Json adapts to `json`; jsonb_set needs `jsonb` (no json
+  -- overload → the whole statement fails to plan without the cast). Verified live 2026-09-05.
+  surface_data = jsonb_set(
+    CASE WHEN public.asset_surface.surface_data ? '_scanner'
+         THEN public.asset_surface.surface_data
+         ELSE public.asset_surface.surface_data || jsonb_build_object('_scanner', '{}'::jsonb)
+    END,
+    ARRAY['_scanner', %(tier)s], %(blob)s::jsonb, true),
+  service_count    = GREATEST(public.asset_surface.service_count, EXCLUDED.service_count),
+  last_seen        = GREATEST(public.asset_surface.last_seen, EXCLUDED.last_seen),
+  first_discovered = COALESCE(public.asset_surface.first_discovered, EXCLUDED.first_discovered),
+  updated_at       = now(),
+  updated_by       = EXCLUDED.updated_by;
+"""
+
+# Baseline read: THIS producer/tier's own prior blob only (never cross-producer, never cross-tier).
+SCANNER_SURFACE_BASELINE_SQL = (
+    "SELECT surface_data->'_scanner'->%s AS prior "
+    "FROM public.asset_surface WHERE asset_id = %s"
+)
+
+
+def write_scanner_surface(conn, ctx: HeavyScanContext, tier: str, coverage: str,
+                          source_tag: str, Json) -> None:
+    """226: persist the port surface THIS heavy scan observed + emit port events, isolated to
+    this producer/tier so the two-writer timeline never corrupts. Caller wraps this in a
+    savepoint + try/except so a surface error can NEVER roll back the scan close-out."""
+    # Fail-closed (4.7 Q4): a failed naabu observed NOTHING. Not a value-preserving write —
+    # a TRUE no-op. Writing would stamp updated_by/updated_at as a scanner observation AND
+    # create a 0-port baseline the next real scan would diff into spurious port_opened.
+    if not ctx.naabu_ok:
+        log(f"surface: SKIP _scanner.{tier} — naabu did not succeed; no observation, "
+            f"no baseline, no service_count touch for {ctx.asset_id}")
+        return
+
+    # naabu gives list[dict] {host, ip, port, protocol} (heavy) vs set[int] (light).
+    ports = [p["port"] for p in (ctx.open_ports or []) if isinstance(p.get("port"), int)]
+    # 4.7 Q2 — fingerprintx service names enrich the blob's `service` field. Keyed
+    # {(port, proto): service}; collapse to {port: {...}} for the shared builder.
+    detail = {port: {"service": svc, "tls": False}
+              for (port, _proto), svc in (ctx.fpx_services or {}).items()}
+    blob = build_scanner_surface_blob(
+        hostname=ctx.hostname,
+        open_ports=ports,
+        naabu_ok=True,                 # gated above; never write a naabu_ok=False blob
+        coverage=coverage,
+        source_tag=source_tag,
+        port_detail=detail,
+    )
+    with conn.cursor() as cur:
+        # per-tier baseline — THIS tier's own prior blob; None (never written) →
+        # compute_events emits asset_first_seen and NO port_closed (the fleet-wide guard).
+        cur.execute(SCANNER_SURFACE_BASELINE_SQL, (tier, ctx.asset_id))
+        row = cur.fetchone()
+        prior = (row["prior"] if row else None)
+        events = compute_events(ctx.asset_id, prior, blob, source_tag, json_wrap=Json)
+        if events:
+            cur.executemany(EVENT_INSERT_SQL, events)
+        cur.execute(SCANNER_SURFACE_UPSERT, {
+            "asset_id":   ctx.asset_id,
+            "tier":       tier,
+            "blob":       Json(blob),
+            "svc_count":  len(ports),
+            "updated_by": source_tag,
+        })
+    log(f"surface: wrote _scanner.{tier} ({len(ports)} port(s), coverage={coverage}, "
+        f"{len(detail)} service name(s), {len(events)} event(s)) for {ctx.asset_id}")
+
+
 def close_out_heavy(conn, ctx: HeavyScanContext, inserted: int, updated: int, Json) -> None:
     """Mark scan_run + scan_queue complete. Mirrors run_medium.close_out
     but does NOT call delta_close_for_scan_run — heavy emits findings
@@ -2865,6 +2997,19 @@ def close_out_heavy(conn, ctx: HeavyScanContext, inserted: int, updated: int, Js
         }
         cur.execute(CLOSE_SCAN_RUN_SQL, params)
         cur.execute(CLOSE_SCAN_QUEUE_SQL, params)
+
+        # 226 — heavy-tier ASM surface write-back (225 Option B). SAVEPOINT-isolated +
+        # best-effort: a surface-write error must NEVER roll back the scan close-out above.
+        # conn.transaction() nested in the caller's txn = a savepoint; on error it rolls
+        # back only the surface writes. coverage='full_ports' NOT 'full' (4.7 Q2): heavy is
+        # the fullest PORT surface in the fleet but probes no web tech (no httpx -td), so a
+        # blanket 'full' would let a consumer read it as asset-surface-complete. Mark the
+        # axis actually covered — same honest-coverage discipline as PARTIAL_OK.
+        try:
+            with conn.transaction():
+                write_scanner_surface(conn, ctx, "heavy", "full_ports", "scanner_heavy", Json)
+        except Exception as e:
+            log(f"surface write-back failed (non-fatal): {e!r}")
 
 
 def degraded_out_heavy(conn, ctx: HeavyScanContext, error: str,
@@ -3197,6 +3342,11 @@ def run(descriptor_path: str, dsn: str) -> int:
         # in BOTH or NEITHER). Additive: a net-depth failure never fails the tier
         # (testssl is the reachability proof).
         naabu_ok, open_ports = run_naabu_phase(ctx, work_dir)
+        # 226 — carry net-depth results to close_out_heavy's surface write (they're locals
+        # here; close_out_heavy never sees run()'s frame). Stash BOTH, and stash naabu_ok
+        # verbatim: it is the fail-closed gate that decides whether we write a surface at all.
+        ctx.naabu_ok = bool(naabu_ok)
+        ctx.open_ports = list(open_ports or [])
         fpx_ok = run_fingerprintx_phase(ctx, work_dir, open_ports) if naabu_ok else False
         if naabu_ok and fpx_ok:
             ctx.tools_run.append("naabu")

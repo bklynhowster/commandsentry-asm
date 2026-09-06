@@ -122,6 +122,23 @@ def test_naabu_failed_suppresses_close():
     assert not any(e["event_type"] == "port_closed" for e in _events(cur)), "fail-closed on naabu failure"
 
 
+# ── 226 / 4.7 Q4 — a failed naabu is a TRUE no-op, not a value-preserving write ──────────────────
+def test_naabu_failed_is_a_true_noop():
+    """Shipped 225 wrote the blob + service_count even when naabu FAILED. GREATEST(existing,0) made
+    the value harmless, but it still (a) stamped updated_by/updated_at as a scanner observation and
+    (b) created a 0-port BASELINE that the next real scan diffs into spurious port_opened. 4.7 Q4:
+    absence of coverage is not an observation — skip the whole write."""
+    cur = _run({80, 443}, prior=None, naabu_ok=False)
+    assert _surface_upserts(cur) == [], "naabu-fail must not touch asset_surface AT ALL"
+    assert _events(cur) == [], "naabu-fail must emit no surface events"
+
+
+def test_naabu_failed_does_not_block_scan_closeout():
+    cur = _run({80}, prior=None, naabu_ok=False)
+    assert any("scan_run" in sql.lower() for sql, _ in cur.executed), \
+        "close_out must still close the scan_run when the surface write is skipped"
+
+
 # ── SQL type-cast pin (caught LIVE 2026-09-05) ───────────────────────────────────────────────────
 def test_upsert_casts_blob_to_jsonb():
     # psycopg's Json adapts a dict to type `json`, but jsonb_set() has no `json` overload — so

@@ -2805,6 +2805,15 @@ def write_scanner_surface(conn, ctx: ScanContext, tier: str, coverage: str,
     producer/tier so the two-writer timeline never corrupts (4.7 Q6). Caller wraps this in a
     savepoint + try/except so a surface error can NEVER roll back the scan close-out."""
     naabu_ok = (ctx.tool_status.get("naabu") or {}).get("ok") is True
+    # 226 / 4.7 Q4 — a FAILED naabu observed NOTHING, so this must be a TRUE no-op, not a
+    # value-preserving write. Writing anyway would (a) stamp updated_by/updated_at as though the
+    # scanner had observed this surface, and (b) create a per-tier BASELINE of 0 ports that the
+    # NEXT real scan diffs against — emitting spurious port_opened for ports that never changed.
+    # Absence of coverage is not an observation (fail-closed: verdict vs transport). Skip it all.
+    if not naabu_ok:
+        log(f"surface: SKIP _scanner.{tier} — naabu did not succeed; no observation, "
+            f"no baseline, no service_count touch for {ctx.asset_id}")
+        return
     open_ports = getattr(ctx, "open_ports", None) or []
     blob = build_scanner_surface_blob(
         hostname=ctx.hostname,
