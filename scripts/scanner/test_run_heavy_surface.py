@@ -188,6 +188,27 @@ def test_missing_fingerprintx_degrades_label_not_ports():
     assert params["svc_count"] == 2
 
 
+# ── multi-IP dedupe (caught LIVE 2026-09-06) ─────────────────────────────────────────────
+def test_svc_count_dedupes_ports_seen_on_multiple_ips():
+    """naabu emits one row per port PER IP. A 2-IP host (Pressable) returns each port twice.
+    build_scanner_surface_blob dedupes via a set, but svc_count used len() of the RAW list, so
+    service_count landed at 2x the blob's port count — and GREATEST no-downgrade makes that
+    inflation STICKY. service_count MUST equal the number of unique ports in the blob."""
+    dupes = [
+        {"host": "h", "ip": "1.1.1.1", "port": 22,  "protocol": "tcp"},
+        {"host": "h", "ip": "2.2.2.2", "port": 22,  "protocol": "tcp"},
+        {"host": "h", "ip": "1.1.1.1", "port": 443, "protocol": "tcp"},
+        {"host": "h", "ip": "2.2.2.2", "port": 443, "protocol": "tcp"},
+    ]
+    cur = _run(dupes, prior=None)
+    _sql, params = _surface_upserts(cur)[0]
+    blob_ports = params["blob"]["subdomains"][0]["services"]
+    assert len(blob_ports) == 2, f"blob must hold 2 unique ports, got {len(blob_ports)}"
+    assert params["svc_count"] == 2, (
+        f"service_count must equal UNIQUE port count (2), got {params['svc_count']} "
+        "— raw-list len() double-counts multi-IP hosts and GREATEST makes it permanent")
+
+
 # ── drift + SQL type-cast pins ──────────────────────────────────────────────────────────
 def test_upsert_identical_to_light():
     """The two tiers write the SAME row shape through the SAME SQL. If someone fixes a cast

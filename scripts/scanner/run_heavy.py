@@ -2915,7 +2915,13 @@ def write_scanner_surface(conn, ctx: HeavyScanContext, tier: str, coverage: str,
         return
 
     # naabu gives list[dict] {host, ip, port, protocol} (heavy) vs set[int] (light).
-    ports = [p["port"] for p in (ctx.open_ports or []) if isinstance(p.get("port"), int)]
+    # DEDUPE (caught live 2026-09-06): naabu emits one row per port PER IP, so a multi-IP
+    # host (e.g. Pressable's 2 IPs) yields the same port twice. build_scanner_surface_blob
+    # dedupes internally via a set, but svc_count was len() of the RAW list — so
+    # service_count came out 2x the blob's port count (ftp.sciimage.com 4 ports -> 8,
+    # ftp.unimacgraphics.com 3 -> 6). That inflation is STICKY because service_count is
+    # GREATEST no-downgrade. Count unique ports so the column matches the blob.
+    ports = sorted({p["port"] for p in (ctx.open_ports or []) if isinstance(p.get("port"), int)})
     # 4.7 Q2 — fingerprintx service names enrich the blob's `service` field. Keyed
     # {(port, proto): service}; collapse to {port: {...}} for the shared builder.
     detail = {port: {"service": svc, "tls": False}
