@@ -31,6 +31,10 @@ on:
         description: 'Max assets to enqueue this run (0 = whole fleet). Ramp up from a small batch.'
         type: string
         default: '25'
+      exclude_suffixes:
+        description: 'Comma-separated apexes/hostnames to EXCLUDE (an entry also excludes its subdomains). Command FortiGate set: commandcommcentral.com,sciimage.com'
+        type: string
+        default: ''
       dry_run:
         description: 'true = count only, write nothing. Flip to false to actually enqueue.'
         type: boolean
@@ -49,6 +53,7 @@ jobs:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
           INTENSITY: ${{ github.event.inputs.intensity }}
           BATCH_LIMIT: ${{ github.event.inputs.batch_limit }}
+          EXCLUDE_SUFFIXES: ${{ github.event.inputs.exclude_suffixes }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
           set -e
@@ -73,6 +78,32 @@ jobs:
 
           LIMIT_SQL=""
           if [ "${BATCH_LIMIT:-0}" != "0" ]; then LIMIT_SQL="limit ${BATCH_LIMIT}"; fi
+
+          # ── exclude_suffixes (2026-09-06) ───────────────────────────────────────
+          # Skip named apexes/hostnames and everything under them. Built for the
+          # FortiGate-fronted set (commandcommcentral.com, sciimage.com), which trips
+          # WAF bans and gets ~no template coverage anyway -- see FORTIGATE_APEXES /
+          # FORTIGATE_HOSTNAMES in run_medium.py.
+          #
+          # Charset-validated before it reaches SQL: letters, digits, dot, hyphen and
+          # comma ONLY. That bars quotes and semicolons, so a dispatch input cannot
+          # inject. Emits single-quoted SQL literals only -- NEVER a double quote,
+          # which would close the CTE bash string (see the warning above it).
+          EXCL_SQL=""
+          if [ -n "${EXCLUDE_SUFFIXES:-}" ]; then
+            case "${EXCLUDE_SUFFIXES}" in
+              *[!a-zA-Z0-9.,-]*)
+                echo "::error::exclude_suffixes may contain only letters, digits, dot, hyphen and comma (got: ${EXCLUDE_SUFFIXES})."
+                exit 1 ;;
+            esac
+            _OLDIFS=$IFS; IFS=','
+            for _s in ${EXCLUDE_SUFFIXES}; do
+              [ -z "${_s}" ] && continue
+              EXCL_SQL="${EXCL_SQL} and a.asset_id <> '${_s}' and a.asset_id not like '%.${_s}'"
+            done
+            IFS=$_OLDIFS
+            echo "::notice::Excluding ${EXCLUDE_SUFFIXES} (and all subdomains)."
+          fi
           # eligible = owned + confirmed-live + not already queued/running (dup guard).
           #
           # ORDER BY STALENESS, not asset_id (2026-08-26). The dup guard only
@@ -107,7 +138,7 @@ jobs:
           CTE="with eligible as (
                  select a.asset_id from public.assets a
                   where a.discovery_status = 'confirmed_live'
-                    and a.ownership = 'owned'
+                    and a.ownership = 'owned'${EXCL_SQL}
                     -- 4.7 ㊲ (2026-09-02) — AGE-BOUND the 'running' arm.
                     -- An unbounded 'running' check treats a row abandoned by a
                     -- dead runner as an active scan FOREVER, so that asset is
