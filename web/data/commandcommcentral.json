@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-09-06T10:56:35Z_498b7582",
-    "started_at": "2026-09-06T10:56:35Z",
-    "completed_at": "2026-09-06T11:03:47Z",
-    "duration_seconds": 432,
+    "id": "scan_2026-09-06T15:33:48Z_f63b2a67",
+    "started_at": "2026-09-06T15:33:48Z",
+    "completed_at": "2026-09-06T15:40:47Z",
+    "duration_seconds": 419,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -45,8 +45,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-09-06T11:03:47Z",
-      "last_seen": "2026-09-06T11:03:47Z",
+      "first_discovered": "2026-09-06T15:40:47Z",
+      "last_seen": "2026-09-06T15:40:47Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -167,8 +167,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-06T11:03:47Z",
-      "last_seen": "2026-09-06T11:03:47Z",
+      "first_discovered": "2026-09-06T15:40:47Z",
+      "last_seen": "2026-09-06T15:40:47Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -277,8 +277,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-06T11:03:48Z",
-      "last_seen": "2026-09-06T11:03:48Z",
+      "first_discovered": "2026-09-06T15:40:47Z",
+      "last_seen": "2026-09-06T15:40:47Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -377,8 +377,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-06T11:03:48Z",
-      "last_seen": "2026-09-06T11:03:48Z",
+      "first_discovered": "2026-09-06T15:40:47Z",
+      "last_seen": "2026-09-06T15:40:47Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -487,8 +487,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-06T11:03:48Z",
-      "last_seen": "2026-09-06T11:03:48Z",
+      "first_discovered": "2026-09-06T15:40:48Z",
+      "last_seen": "2026-09-06T15:40:48Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -547,8 +547,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-06T11:03:48Z",
-      "last_seen": "2026-09-06T11:03:48Z",
+      "first_discovered": "2026-09-06T15:40:48Z",
+      "last_seen": "2026-09-06T15:40:48Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -605,8 +605,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-06T11:03:48Z",
-      "last_seen": "2026-09-06T11:03:48Z",
+      "first_discovered": "2026-09-06T15:40:48Z",
+      "last_seen": "2026-09-06T15:40:48Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -725,8 +725,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-06T11:03:48Z",
-      "last_seen": "2026-09-06T11:03:48Z",
+      "first_discovered": "2026-09-06T15:40:48Z",
+      "last_seen": "2026-09-06T15:40:48Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -835,8 +835,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-06T11:03:48Z",
-      "last_seen": "2026-09-06T11:03:48Z",
+      "first_discovered": "2026-09-06T15:40:48Z",
+      "last_seen": "2026-09-06T15:40:48Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -951,9 +951,12 @@
       }
     }
   ],
-  "phantom_subdomains": [],
+  "phantom_subdomains": [
+    "intranet2.commandcommcentral.com",
+    "old.commandcommcentral.com"
+  ],
   "deltas": {
-    "since_scan": "scan_2026-09-06T04:26:09Z_f6e1e676",
+    "since_scan": "scan_2026-09-06T10:56:35Z_498b7582",
     "added": {
       "subdomains": [],
       "services": [],
@@ -971,75 +974,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-08-05T14:40:08Z_92a8330a",
-      "started_at": "2026-08-05T14:40:08Z",
-      "completed_at": "2026-08-05T14:47:59Z",
-      "subdomain_count": 9,
-      "live_subdomain_count": 9,
-      "host_count": 8,
-      "service_count": 14,
-      "subdomain_names": [
-        "api.commandcommcentral.com",
-        "commandcommcentral.com",
-        "edelivery.commandcommcentral.com",
-        "geisinger.commandcommcentral.com",
-        "ns01.commandcommcentral.com",
-        "ns02.commandcommcentral.com",
-        "test.commandcommcentral.com",
-        "testapi.commandcommcentral.com",
-        "www.commandcommcentral.com"
-      ],
-      "ports_by_sub": {
-        "commandcommcentral.com": {
-          "24.38.70.5": [
-            80,
-            443
-          ]
-        },
-        "api.commandcommcentral.com": {
-          "24.157.51.85": [
-            80,
-            443
-          ]
-        },
-        "edelivery.commandcommcentral.com": {
-          "24.157.51.88": [
-            80,
-            443
-          ]
-        },
-        "geisinger.commandcommcentral.com": {
-          "24.157.51.82": [
-            80,
-            443
-          ]
-        },
-        "ns01.commandcommcentral.com": {},
-        "ns02.commandcommcentral.com": {},
-        "test.commandcommcentral.com": {
-          "24.38.70.8": [
-            80,
-            443
-          ]
-        },
-        "testapi.commandcommcentral.com": {
-          "24.38.70.14": [
-            80,
-            443
-          ]
-        },
-        "www.commandcommcentral.com": {
-          "24.38.70.5": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "IIS": "10.0"
-      }
-    },
     {
       "scan_id": "scan_2026-08-05T20:00:02Z_5cda8a24",
       "started_at": "2026-08-05T20:00:02Z",
@@ -9180,6 +9114,75 @@
       "scan_id": "scan_2026-09-06T10:56:35Z_498b7582",
       "started_at": "2026-09-06T10:56:35Z",
       "completed_at": "2026-09-06T11:03:47Z",
+      "subdomain_count": 9,
+      "live_subdomain_count": 9,
+      "host_count": 8,
+      "service_count": 14,
+      "subdomain_names": [
+        "api.commandcommcentral.com",
+        "commandcommcentral.com",
+        "edelivery.commandcommcentral.com",
+        "geisinger.commandcommcentral.com",
+        "ns01.commandcommcentral.com",
+        "ns02.commandcommcentral.com",
+        "test.commandcommcentral.com",
+        "testapi.commandcommcentral.com",
+        "www.commandcommcentral.com"
+      ],
+      "ports_by_sub": {
+        "commandcommcentral.com": {
+          "24.38.70.5": [
+            80,
+            443
+          ]
+        },
+        "api.commandcommcentral.com": {
+          "24.157.51.85": [
+            80,
+            443
+          ]
+        },
+        "edelivery.commandcommcentral.com": {
+          "24.157.51.88": [
+            80,
+            443
+          ]
+        },
+        "geisinger.commandcommcentral.com": {
+          "24.157.51.82": [
+            80,
+            443
+          ]
+        },
+        "ns01.commandcommcentral.com": {},
+        "ns02.commandcommcentral.com": {},
+        "test.commandcommcentral.com": {
+          "24.38.70.8": [
+            80,
+            443
+          ]
+        },
+        "testapi.commandcommcentral.com": {
+          "24.38.70.14": [
+            80,
+            443
+          ]
+        },
+        "www.commandcommcentral.com": {
+          "24.38.70.5": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "IIS": "10.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-09-06T15:33:48Z_f63b2a67",
+      "started_at": "2026-09-06T15:33:48Z",
+      "completed_at": "2026-09-06T15:40:47Z",
       "subdomain_count": 9,
       "live_subdomain_count": 9,
       "host_count": 8,
