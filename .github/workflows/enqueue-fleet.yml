@@ -98,6 +98,12 @@ jobs:
           # the same defect this fix exists to remove. 'failed' is deliberately
           # EXCLUDED: a failed run got nothing, so it sorts nulls-first and is
           # retried promptly, which is what we want.
+          # ⚠ ZERO double-quote characters allowed anywhere inside this CTE string.
+          # It is a double-quoted bash assignment: one inner double quote closes it
+          # early, bash parses the next paren as a subshell, and the step dies with
+          # "syntax error near unexpected token (" before it ever reaches the DB.
+          # That shipped 2026-09-02 and broke this workflow outright; found 2026-09-06
+          # (last good run 08-27). Verify with: bash -n on the extracted run block.
           CTE="with eligible as (
                  select a.asset_id from public.assets a
                   where a.discovery_status = 'confirmed_live'
@@ -107,7 +113,7 @@ jobs:
                     -- dead runner as an active scan FOREVER, so that asset is
                     -- silently excluded from every sweep. Found live:
                     -- cooked.prodexlabs.com wedged 53.6 days. poll_queue.py
-                    -- promised a "liveness sweeper (separate cron, M11)" that
+                    -- promised a liveness sweeper (separate cron, M11) that
                     -- was never built.
                     -- Fixed at the READ layer, not with a scheduled writer:
                     -- a wrong threshold here costs a redundant enqueue (the VPN
