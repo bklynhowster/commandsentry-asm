@@ -2625,11 +2625,48 @@ CLOSER_CHUNKS: list[tuple[str, str | None, str]] = [
 SAFE_ONLY_CHUNK_COUNT = 5
 
 
-def chunk_label(sev: str, tag: str | None) -> str:
+def nuclei_chunk_label(sev: str, tag: str | None) -> str:
     """Canonical name for a chunk, matching the tool_status key convention
     (`nuclei[critical,high]`, `nuclei[medium:cve]`) so a label recorded here
-    is greppable against the phase entry it corresponds to."""
+    is greppable against the phase entry it corresponds to.
+
+    NOT named `chunk_label` — run_nuclei_chunk() already binds that name as a
+    local, which would shadow this function inside the one place most likely
+    to want it.
+    """
     return f"{sev}:{tag}" if tag else sev
+
+
+def apply_chunk_plan_meta(ctx) -> None:
+    """Fold ctx.chunk_plan_meta into EVERY nuclei tool_status entry.
+
+    🔴 WHY THIS EXISTS (2026-09-07). phase_contract._merge_phase_diagnostics
+    does this too — but only for phases that run through `run_phase`. Medium's
+    nuclei chunks are credited directly inside the chunk loop, so the merge
+    never reached them. Measured over 90 days at the time of writing:
+
+        heavy   226 runs,  10 carrying planned_chunks
+        medium   54 runs,   0 carrying planned_chunks
+
+    ⑭′.4 — the mechanism built specifically to make a SHRUNKEN NUCLEI PLAN
+    visible — had therefore never once fired on the tier that actually shrinks
+    plans. The field was written to ctx and silently dropped on the floor.
+
+    Called from close_out AND degraded_out, i.e. from the two places every
+    outcome path passes through on its way to serialising tool_status, rather
+    than from the chunk loop. A merge that lives on the happy path is a merge
+    that is absent from exactly the runs worth explaining.
+
+    Keys are additive and disjoint from the verdict keys (ok / evidence /
+    percent / reason), so this cannot alter a verdict — same contract as
+    _merge_phase_diagnostics, deliberately.
+    """
+    meta = getattr(ctx, "chunk_plan_meta", None)
+    if not meta:
+        return
+    for name, entry in (getattr(ctx, "tool_status", None) or {}).items():
+        if name.startswith("nuclei") and isinstance(entry, dict):
+            entry.update(meta)
 
 
 def unconditional_standard_labels() -> list[str]:
@@ -2643,8 +2680,8 @@ def unconditional_standard_labels() -> list[str]:
 
     BASE + CLOSER is the honest floor: 4 chunks, every standard asset, always.
     """
-    return ([chunk_label(s, t) for s, t, _ in BASE_CHUNKS]
-            + [chunk_label(s, t) for s, t, _ in CLOSER_CHUNKS])
+    return ([nuclei_chunk_label(s, t) for s, t, _ in BASE_CHUNKS]
+            + [nuclei_chunk_label(s, t) for s, t, _ in CLOSER_CHUNKS])
 
 
 def omitted_unconditional_labels(chunks: list[tuple[str, str | None, str]]) -> list[str]:
@@ -2656,7 +2693,7 @@ def omitted_unconditional_labels(chunks: list[tuple[str, str | None, str]]) -> l
     deficit is compositional, not cardinal. Count is the wrong instrument here;
     naming the missing chunks is the right one.
     """
-    present = {chunk_label(s, t) for s, t, _ in chunks}
+    present = {nuclei_chunk_label(s, t) for s, t, _ in chunks}
     return [lbl for lbl in unconditional_standard_labels() if lbl not in present]
 
 
@@ -4583,6 +4620,12 @@ def write_scan_metadata_artifact(conn, ctx: ScanContext, Json,
 
 
 def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None:
+    # 2026-09-07 — fold the chunk-plan diagnostics into the nuclei entries
+    # BEFORE tool_status is serialised. Medium's chunks are credited inside the
+    # chunk loop, not via run_phase, so phase_contract's merge never saw them
+    # and planned_chunks landed on 0 of 54 medium runs in 90 days.
+    apply_chunk_plan_meta(ctx)
+
     # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug B2 (ruling ⑦): set-equality
     # invariant. Every tool in tools_run must have a tool_status entry.
     # This raises DegradedRunError("tool_status_invariant", ...) if it
@@ -4817,6 +4860,8 @@ def reconcile_tool_status_invariant(ctx: ScanContext) -> None:
 def degraded_out(conn, ctx: ScanContext, error: str,
                  inserted: int, updated: int, Json) -> None:
     """Stamp scan_run.status='degraded', scan_queue.status='degraded',
+    (chunk-plan diagnostics are folded in first — a degraded run is
+    precisely the one whose plan composition is worth explaining)
     AND flip findings.scan_quality='degraded' for any findings already
     written by this scan_run.
 
@@ -4838,6 +4883,8 @@ def degraded_out(conn, ctx: ScanContext, error: str,
     of which abort path fired. Cheap safety net behind Fix A. See
     reconcile_tool_status_invariant docstring for the full rationale.
     """
+    apply_chunk_plan_meta(ctx)
+
     # Pre-persist reconcile — forces the invariant on ctx BEFORE the
     # row is persisted. Reconciles instead of raising (we're already
     # degrading) so the abort path can't leave inconsistent state.

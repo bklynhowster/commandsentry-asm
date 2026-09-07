@@ -470,6 +470,91 @@ def test_omission_list_is_recorded_UNCONDITIONALLY():
         f"indistinguishable. Line: {line!r}")
 
 
+class _NullCur:
+    rowcount = 0
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def execute(self, *a, **k): pass
+    def fetchone(self): return None
+    def fetchall(self): return []
+
+
+class _NullConn:
+    def cursor(self): return _NullCur()
+    def commit(self): pass
+
+
+def _ctx_with_nuclei_entries(**kw):
+    ctx = _ctx(**kw)
+    # close_out/degraded_out touch these on their way to the (null) cursor.
+    for name, val in (
+        ("scan_run_id", "sr-test"), ("queue_id", "q-test"),
+        ("asset_id", "example.test"), ("hostname", "example.test"),
+        ("egress_ip_initial", None), ("vpn_config_used", None),
+        ("rotation_count", 0), ("egress_ips_seen", []), ("ban_events", []),
+        ("healthcheck_failures", []), ("rotation_storm", False),
+    ):
+        setattr(ctx, name, val)
+    ctx.tools_run = ["wafw00f", "nuclei[medium:tech]"]
+    ctx.tool_status = {"wafw00f": {"ok": True}, "nuclei[medium:tech]": {"ok": True}}
+    ctx.chunk_plan_meta = {
+        "planned_chunks": 9,
+        "actual_chunks": 5,
+        "omitted_unconditional": ["critical,high", "medium:cve",
+                                  "medium:exposure,config"],
+        "plan_routing": "safe_only",
+        "plan_routing_basis": "hardcoded_presumption",
+        "plan_delta_reason": "routed_safe_only",
+    }
+    return ctx
+
+
+def test_chunk_plan_meta_actually_REACHES_the_nuclei_entry():
+    """🔴 THE BUG THIS FILE MISSED THE FIRST TIME.
+
+    The 2026-09-07 self-certification fix computed omitted_unconditional
+    correctly and wrote it to ctx.chunk_plan_meta — and it never appeared in
+    the database, because phase_contract._merge_phase_diagnostics only folds
+    that meta into phases that run through `run_phase`, and MEDIUM credits its
+    nuclei chunks directly inside the chunk loop.
+
+    Measured after shipping, over 90 days:
+        heavy   226 runs,  10 carrying planned_chunks
+        medium   54 runs,   0 carrying planned_chunks
+
+    So ⑭′.4 — built specifically to expose a shrunken nuclei plan — had never
+    fired on the only tier where the safe-only plan exists. Every unit test
+    passed throughout, because they all asserted on the PLANNER and never on
+    what survives to tool_status.
+
+    Assert on the shipped close-out, not a mirror of it.
+    """
+    ctx = _ctx_with_nuclei_entries(waf_kind="fortiweb", waf_detected=True)
+    M.close_out(_NullConn(), ctx, inserted=0, updated=0, Json=lambda x: x)
+
+    entry = ctx.tool_status["nuclei[medium:tech]"]
+    assert entry.get("omitted_unconditional") == [
+        "critical,high", "medium:cve", "medium:exposure,config"], (
+        f"chunk_plan_meta did not reach the nuclei entry: {entry}")
+    assert entry.get("plan_routing_basis") == "hardcoded_presumption", entry
+    assert entry.get("ok") is True, "the merge must not disturb the verdict"
+    assert "omitted_unconditional" not in ctx.tool_status["wafw00f"], (
+        "meta is nuclei-scoped — stamping it on wafw00f/nikto/ffuf makes a "
+        "meaningless field look meaningful (the run #2649 lesson)")
+
+
+def test_chunk_plan_meta_reaches_the_entry_on_the_DEGRADED_path_too():
+    """A degraded run is the one whose plan composition most needs explaining.
+    A merge that only happens on the clean path is absent from exactly the
+    runs worth reading."""
+    ctx = _ctx_with_nuclei_entries(waf_kind="fortiweb", waf_detected=True)
+    M.degraded_out(_NullConn(), ctx, "egress_unstable",
+                   inserted=0, updated=0, Json=lambda x: x)
+    entry = ctx.tool_status["nuclei[medium:tech]"]
+    assert entry.get("omitted_unconditional"), (
+        f"degraded path dropped the chunk-plan meta: {entry}")
+
+
 def test_unconditional_denominator_excludes_stack_chunks():
     """4.7 guard 1: the denominator must be `should-have-been`, not
     `impossible`. No host is WordPress AND Drupal AND Joomla AND IIS AND PHP,
