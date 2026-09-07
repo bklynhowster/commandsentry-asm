@@ -1,0 +1,99 @@
+name: Toolchain inventory
+
+# Capture the EXACT versions and flag sets of every scanning tool in the
+# running scanner image.
+#
+# WHY THIS EXISTS (2026-09-07). docker/Dockerfile installs all ten scanning
+# tools with `@latest`, the image is published as `:latest`, and nuclei
+# templates are refreshed with `-update-templates` at build time. Three
+# independent floating layers. Consequences:
+#
+#   * A finding can disappear because a nuclei template was renamed or
+#     dropped upstream, and the finding lifecycle records that as
+#     REMEDIATION. That is a false-remediation path no gate can catch,
+#     because the scan itself ran perfectly.
+#   * Every coverage measurement in specs 227-231 assumes stable tool
+#     behaviour. `wall_clock_cut_400s at 78%` can move with a nuclei
+#     release and nothing in our code changes.
+#   * Probe flags can change under us, which is what blocked the
+#     curl -> Go-stack migration (spec 231): no way to know which httpx
+#     flags the installed build actually supports.
+#
+# This workflow is the ground truth we pin FROM, and the thing to re-run
+# whenever a deliberate bump happens. Read-only; it changes nothing.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/bklynhowster/commandsentry-scanner:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Tool versions
+        # Never let one tool's exit code kill the inventory — several PD
+        # tools print version to stderr and exit non-zero. We want the
+        # whole picture, including which ones misbehave.
+        run: |
+          set +e
+          echo "=============================================="
+          echo " TOOL VERSIONS  (pin the Dockerfile to these)"
+          echo "=============================================="
+          for t in subfinder dnsx httpx naabu nuclei katana fingerprintx ffuf gau; do
+            printf '\n----- %s -----\n' "$t"
+            "$t" -version 2>&1 | head -5
+          done
+          printf '\n----- wireguard-go -----\n'; wireguard-go --version 2>&1 | head -3
+          printf '\n----- wg -----\n';           wg --version 2>&1 | head -3
+          printf '\n----- nikto -----\n';        nikto -Version 2>&1 | head -8
+          printf '\n----- wafw00f -----\n';      wafw00f --version 2>&1 | head -3
+          printf '\n----- testssl -----\n';      testssl.sh --version 2>&1 | head -5
+          exit 0
+
+      - name: Nuclei template version
+        # Templates float SEPARATELY from the nuclei binary: the Dockerfile
+        # runs `nuclei -update-templates` at build time. Pinning the binary
+        # alone does not pin what it scans FOR.
+        run: |
+          set +e
+          echo "=== nuclei -templates-version ==="
+          nuclei -templates-version 2>&1 | head -10
+          echo
+          echo "=== template dir + count ==="
+          for d in /root/nuclei-templates "$HOME/nuclei-templates" /nuclei-templates; do
+            [ -d "$d" ] && { echo "$d"; find "$d" -name '*.yaml' | wc -l; break; }
+          done
+          exit 0
+
+      - name: httpx flag set
+        # THE SPEC-231 BLOCKER. The curl -> Go-stack migration needs httpx to
+        # return RESPONSE HEADERS (check_headers needs the security-header
+        # set; check_methods needs `Allow` from OPTIONS). No existing httpx
+        # call in this repo retrieves headers, so there is no in-repo
+        # precedent for the flag. Capture the real one rather than guess —
+        # a guessed flag ships a probe that fails on the runner.
+        run: |
+          set +e
+          echo "=== httpx -h (FULL) ==="
+          httpx -h 2>&1
+          echo
+          echo "=== grep: header / method / response-body flags ==="
+          httpx -h 2>&1 | grep -iE "header|method|response|body|store|json" || true
+          exit 0
+
+      - name: Image provenance
+        run: |
+          set +e
+          echo "=== image digest / labels ==="
+          cat /etc/os-release 2>/dev/null | head -3
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          exit 0
