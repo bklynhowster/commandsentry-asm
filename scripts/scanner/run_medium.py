@@ -86,6 +86,8 @@ from tech_detect import (  # noqa: E402  (4.7 ⑭′ — shared with run_light)
 )
 from degradation import (
     COVERAGE_COMPLETE,
+    classify_cut_reason,
+    phase_cut_reason,
     COVERAGE_PARTIAL_MINIMAL,
     COVERAGE_PARTIAL_SIGNIFICANT,
     COVERAGE_UNKNOWN,
@@ -2669,6 +2671,37 @@ def apply_chunk_plan_meta(ctx) -> None:
             entry.update(meta)
 
 
+def apply_cut_class(ctx) -> None:
+    """Stamp `cut_class` on every phase that did not fully complete (4.7 ㉚).
+
+    The bottleneck class, not the raw reason: `time` / `filter` / `transport` /
+    `policy` / `tool`. See degradation.py for the taxonomy and the measured
+    distribution that shaped it.
+
+    WHY A DERIVED FIELD RATHER THAN A NEW ARGUMENT AT ~15 CALL SITES: the
+    reasons are already written correctly and in one vocabulary; what was
+    missing was the grouping. Deriving once, here, means every phase in every
+    tier gets classified — including reasons written by code this function has
+    never heard of — and there is exactly one place to look when a class is
+    wrong. Call sites cannot each get it subtly different.
+
+    Called from the same close_out / degraded_out seam as apply_chunk_plan_meta,
+    for the same reason: those are the two points EVERY outcome path passes
+    through before tool_status is serialised. Putting it in the phase loop is
+    what made ⑭′.4 invisible on medium for months.
+
+    Additive: writes only `cut_class`, never touches a verdict. A phase that
+    completed cleanly gets no key at all — absence means "nothing was cut",
+    which is the honest reading.
+    """
+    for entry in (getattr(ctx, "tool_status", None) or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        cls = classify_cut_reason(phase_cut_reason(entry))
+        if cls is not None:
+            entry["cut_class"] = cls
+
+
 def unconditional_standard_labels() -> list[str]:
     """The chunks EVERY standard target is offered regardless of detected stack.
 
@@ -4625,6 +4658,7 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
     # chunk loop, not via run_phase, so phase_contract's merge never saw them
     # and planned_chunks landed on 0 of 54 medium runs in 90 days.
     apply_chunk_plan_meta(ctx)
+    apply_cut_class(ctx)
 
     # SPEC_SCANNER_DEGRADATION_HARDENING.md Bug B2 (ruling ⑦): set-equality
     # invariant. Every tool in tools_run must have a tool_status entry.
@@ -4884,6 +4918,7 @@ def degraded_out(conn, ctx: ScanContext, error: str,
     reconcile_tool_status_invariant docstring for the full rationale.
     """
     apply_chunk_plan_meta(ctx)
+    apply_cut_class(ctx)
 
     # Pre-persist reconcile — forces the invariant on ctx BEFORE the
     # row is persisted. Reconciles instead of raising (we're already

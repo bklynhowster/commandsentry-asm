@@ -592,6 +592,119 @@ _COVERAGES = (COVERAGE_COMPLETE, COVERAGE_PARTIAL_SIGNIFICANT,
               COVERAGE_PARTIAL_MINIMAL, COVERAGE_UNKNOWN)
 
 
+# ── Cut CLASS — the bottleneck behind a non-completion (4.7 ㉚, 2026-09-07) ──
+#
+# WHY. The critical/high coverage deficit turned out to be two different
+# failures with DISJOINT bottlenecks, carried for months as one number: a
+# ~78% time-cut on non-WAF assets and a ~9% signature-block on WAF-fronted
+# ones. Extra wall clock fixes the first and is irrelevant to the second.
+# A distinction that is not encoded in the data gets re-learned by accident,
+# expensively, every time someone looks. So: name it in the record.
+#
+# ⚠ CORRECTION TO THE ORIGINAL PREMISE, measured 2026-09-07 over 90 days.
+# The ruling assumed time-cut and signature-block were already distinguishable
+# as two values of the same nuclei `reason`. They are not:
+#
+#   * `wall_clock_cut_400s` is the ONLY nuclei cut reason on record — 13
+#     occurrences, 9 assets, 9 of them medium.
+#   * There is NO signature-block reason on nuclei at all. The filter
+#     bottleneck surfaces UPSTREAM as `tech_detect_blocked` on the httpx
+#     phase (23 occurrences), never on nuclei.
+#   * Reason: a WAF-fronted asset is routed to the safe-only plan, which
+#     COMPLETES. You cannot be signature-blocked on templates you were never
+#     offered. Their non-coverage is `routed_safe_only`, not a cut.
+#
+# So the classes below span FOUR mechanisms, not two, and deliberately cover
+# every reason string observed in production rather than the two anticipated.
+#
+# ⚠ TRANSPORT DOMINATES and it is not close: ~1066 occurrences in 90 days
+# (curl_failed 316, homepage_fetch_failed 265, all_probes_failed 240,
+# network_timeout 161, network_unreachable 84), essentially all on LIGHT,
+# versus 13 time-cuts. "We never reached the target" is by far the largest
+# category of non-coverage on this fleet. That was invisible before this
+# field existed, which is the point of it.
+
+CUT_TIME = "time"            # OUR budget ran out. More budget would help.
+CUT_FILTER = "filter"        # a WAF/content filter refused us. Budget is irrelevant.
+CUT_TRANSPORT = "transport"  # never reached the target at all.
+CUT_POLICY = "policy"        # WE chose not to run it. Not a failure.
+CUT_TOOL = "tool"            # the tool itself misbehaved.
+CUT_UNCLASSIFIED = "unclassified"  # reason not recognised — see below.
+
+_CUT_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
+    # (reason prefix, class). Prefix match because several reasons carry a
+    # numeric suffix (`wall_clock_cut_400s`, `nonzero_rc_no_reach_evidence:246`).
+    ("wall_clock_cut",              CUT_TIME),
+    ("wall_timeout",                CUT_TIME),
+    ("tech_detect_blocked",         CUT_FILTER),
+    ("content_signature_blocked",   CUT_FILTER),
+    ("ban",                         CUT_FILTER),
+    ("curl_failed",                 CUT_TRANSPORT),
+    ("homepage_fetch_failed",       CUT_TRANSPORT),
+    ("all_probes_failed",           CUT_TRANSPORT),
+    ("network_timeout",             CUT_TRANSPORT),
+    ("network_unreachable",         CUT_TRANSPORT),
+    ("nonzero_rc_no_reach_evidence", CUT_TRANSPORT),
+    ("egress",                      CUT_TRANSPORT),
+    ("auth_gated",                  CUT_POLICY),
+    ("v1_p4_pending",               CUT_POLICY),
+    ("routed_safe_only",            CUT_POLICY),
+    ("empty_output",                CUT_TOOL),
+    ("naabu_rc",                    CUT_TOOL),
+    ("catchall_calibration_failed", CUT_TOOL),
+    ("no_status_recorded",          CUT_TOOL),
+    ("tool_status_invariant",       CUT_TOOL),
+)
+
+
+def classify_cut_reason(reason: str | None) -> str | None:
+    """Map a raw reason string to its bottleneck class.
+
+    Returns None for a missing reason — a phase that did not report a reason
+    has no cut to classify, and inventing one would be exactly the
+    absent-evidence-becomes-a-verdict failure this codebase keeps gating
+    against (device-class flip, cloud attribution).
+
+    An UNRECOGNISED reason returns CUT_UNCLASSIFIED, never a default class.
+    A wrong class is worse than an admitted gap: it would put an asset in a
+    population it does not belong to, and the whole purpose of this field is
+    to make populations trustworthy. `unclassified` showing up in a group-by
+    is the signal to come add the mapping.
+    """
+    if not reason or not isinstance(reason, str):
+        return None
+    r = reason.strip().lower()
+    if not r:
+        return None
+    for prefix, cls in _CUT_CLASS_PREFIXES:
+        if r.startswith(prefix):
+            return cls
+    return CUT_UNCLASSIFIED
+
+
+def phase_cut_reason(entry: dict) -> str | None:
+    """The reason a phase entry did not fully complete, whichever key holds it.
+
+    Three producers write three different keys — `reason` (PARTIAL_OK),
+    `degraded`, `skipped` — and a reader that knows only one of them sees a
+    third of the picture. Normalising here means the class is computed from
+    the same place regardless of which mechanism fired.
+
+    ⚠ Tests `ok is True`, never `"ok" in entry`: the PARTIAL_OK shape carries
+    `ok: False`, so key-membership reads a cut chunk as clean. That bug has
+    shipped in this repo before.
+    """
+    if not isinstance(entry, dict):
+        return None
+    if entry.get("ok") is True and "degraded" not in entry and "skipped" not in entry:
+        return None
+    for key in ("reason", "degraded", "skipped"):
+        val = entry.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    return None
+
+
 class Degradation:
     """A degradation reason carrying its own disposition. Immutable."""
 

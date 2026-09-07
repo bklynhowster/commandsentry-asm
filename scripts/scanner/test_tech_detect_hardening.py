@@ -543,6 +543,27 @@ def test_chunk_plan_meta_actually_REACHES_the_nuclei_entry():
         "meaningless field look meaningful (the run #2649 lesson)")
 
 
+def test_cut_class_is_stamped_at_close_out_on_every_phase():
+    """㉚ wiring. Same seam, same reasoning as the chunk-plan meta: derived
+    once at close-out so every tier and every reason-producer is covered,
+    including code this function has never heard of."""
+    ctx = _ctx_with_nuclei_entries()
+    ctx.tools_run = ["wafw00f", "httpx[-td]", "nuclei[critical,high]"]
+    ctx.tool_status = {
+        "wafw00f": {"ok": True},                                    # clean
+        "httpx[-td]": {"degraded": "tech_detect_blocked"},          # filter
+        "nuclei[critical,high]": {"ok": False,
+                                  "reason": "wall_clock_cut_400s"},  # time
+    }
+    M.close_out(_NullConn(), ctx, inserted=0, updated=0, Json=lambda x: x)
+
+    assert ctx.tool_status["httpx[-td]"]["cut_class"] == "filter"
+    assert ctx.tool_status["nuclei[critical,high]"]["cut_class"] == "time"
+    assert "cut_class" not in ctx.tool_status["wafw00f"], (
+        "a phase that completed cleanly must carry NO cut_class — absence is "
+        "the honest reading, and a 'none' value would pollute every group-by")
+
+
 def test_chunk_plan_meta_reaches_the_entry_on_the_DEGRADED_path_too():
     """A degraded run is the one whose plan composition most needs explaining.
     A merge that only happens on the clean path is absent from exactly the
