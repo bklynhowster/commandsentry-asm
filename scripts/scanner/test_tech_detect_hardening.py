@@ -33,8 +33,10 @@ Fleet measurement backing the fallback (Command, 30 days to 2026-08-31):
 
 from __future__ import annotations
 
+import inspect
 import json
 import pathlib
+import re
 import sys
 import types
 
@@ -45,6 +47,17 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import tech_detect as T                                        # noqa: E402
 import run_medium as M                                         # noqa: E402
 from run_medium import ScanContext, build_chunk_plan           # noqa: E402
+
+
+def _decomment_source(src: str) -> str:
+    """Strip docstrings and comments before source-pinning.
+
+    A pin that matches its own explanatory comment passes with the defect
+    present — that has shipped in this repo before.
+    """
+    src = re.sub(r'"""[\s\S]*?"""', "", src)
+    src = re.sub(r"'''[\s\S]*?'''", "", src)
+    return "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
 
 
 # The exact row pair from run #2647.
@@ -368,10 +381,107 @@ def test_the_bound_is_derived_from_the_same_tables_the_planner_uses():
             f"{tag} is in STACK_CHUNKS but the planner never emits it")
 
 
-def test_fortigate_bound_matches_its_safe_only_plan():
+def test_fortigate_plan_does_NOT_become_its_own_upper_bound():
+    """🔴 REVERSED 2026-09-07. This test previously asserted
+    `max_possible_chunk_count(ctx) == SAFE_ONLY_CHUNK_COUNT` for a FortiGate
+    target — i.e. it PINNED the self-certification.
+
+    With the bound equal to the plan, planned == actual, ⑭′.4 never fired,
+    all 5 chunks reported ok, and the asset read as fully covered while never
+    having been offered a critical/high template. 172 of 391 Command assets
+    (44%) were certified covered on that basis. A different plan is not a
+    complete plan just because it finished.
+
+    The bound must now be the STANDARD plan — what the asset should have been
+    offered — so the shortfall is visible.
+    """
     ctx = _ctx(waf_kind="fortiweb", waf_detected=True)
-    assert M.max_possible_chunk_count(ctx) == M.SAFE_ONLY_CHUNK_COUNT
-    assert len(build_chunk_plan(ctx)) == M.SAFE_ONLY_CHUNK_COUNT
+    plan = build_chunk_plan(ctx)
+    assert len(plan) == M.SAFE_ONLY_CHUNK_COUNT, "the plan itself is unchanged"
+    assert M.max_possible_chunk_count(ctx) > len(plan), (
+        "a safe-only target must NOT be its own upper bound — that is the "
+        "self-certification that hid zero critical/high coverage on 44% of "
+        "the fleet")
+    assert M.max_possible_chunk_count(ctx) == (
+        len(M.BASE_CHUNKS) + len(M.STACK_CHUNKS) + len(M.CLOSER_CHUNKS))
+
+
+def test_safe_only_omits_critical_high_and_says_so():
+    """The load-bearing one: COUNT cannot detect this deficit.
+
+    The safe-only plan is 5 chunks against 4 unconditional standard ones, so
+    every count comparison reads as healthy. Only naming the missing chunks
+    surfaces that critical/high was never planned.
+    """
+    ctx = _ctx(waf_kind="fortiweb", waf_detected=True)
+    plan = build_chunk_plan(ctx)
+    assert len(plan) > len(M.unconditional_standard_labels()), (
+        "precondition: the safe-only plan has MORE chunks than the "
+        "unconditional standard set — which is exactly why a count test "
+        "cannot catch the omission")
+    omitted = M.omitted_unconditional_labels(plan)
+    assert "critical,high" in omitted, (
+        f"critical/high is absent from the safe-only plan and must be named "
+        f"as omitted; got {omitted}")
+    assert "medium:cve" in omitted, omitted
+    assert "medium:exposure,config" in omitted, omitted
+    # medium:tech IS in the safe-only plan — do not over-report.
+    assert "medium:tech" not in omitted, (
+        f"medium:tech is planned 5x; reporting it omitted would be false: {omitted}")
+
+
+def test_full_plan_reports_an_EMPTY_omission_list_not_a_missing_one():
+    """"Nothing omitted" and "nobody computed omissions" must not look alike.
+    An absent key would let a consumer read a safe-only run as unremarkable."""
+    every_marker = {markers[0] for markers, _t, _l in M.STACK_CHUNKS}
+    ctx = _ctx(tech_stack=every_marker)
+    assert M.omitted_unconditional_labels(build_chunk_plan(ctx)) == []
+
+
+def test_omission_list_is_recorded_UNCONDITIONALLY():
+    """🔴 CAUGHT BY MUTATION, NOT BY THE TEST ABOVE.
+
+    `test_full_plan_reports_an_EMPTY_omission_list_not_a_missing_one` calls the
+    pure helper and asserts it returns []. That passes happily while the SCAN
+    BODY writes the key only when the list is non-empty — a mutation to
+    `if _omitted: ctx.chunk_plan_meta[...] = _omitted` broke nothing.
+
+    That is the pure-function-test-hides-a-wiring-bug shape this repo has been
+    bitten by before: the helper is not the thing that has to be right, the
+    RECORDING is. And the recording lives mid-way through a 200-line scan
+    function, so a source pin is the practical instrument.
+
+    Why it matters: if the key is absent on full plans, a consumer cannot tell
+    "this plan omitted nothing" from "this scanner build predates the field."
+    Absent-means-fine is how a safe-only run reads as unremarkable — the exact
+    failure being fixed, reintroduced one level up.
+    """
+    src = _decomment_source(inspect.getsource(M))
+    lines = [l for l in src.splitlines()
+             if 'chunk_plan_meta["omitted_unconditional"]' in l]
+    assert len(lines) == 1, (
+        f"expected exactly one recording site, found {len(lines)}: {lines}")
+    line = lines[0]
+    indent = len(line) - len(line.lstrip())
+    assert indent == 4, (
+        f"the omission record must sit at function-body level (4 spaces), got "
+        f"{indent}. Deeper indentation means it is nested inside a conditional "
+        f"— i.e. recorded only sometimes, which makes absent and empty "
+        f"indistinguishable. Line: {line!r}")
+
+
+def test_unconditional_denominator_excludes_stack_chunks():
+    """4.7 guard 1: the denominator must be `should-have-been`, not
+    `impossible`. No host is WordPress AND Drupal AND Joomla AND IIS AND PHP,
+    so folding all 5 STACK_CHUNKS into the honest floor would make the
+    shortfall alarmist rather than informative."""
+    labels = M.unconditional_standard_labels()
+    assert len(labels) == len(M.BASE_CHUNKS) + len(M.CLOSER_CHUNKS)
+    stack_tags = {tag for _m, tag, _l in M.STACK_CHUNKS}
+    for lbl in labels:
+        assert lbl.split(":", 1)[-1] not in stack_tags, (
+            f"{lbl} is a stack chunk — it is conditional and must not be in "
+            f"the unconditional denominator")
 
 
 # ── the three defects run #2649 exposed in the ⑭′ ship itself ─────────────

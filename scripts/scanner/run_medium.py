@@ -2625,6 +2625,41 @@ CLOSER_CHUNKS: list[tuple[str, str | None, str]] = [
 SAFE_ONLY_CHUNK_COUNT = 5
 
 
+def chunk_label(sev: str, tag: str | None) -> str:
+    """Canonical name for a chunk, matching the tool_status key convention
+    (`nuclei[critical,high]`, `nuclei[medium:cve]`) so a label recorded here
+    is greppable against the phase entry it corresponds to."""
+    return f"{sev}:{tag}" if tag else sev
+
+
+def unconditional_standard_labels() -> list[str]:
+    """The chunks EVERY standard target is offered regardless of detected stack.
+
+    Deliberately excludes STACK_CHUNKS. Those are mutually exclusive in practice
+    — no host is WordPress AND Drupal AND Joomla AND IIS AND PHP — so counting
+    all 5 into a denominator produces `actual / impossible` rather than
+    `actual / should-have-been`, which is alarmist rather than informative
+    (4.7 guard 1 on the 2026-09-07 self-certification ruling).
+
+    BASE + CLOSER is the honest floor: 4 chunks, every standard asset, always.
+    """
+    return ([chunk_label(s, t) for s, t, _ in BASE_CHUNKS]
+            + [chunk_label(s, t) for s, t, _ in CLOSER_CHUNKS])
+
+
+def omitted_unconditional_labels(chunks: list[tuple[str, str | None, str]]) -> list[str]:
+    """Which unconditional standard chunks this plan never offered.
+
+    THE POINT: for a safe-only target this returns ['critical,high',
+    'medium:cve', 'medium:exposure,config'] — the plan is 5 chunks, MORE than
+    the 4 unconditional ones, so any COUNT comparison reads as healthy. The
+    deficit is compositional, not cardinal. Count is the wrong instrument here;
+    naming the missing chunks is the right one.
+    """
+    present = {chunk_label(s, t) for s, t, _ in chunks}
+    return [lbl for lbl in unconditional_standard_labels() if lbl not in present]
+
+
 def max_possible_chunk_count(ctx: ScanContext) -> int:
     """Upper bound on this target's plan, had tech detection succeeded.
 
@@ -2632,10 +2667,19 @@ def max_possible_chunk_count(ctx: ScanContext) -> int:
     rather than the post-detection plan: a plan shrunk by a blocked
     tech-detect is otherwise internally consistent and reads as a
     legitimate smaller plan. planned_chunks > actual_chunks is the signal.
+
+    2026-09-07 — safe-only targets NO LONGER return SAFE_ONLY_CHUNK_COUNT.
+    Doing so made the safe-only plan its own upper bound, so planned == actual,
+    ⑭′.4 never fired, all 5 chunks reported ok, and the asset SELF-CERTIFIED as
+    fully covered while never having been offered a critical/high template.
+    172 of 391 Command assets (44%) read as covered on that basis. A different
+    plan is not a complete plan just because it finished.
+
+    THRESHOLD_PROBE keeps its own bound — it is an operator-invoked diagnostic
+    with a deliberately narrow plan, not a routing decision made on the asset's
+    behalf, so it is not a misrepresentation.
     """
     if THRESHOLD_PROBE_MODE and THRESHOLD_PROBE_SAFE_ONLY:
-        return SAFE_ONLY_CHUNK_COUNT
-    if is_fortigate_target(ctx):
         return SAFE_ONLY_CHUNK_COUNT
     return len(BASE_CHUNKS) + len(STACK_CHUNKS) + len(CLOSER_CHUNKS)
 
@@ -3042,7 +3086,35 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         "planned_chunks": _upper,
         "actual_chunks": len(chunks),
     }
+    # 2026-09-07 — WHICH unconditional chunks were never offered. Recorded on
+    # EVERY plan, including full ones (where it is []), because "the omission
+    # list is empty" and "nobody computed an omission list" must not look alike
+    # to a reader. Composition, not cardinality: a safe-only plan has 5 chunks
+    # against 4 unconditional ones, so every count comparison reads as healthy
+    # while critical/high was never in the plan.
+    _omitted = omitted_unconditional_labels(chunks)
+    ctx.chunk_plan_meta["omitted_unconditional"] = _omitted
+
     if len(chunks) < _upper:
+        # ROUTING omission first. A safe-only target's plan was not shrunk by
+        # anything that happened during the scan — it was never offered the
+        # standard plan at all, by a routing decision made before the scan
+        # started. Attributing that to `stack_not_applicable` would name the
+        # wrong cause on 44% of the fleet and send an operator looking at tech
+        # detection for a decision taken in build_chunk_plan().
+        if is_fortigate_target(ctx):
+            ctx.chunk_plan_meta["plan_delta_reason"] = "routed_safe_only"
+            ctx.chunk_plan_meta["plan_routing"] = "safe_only"
+            # ⚠ Presumption vs evidence. wafw00f has never once returned a
+            # named FortiWeb verdict fleet-wide (all-time: 7 <none>, 2 generic,
+            # 0 named), so in practice this route is decided by the hardcoded
+            # FORTIGATE_HOSTNAMES / FORTIGATE_APEXES lists, not by observation.
+            # Record which, so the record never implies evidence we do not have.
+            ctx.chunk_plan_meta["plan_routing_basis"] = (
+                "wafw00f_confirmed"
+                if (ctx.waf_kind and "forti" in ctx.waf_kind)
+                else "hardcoded_presumption"
+            )
         # 🔴 Derive this from ctx, NEVER from tool_status. Run #2649 recorded
         # `tech_detect_unusable` on a run where detection SUCCEEDED (17 techs)
         # and the plan was correctly 6 of 9 — the target simply is not
@@ -3051,12 +3123,12 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # detect_tech_stack credited, the lookup missed, and the code fell
         # through to its failure branch. A field built to surface silent
         # failure was manufacturing failure on healthy targets instead.
-        if tech_detection_meets_yield_floor(ctx.tech_stack):
-            _why = "stack_not_applicable"
+        elif tech_detection_meets_yield_floor(ctx.tech_stack):
+            ctx.chunk_plan_meta["plan_delta_reason"] = "stack_not_applicable"
         else:
-            _why = (getattr(ctx, "tech_detect_status", "")
-                    or "tech_detect_no_stack_signal")
-        ctx.chunk_plan_meta["plan_delta_reason"] = _why
+            ctx.chunk_plan_meta["plan_delta_reason"] = (
+                getattr(ctx, "tech_detect_status", "")
+                or "tech_detect_no_stack_signal")
 
     # A′ (4.7 (55)) — the progress DENOMINATOR, snapshotted at loop entry.
     #
