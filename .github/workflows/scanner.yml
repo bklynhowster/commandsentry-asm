@@ -168,8 +168,36 @@ jobs:
     # Pin to a date+sha tag in production; bump explicitly when the
     # image is rebuilt. NET_ADMIN + /dev/net/tun are required for
     # wireguard-go to create + own a TUN device.
+    #
+    # ⚠ THIS LINE SAID `:latest` UNTIL 2026-09-07, while the comment
+    # directly above it said to pin. The intent was recorded and never
+    # implemented, so every rebuild silently swapped the scanning image
+    # under production — including mid-flight, since a scan can be
+    # queued against one image and pick up its container from another.
+    #
+    # WHY IT MATTERS MORE THAN REPRODUCIBILITY: a tool or nuclei template
+    # that changes upstream can make a finding DISAPPEAR, and the finding
+    # lifecycle records that as REMEDIATION. Nothing catches it — the scan
+    # runs perfectly and every phase reports ok. Pinning docker/Dockerfile
+    # (2026-09-07) stops the TOOLS from drifting between builds; pinning
+    # this tag is what stops the IMAGE from changing without a commit.
+    # One without the other leaves the door open.
+    #
+    # ⚠ CONSEQUENCE, READ THIS BEFORE YOU DEBUG A "NOTHING CHANGED" BUG:
+    # rebuilding the image no longer affects production. `build-scanner-
+    # image.yml` publishes both `:latest` and a `YYYYMMDD-<sha7>` tag and
+    # prints the exact line to paste here. Production does not move until
+    # this tag is bumped in a commit. That is deliberate — the bump is the
+    # record of when the scanning surface changed — but it does mean a
+    # rebuild alone is a no-op here.
+    #
+    # The 8 diagnostic/canary workflows deliberately stay on `:latest` so
+    # they keep exercising the newest build. Only the production scan path
+    # is pinned.
+    #
+    # Current pin corresponds to commit 14c639a — the toolchain-pin build.
     container:
-      image: ghcr.io/bklynhowster/commandsentry-scanner:latest
+      image: ghcr.io/bklynhowster/commandsentry-scanner:20260907-14c639a
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

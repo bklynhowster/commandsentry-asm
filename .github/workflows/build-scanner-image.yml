@@ -106,3 +106,38 @@ jobs:
           echo "  image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
           echo "  options: --cap-add=NET_ADMIN --device=/dev/net/tun" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Does production actually use this build?
+        # ⚠ Since 2026-09-07 scanner.yml is pinned to a date+sha tag, so
+        # building an image NO LONGER changes what production scans with.
+        # That is deliberate — the tag bump is the record of when the
+        # scanning surface changed — but it is a perfect footgun: rebuild,
+        # see green, assume the fix is live, and spend an hour debugging
+        # why nothing moved. So say it out loud, right here, every build.
+        run: |
+          set +e
+          PINNED=$(grep -oE "${IMAGE_NAME##*/}:[0-9a-zA-Z._-]+" \
+                     .github/workflows/scanner.yml \
+                   | grep -v '^#' | head -1 | cut -d: -f2)
+          NEW="${{ steps.meta.outputs.tag }}"
+          {
+            echo ""
+            echo "### Production scan path"
+            if [ -z "$PINNED" ]; then
+              # Never report "in sync" from a failed lookup — that is the
+              # fail-closed-gate rule. An empty read is an unknown, not a yes.
+              echo "⚠ Could not read the pinned tag out of scanner.yml."
+              echo "Check it by hand before assuming this build is live."
+            elif [ "$PINNED" = "$NEW" ]; then
+              echo "✅ \`scanner.yml\` is pinned to \`$PINNED\` — this build IS live."
+            else
+              echo "🟡 **This build is NOT live in production.**"
+              echo ""
+              echo "\`scanner.yml\` is pinned to \`$PINNED\`; this build is \`$NEW\`."
+              echo "Production keeps using the pinned image until that tag is"
+              echo "bumped in a commit. Bump it deliberately — and re-run the"
+              echo "\`Toolchain inventory\` workflow afterwards, because moving"
+              echo "the image moves the nuclei template set too."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
