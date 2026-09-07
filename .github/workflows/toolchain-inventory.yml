@@ -78,10 +78,20 @@ jobs:
           # turns every non-printable byte (tabs included) into a newline, so
           # the record becomes three plain lines: mod / path / version. Then
           # `grep -A2 '^mod$'` needs no cleverness at all.
+          # ⚠ Do NOT use -m1 here. Run #3 (2026-09-07) proved why: nuclei and
+          # katana both contain an earlier literal `mod` line somewhere in
+          # their data, so first-match returned `mod @` and `mod  H` — not
+          # empty, just garbage, which is worse because the empty-fallback
+          # never fired. Take EVERY `^mod$` window and keep only the lines
+          # that actually look like a module path or a version; the junk
+          # windows filter themselves out.
           go_module_version() {
             b=$(command -v "$1" 2>/dev/null)
             if [ -z "$b" ]; then echo "(not on PATH)"; return; fi
-            info=$(tr -c '[:print:]' '\n' < "$b" | grep -a -A2 -m1 '^mod$' | tr '\n' ' ')
+            info=$(tr -c '[:print:]' '\n' < "$b" \
+                   | grep -a -A2 '^mod$' \
+                   | grep -aE '^([a-z0-9.-]+\.[a-z]{2,}/|v[0-9]+\.)' \
+                   | head -4 | tr '\n' ' ')
             if [ -n "$info" ]; then
               echo "$info"
             else
@@ -109,7 +119,15 @@ jobs:
             # exists for the tools whose CLI refuses to tell us.
             printf '  [embedded] '; go_module_version "$t" || echo "(no build info found)"
           done
-          printf '\n----- wireguard-go -----\n'; wireguard-go --version 2>&1 | head -3
+          # ⚠ wireguard-go needs the embedded record too, and it is the one
+          # tool where the two numbers are not even the same SCHEME. The
+          # binary prints its own release string ("v0.0.20250522"); the Go
+          # module has no tags at all, so it pins as a pseudo-version
+          # ("v0.0.0-20260522210424-<hash>"). You cannot derive one from the
+          # other, and this is the VPN egress keystone — not a thing to guess.
+          printf '\n----- wireguard-go -----\n'
+          wireguard-go --version 2>&1 | head -3
+          printf '  [embedded] '; go_module_version wireguard-go
           printf '\n----- wg -----\n';           wg --version 2>&1 | head -3
           printf '\n----- nikto -----\n';        nikto -Version 2>&1 | head -8
           printf '\n----- wafw00f -----\n';      wafw00f --version 2>&1 | head -3
