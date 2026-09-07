@@ -53,13 +53,61 @@ jobs:
           # BEFORE the version, so `head -5` silently cut the only line that
           # mattered on the first run of this workflow (2026-09-07). Filtering
           # on the text we actually want is immune to banner height.
+          #
+          # ⚠ And there is no universal version flag. Run #2 (2026-09-07)
+          # proved it: ffuf rejects -version (wants -V), fingerprintx rejects
+          # both -version and --version (cobra: "unknown flag"). Two of the
+          # ten tools returned NOTHING, which is the failure that matters —
+          # an empty answer here reads as "no version" and would have shipped
+          # an incomplete pin. So: try every flag form, then fall back to a
+          # method that cannot depend on the tool's CLI at all.
+          #
+          # THE FALLBACK. Every Go binary embeds its own build info, and the
+          # main module record is literally `mod<TAB>module/path<TAB>vX.Y.Z`.
+          # We read it straight out of the executable — no Go toolchain
+          # required, which matters because the runtime stage deliberately has
+          # none (binaries are built in the builder stage). This is ground
+          # truth about the shipped artifact rather than whatever the tool
+          # chooses to print about itself.
+          #
+          # ⚠ `tr` first, then grep. Do NOT try to match the tabs with one
+          # clever regex: that regex cannot be tested anywhere outside this
+          # image, and a pattern that silently matches nothing looks exactly
+          # like "this tool has no version" — which is the failure that has
+          # already cost this workflow two runs. `tr -c '[:print:]' '\n'`
+          # turns every non-printable byte (tabs included) into a newline, so
+          # the record becomes three plain lines: mod / path / version. Then
+          # `grep -A2 '^mod$'` needs no cleverness at all.
+          go_module_version() {
+            b=$(command -v "$1" 2>/dev/null)
+            if [ -z "$b" ]; then echo "(not on PATH)"; return; fi
+            info=$(tr -c '[:print:]' '\n' < "$b" | grep -a -A2 -m1 '^mod$' | tr '\n' ' ')
+            if [ -n "$info" ]; then
+              echo "$info"
+            else
+              # Never return empty. An empty answer is indistinguishable from
+              # "no version exists" and would ship an incomplete pin.
+              echo "(no Go build-info record found — raw candidates:)"
+              tr -c '[:print:]' '\n' < "$b" \
+                | grep -aE "^(v[0-9]+\.[0-9]+|go1\.|github\.com/)" | head -6 \
+                | sed 's/^/      /'
+            fi
+          }
+
           for t in subfinder dnsx httpx naabu nuclei katana fingerprintx ffuf gau; do
             printf '\n----- %s -----\n' "$t"
-            out=$("$t" -version 2>&1; "$t" --version 2>&1)
-            echo "$out" | grep -iE "version" | grep -viE "^ *$" | head -4
-            # Fall back to the raw tail if nothing matched — better a noisy
-            # answer than a silently empty one.
-            echo "$out" | grep -qiE "version" || echo "$out" | tail -6
+            # ⚠ flags only — never a bare `version` subcommand. gau and
+            # subfinder take positional/stdin targets, so `gau version`
+            # would go scan a "domain" called version. `< /dev/null` for the
+            # same reason: a flag that turns out to mean something other than
+            # version must not leave the tool blocking on stdin.
+            out=$("$t" -version 2>&1 </dev/null; "$t" --version 2>&1 </dev/null; "$t" -V 2>&1 </dev/null)
+            echo "$out" | grep -iE "current version|engine version|^v?[0-9]+\.[0-9]+" \
+              | grep -viE "^ *$" | head -4
+            # Always print the embedded module version too. It is the pin we
+            # actually copy into the Dockerfile, and it is the only line that
+            # exists for the tools whose CLI refuses to tell us.
+            printf '  [embedded] '; go_module_version "$t" || echo "(no build info found)"
           done
           printf '\n----- wireguard-go -----\n'; wireguard-go --version 2>&1 | head -3
           printf '\n----- wg -----\n';           wg --version 2>&1 | head -3
