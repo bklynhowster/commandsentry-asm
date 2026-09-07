@@ -644,6 +644,7 @@ _CUT_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
     ("all_probes_failed",           CUT_TRANSPORT),
     ("network_timeout",             CUT_TRANSPORT),
     ("network_unreachable",         CUT_TRANSPORT),
+    ("target_unreachable",          CUT_TRANSPORT),
     ("nonzero_rc_no_reach_evidence", CUT_TRANSPORT),
     ("egress",                      CUT_TRANSPORT),
     ("auth_gated",                  CUT_POLICY),
@@ -654,6 +655,17 @@ _CUT_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
     ("catchall_calibration_failed", CUT_TOOL),
     ("no_status_recorded",          CUT_TOOL),
     ("tool_status_invariant",       CUT_TOOL),
+    # ── Slugs documented in DegradedRunError's own docstring ────────────
+    # Mapped from that list rather than waiting for each to surface as
+    # `unclassified`. The docstring is the authoritative vocabulary; leaving
+    # known slugs unmapped would under-count real classes until someone
+    # happened to notice.
+    ("rotation_exhausted",          CUT_FILTER),     # every IP banned
+    ("output_stderr_contains_unreachable_pattern", CUT_TRANSPORT),
+    ("asset_pre_flight_unreachable", CUT_TRANSPORT),
+    ("vpn_bringup_failed",          CUT_TRANSPORT),
+    ("tool_startup_failure",        CUT_TOOL),
+    ("validate_mode_target_not_allowlisted", CUT_POLICY),
 )
 
 

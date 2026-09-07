@@ -29,6 +29,11 @@ LIVE_REASONS: dict[str, tuple[str, int]] = {
     "all_probes_failed":             (D.CUT_TRANSPORT,    240),
     "network_timeout":               (D.CUT_TRANSPORT,    161),
     "network_unreachable":           (D.CUT_TRANSPORT,     84),
+    # Surfaced by the trimodality read 2026-09-07 — target_unreachable_after_run
+    # returned `unclassified` on first contact, which is exactly what that value
+    # is for. A default class would have mislabelled it silently.
+    "target_unreachable_after_run":  (D.CUT_TRANSPORT,      1),
+    "egress_unstable":               (D.CUT_TRANSPORT,      1),
     "nonzero_rc_no_reach_evidence:246": (D.CUT_TRANSPORT,  35),
     "empty_output":                  (D.CUT_TOOL,          87),
     "naabu_rc_1":                    (D.CUT_TOOL,          27),
@@ -139,3 +144,47 @@ def test_degraded_wins_even_when_ok_is_true():
     """An entry can carry ok:true AND a degraded key. Treating it as clean
     would hide the degradation behind a stale verdict."""
     assert D.phase_cut_reason({"ok": True, "degraded": "empty_output"}) == "empty_output"
+
+
+# ── Completeness against DegradedRunError's own documented vocabulary ───────
+# Those slugs are the authoritative list of things the runner can raise. A
+# taxonomy that only covers what has happened to appear in the database is a
+# taxonomy that under-counts every class until someone notices.
+DOCUMENTED_SLUGS: dict[str, str] = {
+    "rotation_exhausted":                          D.CUT_FILTER,
+    "tool_status_invariant":                       D.CUT_TOOL,
+    "target_unreachable_after_run":                D.CUT_TRANSPORT,
+    "target_unreachable_pre_run":                  D.CUT_TRANSPORT,
+    "output_stderr_contains_unreachable_pattern":  D.CUT_TRANSPORT,
+    "tool_startup_failure":                        D.CUT_TOOL,
+    "validate_mode_target_not_allowlisted":        D.CUT_POLICY,
+    "vpn_bringup_failed":                          D.CUT_TRANSPORT,
+    "asset_pre_flight_unreachable":                D.CUT_TRANSPORT,
+}
+
+
+def test_every_documented_DegradedRunError_slug_classifies():
+    wrong = {
+        s: (D.classify_cut_reason(s), want)
+        for s, want in DOCUMENTED_SLUGS.items()
+        if D.classify_cut_reason(s) != want
+    }
+    assert not wrong, (
+        f"slugs documented in DegradedRunError but mis/unclassified "
+        f"(got, want): {wrong}")
+
+
+def test_the_documented_slug_list_matches_the_docstring():
+    """Pins the two together. If a new slug is added to the docstring and not
+    here, this fails and points at the gap — rather than the class silently
+    reading `unclassified` in production for months."""
+    doc = D.DegradedRunError.__doc__ or ""
+    missing = [s for s in DOCUMENTED_SLUGS if f'"{s}"' not in doc]
+    assert not missing, (
+        f"listed here but no longer in the DegradedRunError docstring: {missing}")
+    import re as _re
+    in_doc = set(_re.findall(r'^\s*-\s*"([a-z_]+)"', doc, _re.M))
+    unmapped = in_doc - set(DOCUMENTED_SLUGS)
+    assert not unmapped, (
+        f"documented in DegradedRunError but not mapped to a cut class: "
+        f"{sorted(unmapped)} — add them to _CUT_CLASS_PREFIXES and here")
