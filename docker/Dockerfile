@@ -36,23 +36,54 @@ ENV GOPATH=/root/go
 ENV PATH=/root/go/bin:/usr/local/go/bin:$PATH
 ENV CGO_ENABLED=0
 
+# ════════════════════════════════════════════════════════════════════
+# TOOLCHAIN PIN — every version below is GROUND TRUTH, not a guess
+# ════════════════════════════════════════════════════════════════════
+# Captured 2026-09-07 by `.github/workflows/toolchain-inventory.yml`
+# (run #4) from the Go build-info record embedded in each binary in the
+# then-running :latest image. Guarded by scripts/scanner/test_toolchain_pinned.py.
+#
+# WHY PINNED. These were all `@latest`. The sharpest consequence is not
+# "builds aren't reproducible" — it is that a finding can DISAPPEAR
+# because a tool or template changed upstream, and the finding lifecycle
+# records that as REMEDIATION. No gate catches it, because the scan ran
+# perfectly and every phase reported ok. Secondary: every coverage number
+# in specs 227-231 assumes stable tool behaviour, so a baseline built on a
+# floating toolchain is not a baseline.
+#
+# ⚠ PIN TO WHAT IS INSTALLED, NOT TO NEWEST. Every measurement in specs
+# 227-231 came from this exact build. Bumping forward while pinning
+# silently invalidates the baseline those specs rest on. Two tools had
+# ALREADY drifted when this pin was written (httpx v1.10.0 installed vs
+# v1.11.0 released 2026-08-31; dnsx v1.3.0 vs v1.3.1 same day) — they are
+# pinned to the INSTALLED version deliberately. Bump on purpose, re-run
+# the inventory, and re-measure. Never bump as a side effect.
+#
+# ⚠ DO NOT TRUST `<tool> -version` WHEN BUMPING. dnsx's CLI reports
+# "1.2.3" while its own build record says v1.3.0 — the CLI string is a
+# source constant upstream forgot to bump, stale by two releases. Read
+# the embedded record (the inventory workflow does this for you).
+# wireguard is worse: the binary prints "v0.0.20250522" but the module has
+# no tags at all and pins as a v0.0.0-<date>-<hash> pseudo-version.
+# Neither number is derivable from the other.
+
 # ─── wireguard-go (userspace WG impl — the M7 keystone) ────────────
 # This is what makes the whole VPN egress work on hosted runners
 # without the kernel-module-load → systemd-modules-load.service hang.
-RUN go install golang.zx2c4.com/wireguard@latest \
+RUN go install golang.zx2c4.com/wireguard@v0.0.0-20260522210424-ecfc5a8d5446 \
  && mv /root/go/bin/wireguard /usr/local/bin/wireguard-go
 
 # ─── ProjectDiscovery toolkit + ffuf ───────────────────────────────
 # These are the active scanners run by run_light.py + run_medium.py.
-RUN go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
- && go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest \
- && go install github.com/projectdiscovery/httpx/cmd/httpx@latest \
- && go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest \
- && go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest \
- && go install github.com/projectdiscovery/katana/cmd/katana@latest \
- && go install github.com/praetorian-inc/fingerprintx/cmd/fingerprintx@latest \
- && go install github.com/ffuf/ffuf/v2@latest \
- && go install github.com/lc/gau/v2/cmd/gau@latest
+RUN go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.16.0 \
+ && go install github.com/projectdiscovery/dnsx/cmd/dnsx@v1.3.0 \
+ && go install github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0 \
+ && go install github.com/projectdiscovery/naabu/v2/cmd/naabu@v2.6.1 \
+ && go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.11.1 \
+ && go install github.com/projectdiscovery/katana/cmd/katana@v1.7.0 \
+ && go install github.com/praetorian-inc/fingerprintx/cmd/fingerprintx@v1.1.19 \
+ && go install github.com/ffuf/ffuf/v2@v2.2.1 \
+ && go install github.com/lc/gau/v2/cmd/gau@v2.2.4
 
 # ─── Extract `wg` userspace tool from wireguard-tools .deb ─────────
 # We need the `wg` CLI (for setconf/show/set fwmark) but NOT wg-quick
@@ -184,6 +215,36 @@ COPY --from=builder /root/go/bin/ffuf            /usr/local/bin/
 COPY --from=builder /root/go/bin/gau             /usr/local/bin/
 
 # ─── Pre-pull nuclei templates so first scan doesn't pay the cost ──
+#
+# TEMPLATE_DRIFT — DELIBERATE, ACCEPTED, AND INSTRUMENTED (2026-09-07)
+#
+# Pinning the nuclei BINARY above does not pin what it scans FOR. This
+# line pulls the newest template set at build time, so templates float
+# even with the binary frozen — and this is the layer that actually
+# produces the false-remediation path: a template renamed or dropped
+# upstream makes a finding vanish, and the lifecycle records that as
+# REMEDIATION. It directly undermines spec 227's premise that a finding's
+# absence means it was fixed.
+#
+# THE DECISION: keep the drift, make it detectable. Template freshness is
+# how new CVEs get caught at all — freezing the set would trade a real,
+# ongoing coverage loss for reproducibility, which is a bad bargain for an
+# external ASM scanner whose whole job is finding what's new. So the set
+# stays live and the hole is closed from the other side: record the
+# template set per scan run so a vanished finding can be DIFFED against a
+# template change instead of silently reading as a fix.
+#
+# ⚠ There is nothing to pin by version even if we wanted to. Verified by
+# the inventory workflow: `nuclei -templates-version` prints an EMPTY
+# version string. Pinning templates would mean vendoring the
+# nuclei-templates repo at a commit, not passing a flag.
+#
+# Measured 2026-09-07 (inventory run #4): 13,619 templates in
+# /root/nuclei-templates, template version string blank.
+#
+# FOLLOW-ON, NOT YET BUILT: stamp the template count + commit into
+# scan_run. Until that ships, the drift is accepted and recorded here but
+# NOT yet detectable — do not read this comment as "handled."
 RUN nuclei -update-templates -silent 2>/dev/null || true
 
 # ─── Sanity check — fail the build if any expected tool is missing ─
