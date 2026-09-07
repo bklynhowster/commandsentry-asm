@@ -637,6 +637,14 @@ _CUT_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
     ("wall_clock_cut",              CUT_TIME),
     ("wall_timeout",                CUT_TIME),
     ("tech_detect_blocked",         CUT_FILTER),
+    # tech-detect has FOUR failure reasons and only one is a filter block.
+    # All four shrink the nuclei plan (STACK_CHUNKS never added), so leaving
+    # three unclassified would let a shrunken plan past a filter-only gate.
+    # ⚠ The plan-shrink harm is measured by planned_chunks > actual_chunks,
+    # NOT by this class — see the note on the ㉛/㉜ precondition in spec 229.
+    ("tech_detect_no_signal",       CUT_TOOL),   # ran, rows returned, nothing identifiable
+    ("tech_detect_no_output",       CUT_TOOL),
+    ("tech_detect_rc",              CUT_TOOL),
     ("content_signature_blocked",   CUT_FILTER),
     ("ban",                         CUT_FILTER),
     ("curl_failed",                 CUT_TRANSPORT),

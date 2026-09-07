@@ -42,6 +42,12 @@ LIVE_REASONS: dict[str, tuple[str, int]] = {
     "v1_p4_pending":                 (D.CUT_POLICY,        52),
     "auth_gated":                    (D.CUT_POLICY,         8),
     "tech_detect_blocked":           (D.CUT_FILTER,        23),
+    # The other three tech-detect reasons. Only `blocked` is a filter;
+    # all four shrink the plan, which is why the plan-shrink gate keys on
+    # planned>actual rather than on cut_class.
+    "tech_detect_no_signal":         (D.CUT_TOOL,           1),
+    "tech_detect_no_output":         (D.CUT_TOOL,           1),
+    "tech_detect_rc_1":              (D.CUT_TOOL,           1),
     "wall_clock_cut_400s":           (D.CUT_TIME,          13),
     "wall_timeout":                  (D.CUT_TIME,          11),
 }
