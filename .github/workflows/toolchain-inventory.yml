@@ -48,9 +48,18 @@ jobs:
           echo "=============================================="
           echo " TOOL VERSIONS  (pin the Dockerfile to these)"
           echo "=============================================="
+          # ⚠ grep for the version line, do NOT `head` the raw output.
+          # dnsx / httpx / naabu / katana print a multi-line ASCII banner
+          # BEFORE the version, so `head -5` silently cut the only line that
+          # mattered on the first run of this workflow (2026-09-07). Filtering
+          # on the text we actually want is immune to banner height.
           for t in subfinder dnsx httpx naabu nuclei katana fingerprintx ffuf gau; do
             printf '\n----- %s -----\n' "$t"
-            "$t" -version 2>&1 | head -5
+            out=$("$t" -version 2>&1; "$t" --version 2>&1)
+            echo "$out" | grep -iE "version" | grep -viE "^ *$" | head -4
+            # Fall back to the raw tail if nothing matched — better a noisy
+            # answer than a silently empty one.
+            echo "$out" | grep -qiE "version" || echo "$out" | tail -6
           done
           printf '\n----- wireguard-go -----\n'; wireguard-go --version 2>&1 | head -3
           printf '\n----- wg -----\n';           wg --version 2>&1 | head -3
