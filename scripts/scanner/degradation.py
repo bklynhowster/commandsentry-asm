@@ -725,6 +725,81 @@ def phase_cut_reason(entry: dict) -> str | None:
     return None
 
 
+# ── Plan trustworthiness — the ㉟ gate for ㉛/㉜ (4.7, ratified 2026-09-07) ──
+#
+# May a plan be severity-ORDERED (㉛) or CHECKPOINTED into an accumulating
+# coverage set (㉜)? Only if the plan is the plan this target should have had.
+#
+# 🔴 WHAT THIS IS NOT: `planned_chunks > actual_chunks`. That gate was proposed,
+# ratified, and REFUTED by its own negative test the same day. Two situations
+# produce identical arithmetic (planned 9 → actual 4):
+#
+#   * tech-detect SUCCEEDED and the target simply isn't any of the five stacks
+#     (a Cisco ASA, say) → 4 is the COMPLETE, CORRECT plan → trustworthy
+#   * tech-detect was BLOCKED → the stack is unknown → the plan is TRUNCATED
+#     → untrustworthy
+#
+# Missing APPLICABILITY vs missing INFORMATION. Same numbers, opposite meaning.
+# A count measures the delta; the delta's CAUSE is the entire question. Gating
+# on the count would have excluded 24.157.51.84 — one of only two eligible
+# assets on the fleet — from the fix it qualifies for.
+#
+# So: ALLOWLIST on the reason. Name the safe cases affirmatively, deny all else.
+# A plan_delta_reason added in future is denied by default rather than admitted,
+# which keeps the self-maintaining property without the false positive. Same
+# shape as the ㉙a three-valued verdict: `confirmed` admits, `not_observed` and
+# `probe_failed` both deny.
+#
+# ⚠ The allowlist is only as safe as the AFFIRMATIVENESS of what it admits.
+# `stack_not_applicable` is set exclusively in the branch guarded by
+# `tech_detection_meets_yield_floor(ctx.tech_stack)` — the same predicate that
+# drives mark_tool_ok on httpx[-td]. It therefore means "tech-detect ran and
+# succeeded, and none of the five stacks matched", never "no more specific
+# reason was set". The catch-all `else` branch emits tech_detect_* instead,
+# which this gate DENIES. Verified on the persisted record 2026-09-07:
+# stack_not_applicable co-occurs with httpx ok:true; tech_detect_blocked with
+# httpx degraded; never crossed.
+TRUSTWORTHY_PLAN_DELTA_REASONS: frozenset[str] = frozenset({
+    "stack_not_applicable",   # complete plan; those stacks don't apply here
+})
+
+
+def plan_is_trustworthy(entry: dict) -> bool:
+    """True if this nuclei phase's plan may be ordered (㉛) or checkpointed (㉜).
+
+    A MISSING plan_delta_reason means the full plan was emitted with nothing
+    omitted — trustworthy. Any other reason denies, including reasons this
+    function has never heard of.
+
+    ⚠ Denies on a non-dict/absent entry rather than raising: an unreadable
+    record is not evidence of a trustworthy plan.
+    """
+    if not isinstance(entry, dict):
+        return False
+    reason = entry.get("plan_delta_reason")
+    if reason is None:
+        return True
+    if not isinstance(reason, str):
+        return False
+    return reason.strip() in TRUSTWORTHY_PLAN_DELTA_REASONS
+
+
+def run_plan_is_trustworthy(tool_status: dict) -> bool:
+    """Whole-run verdict: every nuclei phase must carry a trustworthy plan.
+
+    ANY untrustworthy nuclei phase disqualifies the run. The chunks share one
+    plan, so a delta reason on one is a fact about all of them — but reading
+    only the first would depend on dict ordering, and a run with no nuclei
+    phase at all must not pass by vacuous truth.
+    """
+    if not isinstance(tool_status, dict):
+        return False
+    nuclei = [v for k, v in tool_status.items() if str(k).startswith("nuclei")]
+    if not nuclei:
+        return False   # nothing to order or checkpoint; not "trustworthy"
+    return all(plan_is_trustworthy(v) for v in nuclei)
+
+
 class Degradation:
     """A degradation reason carrying its own disposition. Immutable."""
 
