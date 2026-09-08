@@ -383,21 +383,59 @@ def tls_check_is_degraded(exception: BaseException) -> tuple[bool, str]:
     return True, "unknown_exception"
 
 
+def httpx_header_key(header_name: str) -> str:
+    """Translate a wire-format header name to the key httpx emits in -json.
+
+    ⚠ THIS IS THE WHOLE MIGRATION HAZARD, so it gets its own function and
+    its own test. httpx does NOT return wire-format names in the `header`
+    object. Captured from the live v1.10.0 build against www.prodexlabs.com
+    (toolchain-inventory run #6, 2026-09-08):
+
+        "header": { "cache_control": ..., "content_type": ...,
+                    "x_powered_by": ..., "alt_svc": ..., "etag": ... }
+
+    Lowercase, and hyphens become UNDERSCORES. The curl path looked up
+    `header_name.lower()` -> "strict-transport-security", which matches
+    NOTHING in that dict. A naive swap would have reported all seven
+    security headers missing on every asset in the fleet — a clean
+    fleet-wide false positive that looks exactly like a real finding.
+
+    Caught only because the JSON shape was captured before the parser was
+    written. Do not "simplify" this to .lower().
+    """
+    return header_name.strip().lower().replace("-", "_")
+
+
 def headers_check_is_degraded(rc: int, stdout: str, stderr: str) -> tuple[bool, str]:
-    """curl -sI failure modes. rc != 0 with empty stdout = couldn't fetch
-    headers. rc == 0 but empty stdout = curl thinks it worked but got
-    nothing parseable (uncommon but seen)."""
+    """httpx -json failure modes (㊴ migration, 2026-09-08).
+
+    Was curl -sI. The migration exists because curl's UNMAPPED exit codes
+    were being recorded as reachability verdicts: measured over 90 days,
+    158 `curl_failed` runs on headers_check where the Go stack reached the
+    same host in the SAME run 94% of the time (spec 231). The mapped codes
+    (6/7/28/35) were honest — the catch-all was not.
+
+    httpx gives a structured `failed` boolean instead of an exit code we
+    have to interpret, so there is no catch-all left to misread.
+    """
     if rc != 0 and len(stdout.strip()) == 0:
-        # curl's own exit code mapping for the network-level failures
-        if rc in (6, 7):  # 6=resolve failed, 7=connect failed
-            return True, "network_unreachable"
-        if rc == 28:  # operation timed out
-            return True, "network_timeout"
-        if rc == 35:  # SSL handshake fail
-            return True, "tls_handshake_failed"
-        return True, "curl_failed"
-    if rc == 0 and len(stdout.strip()) == 0:
+        # httpx exits non-zero with no output only when it could not run or
+        # could not reach anything at all. No per-errno mapping to guess at.
+        return True, "httpx_no_output"
+    if not stdout.strip():
         return True, "empty_response_body"
+    try:
+        rec = json.loads(stdout.strip().splitlines()[0])
+    except (json.JSONDecodeError, IndexError):
+        return True, "no_parseable_json"
+    # httpx's own verdict, not our inference from a process exit code.
+    if rec.get("failed") is True:
+        return True, "host_unreachable"
+    if not isinstance(rec.get("header"), dict):
+        # -irh was accepted but produced no header map. Do NOT treat this as
+        # "no headers present" — that would emit 7 false findings. It is a
+        # tool fault, and it must degrade.
+        return True, "no_header_map"
     return False, ""
 
 
@@ -565,30 +603,44 @@ def check_tls(ctx: ScanContext) -> None:
 
 
 def check_headers(ctx: ScanContext) -> None:
-    """Fetch '/' and check for the standard security header set."""
+    """Fetch '/' and check for the standard security header set.
+
+    ㊴ (2026-09-08): migrated curl -sI -> httpx -json -irh. Precedent is
+    healthcheck #32 (2026-06-16), which moved curl -> httpx for exactly this
+    reason: targets that fingerprint TLS or header shapes reject curl while
+    accepting the Go stack. The light tier's own probes were never migrated
+    until now.
+
+    ⚠ -L is not passed to httpx here on purpose. curl's -L followed
+    redirects silently, so a host redirecting off its own eTLD+1 would have
+    had ITS headers graded against OUR asset. httpx reports the redirect via
+    status_code and we grade what the asset itself served.
+    """
     ctx.tools_run.append("headers_check")
     rc, stdout, stderr = run_cmd(
-        ["curl", "-sI", "-L", "--max-time", "15",
-         "-H", "User-Agent: Mozilla/5.0 (compatible; COMMANDsentry/1.0)",
-         f"https://{ctx.hostname}/"],
-        timeout=20,
+        ["httpx", "-u", f"https://{ctx.hostname}/",
+         "-silent", "-no-color", "-json", "-irh", "-sc",
+         "-timeout", "15",
+         "-H", "User-Agent: Mozilla/5.0 (compatible; COMMANDsentry/1.0)"],
+        timeout=25,
     )
     degraded, reason = headers_check_is_degraded(rc, stdout, stderr)
     if degraded:
-        log(f"headers_check: curl rc={rc}: {stderr.strip()[:200]}")
+        log(f"headers_check: httpx rc={rc}: {stderr.strip()[:200]}")
         mark_tool_degraded(ctx, "headers_check", reason)
         return
 
-    ctx.artifacts.append(("headers_check", "txt", stdout))
+    ctx.artifacts.append(("headers_check", "json", stdout))
 
-    headers_lc = {}
-    for line in stdout.splitlines():
-        if ":" in line:
-            k, v = line.split(":", 1)
-            headers_lc[k.strip().lower()] = v.strip()
+    # httpx already normalises the header names (lowercase, hyphens ->
+    # underscores). Keys are used verbatim; the SECURITY_HEADERS side is
+    # translated to match via httpx_header_key(). See that function — this
+    # is the one place the migration could silently invent findings.
+    rec = json.loads(stdout.strip().splitlines()[0])
+    headers_lc = rec.get("header") or {}
 
     for header_name, severity, why in SECURITY_HEADERS:
-        if header_name.lower() not in headers_lc:
+        if httpx_header_key(header_name) not in headers_lc:
             slug = header_name.lower().replace("-", "_")
             ctx.findings.append(LightFinding(
                 check_name=f"missing-header-{header_name.lower()}",
