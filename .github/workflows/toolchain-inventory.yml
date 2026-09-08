@@ -134,6 +134,57 @@ jobs:
           printf '\n----- testssl -----\n';      testssl.sh --version 2>&1 | head -5
           exit 0
 
+      - name: httpx JSON shape for the curl -> Go-stack migration (spec 231 / ㊴)
+        # ⚠ THIS STEP MAKES ONE OUTBOUND REQUEST. Every other step here is
+        # offline. Target is an OWNED Prodex asset under standing ROE, and it
+        # is a single GET — the same request the light tier already makes on
+        # every sweep. Zero incremental exposure.
+        #
+        # WHY. ㊴ migrates light's header/body probes from curl to httpx. The
+        # FLAGS are known (-irh puts response headers in -json output) but the
+        # JSON SHAPE is not: no httpx consumer in this repo reads a header map,
+        # so there is no in-repo precedent for the key name or its casing.
+        # Writing a parser against a guessed key is exactly the guess that cost
+        # spec 233. Capture the real shape, THEN write the parser.
+        #
+        # jq, not python: an inline python heredoc at column 0 breaks the YAML
+        # block scalar (learned the hard way on this very step).
+        run: |
+          set +e
+          TARGET="https://www.prodexlabs.com"
+
+          echo "=== 1. top-level keys returned by  httpx -json -irh -sc ==="
+          OUT=$(httpx -u "$TARGET" -silent -no-color -json -irh -sc -timeout 15 2>/dev/null | head -1)
+          if [ -z "$OUT" ]; then
+            echo "NO OUTPUT -- httpx returned nothing. Do NOT infer a shape from this."
+            exit 0
+          fi
+          echo "$OUT" | jq -r 'to_entries | map("\(.key)  [\(.value|type)]") | sort | .[]'
+
+          echo
+          echo "=== 2. which key holds the header map, and is it dict or blob? ==="
+          echo "$OUT" | jq -r '
+            to_entries
+            | map(select(.key | test("header|raw"; "i")))
+            | if length == 0 then
+                "NONE -- -irh did not add a header key. The parser CANNOT be written yet."
+              else
+                map("\(.key) is \(.value|type)") | .[]
+              end'
+
+          echo
+          echo "=== 3. header key names as httpx emits them (CASING MATTERS) ==="
+          echo "$OUT" | jq -r '
+            to_entries
+            | map(select((.key | test("header"; "i")) and (.value|type=="object")))
+            | .[0].value // {}
+            | keys | .[]' | head -25
+
+          echo
+          echo "=== 4. status_code key name + type (for common_paths) ==="
+          echo "$OUT" | jq -r 'to_entries | map(select(.key|test("status"))) | map("\(.key) = \(.value)") | .[]'
+          exit 0
+
       - name: Nuclei template version
         # Templates float SEPARATELY from the nuclei binary: the Dockerfile
         # runs `nuclei -update-templates` at build time. Pinning the binary
