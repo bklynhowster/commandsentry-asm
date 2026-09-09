@@ -208,58 +208,99 @@ jobs:
         # This is the same discipline that caught the header underscore trap:
         # the `-irh` capture is the only reason ㊴ probe 1 did not ship seven
         # fabricated findings per asset fleet-wide.
+        # 🔴 RUN #7 RESULT (2026-09-09): `-irr` IS NOT PARSEABLE JSON.
+        #
+        #   jq: parse error: Invalid string: control characters from U+0000
+        #   through U+001F must be escaped at line 3, column 5707
+        #
+        # httpx embeds the raw response with LITERAL control bytes (CR/LF)
+        # inside a JSON string value, unescaped. jq refuses it, and Python's
+        # json.loads refuses it too by default (strict=True rejects control
+        # characters in strings). Had the parser been written from a guess,
+        # common_paths would have thrown or silently produced empty bodies on
+        # EVERY asset — every catch-all hash equal, every host a "catch-all",
+        # real /.env findings suppressed, all phases still ok.
+        #
+        # The -h dump in the next step gives the actual answer:
+        #   -irrb, -include-response-base64   base64 encoded http request/response
+        #   -hash string                      response body hash (md5..sha512)
+        #   -ct,  -content-type               display response content-type
+        #   -bp,  -body-preview               first N chars of response body
+        #
+        # ⚠ TWO THINGS STILL UNKNOWN, and both are load-bearing:
+        #   (a) Does the -irrb blob contain the REQUEST too, and/or the
+        #       RESPONSE HEADERS? _body_sha() must hash the BODY ONLY. A hash
+        #       over anything containing Date/Set-Cookie changes on every
+        #       request, so the two catch-all control probes would never match
+        #       each other, catch-all detection would silently switch OFF, and
+        #       suppression would stop — noisy rather than dangerous, but wrong.
+        #   (b) Is `-hash sha256` body-only and therefore stable? If so it
+        #       replaces _body_sha entirely and we never need the body for the
+        #       baseline at all — only for HIGH-path marker verification.
+        # Test (b) by hashing the SAME url TWICE and comparing.
         run: |
           set +e
           TARGET="https://www.prodexlabs.com"
 
-          OUT=$(httpx -u "$TARGET" -silent -no-color -json -irr -sc -timeout 15 2>/dev/null | head -1)
-          if [ -z "$OUT" ]; then
-            echo "NO OUTPUT with -irr. Do NOT infer a shape from this."
-            echo "Re-check the flag name against the -h dump in the next step."
-            exit 0
+          echo "=== 1. -irrb : keys, types, sizes (base64 => jq-safe) ==="
+          B=$(httpx -u "$TARGET" -silent -no-color -json -irrb -sc -ct -timeout 15 2>/dev/null | head -1)
+          if [ -z "$B" ]; then
+            echo "NO OUTPUT with -irrb. STOP — do not infer a shape."
+          else
+            echo "$B" | jq -r 'to_entries
+              | map("\(.key)  [\(.value|type)]  len=\(
+                  if (.value|type)=="string" then (.value|length)
+                  elif (.value|type)=="object" then (.value|keys|length)
+                  else 0 end)")
+              | sort | .[]' || echo "jq FAILED on -irrb too — report verbatim."
+
+            echo
+            echo "=== 2. decode each long base64 field: REQUEST? HEADERS? BODY? ==="
+            # This is question (a). If the decoded text starts with 'GET / HTTP'
+            # it is the REQUEST. If it starts with 'HTTP/1.1 200' it is the
+            # response WITH headers. If it starts with '<!DOCTYPE' it is a
+            # clean body.
+            for K in $(echo "$B" | jq -r 'to_entries
+                        | map(select((.value|type)=="string" and (.value|length) > 200))
+                        | map(.key) | .[]'); do
+              echo "--- $K (first 200 chars decoded) ---"
+              echo "$B" | jq -r --arg k "$K" '.[$k]' | base64 -d 2>/dev/null | head -c 200
+              echo
+              echo "--- $K : does it contain a Date header? (volatile => unusable for hashing) ---"
+              echo "$B" | jq -r --arg k "$K" '.[$k]' | base64 -d 2>/dev/null \
+                | head -40 | grep -iE "^(date|set-cookie|GET |POST |HTTP/)" | head -5
+              echo
+            done
           fi
 
-          echo "=== 1. every top-level key under -irr, with type and SIZE ==="
-          # Size matters: the body key is the big one. Types alone can't
-          # distinguish 'body' from 'raw_header' — both are strings.
-          echo "$OUT" | jq -r 'to_entries
-            | map("\(.key)  [\(.value|type)]  len=\(
-                if (.value|type)=="string" then (.value|length)
-                elif (.value|type)=="object" then (.value|keys|length)
-                else 0 end)")
-            | sort | .[]'
+          echo
+          echo "=== 3. status_code + content_type as -irrb exposes them ==="
+          # _probe_path_body compares `code not in (200, 204, 206)` against an
+          # int tuple; a string status_code silently never matches.
+          echo "$B" | jq -r '"status_code=\(.status_code) [\(.status_code|type)]"'
+          echo "$B" | jq -r '[ (.content_type // empty), (.header.content_type // empty) ]
+                              | if length==0 then "content_type NOT FOUND" else .[] end'
 
           echo
-          echo "=== 2. candidate BODY keys (string, longer than 200 chars) ==="
-          echo "$OUT" | jq -r 'to_entries
-            | map(select((.value|type)=="string" and (.value|length) > 200))
-            | if length == 0 then
-                "NONE -- no long string field. -irr did NOT return a body. STOP."
-              else map("\(.key)  len=\(.value|length)") | .[] end'
-
-          echo
-          echo "=== 3. is the body RAW HTML or BASE64? (first 120 chars each) ==="
-          # A base64 body would need decoding before sha256/marker matching —
-          # hashing base64 still "works" but silently changes every hash.
-          echo "$OUT" | jq -r 'to_entries
-            | map(select((.value|type)=="string" and (.value|length) > 200))
-            | map("--- \(.key) ---\n\(.value[0:120])") | .[]'
-
-          echo
-          echo "=== 4. status_code type under -irr (must be NUMBER, not string) ==="
-          # _probe_path_body compares `code not in (200, 204, 206)` — an int
-          # tuple. If httpx emits a string, EVERY comparison silently fails
-          # and no path is ever considered exposed.
-          echo "$OUT" | jq -r '.status_code | "value=\(.) type=\(.|type)"'
-
-          echo
-          echo "=== 5. content-type, as -irr exposes it (for the ctype gate) ==="
-          # _probe_path_body normalizes Content-Type and _is_known_secret_ctype
-          # gates HIGH findings on it. Confirm where it lives under -irr.
-          echo "$OUT" | jq -r '
-            [ (.header.content_type // empty), (.content_type // empty) ]
-            | if length == 0 then "NOT FOUND at .header.content_type or .content_type"
-              else .[] end'
+          echo "=== 4. -hash sha256 : field name, and is it STABLE across 2 runs? ==="
+          # Question (b). Two independent requests to the same URL. If the two
+          # hashes MATCH, the hash is body-only and can replace _body_sha for
+          # the catch-all baseline. If they DIFFER, it includes volatile
+          # headers and must NOT be used for catch-all detection.
+          H1=$(httpx -u "$TARGET" -silent -no-color -json -hash sha256 -timeout 15 2>/dev/null | head -1)
+          sleep 2
+          H2=$(httpx -u "$TARGET" -silent -no-color -json -hash sha256 -timeout 15 2>/dev/null | head -1)
+          echo "hash-bearing keys in run 1:"
+          echo "$H1" | jq -r 'to_entries | map(select(.key|test("hash"))) | map("  \(.key) = \(.value|tostring)") | .[]'
+          V1=$(echo "$H1" | jq -r '[.. | strings] | map(select(test("^[0-9a-f]{64}$"))) | .[0] // "none"')
+          V2=$(echo "$H2" | jq -r '[.. | strings] | map(select(test("^[0-9a-f]{64}$"))) | .[0] // "none"')
+          echo "  run1 sha256=$V1"
+          echo "  run2 sha256=$V2"
+          if [ "$V1" = "$V2" ] && [ "$V1" != "none" ]; then
+            echo "  => STABLE. Body-only. CAN replace _body_sha for the catch-all baseline."
+          else
+            echo "  => UNSTABLE or absent. Do NOT use for catch-all detection."
+          fi
           exit 0
 
       - name: Nuclei template version
