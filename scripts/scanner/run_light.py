@@ -536,6 +536,54 @@ def wpvuln_lookup_is_degraded(reason: str | None) -> tuple[bool, str]:
     return False, ""
 
 
+def wpvuln_homepage_is_degraded(rc: int, html: str) -> tuple[bool, str]:
+    """㊴ probe 3, INTERPRETATION fix. Same defect as methods_check.
+
+    The old call site collapsed `rc != 0 or not html` into the single reason
+    `homepage_fetch_failed`, which degradation.py maps to CUT_TRANSPORT --
+    "we never reached the target". That is a claim about the ASSET derived
+    from an unmapped curl exit code.
+
+    It is not a small line item: `homepage_fetch_failed` is 265 of the ~1066
+    occurrences that make TRANSPORT the dominant cut class on this fleet,
+    second only to `curl_failed`'s 316. Both are light-tier, and both were
+    over-claiming.
+
+    ⚠ probe 3 STAYS ON CURL, permanently, and that is a measured decision --
+    not laziness. Inventory run #9 (2026-09-09) against a real www->apex 301:
+
+        no -fr :  status 301, wp-content occurrences in body = 0
+        -fr    :  status 200, wp-content occurrences in body = 46
+
+    So `-fr` is mandatory or every redirecting asset reads as "not WordPress"
+    and mark_tool_ok fires -- a healthy-looking total loss of WP CVE coverage.
+    But under `-fr`, httpx's `url` field STILL echoes the input, so there is
+    no field saying where we landed, and the ratified guard (never follow a
+    redirect off eTLD+1) cannot be enforced from its output. `-include-chain`
+    is not a way out: it reintroduces the same unescaped-control-character
+    parse error that makes `-irr` unusable. curl's `-w %{url_effective}` does
+    report the final URL, so curl remains the only tool here that CAN enforce
+    the boundary. Enforcing it is a separate, ratified piece of work.
+
+    Distinguishes three outcomes that were previously one:
+      * documented transport codes  -> a real transport verdict
+      * reached but empty body      -> NOT transport; the host answered
+      * anything else               -> unmapped, classifies as UNCLASSIFIED
+    """
+    if rc == 0 and html:
+        return False, ""
+    if rc == 0 and not html:
+        # We reached the host and it returned nothing. That is a fact about
+        # the RESPONSE, not about reachability. Calling it transport would be
+        # the same over-claim in a different costume.
+        return True, "empty_homepage_body"
+    if rc in (6, 7):
+        return True, "network_unreachable"
+    if rc == 28:
+        return True, "network_timeout"
+    return True, f"curl_exit_{rc}_unmapped"
+
+
 def common_paths_is_degraded(probe_count: int, total_paths: int) -> tuple[bool, str]:
     """common_paths probes a fixed list. If we couldn't probe ANY of
     them (all curl calls failed), the target is unreachable. If we
@@ -1519,10 +1567,9 @@ def check_wpvulnerability(ctx: ScanContext) -> None:
          "-A", BROWSER_UA, f"https://{ctx.hostname}/"],
         timeout=20,
     )
-    if rc != 0 or not html:
-        log(f"  wpvulnerability: homepage fetch rc={rc}, skipping")
-        # Degraded: couldn't even reach the target homepage.
-        degraded, reason = wpvuln_lookup_is_degraded("homepage_fetch_failed")
+    degraded, reason = wpvuln_homepage_is_degraded(rc, html)
+    if degraded:
+        log(f"  wpvulnerability: homepage fetch rc={rc} reason={reason}, skipping")
         mark_tool_degraded(ctx, "wpvulnerability", reason)
         return
 
