@@ -1156,7 +1156,49 @@ def legacy_adapter(fn, tier, *args, _phase_name=None, **kwargs):
 # if it is misbehaviour, fix the misbehaviour. Raising the ceiling to hide slow
 # behaviour is the failure mode 4.7 named explicitly.
 #
-# ── 4.7 rulings ㉖/㉗/㉘, 2026-09-01 — READ BEFORE PROPOSING A RAISE ──────────
+# ── 🔶 SUSPENDED 2026-09-09 — the finding under this guard is NOT settled ────
+#
+# Everything from here to CUMULATIVE_WALL_CLOCK_S is DERIVED-FROM, not
+# DO-NOT-REVISIT. Read it as provenance. Do not treat any number in it as a
+# constant, and do not let it stop you re-measuring — it very nearly did
+# exactly that on 2026-09-09.
+#
+# THE SAMPLE IT WAS DERIVED FROM (never stated until now, which is the defect):
+#   * date       : pre-2026-09-06 runs ONLY
+#   * population : Command, WAF/CDN-fronted targets (Pressable, Cloudflare)
+#   * tiers      : MIXED heavy + medium
+#   * n          : single digits
+#
+# WHY SUSPENDED. Every input is now known stale or confounded:
+#   * `7255 counter-units` is the PRE-cutover total. The crit/high chunk's
+#     `total` steps 7255 -> 9039 around 09-06 on BOTH instances. Cause not yet
+#     identified (candidates: ㉙ plan-selection split, nuclei-templates corpus
+#     growth, the toolchain pin itself, or a RECORDING change).
+#   * `3.8 units/sec` is derived from pre-cutover `percent`.
+#   * `~1909s` falls out of both, so it inherits both.
+#   * ⚠ If `total` changed MEANING rather than size — e.g. nuclei clustering
+#     templates by request signature differently across a version bump — then
+#     `percent` is unit-inconsistent across the boundary and NONE of these
+#     numbers are comparable to post-09-06 ones. Unresolved.
+#
+# STATUS: neither "stands" nor "refuted" — SUSPENDED pending measurement in
+# validated units. That distinction is load-bearing: it is what stops the next
+# reader treating either the old or the new number as settled.
+#
+# ⛔ DO NOT re-derive this on post-cutover `percent` either. `percent` is the
+# measurement under suspicion and cannot validate itself (an allowlist cannot
+# self-reference). Resolve units FIRST by counting actual template executions
+# from run artifacts on one pre- and one post-cutover run, same asset+tier.
+#
+# ⚠ A do-not-revisit warning is only ever as good as the finding underneath it.
+# This one guarded a number nobody had verified and discouraged the exact
+# re-measurement that was required. Any future guard here carries its
+# population, date, tier and n — or it does not go in.
+#
+# Full context: Obsidian 234 (RETRACTED IN PLACE — read the retraction header,
+# not the body) and the 4.7 exchange of 2026-09-09.
+#
+# ── 4.7 rulings ㉖/㉗/㉘, 2026-09-01 — PROVENANCE OF THE SUSPENDED FINDING ────
 #
 # This ceiling was tested against a real aspiration and HELD. nuclei's
 # `critical,high` chunk is 7255 counter-units at a measured 3.8 units/sec, so it
