@@ -182,7 +182,84 @@ jobs:
 
           echo
           echo "=== 4. status_code key name + type (for common_paths) ==="
-          echo "$OUT" | jq -r 'to_entries | map(select(.key|test("status"))) | map("\(.key) = \(.value)") | .[]'
+          echo "$OUT" | jq -r 'to_entries | map(select(.key|test("status"))) | map("\(.key) = \(.value) [\(.value|type)]") | .[]'
+          exit 0
+
+      - name: httpx -irr BODY shape (common_paths + wpvulnerability, ㊴ probes 2+3)
+        # ⚠ ONE more outbound GET, same OWNED Prodex asset as the step above,
+        # same single-GET shape the light tier already performs every sweep.
+        #
+        # WHY A SECOND CAPTURE. The step above captured `-irh` (headers only).
+        # The two remaining ㊴ probes need the RESPONSE BODY, which is a
+        # different flag (`-irr`) and therefore a different, UNKNOWN JSON shape:
+        #
+        #   * common_paths  -> _probe_path_body() returns (status, body, ctype).
+        #     The body is load-bearing: it feeds the catch-all baseline sha256
+        #     AND verify_secret_content() for HIGH paths. A wrong body key does
+        #     not fail loudly — it makes every body empty, which makes every
+        #     hash equal, which makes EVERY host look like a catch-all and
+        #     SUPPRESSES real /.env findings. Silent, and in the dangerous
+        #     direction (fewer findings, all phases still ok).
+        #   * wpvulnerability -> homepage fetch for WP version detection. An
+        #     empty body reads as "not WordPress" and skips the CVE lookup,
+        #     which `wpvuln_lookup_is_degraded` classifies as HEALTHY.
+        #
+        # So a guessed key silently DELETES coverage in both. Capture first.
+        # This is the same discipline that caught the header underscore trap:
+        # the `-irh` capture is the only reason ㊴ probe 1 did not ship seven
+        # fabricated findings per asset fleet-wide.
+        run: |
+          set +e
+          TARGET="https://www.prodexlabs.com"
+
+          OUT=$(httpx -u "$TARGET" -silent -no-color -json -irr -sc -timeout 15 2>/dev/null | head -1)
+          if [ -z "$OUT" ]; then
+            echo "NO OUTPUT with -irr. Do NOT infer a shape from this."
+            echo "Re-check the flag name against the -h dump in the next step."
+            exit 0
+          fi
+
+          echo "=== 1. every top-level key under -irr, with type and SIZE ==="
+          # Size matters: the body key is the big one. Types alone can't
+          # distinguish 'body' from 'raw_header' — both are strings.
+          echo "$OUT" | jq -r 'to_entries
+            | map("\(.key)  [\(.value|type)]  len=\(
+                if (.value|type)=="string" then (.value|length)
+                elif (.value|type)=="object" then (.value|keys|length)
+                else 0 end)")
+            | sort | .[]'
+
+          echo
+          echo "=== 2. candidate BODY keys (string, longer than 200 chars) ==="
+          echo "$OUT" | jq -r 'to_entries
+            | map(select((.value|type)=="string" and (.value|length) > 200))
+            | if length == 0 then
+                "NONE -- no long string field. -irr did NOT return a body. STOP."
+              else map("\(.key)  len=\(.value|length)") | .[] end'
+
+          echo
+          echo "=== 3. is the body RAW HTML or BASE64? (first 120 chars each) ==="
+          # A base64 body would need decoding before sha256/marker matching —
+          # hashing base64 still "works" but silently changes every hash.
+          echo "$OUT" | jq -r 'to_entries
+            | map(select((.value|type)=="string" and (.value|length) > 200))
+            | map("--- \(.key) ---\n\(.value[0:120])") | .[]'
+
+          echo
+          echo "=== 4. status_code type under -irr (must be NUMBER, not string) ==="
+          # _probe_path_body compares `code not in (200, 204, 206)` — an int
+          # tuple. If httpx emits a string, EVERY comparison silently fails
+          # and no path is ever considered exposed.
+          echo "$OUT" | jq -r '.status_code | "value=\(.) type=\(.|type)"'
+
+          echo
+          echo "=== 5. content-type, as -irr exposes it (for the ctype gate) ==="
+          # _probe_path_body normalizes Content-Type and _is_known_secret_ctype
+          # gates HIGH findings on it. Confirm where it lives under -irr.
+          echo "$OUT" | jq -r '
+            [ (.header.content_type // empty), (.content_type // empty) ]
+            | if length == 0 then "NOT FOUND at .header.content_type or .content_type"
+              else .[] end'
           exit 0
 
       - name: Nuclei template version

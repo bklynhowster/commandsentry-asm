@@ -475,17 +475,51 @@ def dns_posture_is_degraded(spf_rc: int, dmarc_rc: int) -> tuple[bool, str]:
     return False, ""
 
 
-def httpx_methods_is_degraded(rc: int, stdout: str) -> tuple[bool, str]:
-    """methods_check uses curl OPTIONS. Same failure-mode mapping as
-    headers_check — rc != 0 with empty stdout means we couldn't ask the
-    server about its methods at all."""
-    if rc != 0 and len(stdout.strip()) == 0:
-        if rc in (6, 7):
-            return True, "network_unreachable"
-        if rc == 28:
-            return True, "network_timeout"
-        return True, "curl_failed"
-    return False, ""
+def methods_check_is_degraded(rc: int, stdout: str) -> tuple[bool, str]:
+    """methods_check is the ONE light probe ㊴ cannot migrate.
+
+    httpx has no way to SEND an OPTIONS request — its `-method` flag is
+    display-only — so this probe stays on curl permanently. What ㊴ fixes
+    here is the INTERPRETATION, not the mechanism.
+
+    🔴 THE DEFECT. The old catch-all returned `curl_failed` for every exit
+    code it did not recognise, and degradation.py maps `curl_failed` ->
+    CUT_TRANSPORT, i.e. "we never reached the target". That is a factual
+    claim about the ASSET, invented from an exit code nobody had mapped.
+
+    It was measured wrong. Over 90 days, 158 `curl_failed` runs on
+    headers_check had the Go stack reach the SAME host in the SAME run 94%
+    of the time. And `curl_failed` is 316 of the ~1066 occurrences that make
+    TRANSPORT the dominant cut class on this fleet — so roughly a third of
+    that headline rests on a guess that was usually false.
+
+    So: map only what curl(1) actually documents, and for anything else say
+    we do not know. An unmapped exit falls through _CUT_CLASS_PREFIXES to
+    CUT_UNCLASSIFIED by design — `classify_cut_reason` returns that rather
+    than a default class precisely so an unrecognised reason is an admitted
+    gap instead of a wrong population. `unclassified` in a group-by is the
+    signal to come add a real mapping once evidence exists for one.
+
+    ⚠ Do NOT add a `curl_exit` prefix to _CUT_CLASS_PREFIXES to "tidy up"
+    the unclassified rows. That re-asserts the exact verdict this removes.
+    ⚠ `curl_failed` STAYS mapped in degradation.py. 316 historical rows
+    carry it and must keep classifying the way they did when they were
+    written; this changes what we emit from now on, not the past.
+    """
+    # Unchanged trigger: a non-zero rc that also produced NO output. A
+    # non-zero rc WITH output means curl got something back and the probe
+    # can still be read.
+    if not (rc != 0 and len(stdout.strip()) == 0):
+        return False, ""
+    if rc in (6, 7):
+        # curl(1): 6 = couldn't resolve host, 7 = failed to connect.
+        # Both are unambiguous transport. Kept lumped under the existing
+        # reason so historical classification is unchanged.
+        return True, "network_unreachable"
+    if rc == 28:
+        return True, "network_timeout"
+    # Everything else: name the code, claim nothing about the target.
+    return True, f"curl_exit_{rc}_unmapped"
 
 
 def wpvuln_lookup_is_degraded(reason: str | None) -> tuple[bool, str]:
@@ -1588,9 +1622,9 @@ def check_methods(ctx: ScanContext) -> None:
          f"https://{ctx.hostname}/"],
         timeout=15,
     )
-    degraded, reason = httpx_methods_is_degraded(rc, stdout)
+    degraded, reason = methods_check_is_degraded(rc, stdout)
     if degraded:
-        log(f"methods_check: curl rc={rc}: {stderr.strip()[:200]}")
+        log(f"methods_check: curl rc={rc} reason={reason}: {stderr.strip()[:200]}")
         mark_tool_degraded(ctx, "methods_check", reason)
         return
 
