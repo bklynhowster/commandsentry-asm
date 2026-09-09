@@ -45,6 +45,7 @@ EXIT CODES:
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -701,7 +702,10 @@ def check_headers(ctx: ScanContext) -> None:
 # non-HIGH paths. Kept INDEPENDENT of run_medium.detect_ffuf_catchall by design
 # (ruling 2): same SEMANTIC (random-path 2xx with a content-matching baseline),
 # different tool (curl vs httpx) and surface (fixed list vs ffuf wordlist).
-_STATUS_MARKER = "__CS_HTTP_STATUS__"
+# _STATUS_MARKER is GONE with 39 probe 2. It existed only to smuggle the
+# status code out of curl on a `-w` line appended to the body; httpx returns
+# `status_code` as a first-class NUMBER, so there is nothing to smuggle and
+# nothing to strip back off the body. Do not reintroduce it.
 _MAX_BODY = 262144  # 256 KB cap for hashing / marker scan (hole 3)
 
 
@@ -823,25 +827,68 @@ def _probe_path_body(ctx: ScanContext, path: str) -> tuple[int, str, str | None]
     Returns (0, '', None) on transport failure. The status/content_type ride out
     on one curl -w line, tab-separated (Content-Type never contains a tab)."""
     rc, stdout, _ = run_cmd(
-        ["curl", "-sS", "--max-time", "10",
+        ["httpx", "-u", f"https://{ctx.hostname}{path}",
+         "-silent", "-no-color", "-json",
+         "-irrb",            # base64 request/response -- see the WHY below
+         "-sc", "-ct",       # status_code + content_type as first-class fields
+         "-timeout", "10",
          "-H", "Accept-Encoding: identity",
-         "-H", "User-Agent: Mozilla/5.0 (compatible; COMMANDsentry/1.0)",
-         "-w", f"\n{_STATUS_MARKER}%{{http_code}}\t%{{content_type}}",
-         f"https://{ctx.hostname}{path}"],
+         "-H", "User-Agent: Mozilla/5.0 (compatible; COMMANDsentry/1.0)"],
         timeout=15,
     )
-    if rc != 0 or _STATUS_MARKER not in stdout:
+    if rc != 0 or not stdout.strip():
         return 0, "", None
-    body, _, tail = stdout.rpartition(_STATUS_MARKER)
-    if body.endswith("\n"):
-        body = body[:-1]
-    code_str, _, ctype_str = tail.strip().partition("\t")
     try:
-        code = int(code_str.strip()[:3])
-    except ValueError:
-        code = 0
-    ctype = _normalize_ctype(ctype_str) if ctype_str.strip() else None
+        rec = json.loads(stdout.strip().splitlines()[0])
+    except (ValueError, IndexError):
+        return 0, "", None
+    # httpx's own reachability verdict, not an exit code we have to interpret.
+    if rec.get("failed") is True:
+        return 0, "", None
+
+    code = rec.get("status_code")
+    if not isinstance(code, int):
+        # Captured as a NUMBER on v1.10.0. If a bump ever makes it a string,
+        # `code not in (200, 204, 206)` would silently never match and NO path
+        # would ever be considered exposed -- a total, silent loss of this
+        # check. Refuse rather than degrade quietly.
+        return 0, "", None
+
+    body = _decode_httpx_body(rec.get("body"))
+    ct_raw = rec.get("content_type") or (rec.get("header") or {}).get("content_type")
+    ctype = _normalize_ctype(ct_raw) if ct_raw and str(ct_raw).strip() else None
     return code, body[:_MAX_BODY], ctype
+
+
+def _decode_httpx_body(raw: object) -> str:
+    """Decode httpx's `-irrb` body field (base64) to text.
+
+    ⚠ WHY BASE64 AND NOT `-irr`. Captured 2026-09-09, inventory run #7:
+    `-irr` emits the raw response with LITERAL control bytes (CR/LF) inside a
+    JSON string, unescaped, and jq rejects it outright --
+    "control characters from U+0000 through U+001F must be escaped".
+    Python's json.loads rejects it too (strict=True). `-irrb` base64-encodes
+    it, so the record is ordinary parseable JSON. Do NOT "simplify" this back
+    to -irr.
+
+    ⚠ WHY `body` AND NOT `raw_header`/`request`. Run #8 captured them as three
+    SEPARATE top-level keys. `body` is the response body ALONE -- no Date, no
+    Set-Cookie. That matters because _body_sha() hashes this for the catch-all
+    baseline: a hash over anything containing a volatile header would differ on
+    every request, the two control probes would never match each other, and
+    catch-all detection would silently switch itself off.
+
+    Returns "" on anything unexpected. An empty body is the SAFE failure here
+    only because the caller already treats (0, "", None) as a failed probe --
+    never let "" reach _body_sha as if it were a real body, or every host
+    hashes identically and looks like a catch-all.
+    """
+    if not isinstance(raw, str) or not raw:
+        return ""
+    try:
+        return base64.b64decode(raw, validate=False).decode("utf-8", "replace")
+    except Exception:
+        return ""
 
 
 _CATCHALL_2XX = (200, 204, 206)

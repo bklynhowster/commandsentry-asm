@@ -303,6 +303,69 @@ jobs:
           fi
           exit 0
 
+      - name: httpx redirect shape (㊴ probe 3, wpvulnerability)
+        # ⚠ ONE outbound GET to an OWNED Command asset under standing ROE.
+        #
+        # WHY. probe 3 is wpvulnerability's homepage fetch, and it is the ONLY
+        # light probe whose curl carries `-L` (follow redirects). Probes 1 and 2
+        # had no -L, so they ported without touching redirect semantics. This
+        # one cannot.
+        #
+        # The constraint is NOT "don't follow redirects". It is:
+        #   ⛔ never follow a redirect off eTLD+1
+        # (ratified; two assets redirect to login.microsoftonline.com, and
+        # grading Microsoft's homepage as our asset is the failure mode).
+        #
+        # httpx offers only two settings, and NEITHER is the rule we need:
+        #   -fr,  -follow-redirects        follow everything, including offsite
+        #   -fhr, -follow-host-redirects   same HOST only
+        #
+        # -fhr is too tight: www.commandcompanies.com -> commandcompanies.com is
+        # a different HOST but the same eTLD+1. Using -fhr would stop following
+        # it, the homepage would be a 301 stub, "wp-content" would be absent,
+        # and wpvulnerability would conclude "not a WordPress site" and
+        # mark_tool_ok -- silently dropping WP CVE coverage on the 4 www assets
+        # that have an apex sibling. A HEALTHY-looking total loss of coverage.
+        #
+        # So: use -fr and enforce eTLD+1 ourselves. That needs the FINAL url
+        # after redirects, and it is not yet known which field carries it.
+        # `input` and `url` were both captured at len=26 on a NON-redirecting
+        # target, so they are indistinguishable there. Resolve it against a
+        # KNOWN redirector.
+        run: |
+          set +e
+          TARGET="https://www.commandcompanies.com/"
+          echo "target (known www -> apex redirector): $TARGET"
+
+          echo
+          echo "=== A. NO -fr (baseline: what a 301 stub looks like) ==="
+          A=$(httpx -u "$TARGET" -silent -no-color -json -sc -timeout 15 2>/dev/null | head -1)
+          echo "$A" | jq -r '"status_code=\(.status_code)  input=\(.input)  url=\(.url)  location=\(.location // "<none>")"'
+
+          echo
+          echo "=== B. WITH -fr (which field becomes the FINAL url?) ==="
+          B=$(httpx -u "$TARGET" -silent -no-color -json -sc -fr -timeout 15 2>/dev/null | head -1)
+          echo "$B" | jq -r '"status_code=\(.status_code)  input=\(.input)  url=\(.url)  location=\(.location // "<none>")"'
+          echo "  -> if url differs from input above, the url field is the FINAL url"
+          echo "     and is what the eTLD+1 guard must test. If equal, use -include-chain."
+
+          echo
+          echo "=== C. -fr -include-chain (fallback if B was ambiguous) ==="
+          C=$(httpx -u "$TARGET" -silent -no-color -json -sc -fr -include-chain -timeout 15 2>/dev/null | head -1)
+          echo "$C" | jq -r 'to_entries
+            | map(select(.key | test("chain|redirect|location|url|input")))
+            | map("  \(.key) [\(.value|type)] = \(.value|tostring|.[0:160])") | .[]'
+
+          echo
+          echo "=== D. does -fr change whether the body looks like WordPress? ==="
+          # The actual thing probe 3 depends on: 'wp-content' present in the body.
+          for FLAG in "" "-fr"; do
+            R=$(httpx -u "$TARGET" -silent -no-color -json -irrb $FLAG -timeout 15 2>/dev/null | head -1)
+            N=$(echo "$R" | jq -r '.body // ""' | base64 -d 2>/dev/null | grep -c "wp-content")
+            echo "  flags='$FLAG'  wp-content occurrences in decoded body: $N"
+          done
+          exit 0
+
       - name: Nuclei template version
         # Templates float SEPARATELY from the nuclei binary: the Dockerfile
         # runs `nuclei -update-templates` at build time. Pinning the binary
