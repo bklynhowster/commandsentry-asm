@@ -454,6 +454,60 @@ jobs:
               done
             fi
           done
+          echo
+          echo "=== ⛔ WHICH CORPUS DOES NUCLEI ACTUALLY READ? ==="
+          # -templates-version resolved to $HOME/nuclei-templates and printed a
+          # BLANK version. HOME is /root at BUILD time and /github/home at RUN
+          # time, and the Dockerfile bakes into /root/nuclei-templates. So the
+          # baked corpus and the corpus nuclei resolves may be different dirs —
+          # or the resolved one may not exist, in which case nuclei fetches its
+          # own at scan time, the bake is dead weight, and every scan runs
+          # against whatever upstream had that day. #31 cannot stamp anything
+          # until this is settled.
+          #
+          # ⚠ COUNT BOTH DIRS WITH THE SAME INSTRUMENT. `nuclei -tl` and
+          # `find -name '*.yaml'` measure different things — -tl excludes
+          # workflows, profiles, .github/ and non-template yaml, so it always
+          # reads lower than a raw file count even on the dir it IS using.
+          # Comparing the two would prove nothing. Whichever EXPLICIT -tl count
+          # equals the DEFAULT -tl count is the directory nuclei resolves to.
+          echo "HOME=$HOME"
+          echo "-- -tl against /root:  "; nuclei -tl -t /root/nuclei-templates 2>/dev/null | wc -l
+          echo "-- -tl against \$HOME: "; nuclei -tl -t "$HOME/nuclei-templates" 2>/dev/null | wc -l
+          echo "-- -tl DEFAULT (no -t):"; nuclei -tl 2>/dev/null | wc -l
+          echo "   ^^ the explicit count matching the default names the resolved dir."
+          for d in /root/nuclei-templates "$HOME/nuclei-templates"; do
+            if [ -d "$d" ]; then
+              printf '%s  EXISTS  yaml=%s\n' "$d" "$(find "$d" -name '*.yaml' | wc -l)"
+              # mtime is the most direct evidence of a runtime fetch: a dir
+              # dated TODAY inside an image built 09-07 is fetch-at-scan-time,
+              # no inference required.
+              stat -c '   mtime=%y  ctime=%z' "$d" 2>/dev/null || ls -ld "$d"
+              printf '   path-hash='
+              find "$d" -name '*.yaml' -printf '%P\n' 2>/dev/null | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+              [ -f "$d/.checksum" ] && { printf '   .checksum head: '; head -c 120 "$d/.checksum"; echo; }
+            else
+              echo "$d  MISSING"
+            fi
+          done
+          echo "-- nuclei config (dir + version it believes):"
+          cat "$HOME/.config/nuclei/.templates-config.json" 2>/dev/null | head -c 800; echo
+          echo
+          echo "=== THE REAL FALSIFIER — planned REQUESTS, not templates ==="
+          # `total` is nuclei's planned REQUEST count, so measure that quantity
+          # directly rather than proxying it through template counts. The count
+          # ratio (4250/4744 = 0.896) does not equal the request ratio
+          # (7255/9039 = 0.803) because requests-per-template is NOT uniform —
+          # fuzz and intrusive fire many requests each. -stats reports the same
+          # quantity `total` records, with no density assumption.
+          # 127.0.0.1 with nothing listening: zero outbound traffic.
+          # No -t, so this resolves exactly as production does.
+          for TAGS in "dos" "intrusive,dos,fuzz"; do
+            echo "-- -exclude-tags $TAGS"
+            timeout 40 nuclei -u 127.0.0.1 -severity critical,high -exclude-tags "$TAGS" \
+              -stats -stats-interval 2 -silent 2>&1 | grep -oE 'Requests: [0-9]+/[0-9]+' | head -2
+          done
+          echo "   ^^ the denominator is nuclei's planned-request total. Reproduces 9039 / 7255 or it does not."
           exit 0
 
       - name: httpx flag set
