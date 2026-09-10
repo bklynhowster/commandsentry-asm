@@ -1156,49 +1156,159 @@ def legacy_adapter(fn, tier, *args, _phase_name=None, **kwargs):
 # if it is misbehaviour, fix the misbehaviour. Raising the ceiling to hide slow
 # behaviour is the failure mode 4.7 named explicitly.
 #
-# ── 🔶 SUSPENDED 2026-09-09 — the finding under this guard is NOT settled ────
+# ── ✅ CONFIRMED FOR COMMAND 2026-09-09 — closed after re-measurement ────────
 #
-# Everything from here to CUMULATIVE_WALL_CLOCK_S is DERIVED-FROM, not
-# DO-NOT-REVISIT. Read it as provenance. Do not treat any number in it as a
-# constant, and do not let it stop you re-measuring — it very nearly did
-# exactly that on 2026-09-09.
+# This guard was SUSPENDED on 2026-09-09 because it stated no population, date,
+# tier or n. It has now been re-measured by an independent derivation and the
+# acceptance HOLDS for Command. It is written as DERIVED-FROM, not
+# DO-NOT-REVISIT. Read the sample before you use any number in it.
 #
-# THE SAMPLE IT WAS DERIVED FROM (never stated until now, which is the defect):
-#   * date       : pre-2026-09-06 runs ONLY
-#   * population : Command, WAF/CDN-fronted targets (Pressable, Cloudflare)
+# THE SAMPLE (state this or it does not go in):
+#   * date       : 08-31 17:11 .. 09-06 12:20
+#   * population : Command — unimacgraphics.com, commandcompanies.com,
+#                  ftp.unimacgraphics.com (WAF/CDN-fronted: Pressable, Cloudflare)
 #   * tiers      : MIXED heavy + medium
-#   * n          : single digits
+#   * n          : 7 crit/high chunk records, 6 of them timeable
 #
-# WHY SUSPENDED. Every input is now known stale or confounded:
-#   * `7255 counter-units` is the PRE-cutover total. The crit/high chunk's
-#     `total` steps 7255 -> 9039 around 09-06 on BOTH instances. Cause not yet
-#     identified (candidates: ㉙ plan-selection split, nuclei-templates corpus
-#     growth, the toolchain pin itself, or a RECORDING change).
-#   * `3.8 units/sec` is derived from pre-cutover `percent`.
-#   * `~1909s` falls out of both, so it inherits both.
-#   * ⚠ If `total` changed MEANING rather than size — e.g. nuclei clustering
-#     templates by request signature differently across a version bump — then
-#     `percent` is unit-inconsistent across the boundary and NONE of these
-#     numbers are comparable to post-09-06 ones. Unresolved.
+# HOW IT WAS RE-MEASURED. `requests / rps` recovers chunk elapsed seconds from
+# the per-chunk record, independently of `percent` (which was the suspect unit
+# and cannot validate itself). Command's six timed runs:
 #
-# STATUS: neither "stands" nor "refuted" — SUSPENDED pending measurement in
-# validated units. That distinction is load-bearing: it is what stops the next
-# reader treating either the old or the new number as settled.
+#     588/196 = 3.0    676/169 = 4.0    1338/446 = 3.0
+#     1270/423 = 3.0   1707/427 = 4.0   1530/510 = 3.0
 #
-# ⛔ DO NOT re-derive this on post-cutover `percent` either. `percent` is the
-# measurement under suspicion and cannot validate itself (an allowlist cannot
-# self-reference). Resolve units FIRST by counting actual template executions
-# from run artifacts on one pre- and one post-cutover run, same asset+tier.
+# RESULT — the rate is FLAT at 3.0-4.0 req/s. There is no decay on Command.
+# Across the ⑮ fuse change, 180s bought ~630 requests and 400s bought ~1460:
+# fuse ratio 2.22, request ratio 2.32 — slightly super-linear, NOT flattening.
+# 7255 at ~3.5/sec is ~2073s against this 1800s ceiling. On the FULL (non-WAF)
+# plan the chunk `total` is 9039, which at the same rate is ~2583s — so the
+# acceptance holds on BOTH plan classes, and by a wider margin on the full one.
+# ⚠ 7255 and 9039 are PLAN CLASSES, not dates. There is no cutover and no
+# boundary — see the resolution below before using either number.
+#
+# ⚠ PRECISION. `rps` is stored as an integer, so the recovery band is 100/rps:
+# ±1.5% at rps=31 but ±17% at rps=3. At Command's rates these rows carry
+# "consistent with the stated fuse, at ±17%" and NOT "confirmed arithmetically".
+# Four of the 400s runs recovered OVER 400s (446, 423, 427, 510); at this
+# resolution that is indistinguishable from rounding and is not claimable
+# either way.
+#
+# ✅ RESOLVED 2026-09-10 — `total` NEVER "stepped", and there is no 09-06
+# boundary. 7255 and 9039 are TWO PLANS, selected per-run by WAF state:
+#
+#     run_medium.py:3032-3035
+#         if ctx.waf_detected:  cmd += ["-exclude-tags", "intrusive,dos,fuzz"]
+#         else:                 cmd += ["-exclude-tags", "dos"]
+#
+# Both branches drop `dos`; the WAF branch additionally drops `intrusive` and
+# `fuzz`. Fewer templates loaded => fewer planned requests => smaller `total`.
+# 9039 - 7255 = 1784 is the intrusive+fuzz share of the crit/high corpus.
+#
+# EVIDENCE, three independent levels:
+#   1. CODE — the branch above, read at the call site.
+#   2. DATA — `total` is stable per asset and strictly two-valued across 14
+#      assets (10 Command + 4 Prodex). No asset has ever shown both values.
+#      ⛔ On 09-06 the two values INTERLEAVE hour by hour: ftp.unimacgraphics
+#      7255 at 12:20, the bare IPs 9039 at 18:50-20:50, 52.119.65.5 9039 at
+#      22:20, enrollment2 7255 at 22:50, email.commandcompanies 9039 at 23:20.
+#      Corpus growth cannot produce that. The temporal reading is DEAD.
+#   3. CORRELATION — `waf_detected` (scan metadata artifact) vs `total`, 7 of 7
+#      where recorded: false->9039 (six assets), true->7255. Discriminating
+#      case: email.commandcompanies.com is false/9039 while
+#      commandcompanies.com is 7255 — same parent domain, opposite bucket, so
+#      no per-organisation confound. The 3 NULLs are heavy runs, which do not
+#      write the metadata artifact; all 3 sit in the 7255 bucket.
+#
+# ⚠ CONSEQUENCE FOR THIS ACCEPTANCE — it survives and gets STRONGER, but read
+# the units correctly. Every Command row behind the 3.0-4.0 req/s measurement
+# (unimacgraphics, commandcompanies, ftp.unimacgraphics) is WAF-fronted and
+# therefore on the REDUCED 7255 plan. Command needs ~2073s for the reduced
+# plan and ~2583s for the full one, against an 1800s ceiling. Over either way.
+#
+# ⚠ `percent` is comparable WITHIN a plan class and NOT across one. That is the
+# units question the earlier SUSPENSION was waiting on, and it is now answered:
+# `total` did not change MEANING, it is two different template sets.
+#
+# ⛔ 7255 AND 9039 ARE NOT CLASS IDENTIFIERS. `total` is planned requests over
+# the LOADED TEMPLATE SET, so it is a function of PLAN CLASS x CORPUS VERSION,
+# and only one corpus version has been measured. Templates are deliberately NOT
+# pinned (docker/Dockerfile runs `nuclei -update-templates` at build; version
+# string blank) — only the binary is (v3.11.1). The same asset in the same WAF
+# class WILL report a different `total` after the next image rebuild.
+# ⚠ Anything that treats 7255/9039 as markers breaks silently at that rebuild.
+# Key on the WAF class, never on the number.
+#
+# ⚠ 1784 (9039-7255) IS NOT A CONSTANT either. It is this-corpus, and it must be
+# expressed as a RATIO measured at a stamped corpus, not as a fixed count.
+# NOT established: that it is exactly the intrusive+fuzz request count. #31
+# (stamp the template count + commit into scan_run) is what makes that
+# measurable at all — and is also what makes any historical `percent`
+# comparison legitimate, since without it the corpus dimension is invisible.
+#
+# ⚠ BOUND ON CORPUS DRIFT, measured 2026-09-10. There WAS a rebuild inside the
+# record window: docker/Dockerfile 14c639ac at 09-07 15:32 (scanner.yml sat on
+# `:latest` until c7d8abf1 at 09-07 17:33, so every rebuild reached production
+# immediately). The PRIOR build was 94ad731c at 08-26 07:18 — a 12.3-day gap,
+# so the re-fetch spanned a real upstream window. Two Prodex assets span it at
+# an unchanged `total`: prodexlabs.com (7 runs, 09-03 .. 09-09) and
+# www.prodexlabs.com (4 runs, 09-05 .. 09-09), all 9039.
+#
+# THE FETCH DEMONSTRABLY LANDED, so "the update silently failed" is refuted for
+# this rebuild: 14c639ac edits lines 39-78, ABOVE the update-templates line, so
+# Docker's layer cache was busted and it genuinely re-ran; nothing COPYs
+# templates into the image, so /root/nuclei-templates can only exist because the
+# fetch succeeded; and inventory measured 13,619 templates present on 09-07.
+#
+# ⚠ But `RUN nuclei -update-templates -silent 2>/dev/null || true` IS a
+# fail-silent path. It did not fire here; it can fire later, and nothing would
+# record that it had — `nuclei -templates-version` prints an empty string, so
+# the corpus cannot be read from inside the image either. Checks that pass by
+# never running, in the template path.
+# ⛔ #31 must therefore stamp the corpus PRESENT AT SCAN TIME, not the corpus
+# the build intended to fetch. Those can differ with nothing recording it.
+#
+# This is evidence the CORPUS WAS STABLE in the crit/high band across
+# 08-26 -> 09-07. It is NOT evidence that `total` is corpus-insensitive.
+#
+# ⚠ THE WAF VERDICT HAS A SECOND, PER-RUN INPUT — so "one total per asset" is
+# measured, not structurally guaranteed. run_heavy.py:2148 (`waf_differential`)
+# sets `ctx.waf_detected = True` from a BEHAVIOURAL block verdict, which can
+# differ run to run on one asset and would flip its plan class.
+# MEASURED 09-10 on `stack_id_waf_differential` artifacts: 124 of 126 have
+# `details.live_flag = false` (dry-run, cannot set the flag), 07-21 .. 09-06.
+# The 2 live ones (3 payload classes blocked) are both 08-28 — BEFORE the heavy
+# regime boundary, so they carry no crit/high record and touched no `total` in
+# the sample. ⛔ `ACTIVE_PROBE_LIVE` defaults to 'false' and is settable only by
+# workflow_dispatch input; if it is ever dispatched true, an asset CAN change
+# plan class between runs with no other change. Re-check before relying on
+# per-asset stability.
+#
+# ⛔ WAF-fronted assets are hit TWICE: plan-level tag exclusion removes
+# intrusive+fuzz before the scan starts, and then the fuse truncates what
+# remains. Plan-level exclusion and fuse truncation COMPOSE on the same assets.
+#
+# ⛔ DO NOT re-derive any of this on `percent`. `percent` = requests ÷ total,
+# so it is algebraically the same quantity as `requests` and adds nothing;
+# it also cannot validate itself.
+#
+# ⛔ THIS IS A COMMAND RESULT AND DOES NOT TRANSFER. Prodex measures 19-22 req/s
+# on the same chunk — ~6x Command's rate, also flat — and its heavy runs finish
+# in 1230-1497s, never reaching this 1800s ceiling. On Prodex the binding
+# constraint is the 400s per-chunk fuse, not this constant. Different
+# population, different bottleneck, different arithmetic. Do not carry a
+# Command number onto Prodex or vice versa.
 #
 # ⚠ A do-not-revisit warning is only ever as good as the finding underneath it.
-# This one guarded a number nobody had verified and discouraged the exact
-# re-measurement that was required. Any future guard here carries its
-# population, date, tier and n — or it does not go in.
+# The previous version of this comment guarded a number nobody had verified and
+# discouraged the exact re-measurement that confirmed it. Any future guard here
+# carries its population, date, tier and n — or it does not go in.
 #
-# Full context: Obsidian 234 (RETRACTED IN PLACE — read the retraction header,
-# not the body) and the 4.7 exchange of 2026-09-09.
+# Full context: Obsidian 205 (the original measurement, VINDICATED — 3.8
+# counter-units/sec from 687/180s on #2637 and 676/180s on #2649 reproduces as
+# 3.0-4.0 req/s five weeks later from a completely different derivation) and
+# Obsidian 234 (RETRACTED IN PLACE — read the retraction header, not the body).
 #
-# ── 4.7 rulings ㉖/㉗/㉘, 2026-09-01 — PROVENANCE OF THE SUSPENDED FINDING ────
+# ── 4.7 rulings ㉖/㉗/㉘, 2026-09-01 — CONFIRMED 2026-09-09 ──────────────────
 #
 # This ceiling was tested against a real aspiration and HELD. nuclei's
 # `critical,high` chunk is 7255 counter-units at a measured 3.8 units/sec, so it
