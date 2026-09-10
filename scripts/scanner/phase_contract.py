@@ -1263,30 +1263,73 @@ def legacy_adapter(fn, tier, *args, _phase_name=None, **kwargs):
 # measurable at all — and is also what makes any historical `percent`
 # comparison legitimate, since without it the corpus dimension is invisible.
 #
-# ⚠ BOUND ON CORPUS DRIFT, measured 2026-09-10. There WAS a rebuild inside the
-# record window: docker/Dockerfile 14c639ac at 09-07 15:32 (scanner.yml sat on
-# `:latest` until c7d8abf1 at 09-07 17:33, so every rebuild reached production
-# immediately). The PRIOR build was 94ad731c at 08-26 07:18 — a 12.3-day gap,
-# so the re-fetch spanned a real upstream window. Two Prodex assets span it at
-# an unchanged `total`: prodexlabs.com (7 runs, 09-03 .. 09-09) and
-# www.prodexlabs.com (4 runs, 09-05 .. 09-09), all 9039.
+# ⛔⛔ RETRACTED 2026-09-10, SAME DAY IT WAS WRITTEN — an earlier version of this
+# paragraph claimed a "12.3-day corpus-stability bound" from two assets holding
+# at total=9039 across the 09-07 image rebuild. THAT CLAIM MEASURED THE WRONG
+# ARTIFACT and is false. Replaced rather than deleted, so the wrong model is not
+# re-derived from the Dockerfile by the next reader.
 #
-# THE FETCH DEMONSTRABLY LANDED, so "the update silently failed" is refuted for
-# this rebuild: 14c639ac edits lines 39-78, ABOVE the update-templates line, so
-# Docker's layer cache was busted and it genuinely re-ran; nothing COPYs
-# templates into the image, so /root/nuclei-templates can only exist because the
-# fetch succeeded; and inventory measured 13,619 templates present on 09-07.
+# WHAT IS ACTUALLY TRUE: THE CORPUS IS FETCHED AT RUNTIME, PER SCAN.
+# Measured in the production image (toolchain-inventory run #4, tag
+# 20260907-9191df6):
 #
-# ⚠ But `RUN nuclei -update-templates -silent 2>/dev/null || true` IS a
-# fail-silent path. It did not fire here; it can fire later, and nothing would
-# record that it had — `nuclei -templates-version` prints an empty string, so
-# the corpus cannot be read from inside the image either. Checks that pass by
-# never running, in the template path.
-# ⛔ #31 must therefore stamp the corpus PRESENT AT SCAN TIME, not the corpus
-# the build intended to fetch. Those can differ with nothing recording it.
+#     -tl against /root/nuclei-templates  : 13212
+#     -tl against $HOME/nuclei-templates  : 13203
+#     -tl DEFAULT, no -t                  : 13203   <- matches $HOME
 #
-# This is evidence the CORPUS WAS STABLE in the crit/high band across
-# 08-26 -> 09-07. It is NOT evidence that `total` is corpus-insensitive.
+#     /root/nuclei-templates        mtime 2026-09-07 21:00:25   (the bake)
+#     /github/home/nuclei-templates mtime 2026-09-10 19:11:13   (~21s into the run)
+#
+# nuclei resolves $HOME/nuclei-templates. HOME is /root at BUILD time and
+# /github/home at RUN time, so the Dockerfile's `nuclei -update-templates` bakes
+# into a path nuclei never reads. ⛔ /root/nuclei-templates IS DEAD WEIGHT.
+# Every scan downloads its own template corpus at runtime.
+#
+# ⛔ CONSEQUENCE: IMAGE REBUILD DATES ARE IRRELEVANT TO WHAT A SCAN SCANS WITH.
+# Do not reason about template coverage from Dockerfile history, image tags, or
+# build timestamps — none of them touch the corpus a scan actually uses. The
+# `|| true` on the Dockerfile's update-templates line is therefore moot for
+# scans; the fail-silent risk MOVED to the runtime fetch, where it is unprobed.
+#
+# ⚠ A REAL corpus version DOES exist, but only AFTER nuclei has run once —
+# which is why `-templates-version` printed blank when called first:
+#   $HOME/.config/nuclei/.templates-config.json -> "nuclei-templates-version"
+#   Observed v10.4.8, both baked (09-07) and fetched (09-10). Upstream had not
+#   moved between those dates, which independently explains `total` holding at
+#   9039 — the corpus, not the image, was stable.
+#
+# ⚠ A PATH HASH OVER *.yaml IS NOT A COMPLETE CORPUS IDENTITY. Both directories
+# hash identically (bcc9a684...b859) yet return -tl counts 9 apart, because
+# non-yaml files — `.nuclei-ignore` and friends — change which templates execute
+# and are invisible to a yaml-only hash. #31 must stamp
+# `nuclei-templates-version` PLUS a hash covering the whole directory.
+#
+# ✅ THE PLAN-CLASS MECHANISM IS NOW CONFIRMED BY DIRECT MEASUREMENT, not by
+# proxy. `nuclei -u 127.0.0.1 -severity critical,high -stats` reports the same
+# planned-request quantity `total` records:
+#
+#     -exclude-tags dos               -> Requests: 37/9039
+#     -exclude-tags intrusive,dos,fuzz -> Requests: 148/7255
+#
+# 9039 and 7255 reproduce EXACTLY. No density assumption, zero outbound traffic.
+# ⚠ The earlier template-COUNT test (4744 vs 4250, ratio 0.896 against the
+# request ratio 0.803) was the wrong instrument — requests-per-template is not
+# uniform, and fuzz/intrusive fire many requests each. That mismatch never
+# falsified anything.
+#
+# ⚠ THREE UNPROBED RUNTIME-FETCH MODES, in rising order of likelihood:
+#   1. fetch fails entirely -> 0 templates -> does the run report success with
+#      no coverage at all?
+#   2. fetch partially succeeds -> subset loaded -> PARTIAL coverage recorded as
+#      complete. Likelier than total failure and much harder to see.
+#   3. fetch succeeds against a CHANGED corpus -> findings appear and disappear
+#      -> phantom remediation. Not a failure from the scanner's view, and it is
+#      LIVE ON EVERY SCAN TODAY.
+#
+# ⚠ ALSO UNMEASURED: the runtime fetch cost ~21s. If that lands inside
+# NUCLEI_CHUNK_WALL_S on the FIRST nuclei chunk of a scan, ~5% of the 400s fuse
+# is spent downloading templates and the first chunk is systematically
+# disadvantaged against every later one.
 #
 # ⚠ THE WAF VERDICT HAS A SECOND, PER-RUN INPUT — so "one total per asset" is
 # measured, not structurally guaranteed. run_heavy.py:2148 (`waf_differential`)

@@ -234,17 +234,44 @@ COPY --from=builder /root/go/bin/gau             /usr/local/bin/
 # template set per scan run so a vanished finding can be DIFFED against a
 # template change instead of silently reading as a fix.
 #
-# ⚠ There is nothing to pin by version even if we wanted to. Verified by
-# the inventory workflow: `nuclei -templates-version` prints an EMPTY
-# version string. Pinning templates would mean vendoring the
-# nuclei-templates repo at a commit, not passing a flag.
+# ⛔⛔ THIS PRE-PULL IS DEAD WEIGHT — CORRECTED 2026-09-10, DO NOT DELETE THE
+# LINE WITHOUT READING THIS.
 #
-# Measured 2026-09-07 (inventory run #4): 13,619 templates in
-# /root/nuclei-templates, template version string blank.
+# HOME is /root at BUILD time and /github/home at RUN time. nuclei resolves its
+# template directory from $HOME, so this line writes /root/nuclei-templates and
+# NOTHING EVER READS IT. Measured in the production image
+# (toolchain-inventory run #4):
 #
-# FOLLOW-ON, NOT YET BUILT: stamp the template count + commit into
-# scan_run. Until that ships, the drift is accepted and recorded here but
-# NOT yet detectable — do not read this comment as "handled."
+#     -tl against /root/nuclei-templates  : 13212
+#     -tl against $HOME/nuclei-templates  : 13203
+#     -tl DEFAULT, no -t                  : 13203   <- matches $HOME
+#     /root  mtime 2026-09-07 (this build) | $HOME mtime = ~21s into the RUN
+#
+# ⛔ EVERY SCAN DOWNLOADS ITS OWN CORPUS AT RUNTIME. Consequences:
+#   * Image rebuild dates, tags and this file's history say NOTHING about what
+#     a scan scans with. Do not reason about template coverage from them.
+#   * The `|| true` below cannot cause a silent scan-time coverage loss,
+#     because scans do not use what it fetches. The fail-silent risk MOVED to
+#     the runtime fetch and is UNPROBED there.
+#   * The template-drift decision recorded below still stands, but its
+#     mechanism is the runtime fetch, not this line.
+#
+# ⚠ CORRECTION: an earlier version of this comment said "there is nothing to
+# pin by version — `nuclei -templates-version` prints an EMPTY version string."
+# That was an artifact of CALL ORDER, not a missing feature. The flag was
+# invoked before any nuclei run had created the runtime directory. After a
+# single `nuclei -tl`, $HOME/.config/nuclei/.templates-config.json reports
+# "nuclei-templates-version":"v10.4.8". A real corpus version DOES exist — it
+# is simply unreadable until nuclei has run once. #31 stamps it from there.
+#
+# ⚠ Also corrected: "13,619 templates in /root/nuclei-templates" is a count of
+# a directory no scan reads.
+#
+# KEEPING THE LINE ANYWAY: it is cheap, and removing it would be a behaviour
+# change in a build whose relationship to scan-time behaviour is now understood
+# but not yet re-verified end to end. Fixing HOME, or pointing the fetch at the
+# runtime path, is a deliberate change to make on its own — not a side effect
+# of a comment correction.
 RUN nuclei -update-templates -silent 2>/dev/null || true
 
 # ─── Sanity check — fail the build if any expected tool is missing ─
