@@ -23,7 +23,27 @@ name: Toolchain inventory
 # whenever a deliberate bump happens. Read-only; it changes nothing.
 
 on:
+  # ⛔ THE TAG IS AN INPUT BECAUSE THE DEFAULT USED TO BE WRONG.
+  # This workflow ran in `:latest` while scanner.yml ran production in a dated
+  # tag. Everything it measured — tool versions, flag shapes, and now the nuclei
+  # corpus identity and the two plan-class template counts — described an image
+  # NO SCAN HAS EVER RUN IN, and would have silently drifted further every time
+  # `:latest` was rebuilt. That defeats the purpose of an inventory.
+  #
+  # Default = the exact tag scanner.yml uses, so "inventory" means "what did
+  # production actually scan with".
+  # ⚠ KEEP THIS IN SYNC WITH scanner.yml's `image:` WHEN THE PIN MOVES.
+  #
+  # Pass `latest` deliberately and diff the two runs: that IS the corpus-drift
+  # measurement, and it is the only way to see whether upstream templates moved
+  # since the pin — `nuclei -templates-version` prints an empty string, so there
+  # is no version to compare instead.
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Scanner image tag to inspect. Default = the production pin. Use "latest" to measure upstream drift since that pin.'
+        required: false
+        default: '20260907-14c639a'
 
 permissions:
   contents: read
@@ -33,7 +53,7 @@ jobs:
   inventory:
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/bklynhowster/commandsentry-scanner:latest
+      image: ghcr.io/bklynhowster/commandsentry-scanner:${{ github.event.inputs.image_tag || '20260907-14c639a' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

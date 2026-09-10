@@ -1219,6 +1219,24 @@ def legacy_adapter(fn, tier, *args, _phase_name=None, **kwargs):
 #      no per-organisation confound. The 3 NULLs are heavy runs, which do not
 #      write the metadata artifact; all 3 sit in the 7255 bucket.
 #
+# ⛔⛔ THERE IS A THIRD PLAN CLASS AND SELECTING ON `total` DROPS IT SILENTLY.
+# The FortiGate SAFE-ONLY branch plans `nuclei[medium:tech]` and NOTHING else —
+# no crit/high chunk exists, so `total` is structurally NULL and the asset
+# cannot appear in ANY population selected on `total`. Confirmed from data
+# 2026-09-10, not from 194's description: commandcommcentral.com (3 heavy,
+# 09-03) and ftp.sciimage.com (1 heavy, 09-06). ⚠ These are the assets with the
+# WORST coverage in the fleet — zero critical/high templates ever run — and
+# they are invisible to every `total`-keyed query.
+#
+# ⚠ THE REAL DENOMINATOR (Command, ALL history, both record shapes):
+#     HAS crit/high chunk, `total` present : 16 runs / 10 assets, 08-31..09-07
+#     HAS crit/high chunk, `total` NULL    : 20 runs /  9 assets, 06-13..09-06
+#     NO  crit/high chunk at all           :  8 runs /  3 assets, 08-29..09-06
+#   Everything above — the 7255/9039 split, the waf<->total correlation, the
+#   rate and fuse arithmetic — rests on the 16, i.e. 16 of 44 runs. Recording
+#   reaches back to 06-13, NOT 08-30: the older generation carries the chunk
+#   with no counters. State N-of-M against 44.
+#
 # ⚠ CONSEQUENCE FOR THIS ACCEPTANCE — it survives and gets STRONGER, but read
 # the units correctly. Every Command row behind the 3.0-4.0 req/s measurement
 # (unimacgraphics, commandcompanies, ftp.unimacgraphics) is WAF-fronted and
@@ -1278,10 +1296,14 @@ def legacy_adapter(fn, tier, *args, _phase_name=None, **kwargs):
 # `details.live_flag = false` (dry-run, cannot set the flag), 07-21 .. 09-06.
 # The 2 live ones (3 payload classes blocked) are both 08-28 — BEFORE the heavy
 # regime boundary, so they carry no crit/high record and touched no `total` in
-# the sample. ⛔ `ACTIVE_PROBE_LIVE` defaults to 'false' and is settable only by
-# workflow_dispatch input; if it is ever dispatched true, an asset CAN change
-# plan class between runs with no other change. Re-check before relying on
-# per-asset stability.
+# the sample.
+# ⚠ DOWNGRADED 2026-09-10 from "could break the WAF<->total mapping" to "code
+# path EXISTS but is UNOBSERVED": no asset has more than one distinct `total`
+# in ALL history on either instance (Command 18 assets, Prodex 4). Scoped to
+# where the behavioural path can actually fire — non-WAF assets with heavy runs
+# — that is prodexlabs.com (7 runs) and www.prodexlabs.com (4), all 9039.
+# Eleven runs, no flip. `ACTIVE_PROBE_LIVE` defaults to 'false' and is settable
+# only by workflow_dispatch input; re-check only if it is ever dispatched true.
 #
 # ⛔ WAF-fronted assets are hit TWICE: plan-level tag exclusion removes
 # intrusive+fuzz before the scan starts, and then the fuse truncates what
