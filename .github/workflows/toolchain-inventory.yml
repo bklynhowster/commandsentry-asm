@@ -381,6 +381,61 @@ jobs:
           done
           exit 0
 
+      - name: Nuclei corpus identity (#31 probe — capture, do NOT guess)
+        # #31 must record WHICH template corpus a scan actually ran against.
+        # Two verified facts make that harder than it looks:
+        #   * `nuclei -templates-version` prints an EMPTY string (see the step
+        #     above, and docker/Dockerfile records the same) — there is no
+        #     version string to read.
+        #   * `RUN nuclei -update-templates -silent 2>/dev/null || true` is
+        #     FAIL-SILENT, so the corpus PRESENT can differ from the corpus the
+        #     build intended to fetch with nothing anywhere recording that it
+        #     did. The stamp therefore has to describe what is present at scan
+        #     time, not what the build asked for.
+        # There is NO in-repo precedent for a template-listing flag, so this
+        # step captures the real shape rather than shipping a guessed one —
+        # the same discipline that produced the httpx `-irrb` finding.
+        run: |
+          set +e
+          echo "=== does a template-list flag exist in this nuclei? ==="
+          nuclei -h 2>&1 | grep -iE "tl,|-tl\b|template-list|list.*template|templates-version" | head -20
+          echo
+          echo "=== PLAN-CLASS COUNTS — the exact two branches run_medium.py:3032 picks ==="
+          echo "-- FULL plan (non-WAF):  -severity critical,high -exclude-tags dos"
+          nuclei -tl -severity critical,high -exclude-tags dos 2>/dev/null | wc -l
+          echo "-- REDUCED plan (WAF):   -severity critical,high -exclude-tags intrusive,dos,fuzz"
+          nuclei -tl -severity critical,high -exclude-tags intrusive,dos,fuzz 2>/dev/null | wc -l
+          echo "   ^^ if both read 0 the flag is unsupported and the stamp needs another source."
+          echo "   These two counts are what the 7255 : 9039 ratio has to be tested against."
+          echo
+          echo "=== corpus identity candidates ==="
+          D=""
+          for d in /root/nuclei-templates "$HOME/nuclei-templates" /nuclei-templates; do
+            [ -d "$d" ] && { D="$d"; break; }
+          done
+          echo "dir=$D"
+          if [ -n "$D" ]; then
+            echo "-- git ref (is it a clone?):"
+            git -C "$D" rev-parse HEAD 2>&1 | head -2
+            echo "-- top-level entries incl. dotfiles:"
+            ls -a "$D" 2>/dev/null | head -25
+            echo "-- yaml count:"
+            find "$D" -name '*.yaml' | wc -l
+            echo "-- deterministic path hash (detects add/remove, not edits):"
+            find "$D" -name '*.yaml' -printf '%P\n' 2>/dev/null | LC_ALL=C sort | sha256sum
+          fi
+          echo
+          echo "=== nuclei config dir (may carry a fetched-version record) ==="
+          for c in "$HOME/.config/nuclei" /root/.config/nuclei; do
+            if [ -d "$c" ]; then
+              echo "$c"; ls -a "$c" 2>/dev/null
+              for f in "$c"/*.json "$c"/.*.json; do
+                [ -f "$f" ] && { echo "--- $f"; head -c 600 "$f"; echo; }
+              done
+            fi
+          done
+          exit 0
+
       - name: httpx flag set
         # THE SPEC-231 BLOCKER. The curl -> Go-stack migration needs httpx to
         # return RESPONSE HEADERS (check_headers needs the security-header
