@@ -83,6 +83,12 @@ ORDER_REACHABILITY = 10    # can we reach it at all; egress health
 ORDER_BAN_DETECT = 20      # fwbbot_check, waf_differential, wafw00f (~5 reqs)
 ORDER_LIGHT = 30           # DNS/TLS/headers/CSP/methods/paths/httpx/wpvuln
 ORDER_PASSIVE_DEPTH = 40   # gau (zero target traffic), content_fetch, stack-id
+ORDER_CORPUS_PREWARM = 45  # nuclei corpus fetch + INPUT floor + #31 stamp.
+                           # MUST precede ORDER_MEDIUM_TOOLS: nuclei downloads
+                           # its corpus on FIRST invocation, so without this the
+                           # download lands inside NUCLEI_CHUNK_WALL_S on
+                           # BASE_CHUNKS[0] (`critical,high`) — the one chunk
+                           # measured ~30s short of completing.
 ORDER_MEDIUM_TOOLS = 50    # nuclei chunked, nikto, ffuf, katana — attack-shaped
 ORDER_HEAVY_DEPTH = 60     # naabu/fingerprintx + active probes (dalfox, arjun)
 

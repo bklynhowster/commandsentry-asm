@@ -56,6 +56,7 @@ EXIT CODES:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -186,6 +187,44 @@ NUCLEI_TIMEOUT_S = 15
 # against a configured cap of 5, which is why ruling ㉑ dropped ⑱′'s gate: the
 # ban-exposure this was gated on was sized against a rate we never sent.
 NUCLEI_CHUNK_WALL_S = 400
+
+# ── nuclei corpus pre-warm (4.7 ruling 2026-09-10) ──────────────────────────
+# nuclei downloads its template corpus on FIRST INVOCATION, into
+# $HOME/nuclei-templates. MEASURED in the production image (toolchain-inventory
+# run #4): ~21s, and HOME is /root at image-BUILD time but /github/home at RUN
+# time — so docker/Dockerfile's pre-pull lands where nuclei never looks and is
+# dead weight. Before this phase existed, the first nuclei call in a container
+# was BASE_CHUNKS[0] — `critical,high` — so that download was spent INSIDE
+# NUCLEI_CHUNK_WALL_S on the one chunk measured ~30s short of completing.
+# ~21s of a ~30s shortfall.
+#
+# ⚠ ITS OWN TIMEOUT, deliberately NOT NUCLEI_CHUNK_WALL_S: a hanging GitHub
+# fetch must not eat a chunk's budget or the cumulative one.
+# ⚠ `or "..."` NOT `os.environ.get(k, "...")`. The two-arg form returns the
+# default ONLY when the key is ABSENT. A GitHub Actions variable that EXISTS
+# with an EMPTY value returns "", and int("") raises ValueError — at MODULE
+# IMPORT, not inside the phase. That does not degrade a scan, it breaks EVERY
+# scan on BOTH instances. Recorded trap: defaults differ by arrival path.
+NUCLEI_CORPUS_WALL_S = int(os.environ.get("NUCLEI_CORPUS_WALL_S") or "180")
+NUCLEI_CORPUS_FETCH_RETRIES = int(
+    os.environ.get("NUCLEI_CORPUS_FETCH_RETRIES") or "2")
+
+# ⛔ THIS IS AN *INPUT* FLOOR — "did we load a plausible corpus at all" — and it
+# is NOT ruling 85's OUTPUT floor ("nuclei ran but did little"), which stays
+# OPEN and SEPARATE. Do not let one absorb the other.
+#
+# An input floor needs no calibration: 13,203 templates against 0 or 200 is a
+# bound that can be set today. It is stated as a LOOSE FLOOR, NOT a target.
+# ⚠ Do NOT tighten it toward the observed count — that turns it into a
+# per-corpus-version maintenance burden and starts failing the honest case,
+# which is exactly how ㉟ went wrong.
+# Observed 2026-09-10, production image, `nuclei -tl`: 13203.
+# ⛔ THIS IS THE EMERGENCY ROLLBACK KNOB, so the empty-string trap matters most
+# here: "define the variable, clear its value" is the natural way to reach for a
+# rollback under pressure, and with the two-arg form that bricks every scan on
+# both instances at import time instead of relaxing the floor.
+NUCLEI_CORPUS_MIN_TEMPLATES = int(
+    os.environ.get("NUCLEI_CORPUS_MIN_TEMPLATES") or "6000")
 NUCLEI_URLS_PER_CHUNK = 40     # ~30-50s of work per chunk
 
 # ── nuclei -stats (increment 2a, 4.7 ruling ⑭) — SHIPS DARK ─────────────────
@@ -673,6 +712,15 @@ class ScanContext:
     # path. Without it a plan shrunk by a blocked tech-detect is internally
     # consistent and indistinguishable from a legitimately smaller plan.
     chunk_plan_meta: dict[str, Any] = field(default_factory=dict)
+    # nuclei corpus pre-warm verdict (4.7 2026-09-10). False ⇒ the corpus
+    # failed its INPUT floor and nuclei chunks MUST NOT run. A chunk that
+    # COMPLETES is recorded `ok` regardless of yield — there is no floor on the
+    # completion path (see mark_tool_ok_evidenced) — so a clean scan against an
+    # empty or partial template set feeds the autocloser and closes findings as
+    # REMEDIATED. Detection after the fact leaves the damage done.
+    nuclei_corpus_ok: bool = True
+    # #31 stamp: the corpus PRESENT at scan time, not the one the build wanted.
+    nuclei_corpus_meta: dict[str, Any] = field(default_factory=dict)
     # Per-tool diagnostics a phase wants persisted. Needed because mark_tool_ok
     # REPLACES ctx.tool_status[name], so anything written into that entry by
     # the phase body is clobbered when run_phase credits the phase afterwards.
@@ -3092,6 +3140,152 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
     return rc, matches, [], stdout, stderr
 
 
+def nuclei_templates_dir() -> str:
+    """Resolve the corpus directory nuclei ACTUALLY uses.
+
+    Read it out of nuclei's own config rather than assuming a path. $HOME
+    differs between image build (/root) and run (/github/home), which is
+    precisely how the Dockerfile's pre-pull ended up in a directory nuclei
+    never reads — measured, not theorised.
+    """
+    cfg = os.path.expanduser("~/.config/nuclei/.templates-config.json")
+    try:
+        with open(cfg, "r", encoding="utf-8") as fh:
+            d = json.load(fh)
+        p = d.get("nuclei-templates-directory")
+        if isinstance(p, str) and p.strip():
+            return p.strip()
+    except Exception:
+        pass
+    return os.path.expanduser("~/nuclei-templates")
+
+
+def nuclei_corpus_identity(tdir: str) -> dict[str, Any]:
+    """#31 stamp — identify the corpus PRESENT at scan time.
+
+    ⚠ Hashes EVERY file, not just *.yaml. In the production image both template
+    directories hash IDENTICALLY over *.yaml yet return `nuclei -tl` counts 9
+    apart, because `.nuclei-ignore` is not yaml and changes which templates
+    execute. A yaml-only hash is not a corpus identity.
+    """
+    version = None
+    cfg = os.path.expanduser("~/.config/nuclei/.templates-config.json")
+    try:
+        with open(cfg, "r", encoding="utf-8") as fh:
+            version = json.load(fh).get("nuclei-templates-version")
+    except Exception:
+        pass
+    h = hashlib.sha256()
+    files = 0
+    try:
+        for root, dirs, names in os.walk(tdir):
+            dirs.sort()
+            for n in sorted(names):
+                full = os.path.join(root, n)
+                try:
+                    size = os.path.getsize(full)
+                except OSError:
+                    size = -1
+                rel = os.path.relpath(full, tdir)
+                h.update(("%s:%d\n" % (rel, size)).encode("utf-8", "replace"))
+                files += 1
+    except Exception:
+        pass
+    return {
+        "templates_version": version,
+        "dir": tdir,
+        "files": files,
+        "dir_sha256": h.hexdigest() if files else None,
+    }
+
+
+def corpus_floor_failed(count: int) -> str | None:
+    """INPUT floor verdict. Returns a stable slug, or None when the corpus is
+    plausible. Pure function so the gate can be tested at the boundary —
+    including the case it must PASS (㉟)."""
+    if count < 0:
+        return "nuclei_corpus_unreadable"
+    if count == 0:
+        return "nuclei_corpus_empty"
+    if count < NUCLEI_CORPUS_MIN_TEMPLATES:
+        return "nuclei_corpus_below_input_floor"
+    return None
+
+
+def prewarm_nuclei_corpus(ctx: ScanContext) -> None:
+    """Fetch and verify the nuclei template corpus BEFORE any chunk runs.
+
+    One change, three problems (4.7 ruling 2026-09-10):
+      1. moves the ~21s runtime download OUT of NUCLEI_CHUNK_WALL_S, off the
+         `critical,high` chunk that was ~30s short of completing;
+      2. adds an INPUT floor, closing "empty or partial fetch recorded as a
+         clean scan" — which feeds the autocloser and closes findings as
+         remediated;
+      3. takes #31's corpus stamp once per run, from the resolved directory.
+
+    The 21s is spent either way and inside the cumulative budget either way.
+    The only thing that changes is whether crit/high spends it DOWNLOADING or
+    SCANNING, so this is recovered scanning at zero cost to anything else — on
+    both instances, regardless of which constraint binds there.
+
+    ⚠ TRANSPORT vs VERDICT. A fetch that TIMES OUT is transport — retry it. A
+    fetch that COMPLETES and yields a trivial corpus is a VERDICT — degrade,
+    and never retry. Retrying a verdict is how a fail-closed gate quietly
+    becomes fail-open.
+    """
+    tdir = nuclei_templates_dir()
+    log(f"→ nuclei corpus pre-warm (dir={tdir}, wall={NUCLEI_CORPUS_WALL_S}s)")
+    count = -1
+    stderr = ""
+    elapsed = 0.0
+    attempts = 0
+    for attempt in range(1, NUCLEI_CORPUS_FETCH_RETRIES + 2):
+        attempts = attempt
+        t0 = time.time()
+        rc, stdout, stderr = run_cmd(["nuclei", "-tl", "-silent"],
+                                     timeout=NUCLEI_CORPUS_WALL_S)
+        elapsed = round(time.time() - t0, 1)
+        if rc == 124:
+            # TRANSPORT: the fetch hung. Retry — this is not a verdict.
+            log(f"  attempt {attempt}: TIMEOUT after {elapsed}s "
+                f"— transport, retrying")
+            count = -1
+            continue
+        count = sum(1 for ln in stdout.splitlines() if ln.strip())
+        log(f"  attempt {attempt}: rc={rc} templates={count} in {elapsed}s")
+        # A completed fetch is a VERDICT whatever it yielded. Do not retry.
+        break
+
+    ident = nuclei_corpus_identity(tdir)
+    ident.update({"templates_listed": count, "fetch_seconds": elapsed,
+                  "attempts": attempts})
+    ctx.nuclei_corpus_meta = ident
+
+    floor = corpus_floor_failed(count)
+    if floor:
+        ctx.nuclei_corpus_ok = False
+        ctx.tool_diag["nuclei_corpus"] = ident
+        mark_tool_degraded(ctx, "nuclei_corpus", floor, stderr=stderr)
+        log(f"  corpus FAILED the input floor: {floor} "
+            f"(listed={count}, floor={NUCLEI_CORPUS_MIN_TEMPLATES}) "
+            f"— nuclei chunks will be SKIPPED, not run against a bad corpus")
+        return
+
+    ctx.nuclei_corpus_ok = True
+    ctx.tool_diag["nuclei_corpus"] = ident
+    mark_tool_ok_evidenced(
+        ctx, "nuclei_corpus",
+        Evidence.measured(items=count,
+                          templates_version=ident.get("templates_version"),
+                          dir_sha256=ident.get("dir_sha256"),
+                          corpus_files=ident.get("files"),
+                          fetch_seconds=elapsed),
+    )
+    log(f"  corpus OK: {count} templates, version="
+        f"{ident.get('templates_version')}, files={ident.get('files')}, "
+        f"sha256={str(ident.get('dir_sha256'))[:16]}… in {elapsed}s")
+
+
 def run_nuclei_chunked(ctx: ScanContext) -> None:
     """Run nuclei in multiple chunks, rotating VPN between each.
 
@@ -3103,6 +3297,21 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
     is run on the SAME egress IP before rotating away — so we can map
     rate-to-ban behavior in a single scan.
     """
+    # ── INPUT-FLOOR GATE (4.7 ruling 2026-09-10) ────────────────────────────
+    # The pre-warm phase found no plausible template corpus. Do NOT run chunks.
+    # A chunk that COMPLETES is recorded `ok` regardless of yield — there is no
+    # floor on the completion path — so scanning with an empty or partial
+    # corpus produces a CLEAN scan, which feeds the autocloser and closes real
+    # findings as REMEDIATED. Detecting that afterwards leaves the damage done,
+    # which is why the gate is here and not in a downstream report.
+    if not ctx.nuclei_corpus_ok:
+        for _sev, _tag, _label in build_chunk_plan(ctx):
+            mark_tool_skipped(ctx, nuclei_chunk_label(_sev, _tag),
+                              "nuclei_corpus_below_input_floor")
+        log("→ nuclei SKIPPED — corpus failed its input floor; chunks would "
+            "have reported ok against an empty/partial template set")
+        return
+
     # Effective mode resolution. PATIENT_MODE may be inherited from the
     # workflow input OR auto-enabled by target class (FortiGate → on).
     patient_effective = is_effective_patient_mode(ctx)

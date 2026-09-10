@@ -34,7 +34,8 @@ Both are verified by test_phase_registry.py.
 from __future__ import annotations
 
 from phase_contract import (phase, legacy_adapter,  # noqa: E402
-                            ORDER_BAN_DETECT, ORDER_LIGHT, ORDER_MEDIUM_TOOLS)
+                            ORDER_BAN_DETECT, ORDER_LIGHT, ORDER_MEDIUM_TOOLS,
+                            ORDER_CORPUS_PREWARM)
 from phase_source import LIGHT, MEDIUM  # noqa: E402
 
 import run_light as _light  # noqa: E402
@@ -73,6 +74,15 @@ _register("httpx[-td]", MEDIUM, _medium.detect_tech_stack, ORDER_LIGHT)
 
 # Attack-shaped tools last within medium. These are the ones whose ban exposure
 # the ordering above exists to bound.
+# Corpus pre-warm runs BEFORE every attack-shaped tool. nuclei downloads its
+# template corpus on first invocation (~21s measured), so without this the
+# download is spent inside NUCLEI_CHUNK_WALL_S on the FIRST chunk — which is
+# `critical,high`, the one measured ~30s short. It also carries the INPUT floor
+# that stops an empty/partial corpus being recorded as a clean scan, and takes
+# #31's corpus stamp once per run.
+# ⚠ Registered unconditionally at MEDIUM: it must also run for the FortiGate
+# safe-only plan, which still needs templates for its `medium:tech` chunks.
+_register("nuclei_corpus", MEDIUM, _medium.prewarm_nuclei_corpus, ORDER_CORPUS_PREWARM)
 _register("nuclei", MEDIUM, _medium.run_nuclei_chunked, ORDER_MEDIUM_TOOLS)
 _register("nikto", MEDIUM, _medium.run_nikto, ORDER_MEDIUM_TOOLS)
 _register("ffuf", MEDIUM, _medium.run_ffuf_chunked, ORDER_MEDIUM_TOOLS)
