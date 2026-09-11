@@ -1164,6 +1164,12 @@ def build_planned_steps(ctx: "ScanContext") -> list[str]:
     steps: list[str] = ["wafw00f", "httpx[-td]"]
     if CRAWL_FIRST_MODE:
         steps.append("katana")
+    # corpus_prewarm runs immediately before the nuclei chunks in run().
+    # ⚠ It MUST be in this list as well as in run(): this function is the
+    # portal's denominator, and a phase that executes but is not planned is
+    # the #2637 bug (planned_steps short, so the ScanProgress card has no row
+    # for it and its state cannot render).
+    steps.append("corpus_prewarm")
 
     # nuclei chunks — only the chunk names that'll actually attempt a scan.
     # build_chunk_plan returns (sev, tag, desc) tuples; chunk_name must
@@ -5430,6 +5436,26 @@ def run(descriptor_path: str, dsn: str) -> int:
         log(f"planned_steps ({len(ctx.planned_steps)} total): "
             f"{ctx.planned_steps}")
         flush_planned_steps(ctx)
+
+        # ─── Phase 1.5: nuclei corpus pre-warm ─────────────────────
+        # ⛔ EXPLICIT CALL, NOT REGISTRY DISPATCH. run_medium has NO registry
+        # dispatch — no run_phases, no phases_for_tier, no `import
+        # phase_registry`. Registering a phase at MEDIUM therefore reaches
+        # HEAVY (which reads the registry cumulatively) and NOT medium.
+        #
+        # That gap is not cosmetic: DEEP_SWEEP_TIER is "medium", so every
+        # automatic deep scan is a medium. Without this call the medium tier
+        # (a) pays the ~12s template download inside NUCLEI_CHUNK_WALL_S on the
+        # crit/high chunk again, and (b) NEVER RUNS THE INPUT FLOOR — leaving
+        # the empty/partial-corpus-recorded-as-clean path open on exactly the
+        # tier automatic scanning uses.
+        #
+        # The registration in phase_registry.py is KEPT: heavy reaches it by
+        # registry, medium by this call. scanner.yml invokes run_light /
+        # run_medium / run_heavy mutually exclusively (gated on `intensity`),
+        # so it cannot double-fire. Same placement pattern as
+        # persist_stack_id_wafw00f above.
+        prewarm_corpus(ctx)
 
         # ─── Phase 2: nuclei (chunked + rotation) ──────────────────
         if ctx.total_requests < MAX_REQUESTS_TOTAL:

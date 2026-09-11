@@ -18,6 +18,7 @@ So the wiring tests below assert on the PERSISTED surface — tool_status — an
 on the registry itself, not on the helpers.
 """
 import os
+import re
 import sys
 import types
 import pytest
@@ -339,3 +340,47 @@ def test_the_prefix_consumers_only_ever_see_chunk_dicts(monkeypatch):
     for k in ctx.tool_status:
         assert not (k.startswith("nuclei") and not k.startswith("nuclei[")), (
             f"{k} lands in the nuclei prefix namespace but is not a chunk record")
+
+
+# ── ⛔ EVERY MEDIUM-REGISTERED PHASE MUST BE REACHABLE FROM THE MEDIUM RUNNER ──
+# THE DEFECT CLASS, and it has now appeared in BOTH directions in one day:
+#   * persist_stack_id_wafw00f lives in run_medium.run()'s LINEAR BODY, so
+#     HEAVY — which dispatches through the registry — never reaches it.
+#   * corpus_prewarm was registered at MEDIUM only, so MEDIUM — which has NO
+#     registry dispatch at all (no run_phases, no phases_for_tier, no
+#     `import phase_registry`) — never reached IT.
+#
+# The second one mattered more: DEEP_SWEEP_TIER is "medium", so every automatic
+# deep scan is a medium. A registration that only heavy can execute meant the
+# input floor did not protect the tier automatic scanning uses.
+#
+# ⚠ Registration is NOT wiring on this codebase. Assert reachability, not
+# registration — a phase that is registered and unreachable passes every test
+# that only checks the registry.
+
+def test_every_MEDIUM_registered_phase_is_reachable_from_the_medium_runner():
+    here = os.path.dirname(os.path.abspath(__file__))
+    reg_src = open(os.path.join(here, "phase_registry.py")).read()
+    med_src = open(os.path.join(here, "run_medium.py")).read()
+
+    # medium genuinely has no registry dispatch — if that ever changes, this
+    # whole test becomes unnecessary and should be revisited deliberately.
+    for dispatch in ("run_phases(", "phases_for_tier(", "import phase_registry"):
+        assert dispatch not in med_src.replace("# ", ""), (
+            f"run_medium now contains {dispatch!r} — it may dispatch the "
+            f"registry after all; re-examine this test's premise")
+
+    # every `_register("<name>", MEDIUM, _medium.<fn>, ...)`
+    pairs = re.findall(r'_register\(\s*"([^"]+)"\s*,\s*MEDIUM\s*,\s*_medium\.(\w+)', reg_src)
+    assert pairs, "no MEDIUM registrations found — the regex or the file moved"
+
+    unreachable = []
+    for phase_name, fn in pairs:
+        # a call site, not the definition
+        called = re.search(rf'(?<!def ){re.escape(fn)}\s*\(\s*ctx\s*\)', med_src)
+        if not called:
+            unreachable.append(f"{phase_name} -> {fn}()")
+    assert unreachable == [], (
+        f"registered at MEDIUM but never called from run_medium's linear body: "
+        f"{unreachable} — heavy would execute these via the registry and medium "
+        f"would silently skip them")
