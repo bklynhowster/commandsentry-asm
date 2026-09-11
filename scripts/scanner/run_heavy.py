@@ -309,14 +309,14 @@ class HeavyScanContext:
     # context, so the field has to exist here too.
     chunk_plan_meta: dict[str, Any] = field(default_factory=dict)
     # nuclei corpus pre-warm verdict + #31 stamp (4.7 ruling 2026-09-10).
-    # Cumulative heavy runs medium's `nuclei_corpus` phase and medium's chunk
+    # Cumulative heavy runs medium's `corpus_prewarm` phase and medium's chunk
     # gate against THIS context, so both fields must exist here — the superset
     # invariant in test_phase_registry exists because the FIRST cumulative
     # heavy run degraded nuclei/nikto/ffuf with AttributeError for exactly this
     # reason (#2620, 2026-08-29). The recording proxy forwards attribute access
     # faithfully; it cannot invent a field that was never declared.
-    nuclei_corpus_ok: bool = True
-    nuclei_corpus_meta: dict[str, Any] = field(default_factory=dict)
+    corpus_prewarm_ok: bool = True
+    corpus_prewarm_meta: dict[str, Any] = field(default_factory=dict)
     tool_diag: dict[str, dict[str, Any]] = field(default_factory=dict)
     tech_detect_status: str = ""
 

@@ -82,7 +82,7 @@ _register("httpx[-td]", MEDIUM, _medium.detect_tech_stack, ORDER_LIGHT)
 # #31's corpus stamp once per run.
 # ⚠ Registered unconditionally at MEDIUM: it must also run for the FortiGate
 # safe-only plan, which still needs templates for its `medium:tech` chunks.
-_register("nuclei_corpus", MEDIUM, _medium.prewarm_nuclei_corpus, ORDER_CORPUS_PREWARM)
+_register("corpus_prewarm", MEDIUM, _medium.prewarm_corpus, ORDER_CORPUS_PREWARM)
 _register("nuclei", MEDIUM, _medium.run_nuclei_chunked, ORDER_MEDIUM_TOOLS)
 _register("nikto", MEDIUM, _medium.run_nikto, ORDER_MEDIUM_TOOLS)
 _register("ffuf", MEDIUM, _medium.run_ffuf_chunked, ORDER_MEDIUM_TOOLS)

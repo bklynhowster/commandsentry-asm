@@ -28,9 +28,9 @@ def test_plan_matches_what_actually_gets_credited():
     """20 planned == 20 credited. Drift either sticks the bar short of 100% or
     overshoots it.
 
-    Was 19 on run #2637. Became 20 on 2026-09-10 when `nuclei_corpus` was added
+    Was 19 on run #2637. Became 20 on 2026-09-10 when `corpus_prewarm` was added
     (4.7 ruling) — a REAL new credited phase, not drift: it writes
-    tool_status["nuclei_corpus"] on both its ok and degraded paths. The count is
+    tool_status["corpus_prewarm"] on both its ok and degraded paths. The count is
     bumped here only because the next test pins WHY it moved; a bare number
     bumped without that is how a denominator quietly goes wrong.
     """
@@ -44,10 +44,10 @@ def test_corpus_prewarm_is_planned_AND_precedes_nuclei():
     wrong) and ordered BEFORE nuclei (or the download is spent inside
     NUCLEI_CHUNK_WALL_S on the `critical,high` chunk)."""
     plan = build_cumulative_planned_steps(HEAVY_OWN)
-    assert "nuclei_corpus" in plan, (
+    assert "corpus_prewarm" in plan, (
         "the corpus pre-warm credits tool_status but is missing from the plan "
         "— that is the #2637 denominator bug in a new place")
-    assert plan.index("nuclei_corpus") < plan.index("nuclei")
+    assert plan.index("corpus_prewarm") < plan.index("nuclei")
 
 
 def test_disabled_phases_are_excluded():

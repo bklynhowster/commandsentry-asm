@@ -718,9 +718,9 @@ class ScanContext:
     # completion path (see mark_tool_ok_evidenced) — so a clean scan against an
     # empty or partial template set feeds the autocloser and closes findings as
     # REMEDIATED. Detection after the fact leaves the damage done.
-    nuclei_corpus_ok: bool = True
+    corpus_prewarm_ok: bool = True
     # #31 stamp: the corpus PRESENT at scan time, not the one the build wanted.
-    nuclei_corpus_meta: dict[str, Any] = field(default_factory=dict)
+    corpus_prewarm_meta: dict[str, Any] = field(default_factory=dict)
     # Per-tool diagnostics a phase wants persisted. Needed because mark_tool_ok
     # REPLACES ctx.tool_status[name], so anything written into that entry by
     # the phase body is clobbered when run_phase credits the phase afterwards.
@@ -3160,7 +3160,7 @@ def nuclei_templates_dir() -> str:
     return os.path.expanduser("~/nuclei-templates")
 
 
-def nuclei_corpus_identity(tdir: str) -> dict[str, Any]:
+def corpus_identity(tdir: str) -> dict[str, Any]:
     """#31 stamp — identify the corpus PRESENT at scan time.
 
     ⚠ Hashes EVERY file, not just *.yaml. In the production image both template
@@ -3204,15 +3204,15 @@ def corpus_floor_failed(count: int) -> str | None:
     plausible. Pure function so the gate can be tested at the boundary —
     including the case it must PASS (㉟)."""
     if count < 0:
-        return "nuclei_corpus_unreadable"
+        return "corpus_unreadable"
     if count == 0:
-        return "nuclei_corpus_empty"
+        return "corpus_empty"
     if count < NUCLEI_CORPUS_MIN_TEMPLATES:
-        return "nuclei_corpus_below_input_floor"
+        return "corpus_below_input_floor"
     return None
 
 
-def prewarm_nuclei_corpus(ctx: ScanContext) -> None:
+def prewarm_corpus(ctx: ScanContext) -> None:
     """Fetch and verify the nuclei template corpus BEFORE any chunk runs.
 
     One change, three problems (4.7 ruling 2026-09-10):
@@ -3256,25 +3256,25 @@ def prewarm_nuclei_corpus(ctx: ScanContext) -> None:
         # A completed fetch is a VERDICT whatever it yielded. Do not retry.
         break
 
-    ident = nuclei_corpus_identity(tdir)
+    ident = corpus_identity(tdir)
     ident.update({"templates_listed": count, "fetch_seconds": elapsed,
                   "attempts": attempts})
-    ctx.nuclei_corpus_meta = ident
+    ctx.corpus_prewarm_meta = ident
 
     floor = corpus_floor_failed(count)
     if floor:
-        ctx.nuclei_corpus_ok = False
-        ctx.tool_diag["nuclei_corpus"] = ident
-        mark_tool_degraded(ctx, "nuclei_corpus", floor, stderr=stderr)
+        ctx.corpus_prewarm_ok = False
+        ctx.tool_diag["corpus_prewarm"] = ident
+        mark_tool_degraded(ctx, "corpus_prewarm", floor, stderr=stderr)
         log(f"  corpus FAILED the input floor: {floor} "
             f"(listed={count}, floor={NUCLEI_CORPUS_MIN_TEMPLATES}) "
             f"— nuclei chunks will be SKIPPED, not run against a bad corpus")
         return
 
-    ctx.nuclei_corpus_ok = True
-    ctx.tool_diag["nuclei_corpus"] = ident
+    ctx.corpus_prewarm_ok = True
+    ctx.tool_diag["corpus_prewarm"] = ident
     mark_tool_ok_evidenced(
-        ctx, "nuclei_corpus",
+        ctx, "corpus_prewarm",
         Evidence.measured(items=count,
                           templates_version=ident.get("templates_version"),
                           dir_sha256=ident.get("dir_sha256"),
@@ -3304,10 +3304,10 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
     # corpus produces a CLEAN scan, which feeds the autocloser and closes real
     # findings as REMEDIATED. Detecting that afterwards leaves the damage done,
     # which is why the gate is here and not in a downstream report.
-    if not ctx.nuclei_corpus_ok:
+    if not ctx.corpus_prewarm_ok:
         for _sev, _tag, _label in build_chunk_plan(ctx):
             mark_tool_skipped(ctx, nuclei_chunk_label(_sev, _tag),
-                              "nuclei_corpus_below_input_floor")
+                              "corpus_below_input_floor")
         log("→ nuclei SKIPPED — corpus failed its input floor; chunks would "
             "have reported ok against an empty/partial template set")
         return

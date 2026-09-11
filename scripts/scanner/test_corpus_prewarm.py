@@ -43,18 +43,18 @@ def test_floor_passes_well_above_the_bound():
 
 
 def test_floor_fails_on_empty_corpus():
-    assert m.corpus_floor_failed(0) == "nuclei_corpus_empty"
+    assert m.corpus_floor_failed(0) == "corpus_empty"
 
 
 def test_floor_fails_on_partial_corpus():
     """Mode 2 — the disguised one. A partial fetch shrinks the corpus and,
     downstream, `total`, which is indistinguishable from a WAF plan-class
     switch on the recorded surface. Caught here instead."""
-    assert m.corpus_floor_failed(200) == "nuclei_corpus_below_input_floor"
+    assert m.corpus_floor_failed(200) == "corpus_below_input_floor"
 
 
 def test_floor_fails_when_unreadable():
-    assert m.corpus_floor_failed(-1) == "nuclei_corpus_unreadable"
+    assert m.corpus_floor_failed(-1) == "corpus_unreadable"
 
 
 def test_floor_is_loose_not_a_target():
@@ -71,8 +71,8 @@ def _ctx():
     c.tool_status = {}
     c.tool_diag = {}
     c.artifacts = []
-    c.nuclei_corpus_ok = True
-    c.nuclei_corpus_meta = {}
+    c.corpus_prewarm_ok = True
+    c.corpus_prewarm_meta = {}
     c.dsn = None
     return c
 
@@ -85,12 +85,12 @@ def test_timeout_is_TRANSPORT_and_is_retried(monkeypatch):
         return 124, "", "hung"
 
     monkeypatch.setattr(m, "run_cmd", fake_run_cmd)
-    monkeypatch.setattr(m, "nuclei_corpus_identity", lambda d: {})
+    monkeypatch.setattr(m, "corpus_identity", lambda d: {})
     ctx = _ctx()
-    m.prewarm_nuclei_corpus(ctx)
+    m.prewarm_corpus(ctx)
     assert len(calls) == m.NUCLEI_CORPUS_FETCH_RETRIES + 1, \
         "a hung fetch is transport and must be retried"
-    assert ctx.nuclei_corpus_ok is False, "exhausted retries must fail CLOSED"
+    assert ctx.corpus_prewarm_ok is False, "exhausted retries must fail CLOSED"
 
 
 def test_trivial_corpus_is_a_VERDICT_and_is_NOT_retried(monkeypatch):
@@ -102,11 +102,11 @@ def test_trivial_corpus_is_a_VERDICT_and_is_NOT_retried(monkeypatch):
         return 0, "one-template\n", ""
 
     monkeypatch.setattr(m, "run_cmd", fake_run_cmd)
-    monkeypatch.setattr(m, "nuclei_corpus_identity", lambda d: {})
+    monkeypatch.setattr(m, "corpus_identity", lambda d: {})
     ctx = _ctx()
-    m.prewarm_nuclei_corpus(ctx)
+    m.prewarm_corpus(ctx)
     assert len(calls) == 1, "a completed fetch is a verdict — never retried"
-    assert ctx.nuclei_corpus_ok is False
+    assert ctx.corpus_prewarm_ok is False
 
 
 def test_prewarm_uses_its_OWN_timeout_not_the_chunk_fuse(monkeypatch):
@@ -114,8 +114,8 @@ def test_prewarm_uses_its_OWN_timeout_not_the_chunk_fuse(monkeypatch):
     seen = []
     monkeypatch.setattr(m, "run_cmd",
                         lambda cmd, timeout=30, **kw: (seen.append(timeout), (0, "x\n", ""))[1])
-    monkeypatch.setattr(m, "nuclei_corpus_identity", lambda d: {})
-    m.prewarm_nuclei_corpus(_ctx())
+    monkeypatch.setattr(m, "corpus_identity", lambda d: {})
+    m.prewarm_corpus(_ctx())
     assert seen[0] == m.NUCLEI_CORPUS_WALL_S
     assert seen[0] != m.NUCLEI_CHUNK_WALL_S
 
@@ -129,9 +129,9 @@ def test_stamp_hashes_every_file_not_only_yaml(tmp_path):
     d = tmp_path / "corpus"
     (d / "http").mkdir(parents=True)
     (d / "http" / "a.yaml").write_text("id: a\n")
-    before = m.nuclei_corpus_identity(str(d))["dir_sha256"]
+    before = m.corpus_identity(str(d))["dir_sha256"]
     (d / ".nuclei-ignore").write_text("http/a.yaml\n")
-    after = m.nuclei_corpus_identity(str(d))["dir_sha256"]
+    after = m.corpus_identity(str(d))["dir_sha256"]
     assert before != after, "a non-yaml file that changes execution must move the hash"
 
 
@@ -139,7 +139,7 @@ def test_stamp_records_version_and_counts(monkeypatch, tmp_path):
     d = tmp_path / "c"
     (d).mkdir()
     (d / "x.yaml").write_text("id: x\n")
-    ident = m.nuclei_corpus_identity(str(d))
+    ident = m.corpus_identity(str(d))
     assert ident["files"] == 1
     assert ident["dir_sha256"]
     assert ident["dir"] == str(d)
@@ -148,13 +148,13 @@ def test_stamp_records_version_and_counts(monkeypatch, tmp_path):
 def test_ok_path_records_evidence_on_the_PERSISTED_surface(monkeypatch):
     monkeypatch.setattr(m, "run_cmd",
                         lambda cmd, timeout=30, **kw: (0, "t\n" * 20000, ""))
-    monkeypatch.setattr(m, "nuclei_corpus_identity",
+    monkeypatch.setattr(m, "corpus_identity",
                         lambda d: {"templates_version": "v10.4.8",
                                    "dir": d, "files": 13619,
                                    "dir_sha256": "deadbeef"})
     ctx = _ctx()
-    m.prewarm_nuclei_corpus(ctx)
-    entry = ctx.tool_status.get("nuclei_corpus")
+    m.prewarm_corpus(ctx)
+    entry = ctx.tool_status.get("corpus_prewarm")
     assert entry and entry.get("ok") is True
     blob = str(entry)
     assert "v10.4.8" in blob and "deadbeef" in blob, \
@@ -168,16 +168,16 @@ def test_prewarm_is_REGISTERED_and_ordered_before_nuclei():
     assert ORDER_CORPUS_PREWARM < ORDER_MEDIUM_TOOLS
     src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "phase_registry.py")).read()
-    assert '_register("nuclei_corpus"' in src
+    assert '_register("corpus_prewarm"' in src
     assert "ORDER_CORPUS_PREWARM" in src
-    assert "prewarm_nuclei_corpus" in src
+    assert "prewarm_corpus" in src
 
 
 def test_failed_corpus_SKIPS_every_chunk(monkeypatch):
     """The gate that actually prevents the damage. Without it, chunks complete
     against an empty corpus, are recorded ok, and feed the autocloser."""
     ctx = _ctx()
-    ctx.nuclei_corpus_ok = False
+    ctx.corpus_prewarm_ok = False
     ctx.tech_stack = set()
     ctx.waf_detected = False
     ctx.waf_kind = None
@@ -196,8 +196,8 @@ def test_failed_corpus_SKIPS_every_chunk(monkeypatch):
 def test_healthy_corpus_does_NOT_skip(monkeypatch):
     """The case the gate must PASS — again, at the wiring level."""
     ctx = _ctx()
-    ctx.nuclei_corpus_ok = True
-    assert ctx.nuclei_corpus_ok is True
+    ctx.corpus_prewarm_ok = True
+    assert ctx.corpus_prewarm_ok is True
 
 
 # ── env resolution: unset / set / set-but-EMPTY ─────────────────────────────
@@ -260,12 +260,82 @@ def test_prewarm_counts_the_WHOLE_corpus_not_a_filtered_subset(monkeypatch):
         return 0, "t\n" * 13203, ""
 
     monkeypatch.setattr(m, "run_cmd", fake_run_cmd)
-    monkeypatch.setattr(m, "nuclei_corpus_identity", lambda d: {})
+    monkeypatch.setattr(m, "corpus_identity", lambda d: {})
     ctx = _ctx()
-    m.prewarm_nuclei_corpus(ctx)
+    m.prewarm_corpus(ctx)
     cmd = seen["cmd"]
     for banned in ("-severity", "-exclude-tags", "-tags"):
         assert banned not in cmd, (
             f"pre-warm must count the WHOLE corpus; {banned} would make it "
             f"count a plan class and trip the floor on every scan")
-    assert ctx.nuclei_corpus_ok is True, "13,203 templates must PASS the floor"
+    assert ctx.corpus_prewarm_ok is True, "13,203 templates must PASS the floor"
+
+
+# ── ⛔ THE `nuclei%` NAMESPACE COLLISION — the regression test ───────────────
+# The phase was first named `nuclei_corpus`, which SATISFIES the `nuclei%`
+# prefix idiom that eight sites use to mean "nuclei actually ran":
+#   asm_autoclose_producer_patterns: 'nuclei' -> ARRAY['nuclei%']
+#                       'commandsentry_medium' -> ARRAY['nuclei%','ffuf','nikto','wafw00f']
+#   degradation.py, phase_contract.py, run_medium.py x2, test_plan_trust.py
+#   (startswith("nuclei"), and they expect a CHUNK dict)
+#   scripts/db/checks/autoclose_allmatch_compare.sql (tool like 'nuclei%')
+#
+# ⛔ THE BYPASS IT CREATED, which is the exact path the input floor exists to
+# close: on a floor-trip run the chunks are correctly recorded SKIPPED, but the
+# corpus phase itself still lands in tools_run. `nuclei%` is then satisfied by
+# the corpus phase ALONE, so the autocloser treats an UNSCANNED asset as
+# covered and closes its findings as remediated.
+#
+# Renamed OUT of the namespace rather than excluded at eight call sites —
+# exclusions are fragile and the ninth consumer will not know about them.
+
+def test_phase_name_is_OUTSIDE_the_nuclei_prefix_namespace():
+    import phase_registry  # noqa: F401 — registers phases
+    from phase_contract import phases_for_tier
+    from phase_source import MEDIUM
+    names = [s.name for s in phases_for_tier(MEDIUM)]
+    assert "corpus_prewarm" in names, "the pre-warm phase must still be registered"
+    # ⚠ `nuclei` itself is the SCANNER phase and belongs in this namespace —
+    # that is what the `nuclei%` idiom exists to match (㉟: test the case the
+    # gate must PASS). Anything ELSE in the namespace is the bug.
+    assert "nuclei" in names, "the scanner phase must still be registered as `nuclei`"
+    offenders = [n for n in names if n.startswith("nuclei") and n != "nuclei"]
+    assert offenders == [], (
+        f"phase name(s) {offenders} satisfy the `nuclei%` idiom without being "
+        f"the nuclei scanner — the autocloser would read an unscanned asset as covered")
+
+
+def test_floor_trip_leaves_NOTHING_matching_nuclei_percent(monkeypatch):
+    """4.7's stated assertion: on a floor-trip run, tools_run/tool_status carry
+    no entry matching `nuclei%`. This is what stops the autocloser closing
+    findings on an asset whose chunks were all skipped."""
+    ctx = _ctx()
+    ctx.corpus_prewarm_ok = False
+    ctx.tech_stack = set(); ctx.waf_detected = False; ctx.waf_kind = None
+    ctx.hostname = "example.com"; ctx.chunk_plan_meta = {}
+    monkeypatch.setattr(m, "is_fortigate_target", lambda c: False)
+    m.run_nuclei_chunked(ctx)
+
+    # every chunk recorded, none of them ok
+    assert ctx.tool_status, "chunks must be recorded SKIPPED, not silently absent"
+    assert not any(v.get("ok") is True for v in ctx.tool_status.values())
+
+    # and the corpus phase must not masquerade as a nuclei chunk
+    nuclei_like = [k for k in ctx.tool_status
+                   if k.startswith("nuclei") and not k.startswith("nuclei[")]
+    assert nuclei_like == [], (
+        f"{nuclei_like} would satisfy `nuclei%` on a run where nuclei never scanned")
+
+
+def test_the_prefix_consumers_only_ever_see_chunk_dicts(monkeypatch):
+    """degradation.py / run_medium.py collect startswith('nuclei') entries and
+    expect chunk dicts. A non-chunk entry in that namespace breaks their shape."""
+    monkeypatch.setattr(m, "run_cmd", lambda cmd, timeout=30, **kw: (0, "t\n" * 20000, ""))
+    monkeypatch.setattr(m, "corpus_identity", lambda d: {"templates_version": "v1",
+                                                         "dir": d, "files": 1,
+                                                         "dir_sha256": "x"})
+    ctx = _ctx()
+    m.prewarm_corpus(ctx)
+    for k in ctx.tool_status:
+        assert not (k.startswith("nuclei") and not k.startswith("nuclei[")), (
+            f"{k} lands in the nuclei prefix namespace but is not a chunk record")
