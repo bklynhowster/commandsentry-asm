@@ -140,6 +140,70 @@ METADATA_IDS = {
 }
 
 
+# ⛔ #037 (2026-09-13) — CERT-HYGIENE SEVERITY CEILING. Severities ratified by Howie.
+#
+# THE DEFECT: every CRITICAL on the Command fleet was a testssl CERTIFICATE
+# finding — chain incomplete, self-signed, expired. Not one was exploitable.
+# testssl rates a broken trust chain CRITICAL; in Command's scheme CRITICAL is
+# reserved for EXPLOITABLE criticals (RCE, auth bypass, exposed secrets/data —
+# cf. the commandcommcentral hardcoded-AES-key C1). An asset's risk is its
+# worst finding, so a single missing intermediate turned a whole host CRITICAL
+# on the daily digest. Howie, 2026-09-13: "telling people we have a critical
+# when there is no critical is a real bad thing."
+#
+# This is severity INFLATION — the mirror image of the #49 coverage deflation.
+# Same credibility cost, opposite direction: #49 claimed more coverage than we
+# had, this claims more danger than exists. Both teach the reader to discount
+# the number, which is the expensive failure.
+#
+# ⭐ THE RULE, encoded as a CEILING rather than a list of known-bad strings:
+# a certificate TRUST or EXPIRY finding is NEVER CRITICAL and never HIGH.
+# These are trust warnings, not compromise. A ceiling holds when a future
+# testssl release invents a new CRITICAL cert variant; an enumeration of
+# today's three strings would silently let it through. Fix by rule, not by
+# enumeration — the same reason #49's exclusion partition is computed by
+# subtraction instead of listed.
+CERT_HYGIENE_IDS = {
+    "cert_chain_of_trust",
+    "cert_trust",
+    "cert_expirationStatus",
+}
+CERT_HYGIENE_MAX_SEVERITY = "MODERATE"
+
+_SEV_RANK = {"INFO": 0, "LOW": 1, "MODERATE": 2, "HIGH": 3, "CRITICAL": 4}
+
+# Variant severities WITHIN cert_chain_of_trust. testssl reports all three
+# variants under the ONE id and distinguishes them only in the finding TEXT,
+# so this keys on text. Substring match on purpose — testssl's phrasing varies
+# across versions ("self signed" vs "self-signed"), and a version bump must not
+# silently reclassify a finding (cf. the @latest toolchain drift lesson).
+_CERT_CHAIN_VARIANTS = (
+    ("chain incomplete", "LOW"),       # missing intermediate: misconfiguration
+    ("self signed",      "MODERATE"),
+    ("self-signed",      "MODERATE"),
+    ("expired",          "MODERATE"),
+)
+
+
+def _cert_hygiene_severity(grouped_id: str, finding_text: str, current: str) -> str:
+    """Ceiling + per-variant severity for certificate trust/expiry findings (#037).
+
+    Never returns HIGH or CRITICAL for a cert-hygiene id.
+    """
+    text = (finding_text or "").lower()
+    if grouped_id == "cert_chain_of_trust":
+        for needle, sev in _CERT_CHAIN_VARIANTS:
+            if needle in text:
+                return sev
+        # Unrecognised chain variant: apply the ceiling rather than guess.
+        # Deliberately NOT defaulted to LOW — an unknown trust failure is not
+        # evidence of a small problem, it is absence of evidence either way.
+        return CERT_HYGIENE_MAX_SEVERITY
+    if _SEV_RANK.get(current, 0) > _SEV_RANK[CERT_HYGIENE_MAX_SEVERITY]:
+        return CERT_HYGIENE_MAX_SEVERITY
+    return current
+
+
 # testssl IDs that should KEEP their MODERATE severity even without CWE.
 # Most testssl MEDIUM-no-CWE entries are hardening items that Command's
 # curated reports demote to LOW (HSTS_time, TLS1_2, FS, TLS_misses_extension_23,
@@ -374,6 +438,14 @@ def parse_testssl_file(
         # - CWE-tagged findings (real named attacks) keep MEDIUM/HIGH.
         if canonical_sev == "MODERATE" and not rec.get("cwe") and grouped_id not in KEEP_MEDIUM_IDS:
             canonical_sev = "LOW"
+
+        # #037 — cert-hygiene ceiling. Runs AFTER the calibration above so it
+        # is the LAST word on a certificate finding's severity: nothing
+        # downstream can re-inflate it.
+        if grouped_id in CERT_HYGIENE_IDS:
+            canonical_sev = _cert_hygiene_severity(
+                grouped_id, rec.get("finding") or "", canonical_sev
+            )
 
         ip_field = rec.get("ip") or ""
         port = rec.get("port") or ""
