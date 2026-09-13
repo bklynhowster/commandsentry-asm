@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-09-13T16:17:48Z_b22596c8",
-    "started_at": "2026-09-13T16:17:48Z",
-    "completed_at": "2026-09-13T16:26:00Z",
-    "duration_seconds": 492,
+    "id": "scan_2026-09-13T20:53:50Z_830eb136",
+    "started_at": "2026-09-13T20:53:50Z",
+    "completed_at": "2026-09-13T21:01:41Z",
+    "duration_seconds": 471,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -21,7 +21,6 @@
       "fingerprintx",
       "httpx",
       "naabu",
-      "subfinder",
       "testssl",
       "wafw00f",
       "whois"
@@ -29,11 +28,11 @@
   },
   "registration": {},
   "summary": {
-    "subdomain_count": 9,
-    "live_subdomain_count": 9,
-    "host_count": 8,
-    "service_count": 14,
-    "newest_cert_expiry_days": 143,
+    "subdomain_count": 6,
+    "live_subdomain_count": 6,
+    "host_count": 5,
+    "service_count": 8,
+    "newest_cert_expiry_days": 142,
     "top_hosting_org": "Cablevision Systems Corp.",
     "platforms": [
       "Microsoft .NET / IIS"
@@ -45,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-09-13T16:26:00Z",
-      "last_seen": "2026-09-13T16:26:00Z",
+      "first_discovered": "2026-09-13T21:01:41Z",
+      "last_seen": "2026-09-13T21:01:41Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -102,7 +101,7 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 143
+            "days_to_expiry": 142
           }
         }
       ],
@@ -167,12 +166,12 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-13T16:26:00Z",
-      "last_seen": "2026-09-13T16:26:00Z",
+      "first_discovered": "2026-09-13T21:01:41Z",
+      "last_seen": "2026-09-13T21:01:41Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 503,
+        "http_status": 404,
         "title": null
       },
       "probe_status": {
@@ -224,7 +223,7 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 143
+            "days_to_expiry": 142
           }
         }
       ],
@@ -244,6 +243,11 @@
         "server": "Microsoft-IIS/10.0",
         "platform_label": "Microsoft .NET / IIS",
         "tech": [
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          },
           {
             "name": "IIS",
             "version": "10.0",
@@ -268,222 +272,12 @@
       }
     },
     {
-      "name": "edelivery.commandcommcentral.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-09-13T16:26:01Z",
-      "last_seen": "2026-09-13T16:26:01Z",
-      "tags": [],
-      "reachability": {
-        "live": true,
-        "http_status": 200,
-        "title": "Home Page - ConsentApp"
-      },
-      "probe_status": {
-        "naabu": {
-          "ok": true
-        },
-        "httpx_tech": {
-          "ok": true
-        },
-        "fingerprintx": {
-          "ok": true
-        }
-      },
-      "hosts": [
-        {
-          "ip": "24.157.51.88",
-          "asn": "AS6128",
-          "asn_org": "Cablevision Systems Corp.",
-          "country": "US",
-          "region": "New York",
-          "city": "Yonkers",
-          "reverse_dns": "189d3358.cst.lightpath.net",
-          "is_private": false
-        }
-      ],
-      "services": [
-        {
-          "ip": "24.157.51.88",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "24.157.51.88",
-          "port": 443,
-          "protocol": "tcp",
-          "service": "https",
-          "banner": null,
-          "tls": true,
-          "cert": {
-            "subject": "CN=enrollment2.edelivery-bessemer.com, O=Bessemer Trust Company National Association, ST=New York, C=US",
-            "issuer": "CN=Sectigo Public Server Authentication CA OV R36, O=Sectigo Limited, C=GB",
-            "san": [
-              "enrollment2.edelivery-bessemer.com",
-              "www.enrollment2.edelivery-bessemer.com"
-            ],
-            "not_before": "2026-02-28T00:00:00Z",
-            "not_after": "2027-02-28T23:59:59Z",
-            "self_signed": false,
-            "days_to_expiry": 168
-          }
-        }
-      ],
-      "dns": {
-        "a": [
-          "24.157.51.88"
-        ],
-        "aaaa": [],
-        "cname": null,
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": null,
-        "platform_label": null,
-        "tech": [
-          {
-            "name": "Bootstrap",
-            "version": null,
-            "category": "frontend"
-          },
-          {
-            "name": "HSTS",
-            "version": null,
-            "category": "security"
-          }
-        ]
-      },
-      "waf": {
-        "detected": true,
-        "vendor": "FortiWeb",
-        "confidence": "high"
-      }
-    },
-    {
-      "name": "geisinger.commandcommcentral.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-09-13T16:26:01Z",
-      "last_seen": "2026-09-13T16:26:01Z",
-      "tags": [],
-      "reachability": {
-        "live": true,
-        "http_status": 200,
-        "title": "GetForm - Geisinger"
-      },
-      "probe_status": {
-        "naabu": {
-          "ok": true
-        },
-        "httpx_tech": {
-          "ok": true
-        },
-        "fingerprintx": {
-          "ok": true
-        }
-      },
-      "hosts": [
-        {
-          "ip": "24.157.51.82",
-          "asn": "AS6128",
-          "asn_org": "Cablevision Systems Corp.",
-          "country": "US",
-          "region": "New York",
-          "city": "Yonkers",
-          "reverse_dns": "189d3352.cst.lightpath.net",
-          "is_private": false
-        }
-      ],
-      "services": [
-        {
-          "ip": "24.157.51.82",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "24.157.51.82",
-          "port": 443,
-          "protocol": "tcp",
-          "service": "https",
-          "banner": null,
-          "tls": true,
-          "cert": {
-            "subject": "CN=*.commandcommcentral.com, O=Strategic Content Imaging, L=Secaucus, ST=New Jersey, C=US",
-            "issuer": "CN=Go Daddy Secure Certificate Authority - G2, OU=http://certs.godaddy.com/repository/, O=GoDaddy.com\\, Inc., L=Scottsdale, ST=Arizona, C=US",
-            "san": [
-              "*.commandcommcentral.com",
-              "commandcommcentral.com"
-            ],
-            "not_before": "2026-01-02T18:09:44Z",
-            "not_after": "2027-02-03T18:09:44Z",
-            "self_signed": false,
-            "days_to_expiry": 143
-          }
-        }
-      ],
-      "dns": {
-        "a": [
-          "24.157.51.82"
-        ],
-        "aaaa": [],
-        "cname": null,
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": null,
-        "platform_label": "Microsoft .NET / IIS",
-        "tech": [
-          {
-            "name": "Bootstrap",
-            "version": null,
-            "category": "frontend"
-          },
-          {
-            "name": "HSTS",
-            "version": null,
-            "category": "security"
-          },
-          {
-            "name": "Microsoft ASP.NET",
-            "version": null,
-            "category": "framework"
-          },
-          {
-            "name": "jQuery",
-            "version": null,
-            "category": "frontend"
-          }
-        ]
-      },
-      "waf": {
-        "detected": true,
-        "vendor": "FortiWeb",
-        "confidence": "high"
-      }
-    },
-    {
       "name": "ns01.commandcommcentral.com",
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-13T16:26:01Z",
-      "last_seen": "2026-09-13T16:26:01Z",
+      "first_discovered": "2026-09-13T21:01:41Z",
+      "last_seen": "2026-09-13T21:01:41Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -542,8 +336,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-13T16:26:01Z",
-      "last_seen": "2026-09-13T16:26:01Z",
+      "first_discovered": "2026-09-13T21:01:41Z",
+      "last_seen": "2026-09-13T21:01:41Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -600,8 +394,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-13T16:26:01Z",
-      "last_seen": "2026-09-13T16:26:01Z",
+      "first_discovered": "2026-09-13T21:01:41Z",
+      "last_seen": "2026-09-13T21:01:41Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -657,7 +451,7 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 143
+            "days_to_expiry": 142
           }
         }
       ],
@@ -716,122 +510,12 @@
       }
     },
     {
-      "name": "testapi.commandcommcentral.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-09-13T16:26:01Z",
-      "last_seen": "2026-09-13T16:26:01Z",
-      "tags": [],
-      "reachability": {
-        "live": true,
-        "http_status": 404,
-        "title": null
-      },
-      "probe_status": {
-        "naabu": {
-          "ok": true
-        },
-        "httpx_tech": {
-          "ok": true
-        },
-        "fingerprintx": {
-          "ok": true
-        }
-      },
-      "hosts": [
-        {
-          "ip": "24.38.70.14",
-          "asn": "AS6128",
-          "asn_org": "Cablevision Systems Corp.",
-          "country": "US",
-          "region": "New Jersey",
-          "city": "Franklin Park",
-          "reverse_dns": "1826460e.cst.lightpath.net",
-          "is_private": false
-        }
-      ],
-      "services": [
-        {
-          "ip": "24.38.70.14",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "24.38.70.14",
-          "port": 443,
-          "protocol": "tcp",
-          "service": "https",
-          "banner": null,
-          "tls": true,
-          "cert": {
-            "subject": "CN=*.commandcommcentral.com, O=Strategic Content Imaging, L=Secaucus, ST=New Jersey, C=US",
-            "issuer": "CN=Go Daddy Secure Certificate Authority - G2, OU=http://certs.godaddy.com/repository/, O=GoDaddy.com\\, Inc., L=Scottsdale, ST=Arizona, C=US",
-            "san": [
-              "*.commandcommcentral.com",
-              "commandcommcentral.com"
-            ],
-            "not_before": "2026-01-02T18:09:44Z",
-            "not_after": "2027-02-03T18:09:44Z",
-            "self_signed": false,
-            "days_to_expiry": 143
-          }
-        }
-      ],
-      "dns": {
-        "a": [
-          "24.38.70.14"
-        ],
-        "aaaa": [],
-        "cname": null,
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": "Microsoft-IIS/10.0",
-        "platform_label": "Microsoft .NET / IIS",
-        "tech": [
-          {
-            "name": "HSTS",
-            "version": null,
-            "category": "security"
-          },
-          {
-            "name": "IIS",
-            "version": "10.0",
-            "category": "webserver"
-          },
-          {
-            "name": "Microsoft ASP.NET",
-            "version": null,
-            "category": "framework"
-          },
-          {
-            "name": "Windows Server",
-            "version": null,
-            "category": null
-          }
-        ]
-      },
-      "waf": {
-        "detected": true,
-        "vendor": "FortiWeb",
-        "confidence": "high"
-      }
-    },
-    {
       "name": "www.commandcommcentral.com",
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-13T16:26:01Z",
-      "last_seen": "2026-09-13T16:26:01Z",
+      "first_discovered": "2026-09-13T21:01:41Z",
+      "last_seen": "2026-09-13T21:01:41Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -887,7 +571,7 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 143
+            "days_to_expiry": 142
           }
         }
       ],
@@ -947,20 +631,74 @@
     }
   ],
   "phantom_subdomains": [
-    "access.commandcommcentral.com",
-    "ftp.commandcommcentral.com"
+    "monitoring.commandcommcentral.com",
+    "news.commandcommcentral.com"
   ],
   "deltas": {
-    "since_scan": "scan_2026-09-13T11:48:42Z_c0c12a77",
+    "since_scan": "scan_2026-09-13T16:17:48Z_b22596c8",
     "added": {
       "subdomains": [],
       "services": [],
       "hosts": []
     },
     "removed": {
-      "subdomains": [],
-      "services": [],
-      "hosts": []
+      "subdomains": [
+        "edelivery.commandcommcentral.com",
+        "geisinger.commandcommcentral.com",
+        "testapi.commandcommcentral.com"
+      ],
+      "services": [
+        {
+          "subdomain": "edelivery.commandcommcentral.com",
+          "ip": "24.157.51.88",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "edelivery.commandcommcentral.com",
+          "ip": "24.157.51.88",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "geisinger.commandcommcentral.com",
+          "ip": "24.157.51.82",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "geisinger.commandcommcentral.com",
+          "ip": "24.157.51.82",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "testapi.commandcommcentral.com",
+          "ip": "24.38.70.14",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "testapi.commandcommcentral.com",
+          "ip": "24.38.70.14",
+          "port": 443,
+          "protocol": "tcp"
+        }
+      ],
+      "hosts": [
+        {
+          "subdomain": "edelivery.commandcommcentral.com",
+          "ip": "24.157.51.88"
+        },
+        {
+          "subdomain": "geisinger.commandcommcentral.com",
+          "ip": "24.157.51.82"
+        },
+        {
+          "subdomain": "testapi.commandcommcentral.com",
+          "ip": "24.38.70.14"
+        }
+      ]
     },
     "changed": {
       "fingerprint": [],
@@ -969,75 +707,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-08-12T19:24:07Z_4d978dd6",
-      "started_at": "2026-08-12T19:24:07Z",
-      "completed_at": "2026-08-12T19:31:06Z",
-      "subdomain_count": 9,
-      "live_subdomain_count": 9,
-      "host_count": 8,
-      "service_count": 14,
-      "subdomain_names": [
-        "api.commandcommcentral.com",
-        "commandcommcentral.com",
-        "edelivery.commandcommcentral.com",
-        "geisinger.commandcommcentral.com",
-        "ns01.commandcommcentral.com",
-        "ns02.commandcommcentral.com",
-        "test.commandcommcentral.com",
-        "testapi.commandcommcentral.com",
-        "www.commandcommcentral.com"
-      ],
-      "ports_by_sub": {
-        "commandcommcentral.com": {
-          "24.38.70.5": [
-            80,
-            443
-          ]
-        },
-        "api.commandcommcentral.com": {
-          "24.157.51.85": [
-            80,
-            443
-          ]
-        },
-        "edelivery.commandcommcentral.com": {
-          "24.157.51.88": [
-            80,
-            443
-          ]
-        },
-        "geisinger.commandcommcentral.com": {
-          "24.157.51.82": [
-            80,
-            443
-          ]
-        },
-        "ns01.commandcommcentral.com": {},
-        "ns02.commandcommcentral.com": {},
-        "test.commandcommcentral.com": {
-          "24.38.70.8": [
-            80,
-            443
-          ]
-        },
-        "testapi.commandcommcentral.com": {
-          "24.38.70.14": [
-            80,
-            443
-          ]
-        },
-        "www.commandcommcentral.com": {
-          "24.38.70.5": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "IIS": "10.0"
-      }
-    },
     {
       "scan_id": "scan_2026-08-13T02:45:34Z_02fdfad2",
       "started_at": "2026-08-13T02:45:34Z",
@@ -9228,6 +8897,54 @@
         },
         "testapi.commandcommcentral.com": {
           "24.38.70.14": [
+            80,
+            443
+          ]
+        },
+        "www.commandcommcentral.com": {
+          "24.38.70.5": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "IIS": "10.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-09-13T20:53:50Z_830eb136",
+      "started_at": "2026-09-13T20:53:50Z",
+      "completed_at": "2026-09-13T21:01:41Z",
+      "subdomain_count": 6,
+      "live_subdomain_count": 6,
+      "host_count": 5,
+      "service_count": 8,
+      "subdomain_names": [
+        "api.commandcommcentral.com",
+        "commandcommcentral.com",
+        "ns01.commandcommcentral.com",
+        "ns02.commandcommcentral.com",
+        "test.commandcommcentral.com",
+        "www.commandcommcentral.com"
+      ],
+      "ports_by_sub": {
+        "commandcommcentral.com": {
+          "24.38.70.5": [
+            80,
+            443
+          ]
+        },
+        "api.commandcommcentral.com": {
+          "24.157.51.85": [
+            80,
+            443
+          ]
+        },
+        "ns01.commandcommcentral.com": {},
+        "ns02.commandcommcentral.com": {},
+        "test.commandcommcentral.com": {
+          "24.38.70.8": [
             80,
             443
           ]
