@@ -3239,6 +3239,54 @@ def prewarm_corpus(ctx: ScanContext) -> None:
     and never retry. Retrying a verdict is how a fail-closed gate quietly
     becomes fail-open.
     """
+    # ⚠ CREDIT THE PHASE — do not remove, and do not move to the exit paths.
+    # THE SAME TWO-DISPATCH ASYMMETRY AS THE WIRING BUG THIS FOLLOWS. On heavy
+    # the registry credits via run_phase() (phase_contract.py:702). Medium calls
+    # prewarm_corpus(ctx) directly from run()'s linear body, where NOTHING does
+    # — so tool_status gained a key that tools_run never had, and
+    # assert_tool_status_invariant (close_out only) raised
+    # `unclaimed=['corpus_prewarm']`. EVERY prewarm-enabled medium degraded.
+    # Confirmed live on both instances 2026-09-11: Prodex #593, Command #2882.
+    #
+    # ⚠ THE PERSISTED ROW HIDES THIS. degraded_out calls
+    # reconcile_tool_status_invariant, which appends the missing name, so
+    # scan_run.tools_run reads clean afterwards. Only status + error_message
+    # show it. Do not "verify" this by inspecting tools_run.
+    #
+    # Safe on heavy: legacy_adapter runs this body against a RECORDING PROXY,
+    # so the append lands on the proxy and run_phase credits the real ctx —
+    # the same arrangement as detect_waf/"wafw00f", the working control.
+    #
+    # ⛔ THIS DELIBERATELY INVERTS run_phase's DOCUMENTED ORDER. That docstring
+    # says: "ORDER IS THE POINT. tools_run is credited AFTER fn returns, never
+    # before, so a tool that ran and failed can never count as coverage for the
+    # note-127 autocloser." Crediting first is a real exception to that rule and
+    # is licensed by TWO PROPERTIES OF THIS PHASE — not by general permission:
+    #
+    #   1. corpus_prewarm EMITS NO FINDINGS, and coverage requires ok='true' in
+    #      tool_status (migration 20260828a). Presence in tools_run alone is not
+    #      coverage, and only the two real exit paths write tool_status. So an
+    #      early credit cannot manufacture coverage for anything the autocloser
+    #      reads. Pinned by test_early_credit_is_licensed_by_no_findings.
+    #   2. the phase name is OUTSIDE the `nuclei%` namespace (8 prefix
+    #      consumers, incl. asm_autoclose_producer_patterns). Under the ORIGINAL
+    #      name `nuclei_corpus` this append would have SATISFIED that prefix on
+    #      runs where nuclei never scanned — the rename is what makes crediting
+    #      here safe at all. Pinned by
+    #      test_phase_name_is_OUTSIDE_the_nuclei_prefix_namespace.
+    #
+    # ⚠ If either property ever stops holding, move the credit to the exit paths.
+    #
+    # ⚠ The exception window (nuclei_templates_dir / run_cmd / corpus_identity,
+    # which hashes a dir that may not exist) cannot corrupt the persisted record:
+    # a raw raise here routes to run()'s generic `except Exception` → fail_out,
+    # which writes ONLY the error text after a rollback. tool_status and
+    # tools_run are never persisted on that path, so the `missing` direction
+    # never reaches the DB. The run is `failed` and loud, which is louder than
+    # degraded. (reconcile_tool_status_invariant DOES repair both directions,
+    # and assert_tool_status_invariant auto-stamps `missing` before raising —
+    # neither is reached here, and neither is needed.)
+    ctx.tools_run.append("corpus_prewarm")
     tdir = nuclei_templates_dir()
     log(f"→ nuclei corpus pre-warm (dir={tdir}, wall={NUCLEI_CORPUS_WALL_S}s)")
     count = -1

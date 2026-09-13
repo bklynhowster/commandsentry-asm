@@ -69,9 +69,10 @@ def test_floor_is_loose_not_a_target():
 
 def _ctx():
     c = types.SimpleNamespace()
-    c.tool_status = {}
-    c.tool_diag = {}
-    c.artifacts = []
+    c.tools_run = []          # ⚠ NOT decoration — prewarm_corpus credits itself
+    c.tool_status = {}        #   here, and set-equality with this list is the
+    c.tool_diag = {}          #   contract close_out asserts. A fixture without
+    c.artifacts = []          #   tools_run cannot observe the 09-11 regression.
     c.corpus_prewarm_ok = True
     c.corpus_prewarm_meta = {}
     c.dsn = None
@@ -384,3 +385,84 @@ def test_every_MEDIUM_registered_phase_is_reachable_from_the_medium_runner():
         f"registered at MEDIUM but never called from run_medium's linear body: "
         f"{unreachable} — heavy would execute these via the registry and medium "
         f"would silently skip them")
+# ── the 09-11 invariant regression ──────────────────────────────────────────
+
+def test_prewarm_SATISFIES_the_tool_status_invariant_on_every_exit(monkeypatch):
+    """THE REGRESSION, pinned as the CONTRACT rather than as the fix.
+
+    corpus_prewarm stamped tool_status without crediting tools_run. Heavy was
+    unaffected (run_phase credits via the registry); medium calls the function
+    directly, so set-equality broke and assert_tool_status_invariant — which
+    runs in close_out only — raised `unclaimed=['corpus_prewarm']`. EVERY
+    prewarm-enabled medium degraded. Confirmed live on both instances
+    2026-09-11: Prodex #593, Command #2882.
+
+    Asserts the INVARIANT, not the presence of an append. A test that asserted
+    `"corpus_prewarm" in ctx.tools_run` would pass just as well if someone
+    later credited it in a way that broke set-equality the other direction.
+
+    ⚠ ALL THREE EXITS, because a floor trip and an exhausted-retry must each
+    record their real reason WITHOUT a bogus invariant failure stacked on top.
+    """
+    from degradation import assert_tool_status_invariant
+
+    cases = [
+        ("success",   lambda c, timeout=30, **kw: (0, "t\n" * 13202, "")),
+        ("floor trip", lambda c, timeout=30, **kw: (0, "t\n" * 3, "")),
+        ("timeout",   lambda c, timeout=30, **kw: (124, "", "hung")),
+    ]
+    for label, fake in cases:
+        monkeypatch.setattr(m, "run_cmd", fake)
+        monkeypatch.setattr(m, "corpus_identity", lambda d: {})
+        ctx = _ctx()
+        m.prewarm_corpus(ctx)
+
+        assert "corpus_prewarm" in ctx.tool_status, \
+            f"{label}: the phase must always stamp a status"
+        # must not raise — this is the assertion close_out makes for real
+        assert_tool_status_invariant(ctx.tools_run, ctx.tool_status)
+        assert ctx.tools_run.count("corpus_prewarm") == 1, \
+            f"{label}: credited more than once — duplicates inflate tools_run"
+
+
+def test_medium_linear_body_phases_credit_themselves():
+    """Generalises the defect class one step past #46's reachability test.
+
+    Reachable-from-medium is not enough: a phase medium calls DIRECTLY gets no
+    registry bookkeeping, so its own body must credit tools_run. Asserted
+    against the working control (detect_waf/"wafw00f") so the rule is anchored
+    to a function that has run in production for weeks, not just to the new one.
+    """
+    import inspect
+    for fn_name, tool in (("prewarm_corpus", "corpus_prewarm"),
+                          ("detect_waf", "wafw00f"),
+                          ("detect_tech_stack", "httpx[-td]")):
+        src = inspect.getsource(getattr(m, fn_name))
+        assert f'tools_run.append("{tool}")' in src, (
+            f"{fn_name}() is called directly from run_medium's linear body and "
+            f"must credit tools_run.append({tool!r}) itself — the registry "
+            f"only credits the heavy path")
+def test_early_credit_is_licensed_by_no_findings(monkeypatch):
+    """PINS THE LICENCE FOR INVERTING run_phase's DOCUMENTED ORDER.
+
+    run_phase credits tools_run AFTER fn returns "so a tool that ran and failed
+    can never count as coverage". prewarm_corpus credits BEFORE. That exception
+    is licensed by this phase emitting NO FINDINGS — coverage requires ok='true'
+    in tool_status (migration 20260828a), and only the two real exit paths write
+    it, so an early credit cannot manufacture coverage.
+
+    ⚠ If corpus_prewarm ever starts emitting findings, the licence is void and
+    the credit must move to the exit paths. This test is what says so.
+    """
+    for fake in (lambda c, timeout=30, **kw: (0, "t\n" * 13202, ""),   # ok
+                 lambda c, timeout=30, **kw: (0, "t\n" * 3, ""),       # floor
+                 lambda c, timeout=30, **kw: (124, "", "hung")):       # timeout
+        monkeypatch.setattr(m, "run_cmd", fake)
+        monkeypatch.setattr(m, "corpus_identity", lambda d: {})
+        ctx = _ctx()
+        ctx.findings = []
+        m.prewarm_corpus(ctx)
+        assert ctx.findings == [], (
+            "corpus_prewarm emitted a finding — early tools_run crediting is no "
+            "longer safe; move the append to the exit paths (see run_phase's "
+            "'ORDER IS THE POINT' docstring)")
