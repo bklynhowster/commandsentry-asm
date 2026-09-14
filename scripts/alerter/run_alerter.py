@@ -142,6 +142,51 @@ FROM (
 ORDER BY asset_id, finding_id;
 """
 
+# ---------------------------------------------------------------------------
+# NEW findings in the window — added 2026-09-14 (relay 133, rule 9).
+#
+# ⛔ THE DEFECT THIS CLOSES. The digest's "finding change(s)" number was
+# len(confirmed) + len(regressed), both of which read v_alerter_changes. That
+# view's outer WHERE (20260711b_...sql:89) admits ONLY rows whose status is
+# 'regressed', 'confirmed' or 'open'. A brand-new finding is inserted with
+# current_status = 'detected' (run_medium.py:4578, run_light.py:2769) and the
+# ON CONFLICT ... ELSE 'detected' branch re-writes 'detected' on every
+# re-observation, so it never leaves that state on its own. finding_history
+# stamps the FINAL current_status, so the row enters the view NEVER.
+#
+# The digest was therefore counting TRANSITIONS BETWEEN EXISTING STATES and was
+# structurally blind to creation. Measured on the 2026-09-13 15:24 → 2026-09-14
+# 17:20 window: 65 findings created, all 65 'detected', 0 rows in
+# v_alerter_changes for the entire window. The email said "0 finding change(s)".
+#
+# This query is the definition 4.7 named in relay 133: creation, read from the
+# findings table itself, not inferred from a transition log. It is ADDITIVE —
+# the confirmed/regressed queries are untouched, so no existing number moves.
+# The headline now names both quantities separately instead of letting one
+# stand in for the other.
+#
+# Same Tier 2 gate as every other digest query: owned + confirmed_live only.
+SQL_NEW_FINDINGS_IN_WINDOW = """
+SELECT f.finding_id, f.asset_id, f.title, f.severity, f.current_status,
+       f.source, f.first_detected_at
+FROM findings f
+JOIN assets a ON a.asset_id = f.asset_id
+WHERE f.first_detected_at >  %s
+  AND f.first_detected_at <= %s
+  AND a.ownership = 'owned'
+  AND a.discovery_status = 'confirmed_live'
+ORDER BY
+  CASE f.severity
+    WHEN 'CRITICAL'      THEN 1
+    WHEN 'HIGH'          THEN 2
+    WHEN 'MODERATE-HIGH' THEN 3
+    WHEN 'MODERATE'      THEN 4
+    WHEN 'LOW'           THEN 5
+    WHEN 'INFO'          THEN 6
+  END,
+  f.asset_id, f.finding_id;
+"""
+
 SQL_HIGH_RISK_ASSETS_NOW = """
 -- Full live set of high-risk assets. The Python alerter diffs this against
 -- the previous run's snapshot to surface only newly-elevated ones.
@@ -210,6 +255,33 @@ WHERE e.event_type = 'asset_first_seen'
   AND e.observed_at <= %s
   AND a.ownership = 'owned'
   AND a.discovery_status = 'confirmed_live'
+  -- ⛔ FIRST-EVER, NOT FIRST-PER-PRODUCER. Added 2026-09-14 (relay 133).
+  --
+  -- surface_diff.py:120-138 emits asset_first_seen when "existing_blob is None
+  -- (this producer never saw the asset)". That is deliberately PER-PRODUCER —
+  -- it is the right semantic for the surface diff, which reasons about one
+  -- producer's view. It is the WRONG semantic for a human-facing panel titled
+  -- "New assets discovered", which claims first-ever discovery.
+  --
+  -- The two only agreed while asm_cron was the sole producer. The light-tier
+  -- surface write-back (mine, live 2026-09-09T11:53) added a second producer,
+  -- and every asset it touches for the first time emits asset_first_seen on an
+  -- asset the fleet has known for months. Measured on the 2026-09-13 →
+  -- 09-14 window: 14 events, ALL source_tag='scanner_light', assets.first_observed
+  -- ranging 2026-03-27 .. 2026-07-19. Not one was new. Corpus check: 45
+  -- scanner_light asset_first_seen rows all time, earliest 2026-09-09T11:53 —
+  -- zero before the write-back shipped. The producer is the cause.
+  --
+  -- This predicate does not touch the writer: the per-producer events stay in
+  -- asset_surface_event as the audit trail, exactly as the namesake/ct_ghost
+  -- rows above do. It only stops the DIGEST from restating a producer's first
+  -- look as the fleet's first sighting.
+  AND NOT EXISTS (
+    SELECT 1 FROM public.asset_surface_event e0
+    WHERE e0.asset_id   = e.asset_id
+      AND e0.event_type = 'asset_first_seen'
+      AND e0.observed_at < e.observed_at
+  )
 ORDER BY e.observed_at DESC, e.asset_id;
 """
 
@@ -473,6 +545,7 @@ def render_html(
     *,
     window_start: datetime,
     window_end: datetime,
+    new_findings: list[tuple],
     confirmed: list[tuple],
     regressed: list[tuple],
     high_risk: list[tuple],
@@ -595,6 +668,11 @@ def render_html(
             f"</tr></thead><tbody>{cells}</tbody></table>"
         )
 
+    new_findings_section = section(
+        "New findings (first detected in this window)",
+        len(new_findings),
+        find_table(new_findings),
+    )
     confirmed_section = section(
         "Newly confirmed findings", len(confirmed), find_table(confirmed)
     )
@@ -612,7 +690,9 @@ def render_html(
     )
 
     pipeline_degraded = bool(stale_assets or canary_violations)
-    has_changes = bool(confirmed or regressed or high_risk or new_assets or dark_assets)
+    has_changes = bool(
+        new_findings or confirmed or regressed or high_risk or new_assets or dark_assets
+    )
 
     # Headline reflects pipeline health FIRST, then activity. Don't say
     # "healthy" if the watchdog has anything to report — that was exactly
@@ -624,8 +704,14 @@ def render_html(
             f"<strong>{len(stale_assets)}</strong> stale live asset(s). See below."
         )
     elif has_changes:
+        # ⛔ "new finding(s)" and "status change(s)" are SEPARATE quantities and
+        # must stay separate. Until 2026-09-14 this line said "finding change(s)"
+        # over len(confirmed)+len(regressed) only — a transition count wearing a
+        # creation count's name, which printed 0 on a 65-finding day. Do not
+        # re-merge them.
         headline = (
-            f"<strong>{len(confirmed) + len(regressed)}</strong> finding change(s), "
+            f"<strong>{len(new_findings)}</strong> new finding(s), "
+            f"<strong>{len(confirmed) + len(regressed)}</strong> status change(s), "
             f"<strong>{len(high_risk)}</strong> asset risk shift(s), "
             f"<strong>{len(new_assets)}</strong> new asset(s), "
             f"<strong>{len(dark_assets)}</strong> dark asset(s) in this window."
@@ -725,6 +811,7 @@ def render_html(
     {baseline_pill}
   </div>
 
+  {new_findings_section}
   {confirmed_section}
   {regressed_section}
   {high_risk_section}
@@ -744,6 +831,7 @@ def render_text(
     *,
     window_start: datetime,
     window_end: datetime,
+    new_findings: list[tuple],
     confirmed: list[tuple],
     regressed: list[tuple],
     high_risk: list[tuple],
@@ -804,10 +892,16 @@ def render_text(
     )
     lines.append("")
 
-    if not (confirmed or regressed or high_risk or new_assets or dark_assets):
+    if not (new_findings or confirmed or regressed or high_risk or new_assets or dark_assets):
         if not pipeline_degraded:
             lines.append("No changes since last run — pipeline healthy.")
         return "\n".join(lines)
+
+    if new_findings:
+        lines.append(f"NEW FINDINGS — first detected in this window ({len(new_findings)}):")
+        for r in new_findings:
+            lines.append(f"  [{r[3]}] {r[1]} — {r[2]}  ({r[0]})")
+        lines.append("")
 
     if confirmed:
         lines.append(f"NEWLY CONFIRMED ({len(confirmed)}):")
@@ -943,6 +1037,8 @@ def main() -> int:
                 conn.commit()
 
             # Pull the changes
+            cur.execute(SQL_NEW_FINDINGS_IN_WINDOW, (window_start, window_end))
+            new_findings = cur.fetchall()
             cur.execute(SQL_NEW_CONFIRMED, (window_start, window_end))
             confirmed = cur.fetchall()
             cur.execute(SQL_REGRESSED, (window_start, window_end))
@@ -1018,6 +1114,10 @@ def main() -> int:
             subject_parts.append(f"{n} canary")
         if (n := len(stale_assets)) > 0:
             subject_parts.append(f"{n} stale")
+        # Subject carries BOTH quantities. "chng" alone read as 0 on nights
+        # when 65 findings were created — see SQL_NEW_FINDINGS_IN_WINDOW.
+        if (n := len(new_findings)) > 0:
+            subject_parts.append(f"{n} new find")
         if (n := len(confirmed) + len(regressed)) > 0:
             subject_parts.append(f"{n} chng")
         if (n := len(high_risk)) > 0:
@@ -1034,6 +1134,7 @@ def main() -> int:
         )
         html = render_html(
             window_start=window_start, window_end=window_end,
+            new_findings=new_findings,
             confirmed=confirmed, regressed=regressed, high_risk=high_risk,
             new_assets=new_assets, dark_assets=dark_assets,
             stale_assets=stale_assets, canary_violations=canary_violations,
@@ -1044,6 +1145,7 @@ def main() -> int:
         )
         text = render_text(
             window_start=window_start, window_end=window_end,
+            new_findings=new_findings,
             confirmed=confirmed, regressed=regressed, high_risk=high_risk,
             new_assets=new_assets, dark_assets=dark_assets,
             stale_assets=stale_assets, canary_violations=canary_violations,
