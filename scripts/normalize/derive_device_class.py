@@ -383,10 +383,31 @@ def classify(observations: dict,
     # i.e. absence-of-fronting). On an equal (high,medium,low) tally it must LOSE to any real
     # fronting class, so it only wins when it is the SOLE class. Priority 0 for origin_host, 1
     # otherwise, as the lowest-order tiebreak.
+    # ── DETERMINISTIC TIE-BREAK (4.7 ruling, relay 116/121, 2026-09-14) ────────
+    # BEFORE this, two classes with identical (high, medium, low) tallies were
+    # separated by `max()`'s "first maximal element" rule over a plain dict whose
+    # order comes from `matched` — i.e. the verdict depended on FINGERPRINT FILE
+    # ORDER. Reproduced on live data: commandmarketinginnovations.com classified
+    # `waf`/{} as produced and `cdn`/{vendor: Automattic} with the same signals in
+    # reverse. A re-sort of device_fingerprints.yaml could silently flip
+    # classifications fleet-wide, with no code change, and device_class feeds
+    # routing (146 R2).
+    #
+    # ⛔⛔ THIS RANKING ENCODES TODAY'S BEHAVIOUR SO THE FIX IS BEHAVIOUR-NEUTRAL.
+    # IT IS **NOT** A CLAIM THAT A WAF OUTRANKS A CDN. That is the orthogonal-lanes
+    # question (146 §4c) — an asset can genuinely be BOTH behind a WAF and fronted
+    # by a CDN, and forcing one field to hold two true things is the real defect.
+    # Changing this order changes the decision math ⇒ soak reset (R2), and is
+    # Howie's cost to accept. Do not "improve" it in passing.
+    _CLASS_TIEBREAK = {"waf": 0, "edge_firewall": 1, "cdn": 2, "origin_host": 3}
     win_class, win = max(
         by_class.items(),
         key=lambda kv: (len(kv[1]["high"]), len(kv[1]["medium"]), len(kv[1]["low"]),
-                        0 if kv[0] == "origin_host" else 1),
+                        0 if kv[0] == "origin_host" else 1,
+                        # Total, explicit, documented. Unknown classes sort last
+                        # (99) but deterministically, so a new device_class added
+                        # to the YAML cannot reintroduce order-dependence.
+                        -_CLASS_TIEBREAK.get(kv[0], 99)),
     )
     conf = _confidence(len(win["high"]), len(win["medium"]))
     vp_conf = _confidence(len(win["vi_high"]), len(win["vi_medium"]))
