@@ -21,6 +21,8 @@ population is growing *because* of the coverage fix we shipped).
 """
 import itertools
 import pathlib
+
+import pytest
 import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -111,3 +113,39 @@ def test_ranking_is_documented_as_status_quo_not_precedence():
     assert "NOT** A CLAIM THAT A WAF OUTRANKS A CDN" in src or \
            "NOT A CLAIM THAT A WAF OUTRANKS A CDN" in src, \
         "the 'this is not a precedence claim' warning has been removed"
+
+
+# ── ⛔ KNOWN DEFECT, EXECUTABLE — same-class vendor collision (4.7 relay 123) ──
+# The tie-break above made CLASS selection deterministic. VENDOR selection WITHIN
+# a class is still last-wins:
+#     derive_device_class.py:370   g["vendor"].update(m["vendor_product"])
+#     derive_device_class.py:380   slot["vendor"].update(g["vendor"])
+# `dict.update()` takes the last writer, and the iteration order comes from
+# `matched` — so two vendor_identifying signals in the SAME class with DIFFERENT
+# vendors resolve to whichever the loop reaches last.
+#
+# MEASURED 2026-09-14 on the fixture below: 6 permutations -> 2 verdicts, 3 each.
+# ⛔ AND vendor_product_confidence reads `confirmed` in BOTH. The system asserts
+# CONFIRMED confidence in a vendor name chosen by list order. That is worse than
+# the class-level bug, which at least only produced `suspected`.
+#
+# ⚠ xfail(strict=True) ON PURPOSE. The defect is real and unfixed; leaving the
+# test plain-red would break CI and get muted. strict=True means that when the
+# vendor-merge work (② / relay 117) fixes this, the test XPASSes and pytest FAILS
+# — forcing whoever fixes it to delete this marker and read the note. A silently
+# self-healing xfail would let the fix land with no one noticing the contract
+# changed.
+@pytest.mark.xfail(strict=True, reason="same-class vendor collision is last-wins; "
+                                       "fixed by the vendor-merge work (relay 117 item 2)")
+def test_same_class_vendor_collision_is_order_invariant():
+    """Cloudflare in front of a Pressable/Automattic origin — a real shape, and
+    both tells read the SAME observation (http_headers), so they genuinely
+    co-occur rather than being a synthetic pairing."""
+    obs = {"http_headers": "x-ac: 1.atl _atomic_dfw MISS\n"
+                           "cf-ray: 8a1b2c3d4e5f-EWR\n"
+                           "server: nginx"}
+    matched, seen = _verdicts_over_all_permutations(obs)
+    vendors = {dict(k[4]).get("vendor") for k in seen}
+    assert len(seen) == 1, (
+        f"vendor is decided by list order: {len(seen)} verdicts across "
+        f"{sum(seen.values())} permutations, vendors seen = {vendors}")
