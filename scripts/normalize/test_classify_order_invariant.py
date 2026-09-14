@@ -20,9 +20,8 @@ posture collection adds header signals to more assets (4.7 relay 121: the tie
 population is growing *because* of the coverage fix we shipped).
 """
 import itertools
+import json
 import pathlib
-
-import pytest
 import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -57,9 +56,15 @@ def _verdicts_over_all_permutations(obs):
         for perm in itertools.permutations(matched):
             d.match_signals = lambda *a, _p=perm, **k: list(_p)
             r = d.classify(obs, FPS, TH)
+            # json.dumps(sort_keys=True), NOT tuple(sorted(items())): vendor_product
+            # may now hold a `vendors` LIST (② multi-vendor shape), and a list inside
+            # a tuple is unhashable. The first version of this harness raised
+            # TypeError on the multi-vendor case — which xfail(strict) silently
+            # swallowed as "still failing". A harness that cannot represent the
+            # fixed output cannot detect the fix.
             key = (r["device_class"], r["confidence"],
                    r["device_class_confidence"], r["vendor_product_confidence"],
-                   tuple(sorted((r["vendor_product"] or {}).items())))
+                   json.dumps(r["vendor_product"] or {}, sort_keys=True))
             seen.setdefault(key, 0)
             seen[key] += 1
     finally:
@@ -115,28 +120,20 @@ def test_ranking_is_documented_as_status_quo_not_precedence():
         "the 'this is not a precedence claim' warning has been removed"
 
 
-# ── ⛔ KNOWN DEFECT, EXECUTABLE — same-class vendor collision (4.7 relay 123) ──
-# The tie-break above made CLASS selection deterministic. VENDOR selection WITHIN
-# a class is still last-wins:
-#     derive_device_class.py:370   g["vendor"].update(m["vendor_product"])
-#     derive_device_class.py:380   slot["vendor"].update(g["vendor"])
-# `dict.update()` takes the last writer, and the iteration order comes from
-# `matched` — so two vendor_identifying signals in the SAME class with DIFFERENT
-# vendors resolve to whichever the loop reaches last.
-#
-# MEASURED 2026-09-14 on the fixture below: 6 permutations -> 2 verdicts, 3 each.
-# ⛔ AND vendor_product_confidence reads `confirmed` in BOTH. The system asserts
-# CONFIRMED confidence in a vendor name chosen by list order. That is worse than
-# the class-level bug, which at least only produced `suspected`.
-#
-# ⚠ xfail(strict=True) ON PURPOSE. The defect is real and unfixed; leaving the
-# test plain-red would break CI and get muted. strict=True means that when the
-# vendor-merge work (② / relay 117) fixes this, the test XPASSes and pytest FAILS
-# — forcing whoever fixes it to delete this marker and read the note. A silently
-# self-healing xfail would let the fix land with no one noticing the contract
-# changed.
-@pytest.mark.xfail(strict=True, reason="same-class vendor collision is last-wins; "
-                                       "fixed by the vendor-merge work (relay 117 item 2)")
+# ── same-class vendor collision — WAS a known defect, FIXED by ② (relay 129) ──
+# History, kept because the marker's self-retirement is the interesting part:
+#   2026-09-14 pinned as xfail(strict=True) — vendor selection within a class was
+#   last-wins via dict.update(), and the coin-flipped vendor carried
+#   vp_conf=confirmed because two signals had fired. Measured: 6 permutations,
+#   2 verdicts, 3 each.
+#   Same day, ② landed per-vendor attribution -> the test XPASSed -> strict turned
+#   that into a FAILURE -> this marker was removed and the test promoted to a
+#   permanent guard. That is exactly the retirement path the strict flag exists
+#   to force; a non-strict xfail would have self-healed silently.
+# ⚠ One detour worth recording: the first harness built its verdict key with
+#   tuple(sorted(items())), which cannot hash the new `vendors` list. It raised
+#   TypeError — and xfail swallowed that as "still failing". The fix was invisible
+#   to the instrument until the instrument could represent the fixed output.
 def test_same_class_vendor_collision_is_order_invariant():
     """Cloudflare in front of a Pressable/Automattic origin — a real shape, and
     both tells read the SAME observation (http_headers), so they genuinely
@@ -145,7 +142,15 @@ def test_same_class_vendor_collision_is_order_invariant():
                            "cf-ray: 8a1b2c3d4e5f-EWR\n"
                            "server: nginx"}
     matched, seen = _verdicts_over_all_permutations(obs)
-    vendors = {dict(k[4]).get("vendor") for k in seen}
     assert len(seen) == 1, (
         f"vendor is decided by list order: {len(seen)} verdicts across "
-        f"{sum(seen.values())} permutations, vendors seen = {vendors}")
+        f"{sum(seen.values())} permutations -> {seen}")
+    (_, _, _, vp_conf, vp_json), = seen
+    vp = json.loads(vp_json)
+    # ② contract: BOTH vendors emitted, each with its OWN confidence, sorted by name.
+    assert "vendors" in vp and [e["vendor"] for e in vp["vendors"]] == ["Automattic", "Cloudflare"], vp
+    # ⛔ THE CLAIM-EXCEEDS-EVIDENCE GUARD: one signal per vendor -> each is `suspected`.
+    # Before ②, ONE of these was published at `confirmed` on the strength of the OTHER.
+    assert all(e["confidence"] == "suspected" for e in vp["vendors"]), vp
+    # top-level vp_conf is the NOT-APPLICABLE sentinel, never an aggregate (relay 129)
+    assert vp_conf == d.VP_CONF_MULTI_VENDOR == "unknown"

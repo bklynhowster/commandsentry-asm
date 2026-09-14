@@ -314,6 +314,17 @@ def match_signals(observations: dict, fingerprints: list[dict], thresholds: dict
     return out
 
 
+# ② (4.7 ruling, relay 129): the TOP-LEVEL vendor_product_confidence when an asset
+# carries 2+ DISTINCT vendors. Any single value collapses exactly what the array
+# exists to preserve — max() implies confidence in *the* vendor, min() understates
+# a genuinely confirmed tell, a fixed "suspected" is arbitrary.
+# ⚠ "unknown" HERE MEANS "NOT APPLICABLE TO A MULTI-VENDOR ASSET" — NOT "we know
+# nothing". The real confidences live per-entry in vendor_product["vendors"].
+# ⛔ CONSUMERS (P2 / R3 CVE gate) MUST READ THE PER-VENDOR VALUES, never this
+# aggregate, or every multi-vendor asset is silently skipped. See 146 R3 amendment.
+VP_CONF_MULTI_VENDOR = "unknown"
+
+
 def _confidence(high: int, medium: int) -> str:
     if high >= 2 or (high >= 1 and medium >= 2):
         return "confirmed"
@@ -410,7 +421,77 @@ def classify(observations: dict,
                         -_CLASS_TIEBREAK.get(kv[0], 99)),
     )
     conf = _confidence(len(win["high"]), len(win["medium"]))
-    vp_conf = _confidence(len(win["vi_high"]), len(win["vi_medium"]))
+
+    # ── ② VENDOR ATTRIBUTION — per vendor, across ALL classes, never update()
+    #    (4.7 rulings, relay 121/123/125/129, 2026-09-14) ──────────────────────
+    # BEFORE: vendor_product = win["vendor"], assembled by dict.update() and scoped
+    # to the WINNING CLASS. Two defects stacked:
+    #   1. a vendor_identifying signal on a LOSING class was discarded outright —
+    #      Automattic dropped because `cdn` lost a tie to `waf` (reproduced live);
+    #   2. two vendors in the SAME class resolved last-wins by list order, while
+    #      vp_conf — correctly — read `confirmed` because two signals fired.
+    #      The confidence was EARNED BY TWO AND SPENT ON ONE. (pinned as
+    #      test_same_class_vendor_collision_is_order_invariant, now retired)
+    #
+    # ⛔ AND THE TRAP INSIDE THE OBVIOUS FIX: `_confidence()` is a CORROBORATION
+    # count. Scoring vp_conf over the UNION of all vendor signals would let a
+    # Cloudflare tell and an Automattic tell sum to `confirmed` — disagreement
+    # counted as mutual confirmation. So confidence is computed PER VENDOR.
+    #
+    # ⚠ device_class / confidence above are UNTOUCHED. The routing/write path reads
+    # only those two (146 R2, device_class_runner:305), so this is additive: no
+    # asset's routing changes, no soak reset.
+    per_vendor: dict[str, dict] = {}
+    for m in matched:
+        if m.get("evidence_class") != "vendor_identifying":
+            continue
+        vp = m.get("vendor_product") or {}
+        v = vp.get("vendor")
+        if not v:
+            continue
+        pv = per_vendor.setdefault(v, {"high": set(), "medium": set(),
+                                       "products": [], "classes": set()})
+        # 157 Q2 dedupe carries over: a signal counts once per vendor, keyed on
+        # dedupe_key, so heavy+discovery wafw00f cannot double-corroborate.
+        if m["weight"] in ("high", "medium"):
+            pv[m["weight"]].add(m["dedupe_key"])
+        p = vp.get("product")
+        if p and p not in pv["products"]:
+            pv["products"].append(p)
+        pv["classes"].add(m["device_class"])
+
+    def _vendor_entry(v: str, pv: dict) -> dict:
+        e = {"vendor": v}
+        # R3: name a product only when the evidence agrees on ONE. Two rows for the
+        # same vendor naming different products (FortiGate vs FortiWeb) is a
+        # product-level conflict; publish the vendor and let the product be
+        # re-earned. Never last-wins.
+        if len(pv["products"]) == 1:
+            e["product"] = pv["products"][0]
+        return e
+
+    if not per_vendor:
+        vendor_product: dict = {}
+        vp_conf = "unknown"
+    elif len(per_vendor) == 1:
+        # ⭐ SHAPE BYTE-IDENTICAL to before for the single-vendor case, so the
+        # portal's existing read (page.tsx :1652-1655) keeps working unchanged for
+        # every asset that has one vendor — which, measured 2026-09-14, is all of
+        # them on both instances.
+        v, pv = next(iter(per_vendor.items()))
+        vendor_product = _vendor_entry(v, pv)
+        vp_conf = _confidence(len(pv["high"]), len(pv["medium"]))
+    else:
+        # ⭐ EMIT BOTH, NEVER PICK. Each entry carries its OWN confidence. Sorted
+        # by vendor name so the array itself is order-invariant.
+        vendor_product = {"vendors": [
+            dict(_vendor_entry(v, pv),
+                 device_class=sorted(pv["classes"])[0] if len(pv["classes"]) == 1
+                              else sorted(pv["classes"]),
+                 confidence=_confidence(len(pv["high"]), len(pv["medium"])))
+            for v, pv in sorted(per_vendor.items())
+        ]}
+        vp_conf = VP_CONF_MULTI_VENDOR
 
     # If even the strongest class can't clear 'suspected' (only low-weight or
     # nothing decisive), stay unknown — 4.7 D2/D3.
@@ -429,7 +510,7 @@ def classify(observations: dict,
         "device_class_confidence": conf,
         "vendor_product_confidence": vp_conf,
         "evidence": matched,           # all matched signals — audit + transition diff
-        "vendor_product": win["vendor"],
+        "vendor_product": vendor_product,
     }
 
 
