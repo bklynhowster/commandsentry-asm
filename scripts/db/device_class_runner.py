@@ -105,6 +105,14 @@ _POSITIVE_CLASSES = frozenset(CLOUD_CLASSES | {"origin_host", "edge_firewall", "
 # behaviour changes and no new event rows are written until phase 2b — deliberately,
 # per 4.7 Q6 (measure the flip-rate in dry-run for 7+ days before enabling any write).
 
+# The two producers of passive posture artifacts, newest-first-by-signal.
+# ⚠ STRINGLY-TYPED BOUNDARY: "light_stack_passive" is also defined as
+# LIGHT_PASSIVE_TOOL in scripts/scanner/stack_passive.py. scripts/db/ cannot
+# import from scripts/scanner/ (different sys.path root), so the literal is
+# duplicated and PINNED BY TEST rather than trusted — same treatment as
+# DEEP_SWEEP_QUEUE_MARKER. If you rename one, the pin fails.
+_PASSIVE_TOOL_NAMES = ("stack_id_passive", "light_stack_passive")
+
 _STATUS_READS_OK = "reads_ok"                        # got observations -> classify normally
 _STATUS_GENUINE_EMPTY = "genuine_empty"              # fresh scan existed, nothing matched -> unknown (streak candidate, Q4)
 _STATUS_NO_FRESH_COLLECTION = "no_fresh_collection"  # nothing fresh to read at all -> unreadable (Q2 Layer A)
@@ -382,6 +390,34 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
             return None
         return obj if isinstance(obj, dict) else None
 
+    def _fresh_json_many(tool_names: tuple, limit: int = 3) -> list:
+        """Newest `limit` json artifacts per tool name, merged newest-first.
+
+        Explicit NAME LIST, never a prefix — `ilike 'stack_id_passive%'` is the
+        predicate shape that made seed-device-class.yml fragile, and the light
+        artifact is deliberately named outside that namespace.
+        Bounded (4.7): an unbounded read inside a per-asset loop is a cost trap.
+        """
+        rows: list = []
+        for tool in tool_names:
+            cur.execute(
+                f"""select a.content_jsonb::text as blob, r.completed_at
+                      from scan_run_artifacts a join scan_run r on r.scan_run_id = a.scan_run_id
+                     where r.asset_id = %s and a.tool_name = %s
+                       and r.completed_at > {fresh}
+                     order by r.completed_at desc limit {int(limit)}""", (asset_id, tool))
+            for row in cur.fetchall() or []:
+                if not row or not row.get("blob"):
+                    continue
+                try:
+                    obj = json.loads(row["blob"])
+                except Exception:
+                    continue
+                if isinstance(obj, dict):
+                    rows.append((row["completed_at"], obj))
+        rows.sort(key=lambda t: t[0], reverse=True)
+        return [o for _, o in rows]
+
     verdict = _fresh_json("stack_id_wafw00f")
     kind = waf_vendor_from_wafw00f(verdict)      # kind string if detected & named, else None
     if kind and kind != "generic":
@@ -391,11 +427,33 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
         # (not alongside waf_vendor) so it never double-counts the same wafw00f run
         # against a vendor row (4.7 same-artifact test, Obsidian 146).
         obs["waf_present"] = True                # -> waf_present_wafw00f
-    passive = _fresh_json("stack_id_passive")
-    http_headers = http_headers_from_passive(passive)
+    # ── PER-SIGNAL MERGE across the two passive producers (4.7 ruling, 2026-09-14) ──
+    # heavy's `stack_id_passive`  = cert + headers + cookies, RARE
+    # light's `light_stack_passive` = headers + cookies, FREQUENT (no cert by design)
+    #
+    # ⛔ A single newest-wins pick CANNOT EXPRESS "this artifact does not carry
+    # that signal" — the same inexpressibility that made `lastDeepAt:
+    # Map<id, Date>` unable to say "this scan doesn't count" in #060. Newest-wins
+    # here would let light's fresher artifact shadow heavy's, and if light lacked
+    # cookies it would silently kill the fortiweb_cookiesession1 tell — fixing
+    # Pressable posture and going blind on FortiGate posture in one commit, with
+    # no test failing.
+    # ⇒ each signal takes the newest candidate that actually CONTAINS it, where
+    #   "contains" is PRESENT AND NON-EMPTY: {} / [] / "" / null all fall through.
+    #   An empty map is ABSENCE, not evidence of absence.
+    passive_candidates = _fresh_json_many(_PASSIVE_TOOL_NAMES, limit=3)
+
+    def _passive_signal(key):
+        for cand in passive_candidates:
+            val = cand.get(key)
+            if val:
+                return val
+        return None
+
+    http_headers = http_headers_from_passive({"headers": _passive_signal("headers")})
     if http_headers:
         obs["http_headers"] = http_headers       # -> product_http_header row
-    cookie_names = passive.get("set_cookie_names") if isinstance(passive, dict) else None
+    cookie_names = _passive_signal("set_cookie_names")
     if isinstance(cookie_names, list) and cookie_names:
         obs["set_cookie_names"] = cookie_names   # -> fortiweb_cookiesession1 (exact match)
 

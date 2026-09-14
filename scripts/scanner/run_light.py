@@ -309,6 +309,12 @@ from run_medium import (flush_progress, flush_planned_steps,  # noqa: E402
 # Declared-tier findings.source — single source of truth shared with the @phase
 # registry (spec 190 / 4.7 ruling 191 Q1). Decouples source from run intensity.
 from phase_source import source_for_tier, LIGHT  # noqa: E402
+from stack_passive import (  # noqa: E402
+    LIGHT_PASSIVE_TOOL,
+    normalise_header_keys,
+    vendor_header_subset,
+    extract_set_cookie_names,
+)
 from tech_detect import (  # noqa: E402  (4.7 ⑭′ — shared with run_medium)
     merge_tech_detection,
     parse_httpx_rows,
@@ -721,6 +727,45 @@ def check_headers(ctx: ScanContext) -> None:
     # is the one place the migration could silently invent findings.
     rec = json.loads(stdout.strip().splitlines()[0])
     headers_lc = rec.get("header") or {}
+
+    # ── (c) LIGHT-TIER PASSIVE POSTURE — zero additional network requests ─────
+    # The posture collector (run_heavy.run_stack_id_passive_phase) is HEAVY-only,
+    # while the automatic deep sweep enqueues MEDIUM — so the automation could
+    # scan the fleet forever and never refresh a posture observation. Measured
+    # 2026-09-14: commandmarketinginnovations.com's newest passive artifact was
+    # 2026-07-22, 54 days old, while the scheduler picked it blind.
+    # Light already fetched these headers; this re-uses them.
+    #
+    # ⛔ NORMALISE FIRST, THEN SUBSET. httpx -irh keys are UNDERSCORED (x_ac,
+    # set_cookie); vendor_header_subset matches `startswith("x-")` and
+    # extract_set_cookie_names matches `== "set-cookie"` — both WIRE format.
+    # Subsetting first silently drops every edge marker and every cookie and
+    # leaves only server/via, which survive purely because they contain no
+    # hyphen. The artifact would look fine and carry nothing.
+    try:
+        wire = normalise_header_keys(headers_lc)
+        signals = {
+            "schema": 1,
+            "collected_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "hostname": ctx.hostname,
+        }
+        vh = vendor_header_subset(wire)
+        if vh:
+            signals["headers"] = vh
+        names = extract_set_cookie_names(wire)
+        if names:
+            signals["set_cookie_names"] = names
+        # ⛔ cert is NOT emitted here. Light's tls_check is a different openssl
+        # invocation from heavy's and extract_cert is testssl-shaped; an empty
+        # cert key would read as evidence of ABSENCE. Omitted, never empty.
+        # Per-signal merge takes cert from heavy's artifact instead.
+        if vh or names:
+            ctx.artifacts.append(
+                (LIGHT_PASSIVE_TOOL, "json", json.dumps(signals)))
+            log(f"  {LIGHT_PASSIVE_TOOL} (persist-only): "
+                f"headers={len(vh)} cookies={len(names)}")
+    except Exception as exc:  # non-fatal, mirrors P0's construction
+        log(f"  {LIGHT_PASSIVE_TOOL}: skipped ({exc})")
 
     for header_name, severity, why in SECURITY_HEADERS:
         if httpx_header_key(header_name) not in headers_lc:

@@ -1557,25 +1557,6 @@ def _parse_cert_subject_issuer(openssl_out: str) -> dict:
     return out
 
 
-def _extract_set_cookie_names(header_obj) -> list:
-    """Distinct Set-Cookie NAMES (token before '='), never values. httpx -irh
-    puts response headers under 'header' (dict; a Set-Cookie may be str or list);
-    also handles a raw header block (str)."""
-    raw: list = []
-    if isinstance(header_obj, dict):
-        for k, v in header_obj.items():
-            if k.lower() == "set-cookie":
-                raw.extend(v if isinstance(v, list) else [v])
-    elif isinstance(header_obj, str):
-        for line in header_obj.splitlines():
-            if line.lower().startswith("set-cookie:"):
-                raw.append(line.split(":", 1)[1])
-    names: list = []
-    for c in raw:
-        name = str(c).split("=", 1)[0].strip()
-        if name and name not in names:
-            names.append(name)
-    return names
 
 
 # Cloud-edge / CDN marker headers captured as VALUE-FREE presence (4.7 cloud-edge Q6).
@@ -1587,9 +1568,16 @@ def _extract_set_cookie_names(header_obj) -> list:
 # a second copy (the cross-repo duplication that made #053b's lists unguardable).
 # Imported under the SAME private names, so every existing caller and test
 # (test_stack_id_passive.py calls h._vendor_header_subset) is untouched.
+# ⚠ Aliased to the previous PRIVATE names on purpose: run_heavy's call sites and
+# scripts/scanner/test_stack_id_passive.py (which reaches h._vendor_header_subset
+# and h._extract_set_cookie_names by attribute) stay untouched — zero test churn.
+# The shared module publishes them WITHOUT underscores because a leading
+# underscore in a module that exists to be shared contradicts its own purpose,
+# and run_light must not import across a private boundary.
 from stack_passive import (  # noqa: E402
-    _EDGE_MARKER_HEADERS,
-    _vendor_header_subset,
+    EDGE_MARKER_HEADERS as _EDGE_MARKER_HEADERS,
+    vendor_header_subset as _vendor_header_subset,
+    extract_set_cookie_names as _extract_set_cookie_names,
 )
 
 
