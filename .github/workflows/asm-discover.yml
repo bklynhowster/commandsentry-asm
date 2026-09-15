@@ -359,6 +359,41 @@ jobs:
           PORTAL_BASE_URL:  ${{ vars.PORTAL_BASE_URL }}
           ALERTER_FROM:     ${{ vars.ALERTER_FROM }}
           ALERTER_FROM_NAME: ${{ vars.ALERTER_FROM_NAME }}
+          # ── FLIP 1, 2026-09-15 (relay 147 / Obsidian 161 step 3) ──────────────
+          # Turns the dark-signal liveness gate from DRY-RUN to LIVE.
+          #
+          # ⛔ WHY NOW: the gate shipped 2026-07-24 and has sat in dry-run for 53
+          # days on a soak nobody closed. On 2026-09-14 the digest told Howie that
+          # www.commandcompanies.com, www.commandmarketinginnovations.com,
+          # www.commandcommcentral.com and www.unimacgraphics.com had gone dark.
+          # They are the company's four main websites and all four were answering
+          # on 80 AND 443 in the verdict table at that moment. The gate had the
+          # right answer in hand every six hours since July and was forbidden to
+          # use it.
+          #
+          # Re-run of the PRODUCTION apply_liveness_gate against live verdicts,
+          # 2026-09-15 16:36 UTC — all four suppress, nothing emitted:
+          #   [liveness-gate] www.unimacgraphics.com: suppress (responded=True,open=True)
+          #   [liveness-gate] www.commandmarketinginnovations.com: suppress (...)
+          #   [liveness-gate] www.commandcommcentral.com: suppress (...)
+          #   [liveness-gate] www.commandcompanies.com: suppress (...)
+          #   [liveness-gate] emit=0 suppress=4 defer=0
+          #
+          # WHAT LIVE CHANGES (import_asm_to_surface.py:474, asset_liveness.py:197):
+          #   stale + fresh verdict says responded  -> SUPPRESS the asset_went_dark
+          #                                            event, and heal the clock
+          #   stale + NO fresh verdict (>12h)       -> DEFER (fail-safe; a probe
+          #                                            outage must never manufacture
+          #                                            a dark alert)
+          #   stale + verdict says no response      -> EMIT, as today
+          #
+          # ⚠ IT IS NOT STATE-FREE. The suppression path runs
+          # `UPDATE public.assets SET last_probe_alive_at = now()`. That column has
+          # ZERO readers today (grepped: written here, read nowhere), so the write
+          # is forensic rather than load-bearing — but it is a write to `assets`,
+          # and "no asset state changes" would be wrong. Nothing else mutates:
+          # discovery_status, went_dark_at and dark_reason are untouched.
+          DARK_LIVENESS_GATE_LIVE: "1"
         run: |
           if [[ -z "${SUPABASE_DSN}" ]]; then
             echo "::warning::SUPABASE_DSN secret not set — skipping Surface upload."
