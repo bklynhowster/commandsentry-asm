@@ -77,6 +77,133 @@ DEFAULT_SUPABASE_URL = "https://hdygktppfvuspnumpfuq.supabase.co"
 # pattern are considered thin and qualify for synthesis.
 THIN_DESCRIPTION_LEN = 200
 
+# ─── Work-queue selection (2026-09-15, relay 139) ────────────────────────────
+#
+# ⛔ THE DEFECT THIS CLOSES — the worker could not see its own work queue.
+#
+# fetch_findings used `q.limit(5000)` with NO where-clause and NO order, then
+# filtered for thin rows in Python. PostgREST clamps every response to the
+# project's Data API `max_rows`, which is 1000. So the worker received an
+# UNORDERED 1000-row sample of a 2511-row table and asked "are any of these
+# thin?" Whether a thin row landed in the sample was an accident of heap
+# order. Measured 2026-09-15 14:05 UTC on hdygktppfvuspnumpfuq:
+#
+#     findings total                               2511
+#     thin (this predicate)                         232
+#     rows returned for ?limit=5000    Content-Range 0-999/*   -> 1000
+#     thin rows INSIDE that 1000-row response          0
+#     thin rows via ordered pagination                232
+#     last description_synthesized_at   2026-09-13 22:55:54
+#
+# That is why 52 consecutive runs were GREEN and each logged "No findings
+# match." while the precheck in the SAME run logged "221 thin finding(s) —
+# running synthesis." Neither step failed; they simply disagreed, and nothing
+# was watching for the disagreement. See the contradiction guard below.
+#
+# ⚠ The comment removed from fetch_findings claimed the 500->5000 raise on
+# 2026-05-28 was needed because "728 enriched out of 1000 total in DB". The
+# 1000 was never the table size — it was this same cap. The identical defect
+# was found and fixed for the portal's /findings page on 2026-06-04 (vault 63
+# §57, 68 §12: "project db-max-rows=1000 overrode .limit(5000). Paginated via
+# .range()"). This file had the same line and was not revisited.
+#
+# THE PREDICATE. Identical string in this constant and in the `QUERY=` line of
+# .github/workflows/enrich-finding-descriptions.yml; a test asserts they are
+# equal by reading the yml, because the precheck and the worker disagreeing is
+# the whole defect.
+#
+# ⚠ WIDER THAN relay 139's ① SPECIFIED, deliberately — one extra clause,
+# `description_source.not.in.(...)`. Without it the server-side predicate is
+# not a superset of the Python inclusion test below: a row with all three
+# columns NON-NULL but a THIN description and an unattested description_source
+# passes `fully_synthesized == False`, is included by Python, and would be
+# excluded server-side — i.e. filtering server-side could silently SHRINK the
+# work queue. Measured before adding it: that population is 0 today
+# (description_source is only ever 'ai_synthesized' 2279 / 'scanner' 232), and
+# the widened predicate returns the SAME 232 rows, so it costs nothing now and
+# closes the class. Fail-open, which is the discipline the yml's own comment
+# at :128-131 states.
+_ATTESTED_SOURCES = ("ai_synthesized", "ai_synthesized_reviewed", "manual")
+THIN_PREDICATE = (
+    "description_synth.is.null,"
+    "impact.is.null,"
+    "remediation.is.null,"
+    f"description_source.not.in.({','.join(_ATTESTED_SOURCES)}),"
+    # ⚠ 5th clause, added 2026-09-15 (relay 141). `not.in` is THREE-VALUED:
+    # for description_source IS NULL, NOT (NULL IN (...)) evaluates to NULL, so
+    # PostgREST EXCLUDES the row — while the Python test (`in {...}` on None ->
+    # False -> not fully synthesized) INCLUDES it if the description is thin.
+    # The one value the 4th clause cannot see is exactly the population it was
+    # added to protect.
+    #
+    # Verified empirically rather than reasoned about, on a column that
+    # actually has NULLs (description_source has none today):
+    #     findings total                    2515
+    #     impact IS NULL                     232
+    #     impact not.in.(bogus)             2283      2283 + 232 == 2515
+    # -> not.in excludes NULLs. Confirmed.
+    #
+    # description_source IS NULL rows today: 0 — same as the 4th clause's
+    # population. Zero is a starting point, not a safety margin.
+    "description_source.is.null"
+)
+
+# The column list, hoisted so the count probe and every page select exactly the
+# same shape. Two copies of a column list is two things that can drift.
+_SELECT_COLUMNS = (
+    "finding_id, title, severity, asset_id, description, cve, cwe, category, source, "
+    "tags, cvss_score, affected_component, affected_component_version, "
+    "matched_url, frameworks, "
+    "description_synth, description_source, description_synth_input_hash, "
+    'impact, remediation, "references"'
+)
+
+# Page size for every paginated read. Must stay <= the project's max_rows or
+# the loop's "a short page means we are done" termination test breaks: a
+# clamped page looks short only by luck. 500 is half the 1000 cap, so a cap
+# reduction would have to halve before this is wrong.
+PAGE_SIZE = 500
+
+# Transport retry (relay 034 ①, finally built). The GOAWAY at run #3421 and
+# Prodex #1003's curl exit 35 are real but one-off; they are not the chronic
+# defect above. Retry so a blip does not lose a page or a write.
+RETRY_ATTEMPTS = 3
+RETRY_BACKOFF_S = (2, 4, 8)
+
+
+def _execute_with_retry(builder, what: str):
+    """Run .execute() on a postgrest builder, retrying transport-level faults.
+
+    Only transport errors are retried. A 4xx/5xx from PostgREST is a real
+    answer and is allowed to raise — retrying a malformed query just makes the
+    same mistake three times more slowly.
+    """
+    import httpx
+
+    transient = (
+        httpx.RemoteProtocolError,
+        httpx.ConnectError,
+        httpx.ReadTimeout,
+        httpx.ReadError,
+    )
+    last: Exception | None = None
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            return builder.execute()
+        except transient as e:
+            last = e
+            if attempt == RETRY_ATTEMPTS - 1:
+                break
+            delay = RETRY_BACKOFF_S[min(attempt, len(RETRY_BACKOFF_S) - 1)]
+            print(
+                f"  transport error on {what} "
+                f"(attempt {attempt + 1}/{RETRY_ATTEMPTS}): {type(e).__name__}: {e} "
+                f"— retrying in {delay}s",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+    raise last  # type: ignore[misc]
+
 
 # ─── Prompt ─────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are an IT security analyst writing internal vulnerability documentation for Command Companies — a multi-org enterprise that includes Command Digital (marketing/print), Command Financial, Command Marketing, Command Missouri, Unimac (Unimac Graphics), and SCI. Your audience is asset owners and their dev leads: technically competent but not security specialists. They need to understand what a finding actually means and what to do about it.
@@ -258,42 +385,150 @@ def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, for
     unless an operator ran --force manually. The expanded filter lets the
     auto-enrichment chain catch these gaps without intervention.
     """
-    q = (
-        sb.table("findings")
-        .select(
-            "finding_id, title, severity, asset_id, description, cve, cwe, category, source, "
-            "tags, cvss_score, affected_component, affected_component_version, "
-            "matched_url, frameworks, "
-            'description_synth, description_source, description_synth_input_hash, '
-            'impact, remediation, "references"'
-        )
-    )
-    if finding_id:
-        q = q.eq("finding_id", finding_id)
-    elif severities:
-        q = q.in_("severity", severities)
+    q = sb.table("findings").select(_SELECT_COLUMNS)
+    def _apply_scope(builder):
+        """Every predicate except paging — applied identically to the count
+        probe and to each page, so the guard below compares like with like."""
+        if finding_id:
+            return builder.eq("finding_id", finding_id)
+        if severities:
+            builder = builder.in_("severity", severities)
+        # --force means "re-synthesise everything in scope", so no thin filter.
+        if not force:
+            builder = builder.or_(THIN_PREDICATE)
+        return builder
 
-    # 5000-row cap so the worker can SEE the full findings table when there
-    # are 1000+ findings. The 500 default in early development assumed a
-    # small dataset; in production with 1000+ findings the cap was silently
-    # excluding ~272 findings from row 501 onward — they'd never be
-    # processed by any run (bulk, cron, workflow_run) because the query
-    # never returned them. Spotted 2026-05-28 during the post-overnight
-    # audit (admin queue had 728 enriched out of 1000 total in DB).
-    # 5000 fits current dataset + 5x growth headroom; if we ever cross
-    # ~3000 findings, switch to proper pagination.
-    rows = q.limit(5000).execute().data or []
+    # ── The exact denominator, server-side, BEFORE fetching anything ────────
+    # head=True sends no rows; count comes back in Content-Range. This is the
+    # number the precheck prints, computed the same way, so the run log can
+    # state its own denominator instead of implying one.
+    count_probe = _apply_scope(
+        sb.table("findings").select("finding_id", count="exact", head=True)
+    )
+    expected = _execute_with_retry(count_probe, "thin-count probe").count or 0
+
+    # ── KEYSET pagination, not OFFSET ──────────────────────────────────────
+    #
+    # ⚠ THIS CHANGED BECAUSE THE GUARD BELOW NOW TOLERATES GROWTH (relay 141).
+    # Offset paging and a growing table do not mix. This workflow is chained to
+    # Scanner completion — the one moment thin rows are being inserted — and
+    # findings went 2511 -> 2515 during the hour this was written.
+    #
+    # With OFFSET: page 1 is rows[0:500] ordered by finding_id. If a row is
+    # then inserted whose finding_id sorts anywhere BEFORE the cursor, every
+    # later row shifts down one, and the read for rows[500:1000] returns what
+    # used to be row 501 — row 500 is SKIPPED. Silently.
+    #
+    # ⛔ 4.7's 141 says "ordering by the PK makes duplicates impossible", which
+    # is true and does not cover skips. Duplicates are the harmless direction.
+    # A tolerated-growth policy on top of offset paging converts an alarm into
+    # a silent omission — the defect this whole change exists to remove.
+    #
+    # KEYSET carries the cursor in the WHERE clause: `finding_id > :last`.
+    # Inserts before the cursor cannot shift the window; inserts after it are
+    # picked up naturally on a later page. No skips, no duplicates, and growth
+    # becomes genuinely safe to tolerate rather than merely survivable.
+    #
+    # ⚠ STILL BOUNDED. Found by mutating .range() back to .limit(5000): the
+    # read returned a full page forever, `len(page) < PAGE_SIZE` never fired,
+    # and the loop spun to the 120-minute workflow timeout. A job that hangs
+    # and reports nothing is the same failure class as the 52 green no-ops. The
+    # bound survives the switch to keyset because an ignored `.gt()` produces
+    # exactly the same non-advancing read.
+    max_pages = (expected + PAGE_SIZE) // PAGE_SIZE + 1
+
+    rows: list[dict] = []
+    cursor: str | None = None
+    pages = 0
+    while True:
+        page_q = _apply_scope(sb.table("findings").select(_SELECT_COLUMNS))
+        if cursor is not None:
+            page_q = page_q.gt("finding_id", cursor)
+        page = (
+            _execute_with_retry(
+                page_q.order("finding_id").limit(PAGE_SIZE),
+                f"findings page after {cursor!r}",
+            ).data
+            or []
+        )
+        rows.extend(page)
+        pages += 1
+        if len(page) < PAGE_SIZE:
+            break
+        if pages > max_pages:
+            print(
+                f"error: pagination did not terminate — {pages} pages read for "
+                f"an expected {expected} row(s) at {PAGE_SIZE}/page. The read is "
+                f"not advancing (a .limit() reinstated in place of the keyset "
+                f"cursor, or an ignored .gt()). Refusing to spin.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        cursor = page[-1]["finding_id"]
+
+    # ── ⛔ CONTRADICTION GUARD — fail loud, do not proceed on a short read ──
+    # This is the assertion that would have turned 52 green no-ops into 52 red
+    # runs on day one. If the count and the walk disagree, the worker cannot
+    # see its whole queue: a reinstated cap, a page-size >= max_rows, a lost
+    # page, or a predicate that drifted between the two. Any of those means the
+    # run is about to under-report its own scope, and a green check that did
+    # nothing is worse than a red one.
+    # ⚠ THE TEST IS `<`, NOT `!=` (relay 141). The two directions mean opposite
+    # things and only one of them is a defect:
+    #
+    #   fetched < expected  the worker cannot see its whole queue — a
+    #                       reinstated cap, a page size >= max_rows, a lost
+    #                       page, or a predicate that drifted between the count
+    #                       and the walk. EXIT 1.
+    #
+    #   fetched > expected  rows arrived during the walk. This workflow is
+    #                       chained to Scanner completion, which is precisely
+    #                       when thin rows are inserted — findings went
+    #                       2511 -> 2515 during the hour this was written. With
+    #                       keyset paging those rows are genuinely ours to
+    #                       process. LOG AND PROCEED.
+    #
+    # `!=` was what shipped first. It would have emailed Howie a red workflow
+    # captioned "Refusing to run on a partial queue" for a queue that was not
+    # partial — alarming copy for a non-event, built into the fix for the
+    # silent-no-op class. That trade is never worth making.
+    if len(rows) < expected:
+        print(
+            f"error: count says {expected} finding(s) in scope, worker fetched "
+            f"only {len(rows)} — cap or pagination defect. Refusing to run on a "
+            f"partial queue.\n"
+            f"       page size {PAGE_SIZE}; if the Data API max_rows was "
+            f"lowered below it, the short-page termination test is invalid.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    grew = len(rows) - expected
+    if grew:
+        print(f"  queue grew by {grew} during the walk (scan landed mid-run) "
+              f"— processing all {len(rows)}")
+    print(f"  in scope: {expected} finding(s) (fetched {len(rows)}, "
+          f"{PAGE_SIZE}/page)")
 
     # Pull asset + best history excerpt for each in batches
     asset_ids = list({r["asset_id"] for r in rows})
     assets_by_id: dict[str, Any] = {}
     if asset_ids:
+        # ⚠ Same max_rows exposure in principle: this is an unpaginated read
+        # clamped at 1000. It is safe only while the DISTINCT asset count stays
+        # under the cap — 400 assets total on Command, 232 findings in scope
+        # touch far fewer (measured 2026-09-15). A missing asset degrades to
+        # asset_name = asset_id rather than to a wrong synthesis, so this is a
+        # display gap, not a silent skip like the findings read was. Left
+        # unpaginated on purpose so the guarded path stays the one that matters;
+        # revisit if the fleet crosses ~1000 assets.
         ar = (
-            sb.table("assets")
-            .select("asset_id, name, organization, type")
-            .in_("asset_id", asset_ids)
-            .execute()
-            .data
+            _execute_with_retry(
+                sb.table("assets")
+                .select("asset_id, name, organization, type")
+                .in_("asset_id", asset_ids),
+                "assets batch",
+            ).data
             or []
         )
         assets_by_id = {a["asset_id"]: a for a in ar}
@@ -319,12 +554,13 @@ def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, for
 
         # Best history excerpt — pick by score (section markers + length)
         hist = (
-            sb.table("finding_history")
-            .select("scan_id, observed_at, status, severity_at_scan, raw_excerpt")
-            .eq("finding_id", r["finding_id"])
-            .limit(50)
-            .execute()
-            .data
+            _execute_with_retry(
+                sb.table("finding_history")
+                .select("scan_id, observed_at, status, severity_at_scan, raw_excerpt")
+                .eq("finding_id", r["finding_id"])
+                .limit(50),
+                f"history for {r['finding_id']}",
+            ).data
             or []
         )
         best = _pick_best_excerpt(hist)
@@ -501,7 +737,12 @@ def write_synthesis(sb, finding_id: str, result: dict, input_hash: str, existing
     if ec in {"high", "medium", "low"}:
         payload["extraction_confidence"] = ec
 
-    sb.table("findings").update(payload).eq("finding_id", finding_id).execute()
+    # Retried: a per-finding write that loses a transport blip would silently
+    # drop work the model was already paid for.
+    _execute_with_retry(
+        sb.table("findings").update(payload).eq("finding_id", finding_id),
+        f"write synthesis for {finding_id}",
+    )
 
 
 VALID_CATEGORIES = {

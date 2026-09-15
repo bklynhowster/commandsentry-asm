@@ -12,13 +12,22 @@
 #   yaml     blocked -> 34 failed        (lazy import, returns {} by design)
 #   requests blocked -> 580 passed       (lazy; NOT required — deliberately absent)
 #
-# anthropic and supabase are imported only by scripts/backfill/* which has no
-# tests. Adding them here would slow every run for no coverage.
+# ⚠ 2026-09-15: the line above used to read "scripts/backfill/* ... has no
+# tests". That is no longer true — test_synthesize_fetch_pagination.py landed
+# with the max_rows pagination fix. anthropic and supabase are STILL not needed
+# (that module's imports of them are lazy, via _import_deps(), and the tests
+# drive a fake client), but httpx now is: _execute_with_retry catches
+# httpx transport exception CLASSES, so the module must be importable.
 #
 # RULE: adding a line here means proving it. Block the module with a stub that
 # raises ImportError and confirm the suite actually fails without it. Two CI
 # runs were burned discovering psycopg and pyyaml one at a time.
+#
+#   httpx     blocked -> 10 failed, 4 passed   (REQUIRED, added 2026-09-15)
+#   supabase  blocked -> 14 passed             (still not required)
+#   anthropic blocked -> 14 passed             (still not required)
 
 pytest
 psycopg[binary]
 pyyaml
+httpx

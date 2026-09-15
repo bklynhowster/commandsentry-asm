@@ -50,6 +50,15 @@ jobs:
       # should ever want one. If a test starts failing for want of a DSN it is
       # an integration test in the wrong lane — move it, don't add a secret.
       SUPABASE_DSN: ""
+      # ── THE ROOTS pytest IS POINTED AT. Defined ONCE, used three times:
+      #    lane 0's find, lane 1's pytest, lane 4's orphan pattern.
+      # Before 2026-09-15 lane 4 restated these as a hand-written list of
+      # subdirectories and it went stale TWICE IN 24 HOURS (scripts/alerter,
+      # then scripts/backfill) — two red builds, nothing actually wrong either
+      # time, because lane 1 globs `scripts` RECURSIVELY and was already
+      # running both. A list that gates nothing but fires anyway is not a
+      # tripwire, it is noise with a good name.
+      PYTEST_ROOTS: "scanner scripts"
 
     steps:
       - uses: actions/checkout@v4
@@ -97,7 +106,12 @@ jobs:
         #   psycopg blocked -> 1 error   (INTERNALERROR — matches run #1)
         #   yaml    blocked -> 34 failed (exactly matches run #2)
         #   requests blocked -> 580 passed  (imported lazily; NOT needed)
-        # anthropic and supabase appear only in backfill scripts with no tests.
+        # ⚠ 2026-09-15: "backfill scripts with no tests" is stale — backfill now
+        # has test_synthesize_fetch_pagination.py. anthropic and supabase are
+        # still NOT needed (lazy imports + a fake client), but httpx now IS, and
+        # was added to requirements-test.txt with the same block-it-and-prove-it
+        # harness: httpx blocked -> 10 failed / 4 passed.
+        # anthropic and supabase appear only in backfill scripts, lazily imported.
         # The list lives in requirements-test.txt so it is a versioned artifact
         # you can install locally to reproduce CI exactly, rather than a string
         # buried in a workflow file.
@@ -141,7 +155,7 @@ jobs:
               echo "$out" | tail -5
               bad=1
             fi
-          done < <(find scanner scripts -name 'test_*.py' -not -path '*/common/tests/*')
+          done < <(find $PYTEST_ROOTS -name 'test_*.py' -not -path '*/common/tests/*')
           if [ "$n" -lt "$MIN_MODULES" ]; then
             echo "::error::preflight found only $n test modules, expected >= $MIN_MODULES."
             echo "         Either tests were deleted/moved, or this lane's find path is wrong."
@@ -152,7 +166,7 @@ jobs:
 
       # ── Lane 1: pytest-style (~580 tests, 27 files) ──
       - name: pytest suites
-        run: python -m pytest scanner scripts --ignore=scripts/common/tests
+        run: python -m pytest $PYTEST_ROOTS --ignore=scripts/common/tests
 
       # ── Lane 2: script-style mechanism tests ──
       # scripts/common/tests/* are standalone scripts, not pytest modules:
@@ -239,26 +253,41 @@ jobs:
       # The failure mode this prevents: a new test lands in a directory no
       # lane globs, goes green forever by never running, and nobody notices —
       # which is exactly how this repo arrived at a suite it could not run.
+      #
+      # The invariant is "every test_*.py lives under a root lane 1 or lane 2
+      # covers" — so the pattern is DERIVED from $PYTEST_ROOTS rather than
+      # restated. Restating it was itself a second source of truth, and it
+      # rotted twice in 24 hours while the invariant held both times.
       - name: no orphaned test files
         run: |
           set -euo pipefail
+          # Coverage derived from $PYTEST_ROOTS (job env). A test_*.py under any
+          # root pytest walks is reachable by construction; the orphan this lane
+          # exists to catch is a test somewhere pytest is never pointed —
+          # ./tools/, ./netlify/, the repo root. (lane 2's ./scripts/common/tests
+          # is under ./scripts and needs no separate entry.)
+          #
+          # ⛔ `case "$f" in $VAR)` CANNOT DO THIS, and the first version of this
+          # step tried. In `case`, the `|` separating alternatives is SYNTAX,
+          # parsed before expansion — a `|` arriving via a variable is a literal
+          # pipe character inside one glob, so "./scanner/test_a.py" would have
+          # to contain the text "|./scripts/*|" to match. The `*`s expand fine,
+          # which is exactly what makes it look plausible. Run verbatim from the
+          # repo root it flagged all 77 test files and exited 1.
+          # `[[ == ]]` pattern-matches an unquoted RHS, so it does work.
+          is_covered() {
+            local f="$1" root
+            for root in $PYTEST_ROOTS; do
+              [[ "$f" == ./$root/* ]] && return 0
+            done
+            return 1
+          }
+          echo "coverage roots (from PYTEST_ROOTS): $PYTEST_ROOTS"
           orphans=0
           while IFS= read -r f; do
-            case "$f" in
-              # ⚠ THIS LIST IS HAND-MAINTAINED AND IT DRIFTS. Added 2026-09-14:
-              # ./scripts/alerter/* — the first test ever placed in that
-              # directory tripped this guard (runs #119 Command / #96 Prodex).
-              # The guard was RIGHT to fire on an unlisted directory; the list
-              # was stale. Note that lanes 0 and 1 already glob `scanner
-              # scripts` RECURSIVELY, so every entry below that starts with
-              # ./scripts/ is a hand-written restatement of a glob that is
-              # already broader — a second source of truth that can only rot.
-              # Structural fix (collapse the ./scripts/<dir>/* entries to
-              # ./scripts/*) is deliberately NOT taken here: it changes what a
-              # good tripwire asserts, and that is 4.7's ruling, not a side
-              # effect of unblocking CI. Routed in relay 137.
-              ./scanner/*|./scripts/db/*|./scripts/normalize/*|./scripts/scanner/*|./scripts/alerter/*|./scripts/common/tests/*) ;;
-              *) echo "::error file=$f::test file is in no CI lane — add its directory to tests.yml"; orphans=1 ;;
-            esac
+            if ! is_covered "$f"; then
+              echo "::error file=$f::test file is under no pytest root ($PYTEST_ROOTS) — it will never run"
+              orphans=1
+            fi
           done < <(find . -name 'test_*.py' -not -path './.venv/*' -not -path './node_modules/*')
           exit $orphans
