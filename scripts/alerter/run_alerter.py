@@ -255,6 +255,36 @@ WHERE e.event_type = 'asset_first_seen'
   AND e.observed_at <= %s
   AND a.ownership = 'owned'
   AND a.discovery_status = 'confirmed_live'
+  -- ⛔ THE ASSET MUST ACTUALLY BE NEW. Added 2026-09-14, CORRECTED same night
+  -- (relay 133 ask 2 / relay 137). This is the load-bearing predicate; the
+  -- NOT EXISTS below is only a de-duplicator.
+  --
+  -- 4.7 wrote the rule in 133: "Either it reads first_observed (and the label
+  -- is true) or the label changes to what it measures. No third option."
+  -- I shipped a third option first — a NOT EXISTS over earlier
+  -- asset_first_seen rows — and executing it against live data showed it
+  -- suppressing only 5 of the 14 false announcements. The other 9 survived,
+  -- because asset_surface_event only has history back to when its writer went
+  -- live (~2026-05-26); an asset first observed BEFORE that has no
+  -- asset_first_seen row at all, so "no earlier event" is trivially true while
+  -- the asset is four months old.
+  --
+  -- ⇒ The event-log test asks what the LOG remembers. The label claims
+  -- something about the ASSET. Measured on 2026-09-13 15:24 -> 09-14 17:20:
+  --     old digest                                   14
+  --     NOT EXISTS over earlier events (wrong)         9   still false
+  --     assets.first_observed inside the window        0   correct — none were new
+  -- Same failure shape as defect ① in this file: reading a derived log
+  -- instead of the fact. NULL first_observed is excluded by the comparison,
+  -- which is right — an asset with no known first sighting is not evidence of
+  -- a new one.
+  AND a.first_observed >  %s
+  AND a.first_observed <= %s
+  -- De-duplication only, NOT the newness test. Two producers can both emit
+  -- asset_first_seen for a genuinely new asset inside one window; without this
+  -- the panel lists it twice. Keep both predicates: the one above decides
+  -- WHETHER the asset is new, this one decides HOW MANY ROWS it gets.
+  --
   -- ⛔ FIRST-EVER, NOT FIRST-PER-PRODUCER. Added 2026-09-14 (relay 133).
   --
   -- surface_diff.py:120-138 emits asset_first_seen when "existing_blob is None
@@ -541,6 +571,34 @@ def _sev_pill(sev: str) -> str:
     )
 
 
+def _count_overlap(new_findings, confirmed, regressed) -> int:
+    """How many findings appear in BOTH the creation count and the transition count.
+
+    ⛔ THE TWO NUMBERS ARE NOT ADDABLE, and the overlap is large — not a corner
+    case. A finding is created 'detected'; if it is re-observed and settles to
+    'confirmed' before the window closes, it is BOTH new AND a status change,
+    and it is counted once in each. Measured over the most recent 1000
+    v_alerter_changes rows (2026-09-14): 254 of 570 transition events — 44.6% —
+    fired within 24h of their finding's creation, i.e. inside one typical
+    digest window.
+
+    A reader who adds "N new + M status changes" therefore over-counts by
+    roughly the size of this intersection. Rather than disclaim that vaguely,
+    the digest states the intersection, so the arithmetic is reconcilable:
+    distinct findings touched = N + M - overlap.
+
+    Element 0 of every row is finding_id (SQL_NEW_FINDINGS_IN_WINDOW,
+    SQL_NEW_CONFIRMED and SQL_REGRESSED all select it first). Guarded so a
+    future column reorder degrades to 0 rather than to a wrong number.
+    """
+    try:
+        created = {r[0] for r in new_findings}
+        changed = {r[0] for r in confirmed} | {r[0] for r in regressed}
+    except (IndexError, TypeError):
+        return 0
+    return len(created & changed)
+
+
 def render_html(
     *,
     window_start: datetime,
@@ -709,9 +767,17 @@ def render_html(
         # over len(confirmed)+len(regressed) only — a transition count wearing a
         # creation count's name, which printed 0 on a 65-finding day. Do not
         # re-merge them.
+        _ov = _count_overlap(new_findings, confirmed, regressed)
+        _ov_note = (
+            f' <span style="color:#888;font-weight:400;">'
+            f"({_ov} finding(s) are in both counts &mdash; "
+            f"{len(new_findings) + len(confirmed) + len(regressed) - _ov} distinct)"
+            f"</span>"
+        ) if _ov else ""
         headline = (
             f"<strong>{len(new_findings)}</strong> new finding(s), "
-            f"<strong>{len(confirmed) + len(regressed)}</strong> status change(s), "
+            f"<strong>{len(confirmed) + len(regressed)}</strong> status change(s)"
+            f"{_ov_note}, "
             f"<strong>{len(high_risk)}</strong> asset risk shift(s), "
             f"<strong>{len(new_assets)}</strong> new asset(s), "
             f"<strong>{len(dark_assets)}</strong> dark asset(s) in this window."
@@ -897,6 +963,17 @@ def render_text(
             lines.append("No changes since last run — pipeline healthy.")
         return "\n".join(lines)
 
+    _ov = _count_overlap(new_findings, confirmed, regressed)
+    if _ov:
+        lines.append(
+            f"NOTE: {_ov} finding(s) are counted in BOTH sections below "
+            f"(created and transitioned in the same window). "
+            f"Distinct findings touched: "
+            f"{len(new_findings) + len(confirmed) + len(regressed) - _ov}. "
+            f"The two numbers are not addable."
+        )
+        lines.append("")
+
     if new_findings:
         lines.append(f"NEW FINDINGS — first detected in this window ({len(new_findings)}):")
         for r in new_findings:
@@ -1069,7 +1146,14 @@ def main() -> int:
             # Asset-surface events in window (added 2026-06-07 — closes the
             # "0 chng while real-time emails fire" gap). Same Tier 2 gate as
             # dispatch_event_notifications: only confirmed_live + owned.
-            cur.execute(SQL_NEW_ASSETS_IN_WINDOW, (window_start, window_end))
+            # FOUR params: the event window, then the asset's own first_observed
+            # window. Same two values twice — they are deliberately separate
+            # placeholders so the two questions stay visibly distinct in the SQL
+            # ("did an event fire in the window" vs "is the asset itself new").
+            cur.execute(
+                SQL_NEW_ASSETS_IN_WINDOW,
+                (window_start, window_end, window_start, window_end),
+            )
             new_assets = cur.fetchall()
             cur.execute(SQL_DARK_ASSETS_IN_WINDOW, (window_start, window_end))
             dark_assets = cur.fetchall()

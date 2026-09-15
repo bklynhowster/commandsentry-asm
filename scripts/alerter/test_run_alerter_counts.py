@@ -163,6 +163,44 @@ def test_adding_the_new_section_did_not_displace_the_existing_ones():
     assert order == sorted(order), "sections rendered out of order"
 
 
+def test_the_two_counts_overlap_and_the_digest_says_so():
+    """⛔ THE TWO NUMBERS ARE NOT ADDABLE, and the overlap is LARGE.
+
+    A finding is created 'detected'; if it settles to 'confirmed' before the
+    window closes it is both new AND a status change. Measured over the most
+    recent 1000 v_alerter_changes rows: 254 of 570 transition events (44.6%)
+    fired within 24h of their finding's creation — inside one typical window.
+    That is not a corner case, so the digest states the intersection rather
+    than disclaiming it, and the arithmetic reconciles.
+    """
+    shared = ("F-SHARED", "a.example", "Weak cipher", "LOW", "detected", "light", W_END)
+    only_new = ("F-NEW", "b.example", "Missing SPF", "LOW", "detected", "light", W_END)
+
+    html, text = _render(new_findings=[shared, only_new], confirmed=[shared])
+    # 2 new + 1 change = 3 naive, 2 distinct
+    assert "1 finding(s) are in both counts" in html
+    assert "2 distinct" in html
+    assert "counted in BOTH sections" in text
+    assert "Distinct findings touched: 2" in text
+    assert "not addable" in text
+
+
+def test_no_overlap_note_when_the_sets_are_disjoint():
+    """A caveat that always prints is a caveat nobody reads."""
+    a = ("F-A", "a.example", "T", "LOW", "detected", "light", W_END)
+    b = ("F-B", "b.example", "T", "LOW", "confirmed", "light", W_END)
+    html, text = _render(new_findings=[a], confirmed=[b])
+    assert "in both counts" not in html
+    assert "counted in BOTH sections" not in text
+
+
+def test_overlap_helper_degrades_to_zero_on_a_column_reorder():
+    """It indexes r[0] for finding_id. If a future SELECT reorders columns the
+    right failure is 'no note', not a confidently wrong number."""
+    assert ra._count_overlap([None], [None], []) == 0
+    assert ra._count_overlap([()], [()], []) == 0
+
+
 def test_zero_new_findings_does_not_invent_a_section():
     """A quiet night must still read as quiet — no empty panel, no false
     'pipeline healthy' suppression of a real transition either."""
@@ -175,6 +213,64 @@ def test_zero_new_findings_does_not_invent_a_section():
 # ---------------------------------------------------------------------------
 # (2) first-EVER vs first-per-producer
 # ---------------------------------------------------------------------------
+
+def test_every_sql_constant_gets_exactly_as_many_params_as_it_has_placeholders():
+    """⛔ CAUGHT A CRASH THAT WOULD HAVE SHIPPED.
+
+    Adding the first_observed predicate took SQL_NEW_ASSETS_IN_WINDOW from two
+    %s to four, while main() still passed (window_start, window_end). psycopg
+    raises ProgrammingError at execute time — and NOTHING in this file executes
+    SQL, so every test stayed green. The dry-run would have caught it; a dry-run
+    is not always run.
+
+    This pins the arity of each SQL constant against the tuple its call site
+    passes, parsed out of the source. It is a stand-in for execution, not a
+    substitute for it.
+    """
+    import ast
+
+    src = open(ra.__file__).read()
+    tree = ast.parse(src)
+
+    expected: dict[str, int] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "execute" or not node.args:
+            continue
+        target = node.args[0]
+        if not (isinstance(target, ast.Name) and target.id.startswith("SQL_")):
+            continue
+        if len(node.args) < 2 or not isinstance(node.args[1], ast.Tuple):
+            continue
+        expected[target.id] = len(node.args[1].elts)
+
+    assert expected, "found no SQL_* execute call sites — this guard is vacuous"
+
+    for name, n_args in sorted(expected.items()):
+        sql = getattr(ra, name)
+        n_ph = _strip_sql_comments(sql).count("%s")
+        assert n_ph == n_args, (
+            f"{name}: {n_ph} placeholder(s) in the SQL but {n_args} argument(s) "
+            f"at the call site — psycopg would raise ProgrammingError"
+        )
+
+
+def test_new_assets_is_gated_on_the_assets_own_first_observed():
+    """THE NEWNESS TEST. 4.7, relay 133: "Either it reads first_observed (and
+    the label is true) or the label changes to what it measures."
+
+    A NOT EXISTS over earlier asset_first_seen rows is NOT a substitute and was
+    shipped as one for several hours. asset_surface_event only has history back
+    to when its writer went live, so an asset first observed before that has no
+    such row and passes the test while being months old. Measured on the
+    2026-09-13 -> 09-14 window: old digest 14, event-log test 9, first_observed
+    test 0 — and 0 is the true answer.
+    """
+    sql = _strip_sql_comments(ra.SQL_NEW_ASSETS_IN_WINDOW)
+    assert "a.first_observed >" in sql and "a.first_observed <=" in sql, \
+        "newness must be decided by the asset's own first_observed"
+
 
 def test_new_assets_requires_no_earlier_first_seen_event():
     """The panel claims first-ever discovery, so the query must exclude any

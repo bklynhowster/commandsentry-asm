@@ -245,7 +245,19 @@ jobs:
           orphans=0
           while IFS= read -r f; do
             case "$f" in
-              ./scanner/*|./scripts/db/*|./scripts/normalize/*|./scripts/scanner/*|./scripts/common/tests/*) ;;
+              # ⚠ THIS LIST IS HAND-MAINTAINED AND IT DRIFTS. Added 2026-09-14:
+              # ./scripts/alerter/* — the first test ever placed in that
+              # directory tripped this guard (runs #119 Command / #96 Prodex).
+              # The guard was RIGHT to fire on an unlisted directory; the list
+              # was stale. Note that lanes 0 and 1 already glob `scanner
+              # scripts` RECURSIVELY, so every entry below that starts with
+              # ./scripts/ is a hand-written restatement of a glob that is
+              # already broader — a second source of truth that can only rot.
+              # Structural fix (collapse the ./scripts/<dir>/* entries to
+              # ./scripts/*) is deliberately NOT taken here: it changes what a
+              # good tripwire asserts, and that is 4.7's ruling, not a side
+              # effect of unblocking CI. Routed in relay 137.
+              ./scanner/*|./scripts/db/*|./scripts/normalize/*|./scripts/scanner/*|./scripts/alerter/*|./scripts/common/tests/*) ;;
               *) echo "::error file=$f::test file is in no CI lane — add its directory to tests.yml"; orphans=1 ;;
             esac
           done < <(find . -name 'test_*.py' -not -path './.venv/*' -not -path './node_modules/*')
