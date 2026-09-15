@@ -36,6 +36,97 @@ permissions:
   contents: read
 
 jobs:
+  # ══════════════════════════════════════════════════════════════════════════
+  # Lane 5 — INSTANCE-DIVERGENCE GUARD (relay 160/161, 2026-09-15)
+  #
+  # ⛔ WHY THIS EXISTS. On 2026-09-15 a "parity port" copied run_light.py,
+  # run_medium.py and run_heavy.py wholesale from Command to Prodex instead of
+  # applying the three edits. It destroyed Prodex's entire P1a targeted-scan layer
+  # (exposure_to_finding, whose docstring calls its source override the isolation
+  # "that guarantees no false-close"), the scan_plan/scan_profile fields, and
+  # Prodex's own DEFAULT_SUPABASE_URL. It reached main.
+  #
+  # Three instruments were silent: the unit suite does not exercise the P1a
+  # dispatch path; test_phase_registry's superset check compares each repo AGAINST
+  # ITSELF, so a wholesale overwrite is internally consistent and invisible to it;
+  # and the one visible signal — the skip count moving 6 -> 8, i.e. Command's test
+  # population arriving with Command's files — was reported as a pass.
+  #
+  # The deleted code CARRIED ITS OWN WARNING:
+  #   "PRODEX-ONLY (Command's run_medium.ScanContext has neither — verified
+  #    2026-08-29). Legitimate instance divergence, not a parity violation."
+  # The marker existed, said exactly the right thing, and nothing read it — a
+  # producer-without-consumer in the comments. This lane is the consumer.
+  #
+  # ⚠ NO HAND-MAINTAINED ALLOWLIST, deliberately. Lane 4's list of directories
+  # rotted twice in 24 hours. This reads markers that already live next to the
+  # code they protect, so adding protected code is a comment, not a registry edit.
+  #
+  # ⚠ DIFFS AGAINST THE PRE-CHANGE TREE, never repo-against-repo. Comparing the
+  # two repos is exactly the check that reported success while the damage was in
+  # flight — both repos agreed, because one had overwritten the other.
+  divergence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the pre-change tree must be reachable. The default
+          # depth-1 checkout cannot diff against anything.
+          fetch-depth: 0
+
+      - name: Protected instance-divergence markers must not be deleted
+        env:
+          MARKERS: 'PRODEX-ONLY|COMMAND-ONLY|Legitimate instance divergence'
+        run: |
+          set -uo pipefail
+
+          # Resolve the pre-change ref. push -> event.before; PR -> merge base.
+          BEFORE="${{ github.event.before || '' }}"
+          if [ -n "${{ github.base_ref }}" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+            BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD 2>/dev/null || true)
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+               && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            BASE="$BEFORE"
+          else
+            BASE=""
+          fi
+
+          # ⛔ FAIL-OPEN IS WRONG HERE, but so is failing a first push / force-push
+          # with no resolvable base. Skip LOUDLY so the gap is visible in the log
+          # rather than being mistaken for a pass.
+          if [ -z "$BASE" ]; then
+            echo "::warning::no pre-change ref resolvable (first push, force-push, or shallow) — divergence guard SKIPPED, not passed"
+            exit 0
+          fi
+          echo "diffing $BASE..HEAD for deleted protected markers"
+
+          # Deleted lines only (^-), excluding the ---/+++ file headers, that
+          # carry a protected marker. -U0 so context lines can't be mistaken for
+          # deletions.
+          DELETED=$(git diff -U0 "$BASE"..HEAD -- '*.py' '*.sh' '*.ts' '*.tsx' '*.yml' \
+                    | grep -E "^-" | grep -vE "^---" | grep -E "$MARKERS" || true)
+
+          if [ -z "$DELETED" ]; then
+            echo "no protected divergence markers deleted"
+            exit 0
+          fi
+
+          echo "::error::A protected instance-divergence marker was DELETED. A parity port applies the EDIT, never the FILE."
+          # Name the file and the line for every hit — a guard that says only
+          # "something broke" gets ignored.
+          git diff -U0 "$BASE"..HEAD -- '*.py' '*.sh' '*.ts' '*.tsx' '*.yml' \
+            | awk -v pat="$MARKERS" '
+                /^\+\+\+ b\// { file=substr($0,7) }
+                /^@@/            { split($0,a,"-"); split(a[2],b,","); ln=b[1]+0 }
+                /^-/ && !/^---/  { if ($0 ~ pat) printf "::error file=%s,line=%d::deleted protected line: %s\n", file, ln, substr($0,2) }
+              '
+          echo ""
+          echo "If this divergence is genuinely being retired, delete the marker in its OWN"
+          echo "commit with the reasoning — not as a side effect of a port."
+          exit 1
+
   unit:
     runs-on: ubuntu-latest
     timeout-minutes: 12
