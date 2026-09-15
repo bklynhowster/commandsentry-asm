@@ -229,6 +229,26 @@ jobs:
         if: steps.targets.outputs.mode != 'skipped'
         shell: bash {0}
         env:
+          # ── FLIP ① , 2026-09-15 (relay 157/158, GATES row "161 step 5") ───────
+          # Makes the EXTENDED reachability verdict authoritative: a host counts as
+          # live if it answers on ANY port, not only on HTTP. Shipped 2026-07-24 in
+          # shadow (`scanner/normalize.py` `_reachability_verdict`), reviewed 46 days
+          # late.
+          #
+          # ⚠ THIS IS A NO-OP ON TODAY'S FLEET AND THAT IS EXPECTED. Divergence is
+          # recorded as `live_ext` in the surface JSON only when httpx says dead AND a
+          # non-HTTP port is open. Measured 2026-09-15 across 81 subdomain reachability
+          # objects: ZERO carry `live_ext`. The only two hosts with a non-HTTP live port
+          # (ftp.sciimage.com, ftp.unimacgraphics.com — both :22, expected SFTP) are also
+          # httpx-live 200, so the branch cannot fire for them. Its first real effect will
+          # be unobserved until an SSH/mail-only host appears.
+          #
+          # Flipped anyway, on 4.7's ruling (158 ①): it encodes the identical principle
+          # Howie ratified for "dark" — a host that answers on any port is alive. Holding
+          # it in shadow while the dark gate ships that same rule is a contradiction.
+          # No-op today = zero risk today; U1's full-range verdict becomes the second
+          # witness the day a qualifying host exists.
+          REACHABILITY_EXT_LIVE: "1"
           # N2 gate (4.7 P1): cloud_ip_check.py reads assets.device_class from the DB
           # at scan time to decide SHALLOW vs DEEP port scan. Graceful/fail-open if unset
           # (helper falls back to the cloud_ip_ranges.json prefix table, then DEEP).

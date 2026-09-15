@@ -1091,6 +1091,64 @@ def _bucket_cloud(sliced: dict) -> tuple[bool, str | None]:
     return (False, None)
 
 
+# ── U6: RESURRECTION HOOK (relay 147 Flip-2 companion / 158, 2026-09-15) ────────────────────
+#
+# ⛔ WHY IT MUST EXIST BEFORE demotion_writer --write-enable. UPSERT_ASSET's no-downgrade CASE
+# promotes ONLY from ('ct_ghost','unverified','dns_only'). A dark asset is not in that list, so
+# once anything marks an asset dark, re-observing it live NEVER brings it back — the importer
+# has no path to undo a demotion. demotion_writer.py's own docstring lists this hook as a
+# required companion change; it was never built, which is why that gate has sat OVERDUE since
+# 2026-07-26.
+#
+# ⚠ BOTH DARK VOCABULARIES. The CHECK constraint (20260711a_asset_lifecycle_p1_columns.sql:52)
+# admits 'confirmed_dark' AND 'went_dark'. demotion_writer writes 'went_dark'; the one dark row
+# on Command today is 'confirmed_dark'. A hook matching only 'went_dark' would strand every
+# 'confirmed_dark' asset permanently. Matching both is not defensive padding — it is the
+# difference between a reversible and an irreversible state today.
+#
+# SINGLE SET, one statement, so the transition is atomic:
+#   resurrection_count += 1      how many times this asset has come back
+#   went_dark_at      -> NULL    it is not dark now
+#   fade_detected_at  -> NULL    the countdown that led here is void
+#   dark_reason       -> NULL    the reason no longer holds
+#   last_transition_at -> now()  the lifecycle audit clock
+#   discovery_status  -> 'confirmed_live'
+#
+# The caller gates on `disc == 'confirmed_live'`, which is itself derived from
+# service_count > 0 — so "re-observed with at least one responding service" is already
+# established before this runs. It does NOT fire on a dns_only/ct_ghost re-observation.
+_DARK_STATUSES = ("confirmed_dark", "went_dark")
+
+RESURRECT_ASSET_SQL = """
+UPDATE public.assets
+SET discovery_status   = 'confirmed_live',
+    resurrection_count = COALESCE(resurrection_count, 0) + 1,
+    went_dark_at       = NULL,
+    fade_detected_at   = NULL,
+    dark_reason        = NULL,
+    last_transition_at = now()
+WHERE asset_id = %(asset_id)s
+  AND discovery_status = ANY(%(dark_statuses)s)
+RETURNING resurrection_count;
+"""
+
+
+def resurrect_if_dark(cur, asset_id: str, logfn=None) -> int | None:
+    """Bring a dark asset back on a live re-observation. Returns the new
+    resurrection_count, or None if the asset was not dark (the overwhelmingly common
+    case — the WHERE simply matches nothing and this is a no-op)."""
+    cur.execute(RESURRECT_ASSET_SQL,
+                {"asset_id": asset_id, "dark_statuses": list(_DARK_STATUSES)})
+    row = cur.fetchone()
+    if not row:
+        return None
+    n = row[0] if not isinstance(row, dict) else row.get("resurrection_count")
+    if logfn:
+        logfn(f"resurrection: {asset_id} was dark, re-observed live "
+              f"(resurrection_count={n}) — went_dark_at/fade_detected_at/dark_reason cleared")
+    return n
+
+
 UPSERT_ASSET = """
 INSERT INTO public.assets
   (asset_id, name, type, organization, ownership, discovery_status,
@@ -1430,6 +1488,11 @@ def import_one(
                     "WHERE asset_id = %s",
                     (bucket_lifecycle["last_seen"], bucket_id),
                 )
+                # U6 — resurrection. Runs on the SAME condition as the clock bump above
+                # (observed confirmed_live ⇒ service_count > 0), and is a no-op for every
+                # asset that was not dark. Placed AFTER the clock so a resurrected asset
+                # already has a fresh last_alive_at when its status flips.
+                resurrect_if_dark(cur, bucket_id, logfn=log)
             # 2b. cloud_drift audit (4.7 E7): the UPSERT flags cloud_drift=true when a
             #     sticky manual flag disagreed with the fresh derived value. Record the
             #     temporal trail (the boolean column drives the portal chip).

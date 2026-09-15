@@ -112,6 +112,10 @@ from degradation import (
 )
 from finding_history_writer import write_finding_history_for_scan_run
 
+# U7 alive clock — shared liveness SSOT (scripts/db/asset_liveness.py), psycopg-free.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "db"))
+from asset_liveness import bump_alive_clock  # noqa: E402
+
 # ─── 4.7 I1 — nikto header classifier SSOT ──────────────────────────────
 # Lives in the normalize package so BOTH parser paths (cs_parsers/nikto.py and
 # this one) share one boundary. Fail-open: if the import ever breaks, nikto
@@ -3845,6 +3849,66 @@ NIKTO_FINDING_RE = re.compile(r"^\[(\d+)\]\s+(\S+?):\s+(.+)$")
 # runs on every asset. nikto's medium-tier rehash adds zero value and
 # pollutes the dashboard with duplicate findings. Clean ownership
 # boundary: each tool owns its slice; medium nikto = OS/CGI/server-config
+# ── Finding-identity hygiene (relay 155 ⑤⑥, 2026-09-15) ──────────────────────────────────
+#
+# ⛔ THE DEFECT. `check_name` drives `finding_id` (`{asset}:medium:{check_name}`), and the
+# nikto slug is derived from the raw response body. On www.prodexlabs.com nikto's Perl prints
+# an ARRAY *reference* instead of the OPTIONS method list — a nikto bug on that host — so the
+# body contains a heap address that changes every run:
+#
+#   www.prodexlabs.com:medium:nikto-999990-options-allowed-http-methods-array-0x561de6ae2e40  09-05
+#   www.prodexlabs.com:medium:nikto-999990-options-allowed-http-methods-array-0x559baf530058  09-09
+#   www.prodexlabs.com:medium:nikto-999990-options-allowed-http-methods-array-0x55df6287a7d0  09-15
+#
+# Every heavy scan therefore mints a brand-new "finding" that is the same non-finding. That is
+# the "1 new info" Howie sees after every scan, forever. The AI explanation on the card even
+# says the method list "was not captured cleanly" — a finding whose own text says it has no
+# content is not a finding.
+#
+# TWO FIXES, deliberately separate:
+#   ⑤ DROP the record outright when the 999990 method list is an ARRAY(0x…) reference. There
+#     is no content to report. A real list ("GET, HEAD, POST, OPTIONS") is kept.
+#   ⑥ GENERAL: strip volatile tokens from any slug before it becomes an identity. ⑤ fixes
+#     this host and this tool; ⑥ is what stops the next tool with a nonce, a heap address or
+#     an embedded timestamp from doing the same thing again.
+_ARRAY_REF_RE = re.compile(r"\barray\(0x[0-9a-f]+\)", re.I)
+
+# Ordered, and each pattern is here because it appeared in a real finding_id or is the
+# obvious neighbour of one. Applied BEFORE slugging so the replacement text slugs cleanly.
+_VOLATILE_TOKEN_RES = (
+    re.compile(r"0x[0-9a-f]{6,}", re.I),                              # heap/pointer addresses
+    re.compile(r"\b\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}(:\d{2})?\b", re.I),  # ISO timestamps
+    re.compile(r"\b\d{10,13}\b"),                                    # epoch seconds / millis
+    re.compile(r"\bnonce[=:]\s*[a-z0-9._-]+", re.I),                  # nonce=...
+    re.compile(r"\bsessionid[=:]\s*[a-z0-9._-]+", re.I),              # sessionid=...
+)
+
+
+def is_contentless_array_ref(text: str) -> bool:
+    """⑤ — nikto printed a Perl ARRAY reference instead of the list itself."""
+    return bool(_ARRAY_REF_RE.search(text or ""))
+
+
+def strip_volatile_tokens(text: str) -> str:
+    """⑥ — replace run-varying tokens with a stable placeholder BEFORE slugging.
+
+    The placeholder is a word (not empty) so two findings that differ ONLY in the volatile
+    token collapse to one identity, while a finding that genuinely has no such token is
+    untouched. Deleting instead of replacing would merge "foo-0xAB-bar" with "foo-bar",
+    which are not the same finding.
+    """
+    out = text or ""
+    for rx in _VOLATILE_TOKEN_RES:
+        out = rx.sub("x", out)
+    return out
+
+
+def slug_for_identity(text: str, fallback: str) -> str:
+    """The ONE slug builder for finding identity. Volatile tokens stripped first."""
+    cleaned = strip_volatile_tokens(text or "").lower()
+    return re.sub(r"[^a-z0-9]+", "-", cleaned)[:60].strip("-") or fallback
+
+
 # issues, not header checks already done in light.
 NIKTO_HEADER_DEDUP_PATTERN = "Suggested security header missing"
 
@@ -3943,9 +4007,15 @@ def parse_nikto_findings(
         # rows already in the DB (whether marked detected, remediated, or
         # the post-#28 false_positive flips) match on re-detect rather
         # than fragmenting into new finding_ids.
-        body_lc = body.lower()
-        slug = re.sub(r"[^a-z0-9]+", "-", body_lc)[:60].strip("-") or \
-               f"finding-{we_promoted}"
+        # ⑤ — a 999990 method list that is a Perl ARRAY reference has no content.
+        # Drop the record rather than mint a new identity for it every scan.
+        if is_contentless_array_ref(body):
+            log(f"nikto: dropped contentless ARRAY(0x…) record on {hostname} "
+                f"(id {nikto_id}) — no method list captured")
+            continue
+
+        # ⑥ — volatile tokens stripped before slugging, so identity is stable run to run.
+        slug = slug_for_identity(body, f"finding-{we_promoted}")
         findings.append(MediumFinding(
             check_name=f"nikto-{slug}",
             title=title,
@@ -4947,6 +5017,14 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
         }
         cur.execute(CLOSE_SCAN_RUN_SQL, params)
         cur.execute(CLOSE_SCAN_QUEUE_SQL, params)
+
+        # U7 (relay 155/158) — THE ALIVE CLOCK. ⚠ Medium runs NO naabu, so it has no
+        # svc_count and 155's "svc_count > 0, the same signal the promote uses" cannot
+        # apply here. Its honest equivalent is a clean httpx run: httpx is an HTTP
+        # prober, so httpx=ok is positive evidence the host answered. The alternative —
+        # bumping because close_out was reached — would infer liveness from the absence
+        # of a crash, which is the exact error class this lane exists to kill.
+        bump_alive_clock(cur, ctx.asset_id, tool_status=ctx.tool_status, logfn=log)
 
         # #35 — live-path delta-close. Called ONLY from close_out (the clean
         # exit); degraded_out NEVER calls it, so a degraded scan can't close

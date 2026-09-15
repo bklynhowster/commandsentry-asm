@@ -132,6 +132,87 @@ def discovery_status_from_service_count(svc_count: int, host_count: int = 0,
     return "ct_ghost"
 
 
+# ── U7: the ALIVE CLOCK (relay 155/158, 2026-09-15) ─────────────────────────────────────────────
+#
+# ⛔ THE DEFECT. `assets.last_alive_at` was bumped in exactly two places, and both are
+# DISCOVERY: the ASM importer's UPSERTs, and run_light's promote branch — which is gated
+# `WHERE discovery_status IN ('ct_ghost','unverified','dns_only')`. Once an asset is
+# confirmed_live the row stops matching, so light stops bumping it; medium and heavy never
+# wrote to `assets` at all (grep: zero `UPDATE public.assets` in either).
+#
+# Result, measured 2026-09-15: www.prodexlabs.com had six completed scans and forty
+# liveness verdicts since 2026-09-05 and still read "last observed Sep 5" on its own page —
+# and asm_cron declared the company website DARK on 09-12, three days after a heavy scan of
+# it. Command: 6 of 53 confirmed_live assets carry last_observed > 7d, 4 of them scanned
+# this week, 5 probe-alive in the last 24h.
+#
+# THE RULE (Howie's, via 155): the alive clock is bumped by EVERY observation that got an
+# answer — regardless of discovery_status. The promote-only filter stays on the
+# discovery_status CHANGE (the no-downgrade rule is untouched); it must not gate the clock.
+#
+# ⚠ DELIBERATELY SEPARATE FROM `last_probe_alive_at` (161 Q6). That one is the PROBE clock,
+# written only when the dark gate rescues a stale asset — a rescue record, not a freshness
+# record. 155 ② says do not fold them. The portal composes all three at read time.
+ALIVE_CLOCK_SQL = (
+    "UPDATE public.assets SET last_alive_at = GREATEST(last_alive_at, now()) "
+    "WHERE asset_id = %s"
+)
+
+# Medium runs no naabu, so it has no svc_count — see observation_proves_alive().
+# httpx IS an HTTP prober: a clean httpx run means the host answered on 80/443.
+_HTTP_PROBE_TOOLS = ("httpx", "httpx_tech", "httpx[-td]")
+_TOOL_OK = ("ok", "success", "complete", "completed")
+
+
+def observation_proves_alive(svc_count=None, tool_status=None) -> bool:
+    """Did THIS completed scan actually get an answer from the host?
+
+    PURE. The caller supplies whichever evidence its tier has:
+
+      light / heavy  svc_count — naabu open ports, the SAME signal
+                     discovery_status_from_service_count() uses to promote.
+      medium         tool_status — ⛔ medium runs NO naabu and has no svc_count, so
+                     relay 155's "svc_count > 0, the same signal the promote uses"
+                     cannot be applied there. Its honest equivalent is a clean httpx
+                     run: httpx is an HTTP prober, so httpx=ok means the host
+                     responded on 80/443. Anything weaker (e.g. "close_out was
+                     reached") would assert liveness from the absence of a crash,
+                     which is the precise error class this whole lane exists to kill.
+
+    Returns False on no evidence. A scan that cannot show an answer must not move the
+    clock — an unbumped clock is recoverable, a falsely-bumped one hides a dead host.
+    """
+    if svc_count is not None:
+        try:
+            if int(svc_count) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    if tool_status:
+        for tool in _HTTP_PROBE_TOOLS:
+            st = tool_status.get(tool)
+            if isinstance(st, str) and st.strip().lower() in _TOOL_OK:
+                return True
+            if isinstance(st, dict) and str(st.get("status", "")).strip().lower() in _TOOL_OK:
+                return True
+    return False
+
+
+def bump_alive_clock(cur, asset_id: str, *, svc_count=None, tool_status=None, logfn=None) -> bool:
+    """Run ALIVE_CLOCK_SQL iff this observation proves the host answered.
+
+    Returns True if the UPDATE ran. Caller supplies an open cursor — this module stays
+    psycopg-free so the scanners' lazy-psycopg pattern is preserved.
+    """
+    if not observation_proves_alive(svc_count=svc_count, tool_status=tool_status):
+        return False
+    cur.execute(ALIVE_CLOCK_SQL, (asset_id,))
+    if logfn:
+        logfn(f"alive-clock: bumped last_alive_at for {asset_id} "
+              f"(svc_count={svc_count}, http_probe={'yes' if tool_status else 'n/a'})")
+    return True
+
+
 # ── Shared verdict read path (4.7 Q4 stale-guard) ───────────────────────────────────────────────
 DEFAULT_VERDICT_MAX_AGE_H = 12
 

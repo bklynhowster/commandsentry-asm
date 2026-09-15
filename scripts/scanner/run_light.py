@@ -75,7 +75,10 @@ from finding_history_writer import write_finding_history_for_scan_run
 # so importing it here does NOT break run_light's lazy-psycopg pattern. Add scripts/db to
 # the path so the sibling-package import resolves whether run as a script or imported.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "db"))
-from asset_liveness import discovery_status_from_service_count  # noqa: E402
+from asset_liveness import (  # noqa: E402
+    bump_alive_clock,
+    discovery_status_from_service_count,
+)
 # Obsidian 225 — shared ASM-surface diff (psycopg-free; safe for the lazy-psycopg pattern).
 from surface_diff import (  # noqa: E402
     build_scanner_surface_blob,
@@ -3097,6 +3100,14 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
         # never touch confirmed_live or went_dark — mirrors the UPSERT_ASSET no-downgrade
         # CASE so a naabu-firewalled rescan seeing 0 ports can never demote a live asset.
         svc_count = len(getattr(ctx, "open_ports", None) or [])
+
+        # U7 (relay 155/158) — THE ALIVE CLOCK, bumped BEFORE and INDEPENDENTLY of the
+        # promote below. The promote is gated on discovery_status IN (ct_ghost, unverified,
+        # dns_only); an already-confirmed_live asset does not match it, which is exactly why
+        # light stopped refreshing the clock the moment an asset became live. The clock is
+        # about "did this observation get an answer", not about status transitions.
+        bump_alive_clock(cur, ctx.asset_id, svc_count=svc_count, logfn=log)
+
         if discovery_status_from_service_count(
                 svc_count, host_count=svc_count, is_apex=False) == "confirmed_live":
             cur.execute(
