@@ -1492,7 +1492,17 @@ def import_one(
                 # (observed confirmed_live ⇒ service_count > 0), and is a no-op for every
                 # asset that was not dark. Placed AFTER the clock so a resurrected asset
                 # already has a fresh last_alive_at when its status flips.
-                resurrect_if_dark(cur, bucket_id, logfn=log)
+                #
+                # ⛔ logfn=print, NOT logfn=log. This module has no `log` — it prints
+                # (23 call sites). `logfn=log` raised NameError at the CALL site for the
+                # FIRST confirmed_live asset of every run, so the whole import failed:
+                # Prodex ASM Discover #317 "import error: name 'log' is not defined ...
+                # 0 ok (0 new), 0 skipped, 1 failed" → exit 1 → and because the later
+                # steps are `if: success()`, the liveness probe worker AND the demotion
+                # writer were SKIPPED — i.e. the dark gate flipped live hours earlier
+                # silently stopped running. The no-op-for-non-dark-assets guard is INSIDE
+                # resurrect_if_dark, so it could never protect a name resolved at the call.
+                resurrect_if_dark(cur, bucket_id, logfn=print)
             # 2b. cloud_drift audit (4.7 E7): the UPSERT flags cloud_drift=true when a
             #     sticky manual flag disagreed with the fresh derived value. Record the
             #     temporal trail (the boolean column drives the portal chip).
