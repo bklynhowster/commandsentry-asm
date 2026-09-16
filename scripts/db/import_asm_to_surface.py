@@ -42,6 +42,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
 import mailer as _mailer  # noqa: E402 — shared provider-branching send path
+from newness import filter_newsworthy  # noqa: E402 — A6: the ONE newness rule
 from pathlib import Path
 from typing import Any
 
@@ -537,6 +538,8 @@ def dispatch_event_notifications(
     conn,
     all_events: list[dict],
     source_tag: str,
+    inserted_asset_ids: "set[str] | None" = None,
+    to_override: "str | None" = None,
 ) -> dict[str, int]:
     """After all per-asset events have been inserted, fan out Resend emails.
 
@@ -546,6 +549,21 @@ def dispatch_event_notifications(
     Returns a small stats dict for the run summary line.
     """
     stats = {"subscribers": 0, "emails_sent": 0, "emails_failed": 0, "skipped_no_key": 0}
+
+    # ⛔ A6 (relay 172/178) — THE NEWNESS GATE, APPLIED BEFORE GROUPING.
+    # asset_first_seen means "this PRODUCER never wrote surface for this asset".
+    # This path read it as "new asset discovered" and emailed on the bare
+    # existence of the event. Measured on live Command data: 42 asm_cron
+    # first-seen events, 5 of them on assets the fleet had held for 9-50 days
+    # (commandmarketinginnovations 9d, app3 15d, ftp.unimacgraphics 31d, insite
+    # 50d, testapi 50d) — every one a false "new asset discovered" email.
+    #
+    # The rule lives in scripts/common/newness.py, not here, because the digest
+    # needs the SAME rule and two copies is exactly the count that already
+    # drifted once. Filtering BEFORE the by_asset grouping matters: an asset
+    # whose only event was a suppressed first-seen must produce no email at all,
+    # not an empty one.
+    all_events = filter_newsworthy(all_events, inserted_asset_ids=inserted_asset_ids or set())
 
     if not all_events:
         return stats
@@ -581,6 +599,23 @@ def dispatch_event_notifications(
     with conn.cursor() as cur:
         cur.execute(FETCH_SUBSCRIBERS)
         subscribers = cur.fetchall()
+
+    # ⛔ OPERATOR-ONLY OVERRIDE (4.7, relay 179). preview_fire_notification.py had
+    # exactly two modes: --dry-run, or send to EVERY real-time subscriber — the
+    # whole admin list, personal addresses included. Combined with A6's
+    # declare-as-new, that made it the one sanctioned bypass of the newness gate:
+    # a synthetic "New asset discovered" about a real months-old host, mailed to
+    # everyone, with a comment saying it was intentional. A preview that reaches
+    # production recipients is not a preview.
+    #
+    # When set, the subscriber list is REPLACED by this single address, which the
+    # tool requires on the command line. Nothing in the cron path passes it —
+    # test_no_production_caller_passes_to_override pins that.
+    if to_override:
+        subscribers = [(None, to_override, {
+            k: {"cadence": "real_time"} for k in EVENT_TYPE_TO_PREF_KEY.values()
+        })]
+        print(f"  (preview mode: sending ONLY to {to_override}, not to subscribers)")
 
     stats["subscribers"] = len(subscribers)
     if not subscribers:
@@ -1351,6 +1386,7 @@ def import_one(
         }
 
     all_events: list[dict] = []
+    inserted_asset_ids: set[str] = set()
     assets_inserted = 0
     surfaces_written = 0
 
@@ -1445,6 +1481,13 @@ def import_one(
             a_row = cur.fetchone()
             if a_row and a_row[1]:
                 assets_inserted += 1
+                # A6 (relay 172/178) — remember WHICH assets this run inserted.
+                # a_row[1] is the UPSERT's own `(xmax = 0) AS inserted`, i.e. the
+                # database's answer to "was this an INSERT or an UPDATE". The
+                # real-time fan-out needs it: an asset_first_seen event means
+                # "this PRODUCER has not seen the asset", not "the asset is new",
+                # and the fan-out was reading it as the latter.
+                inserted_asset_ids.add(bucket_id)
 
             # Asset lifecycle P1 (ASSET_LIFECYCLE_SPEC.md v2): stamp last_alive_at on
             # every confirmed_live observation — the clock the future R2 went-dark
@@ -1569,6 +1612,7 @@ def import_one(
         "asset_inserted": assets_inserted > 0,
         "buckets_processed": len(buckets),
         "assets_inserted": assets_inserted,
+        "inserted_asset_ids": sorted(inserted_asset_ids),
         "surfaces_written": surfaces_written,
         "phantoms_seen": len(phantom_names),
         "phantoms_inserted": phantom_inserted,
@@ -1655,6 +1699,7 @@ def main() -> int:
     skipped = 0
     failed = 0
     all_events: list[dict] = []
+    run_inserted_asset_ids: set[str] = set()
 
     conn = None
     if not args.dry_run:
@@ -1696,6 +1741,11 @@ def main() -> int:
                     new_assets += 1
                 # Collect this asset's events for end-of-run notification dispatch
                 all_events.extend(result.get("events") or [])
+                # …and WHICH assets this run actually inserted. A6 (relay
+                # 172/178): the fan-out gates asset_first_seen on this set, so a
+                # run that forgets to accumulate it announces nothing rather
+                # than announcing everything. Deliberately fail-closed.
+                run_inserted_asset_ids.update(result.get("inserted_asset_ids") or [])
 
         if conn and not args.dry_run:
             # Dark-asset sweep BEFORE the first commit so the dark events
@@ -1734,7 +1784,10 @@ def main() -> int:
             # surface inventory updates — current-state correctness wins
             # over notification delivery.
             if all_events and not args.skip_notifications and not args.skip_events:
-                ns = dispatch_event_notifications(conn, all_events, args.source_tag)
+                ns = dispatch_event_notifications(
+                    conn, all_events, args.source_tag,
+                    inserted_asset_ids=run_inserted_asset_ids,
+                )
                 if ns["subscribers"]:
                     print(
                         f"notifications: {ns['emails_sent']} sent, "

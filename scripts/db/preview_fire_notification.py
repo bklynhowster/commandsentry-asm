@@ -120,6 +120,11 @@ SYNTHETIC_TEMPLATES = {
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     ap.add_argument(
+        "--to",
+        help="REQUIRED unless --dry-run. The single address that receives the "
+             "preview. The send is routed here and NEVER to the subscriber list.",
+    )
+    ap.add_argument(
         "--dsn",
         default=os.environ.get("SUPABASE_DSN"),
         help="Postgres DSN (or set SUPABASE_DSN)",
@@ -145,6 +150,17 @@ def main() -> int:
         help="Print what would be done without writing or sending anything.",
     )
     args = ap.parse_args()
+
+    if not args.dry_run and not args.to:
+        print(
+            "error: --to is REQUIRED unless --dry-run.\n"
+            "       This tool used to send to every real-time subscriber — the\n"
+            "       whole admin list — which makes a synthetic 'new asset'\n"
+            "       email indistinguishable from a real one for six other people.\n"
+            "       Name the single address that should receive the preview.",
+            file=sys.stderr,
+        )
+        return 2
 
     if not args.dsn:
         print("error: --dsn or SUPABASE_DSN required", file=sys.stderr)
@@ -215,7 +231,21 @@ def main() -> int:
         print(f"inserted {len(events)} event(s) into asset_surface_event")
 
         # Dispatch notifications
-        stats = dispatch_event_notifications(conn, events, "manual_test_fire")
+        # ⛔ inserted_asset_ids={asset_id} ON PURPOSE (A6, relay 172/178).
+        # The fan-out now suppresses asset_first_seen for any asset this run did
+        # not INSERT — that gate is what stopped five false "new asset
+        # discovered" emails about hosts the fleet had held for 9-50 days.
+        # This tool's entire job is to show a human what a given email looks
+        # like, so it declares its synthetic asset as newly-inserted rather than
+        # being silently filtered into sending nothing. Passing an empty set
+        # here would make --kinds asset_first_seen print "0 sent" and look like
+        # a broken tool; passing nothing at all would rely on a default, which
+        # is how a forgotten caller becomes a silent one.
+        stats = dispatch_event_notifications(
+            conn, events, "manual_test_fire",
+            inserted_asset_ids={asset_id},
+            to_override=args.to,
+        )
         print(
             f"notifications: {stats['emails_sent']} sent, "
             f"{stats['emails_failed']} failed, "
