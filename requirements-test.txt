@@ -26,8 +26,14 @@
 #   httpx     blocked -> 10 failed, 4 passed   (REQUIRED, added 2026-09-15)
 #   supabase  blocked -> 14 passed             (still not required)
 #   anthropic blocked -> 14 passed             (still not required)
+#
+#   pyflakes  blocked -> lane 6 cannot run   (REQUIRED, added 2026-09-15)
+#     Proven the other way too: run against the tree as it stood at c3890ac9 it
+#     reported TWO undefined names the suite could not see — the shipped
+#     `logfn=log`, and `utc_now`, latent since 2026-06-06.
 
 pytest
 psycopg[binary]
 pyyaml
 httpx
+pyflakes

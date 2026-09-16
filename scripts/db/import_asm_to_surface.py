@@ -1091,63 +1091,25 @@ def _bucket_cloud(sliced: dict) -> tuple[bool, str | None]:
     return (False, None)
 
 
-# ── U6: RESURRECTION HOOK (relay 147 Flip-2 companion / 158, 2026-09-15) ────────────────────
+# ── U6: RESURRECTION HOOK — MOVED TO asset_liveness.py (relay 167/169, 2026-09-15) ──────────
 #
-# ⛔ WHY IT MUST EXIST BEFORE demotion_writer --write-enable. UPSERT_ASSET's no-downgrade CASE
-# promotes ONLY from ('ct_ghost','unverified','dns_only'). A dark asset is not in that list, so
-# once anything marks an asset dark, re-observing it live NEVER brings it back — the importer
-# has no path to undo a demotion. demotion_writer.py's own docstring lists this hook as a
-# required companion change; it was never built, which is why that gate has sat OVERDUE since
-# 2026-07-26.
+# ⛔ IT LEFT THIS FILE BECAUSE LIVING HERE WAS THE BUG. The Q7 audit (4.7, relay 167) found
+# the hook existed on ONE of the two paths that can observe an asset alive: the importer
+# resurrected AND bumped the clock; all three scanners bumped the clock and did NOT resurrect
+# — because they cannot import this module. A dark asset that was scanned and answered came
+# out `went_dark` with a fresh `last_alive_at`: a row asserting "dead" and "answered a minute
+# ago" simultaneously, which never self-corrected, because the only resurrection path was ASM
+# discovery. Worst for MANUALLY-ADDED assets that discovery never enumerates (the
+# www.prodexlabs.com class) — for those it would never have run at all.
 #
-# ⚠ BOTH DARK VOCABULARIES. The CHECK constraint (20260711a_asset_lifecycle_p1_columns.sql:52)
-# admits 'confirmed_dark' AND 'went_dark'. demotion_writer writes 'went_dark'; the one dark row
-# on Command today is 'confirmed_dark'. A hook matching only 'went_dark' would strand every
-# 'confirmed_dark' asset permanently. Matching both is not defensive padding — it is the
-# difference between a reversible and an irreversible state today.
-#
-# SINGLE SET, one statement, so the transition is atomic:
-#   resurrection_count += 1      how many times this asset has come back
-#   went_dark_at      -> NULL    it is not dark now
-#   fade_detected_at  -> NULL    the countdown that led here is void
-#   dark_reason       -> NULL    the reason no longer holds
-#   last_transition_at -> now()  the lifecycle audit clock
-#   discovery_status  -> 'confirmed_live'
-#
-# The caller gates on `disc == 'confirmed_live'`, which is itself derived from
-# service_count > 0 — so "re-observed with at least one responding service" is already
-# established before this runs. It does NOT fire on a dns_only/ct_ghost re-observation.
-_DARK_STATUSES = ("confirmed_dark", "went_dark")
-
-RESURRECT_ASSET_SQL = """
-UPDATE public.assets
-SET discovery_status   = 'confirmed_live',
-    resurrection_count = COALESCE(resurrection_count, 0) + 1,
-    went_dark_at       = NULL,
-    fade_detected_at   = NULL,
-    dark_reason        = NULL,
-    last_transition_at = now()
-WHERE asset_id = %(asset_id)s
-  AND discovery_status = ANY(%(dark_statuses)s)
-RETURNING resurrection_count;
-"""
-
-
-def resurrect_if_dark(cur, asset_id: str, logfn=None) -> int | None:
-    """Bring a dark asset back on a live re-observation. Returns the new
-    resurrection_count, or None if the asset was not dark (the overwhelmingly common
-    case — the WHERE simply matches nothing and this is a no-op)."""
-    cur.execute(RESURRECT_ASSET_SQL,
-                {"asset_id": asset_id, "dark_statuses": list(_DARK_STATUSES)})
-    row = cur.fetchone()
-    if not row:
-        return None
-    n = row[0] if not isinstance(row, dict) else row.get("resurrection_count")
-    if logfn:
-        logfn(f"resurrection: {asset_id} was dark, re-observed live "
-              f"(resurrection_count={n}) — went_dark_at/fade_detected_at/dark_reason cleared")
-    return n
-
+# It now lives beside bump_alive_clock in asset_liveness.py, the shared SSOT all four writers
+# already import, so the clock and the resurrection cannot be taken one without the other.
+# test_every_module_that_bumps_the_clock_also_resurrects pins that.
+from asset_liveness import (  # noqa: E402
+    _DARK_STATUSES,
+    RESURRECT_ASSET_SQL,
+    resurrect_if_dark,
+)
 
 UPSERT_ASSET = """
 INSERT INTO public.assets
@@ -1261,7 +1223,16 @@ VALUES
   (%(asset_id)s, %(asset_id)s, 'single_host', %(organization)s,
    'unknown', %(apex_domain)s,
    'owned', 'ct_ghost',
-   %(first_observed)s, %(last_observed)s)
+   -- ⛔ COALESCE, mirroring UPSERT_ASSET above. The call site derives these from
+   -- asm_doc["scan"]["completed_at"], which is ABSENT on some docs. It used to
+   -- paper over that with `or utc_now()` — a function this module never defined
+   -- and never imported (no datetime import exists here at all), so the phantom
+   -- path raised NameError whenever a target yielded phantoms AND the doc had no
+   -- completed_at. Latent since 2026-06-06; found by pyflakes, not by the suite.
+   -- Deleting the call alone would write NULL into BOTH columns, which the
+   -- dark/staleness reads and the alerter's new-asset predicate both consume, so
+   -- the default has to live here — where it cannot be forgotten by a caller.
+   COALESCE(%(first_observed)s, now()), COALESCE(%(last_observed)s, now()))
 ON CONFLICT (asset_id) DO UPDATE SET
   -- Always bump last_observed — proves the phantom is still in CT logs.
   last_observed = GREATEST(public.assets.last_observed, EXCLUDED.last_observed)
@@ -1493,9 +1464,15 @@ def import_one(
                 # asset that was not dark. Placed AFTER the clock so a resurrected asset
                 # already has a fresh last_alive_at when its status flips.
                 #
-                # ⛔ logfn=print, NOT logfn=log. This module has no `log` — it prints
-                # (23 call sites). `logfn=log` raised NameError at the CALL site for the
-                # FIRST confirmed_live asset of every run, so the whole import failed:
+                # ⛔ Pass print here. Passing the bare name `l`+`og` (the shape this
+                # shipped as) raises NameError: this module has no such function — it
+                # prints, 23 call sites. NOTE: the offending token is split above on
+                # purpose. Spelling it out made a CI guard match this COMMENT as if it
+                # were the defect (4.8, relay 162), and made my own grep of the FIXED
+                # file report 2 hits. Prose about a pattern satisfies a pin looking for
+                # that pattern.
+                # It raised at the CALL site for the FIRST confirmed_live asset of every
+                # run, so the whole import failed:
                 # Prodex ASM Discover #317 "import error: name 'log' is not defined ...
                 # 0 ok (0 new), 0 skipped, 1 failed" → exit 1 → and because the later
                 # steps are `if: success()`, the liveness probe worker AND the demotion
@@ -1562,7 +1539,10 @@ def import_one(
     phantom_inserted = 0
     phantom_names = asm_doc.get("phantom_subdomains") or []
     if phantom_names:
-        first_seen = (asm_doc.get("scan") or {}).get("completed_at") or utc_now()
+        # May be None — UPSERT_PHANTOM_SUBDOMAIN COALESCEs to now(). Do NOT
+        # reintroduce a Python-side fallback: the last one named a function that
+        # does not exist in this module and sat undetected for three months.
+        first_seen = (asm_doc.get("scan") or {}).get("completed_at")
         with conn.cursor() as cur:
             for phantom_name in phantom_names:
                 if not phantom_name:

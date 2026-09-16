@@ -382,3 +382,84 @@ jobs:
             fi
           done < <(find . -name 'test_*.py' -not -path './.venv/*' -not -path './node_modules/*')
           exit $orphans
+
+      # ── Lane 6: undefined names (pyflakes) ──
+      # ⛔ WHY A LINTER AND NOT OUR OWN GUARD. `resurrect_if_dark(cur, id,
+      # logfn=log)` shipped into a module that has no `log`. Python resolves the
+      # name at the CALL, so it raised for the first confirmed_live asset of every
+      # run; the importer exited 1; and because the later steps in
+      # asm-discover.yml are `if: success()`, the liveness probe worker AND the
+      # demotion writer were SKIPPED. A gate flipped live hours earlier silently
+      # stopped running. 1358 tests passed the whole time.
+      #
+      # The first guard written for it used a regex and FAILED ON THE FIXED TREE:
+      # it matched the offending token inside the fix's own explanatory comment.
+      # The second walked the AST and worked — and was still the wrong answer.
+      # Python scope analysis is hard (closures, comprehension scopes,
+      # global/nonlocal, star-imports, conditional and try/except definitions,
+      # del), and a hand-rolled walker fails by FALSE NEGATIVE, which in a guard
+      # is strictly worse than the false positive that had just been caught.
+      #
+      # pyflakes has done this correctly for fifteen years. Run against the broken
+      # tree it found the shipped bug AND a second undefined name — `utc_now` in
+      # the phantom/ct_ghost path, latent since 2026-06-06, invisible to the whole
+      # suite because nothing executes that file's DB path. Two real defects, one
+      # second, zero code. Before building a new instrument, check whether a
+      # standard one already exists.
+      #
+      # ⚠ UNDEFINED-NAME ONLY, AND NO BASELINE FILE. There are ~85 other pyflakes
+      # findings per repo (unused imports, f-strings without placeholders). They
+      # are real but cosmetic, and gating them today would require a
+      # hand-maintained ignore list — the kind of artifact that rotted twice in 24
+      # hours this week. One rule, zero tolerance, nothing to maintain.
+      #
+      # ⚠ WHOLE TREE, NOT THE DIFF. `utc_now` proves this class hides in code
+      # nobody is touching; a diff-scoped check would have missed it for another
+      # three months.
+      #
+      # ⚠ AND IT IS NOT A SUBSTITUTE FOR EXECUTING THE CODE. Mutation-tested three
+      # ways: restoring `logfn=log` and restoring `or utc_now()` are both caught
+      # here — but removing ONLY the COALESCE defaults (writing NULL into
+      # first_observed/last_observed) is invisible to pyflakes and caught solely by
+      # test_importer_confirmed_live_branch.py. A linter proves names resolve; only
+      # running the path proves it behaves.
+      - name: No undefined names
+        run: |
+          set -uo pipefail
+          # MIN_FILES: a lane that scans nothing must FAIL, not pass quietly —
+          # the same failure mode lanes 0 and 4 exist to prevent. Floor set well
+          # below the real count so deleting a few files never cries wolf.
+          MIN_FILES=100
+          n=$(find $PYTEST_ROOTS -name '*.py' | wc -l)
+          if [ "$n" -lt "$MIN_FILES" ]; then
+            echo "::error::pyflakes lane found only $n .py files under '$PYTEST_ROOTS', expected >= $MIN_FILES."
+            echo "         Either the roots are wrong or the checkout is incomplete. Refusing to pass."
+            exit 1
+          fi
+          # ⛔ NO TEMP FILE, AND NO `|| true` ON THE INVOCATION. The first draft
+          # of this step wrote to /tmp and swallowed the exit code. Run locally in
+          # a sandbox where /tmp was not writable, the redirect failed, `|| true`
+          # hid it, and grep then read a STALE file from an earlier run — the step
+          # reported a defect that was no longer there, with total confidence.
+          # That is this lane's own failure mode, committed inside the lane written
+          # to prevent it. Capture in a variable and READ THE EXIT CODE instead:
+          #   pyflakes 0 = clean · 1 = findings · >1 = it did not run.
+          # "It did not run" must never look like "it found nothing".
+          out=$(python -m pyflakes $PYTEST_ROOTS 2>&1); rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::pyflakes exited $rc — it did not complete. This is NOT a pass."
+            echo "$out"
+            exit 1
+          fi
+          undef=$(printf '%s\n' "$out" | grep 'undefined name' || true)
+          if [ -n "$undef" ]; then
+            echo "$undef" | while IFS= read -r line; do
+              f=${line%%:*}; rest=${line#*:}; l=${rest%%:*}
+              echo "::error file=$f,line=$l::$line"
+            done
+            echo
+            echo "An undefined name is a NameError waiting for the first input that"
+            echo "reaches that line. It is not style. Fix it or define it."
+            exit 1
+          fi
+          echo "pyflakes: 0 undefined names across $n files ($(printf '%s\n' "$out" | grep -c . ) other findings, not gated)"

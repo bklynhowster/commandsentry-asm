@@ -28,6 +28,8 @@ class _FakeCursor:
     def __init__(self, rowcount=1):
         self.executed = []          # list of (sql, params)
         self.rowcount = rowcount
+        self._last = ""
+        self.resurrect_row = None   # None = asset was not dark (the common case)
 
     def __enter__(self):
         return self
@@ -36,7 +38,30 @@ class _FakeCursor:
         return False
 
     def execute(self, sql, params=None):
+        self._last = " ".join(str(sql).split())
         self.executed.append((sql, params))
+
+    def fetchone(self):
+        """⛔ ADDED 2026-09-15 (relay 169) AND THE OMISSION WAS THE POINT.
+
+        close_out now calls resurrect_if_dark after bump_alive_clock (Q7 audit,
+        relay 167), and that statement RETURNs resurrection_count — so the write
+        path performs a READ for the first time. This double had no fetchone, so
+        all three tests here raised AttributeError the moment the call landed.
+
+        ⭐ That is the double working as intended: a stand-in that cannot simulate
+        the new behaviour must FAIL, not silently absorb it. Compare the defect
+        this same bundle fixes — a guard that could not observe the failure and
+        reported success anyway.
+
+        Returns None by default, which is the honest common case: these fixtures
+        use live/promoting assets, and for any asset that was not dark the
+        resurrection WHERE matches nothing. Set .resurrect_row to exercise the
+        dark branch.
+        """
+        if "resurrection_count" in getattr(self, "_last", ""):
+            return getattr(self, "resurrect_row", None)
+        return None
 
 
 class _FakeConn:
@@ -58,8 +83,9 @@ class _Ctx:
         self.open_ports = open_ports
 
 
-def _run_close_out(open_ports):
+def _run_close_out(open_ports, *, resurrect_row=None):
     cur = _FakeCursor()
+    cur.resurrect_row = resurrect_row
     conn = _FakeConn(cur)
     run_light.close_out(conn, _Ctx(open_ports), 0, 0, Json=lambda x: x)
     return cur
@@ -117,3 +143,31 @@ def test_run_light_uses_shared_verdict():
     assert "discovery_status_from_service_count" in src, (
         "close_out must call the shared verdict, not re-inline svc>0"
     )
+
+def test_close_out_resurrects_a_dark_asset_that_answered():
+    """⛔ THE Q7 REGRESSION, AT THE LIGHT-SCAN CALL SITE (4.7, relay 167).
+
+    Before this, run_light bumped the clock and could NOT resurrect — the hook
+    lived in import_asm_to_surface.py, which a scanner cannot import. A dark asset
+    scanned here that ANSWERED came out `went_dark` carrying a fresh last_alive_at,
+    and never self-corrected, because the only resurrection path was ASM discovery
+    — which never enumerates manually-added assets at all.
+
+    Drives the REAL close_out and asserts both statements are issued, in order.
+    """
+    cur = _run_close_out({443}, resurrect_row=(1,))
+    stmts = [" ".join(str(x).split()) for x, _ in cur.executed]
+    clock = [i for i, x in enumerate(stmts) if "last_alive_at = GREATEST" in x]
+    res = [i for i, x in enumerate(stmts) if "resurrection_count" in x]
+    assert clock, "the alive clock was not bumped"
+    assert res, "resurrect_if_dark was NOT called — a dark asset would stay dark forever"
+    assert clock[0] < res[0], "the clock must be stamped before the status flips"
+
+
+def test_close_out_with_no_open_ports_neither_bumps_nor_resurrects():
+    """The resurrection is gated on the clock bump's return value, so a scan that
+    proved nothing issues neither statement — no revival on absent evidence."""
+    cur = _run_close_out(set())
+    stmts = [" ".join(str(x).split()) for x, _ in cur.executed]
+    assert not [x for x in stmts if "last_alive_at = GREATEST" in x]
+    assert not [x for x in stmts if "resurrection_count" in x]

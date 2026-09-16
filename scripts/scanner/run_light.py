@@ -77,6 +77,7 @@ from finding_history_writer import write_finding_history_for_scan_run
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "db"))
 from asset_liveness import (  # noqa: E402
     bump_alive_clock,
+    resurrect_if_dark,
     discovery_status_from_service_count,
 )
 # Obsidian 225 — shared ASM-surface diff (psycopg-free; safe for the lazy-psycopg pattern).
@@ -3106,7 +3107,15 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
         # dns_only); an already-confirmed_live asset does not match it, which is exactly why
         # light stopped refreshing the clock the moment an asset became live. The clock is
         # about "did this observation get an answer", not about status transitions.
-        bump_alive_clock(cur, ctx.asset_id, svc_count=svc_count, logfn=log)
+        if bump_alive_clock(cur, ctx.asset_id, svc_count=svc_count, logfn=log):
+            # U6 — resurrection, on the SAME evidence that just bumped the clock.
+            # ⛔ WITHOUT THIS LINE THE SCANNERS COULD BUMP BUT NOT REVIVE (Q7 audit, relay
+            # 167): a dark asset scanned here answered, got a fresh last_alive_at, and
+            # stayed `went_dark` forever — because the only resurrection path was ASM
+            # discovery, which never enumerates manually-added assets at all. No-op for
+            # every asset that was not dark (the WHERE matches nothing): one statement per
+            # completed scan, and it cannot misfire.
+            resurrect_if_dark(cur, ctx.asset_id, logfn=log)
 
         if discovery_status_from_service_count(
                 svc_count, host_count=svc_count, is_apex=False) == "confirmed_live":

@@ -160,7 +160,44 @@ ALIVE_CLOCK_SQL = (
 
 # Medium runs no naabu, so it has no svc_count — see observation_proves_alive().
 # httpx IS an HTTP prober: a clean httpx run means the host answered on 80/443.
-_HTTP_PROBE_TOOLS = ("httpx", "httpx_tech", "httpx[-td]")
+#
+# ⛔ REACHABILITY = PRODUCED **AND** ROUTED. Two halves, and the first draft of this
+# comment stated only the first one — wrongly. It said a bare "httpx" is marked by
+# NO tier. 4.7 measured and corrected it (relay 166): **run_heavy DOES mark "httpx"**
+# (run_heavy.py:953 `tool_name = "httpx"`, then mark_tool_ok/degraded via that
+# variable). The drop was right; the stated reason was false, and a false reason in a
+# comment is what the next person acts on.
+#
+# The real reason is the SECOND half — which runner passes `tool_status` to
+# bump_alive_clock at all:
+#
+#     runner       marks                 passes to bump_alive_clock   reachable here
+#     run_light    "httpx_tech"          svc_count  (:3109)           NO
+#     run_medium   "httpx[-td]"          tool_status (:5027)          YES
+#     run_heavy    "httpx"     (:953)    svc_count  (:2995)           NO
+#
+# ⇒ EXACTLY ONE NAME IS REACHABLE TODAY: "httpx[-td]". Calling the pair below "the
+#   complete set" would be wrong. "httpx_tech" is retained as forward-compatibility,
+#   not as a claim that it matches anything.
+#
+#   "httpx[-td]"   run_medium. Marked ok ONLY when httpx returned parseable content
+#                  (run_medium.py:2516/2586/2599 degrade on no output / rc!=0 / no
+#                  signal), so `ok` is an ANSWER, not the absence of a crash.
+#   "httpx_tech"   run_light. Genuinely produced; unreachable because light routes
+#                  svc_count. Correct in advance if light is ever routed here. If that
+#                  has not happened by the time you read this, delete it rather than
+#                  leave it decorative.
+#
+# ⛔ THE FAILURE MODE THIS TUPLE CREATES, and why a test guards it instead of a
+# comment (4.7, relay 166). The plausible future change is HEAVY falling back to
+# tool_status when naabu is blocked — a WAF blocking naabu while the host answers
+# HTTP is not hypothetical on the FortiGate fleet. On that day heavy routes
+# tool_status carrying "httpx", this tuple does not contain it,
+# observation_proves_alive returns False, the clock is never bumped, and the host
+# drifts toward looking DARK. Silent, and exactly the class we spent 2026-09-15
+# fixing. test_a_runner_that_routes_tool_status_must_have_its_probe_names_here
+# fails the build on that change instead of waiting for the asset to fade.
+_HTTP_PROBE_TOOLS = ("httpx_tech", "httpx[-td]")
 _TOOL_OK = ("ok", "success", "complete", "completed")
 
 
@@ -216,6 +253,80 @@ def bump_alive_clock(cur, asset_id: str, *, svc_count=None, tool_status=None, lo
 # ── Shared verdict read path (4.7 Q4 stale-guard) ───────────────────────────────────────────────
 DEFAULT_VERDICT_MAX_AGE_H = 12
 
+
+
+# ── U6: RESURRECTION HOOK (relay 147/158; MOVED HERE from import_asm_to_surface 167/169) ────
+#
+# ⛔ IT LIVES HERE, NOT IN THE IMPORTER, BECAUSE THAT WAS THE DEFECT. Q7 audit (4.7, relay 167):
+# resurrect_if_dark was defined and called in import_asm_to_surface.py ONLY. All three scanners
+# call bump_alive_clock (which has NO discovery_status filter, by design) and none of them could
+# resurrect, because they cannot import the importer. So a dark asset that was scanned and
+# answered stayed `went_dark` with a fresh `last_alive_at` — "dead" and "answered a minute ago"
+# in the same row, permanently, since the only resurrection path was ASM discovery.
+#
+# ⚠ THE REACHABLE PATH WAS THE MOST HUMAN ONE. Automatic enqueueing filters to confirmed_live
+# (enqueue-fleet.yml:140, seed-device-class.yml:89) — but that filter exists for AUTHORIZATION
+# SCOPE and protected us only by coincidence. The per-asset RUN SCAN button has no status filter
+# at all. The sequence is: someone distrusts a "dark" label, presses Run Scan to check, the scan
+# succeeds, and the card still says dark. After 2026-09-15 that distrust is the correct instinct.
+#
+# ⇒ Placed immediately after bump_alive_clock ON PURPOSE. They are two halves of one observation
+#   and the next person must not be able to take one without the other.
+#
+# ⛔ WHY IT MUST EXIST BEFORE demotion_writer --write-enable. UPSERT_ASSET's no-downgrade CASE
+# promotes ONLY from ('ct_ghost','unverified','dns_only'). A dark asset is not in that list, so
+# once anything marks an asset dark, re-observing it live NEVER brings it back — the importer
+# has no path to undo a demotion. demotion_writer.py's own docstring lists this hook as a
+# required companion change; it was never built, which is why that gate has sat OVERDUE since
+# 2026-07-26.
+#
+# ⚠ BOTH DARK VOCABULARIES. The CHECK constraint (20260711a_asset_lifecycle_p1_columns.sql:52)
+# admits 'confirmed_dark' AND 'went_dark'. demotion_writer writes 'went_dark'; the one dark row
+# on Command today is 'confirmed_dark'. A hook matching only 'went_dark' would strand every
+# 'confirmed_dark' asset permanently. Matching both is not defensive padding — it is the
+# difference between a reversible and an irreversible state today.
+#
+# SINGLE SET, one statement, so the transition is atomic:
+#   resurrection_count += 1      how many times this asset has come back
+#   went_dark_at      -> NULL    it is not dark now
+#   fade_detected_at  -> NULL    the countdown that led here is void
+#   dark_reason       -> NULL    the reason no longer holds
+#   last_transition_at -> now()  the lifecycle audit clock
+#   discovery_status  -> 'confirmed_live'
+#
+# The caller gates on `disc == 'confirmed_live'`, which is itself derived from
+# service_count > 0 — so "re-observed with at least one responding service" is already
+# established before this runs. It does NOT fire on a dns_only/ct_ghost re-observation.
+_DARK_STATUSES = ("confirmed_dark", "went_dark")
+
+RESURRECT_ASSET_SQL = """
+UPDATE public.assets
+SET discovery_status   = 'confirmed_live',
+    resurrection_count = COALESCE(resurrection_count, 0) + 1,
+    went_dark_at       = NULL,
+    fade_detected_at   = NULL,
+    dark_reason        = NULL,
+    last_transition_at = now()
+WHERE asset_id = %(asset_id)s
+  AND discovery_status = ANY(%(dark_statuses)s)
+RETURNING resurrection_count;
+"""
+
+
+def resurrect_if_dark(cur, asset_id: str, logfn=None) -> int | None:
+    """Bring a dark asset back on a live re-observation. Returns the new
+    resurrection_count, or None if the asset was not dark (the overwhelmingly common
+    case — the WHERE simply matches nothing and this is a no-op)."""
+    cur.execute(RESURRECT_ASSET_SQL,
+                {"asset_id": asset_id, "dark_statuses": list(_DARK_STATUSES)})
+    row = cur.fetchone()
+    if not row:
+        return None
+    n = row[0] if not isinstance(row, dict) else row.get("resurrection_count")
+    if logfn:
+        logfn(f"resurrection: {asset_id} was dark, re-observed live "
+              f"(resurrection_count={n}) — went_dark_at/fade_detected_at/dark_reason cleared")
+    return n
 
 def is_verdict_fresh(probed_at, now=None, max_age_hours: int = DEFAULT_VERDICT_MAX_AGE_H) -> bool:
     """PURE freshness check (4.7 Q4). A verdict older than max_age_hours is stale => callers must

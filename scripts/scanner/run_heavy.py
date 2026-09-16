@@ -227,7 +227,10 @@ if str(_DB_PATH) not in sys.path:
 # with every test still green. That is precisely the "defaults that differ by arrival
 # path" trap the comment above warns about, and the first draft of this change fell
 # into it.
-from asset_liveness import bump_alive_clock  # noqa: E402  — U7 alive clock
+from asset_liveness import (  # noqa: E402  — U7 alive clock + U6 resurrection
+    bump_alive_clock,
+    resurrect_if_dark,
+)
 from surface_diff import (  # noqa: E402
     build_scanner_surface_blob,
     compute_events,
@@ -2992,12 +2995,20 @@ def close_out_heavy(conn, ctx: HeavyScanContext, inserted: int, updated: int, Js
         # U7 (relay 155/158) — THE ALIVE CLOCK. Heavy DOES run naabu, so it uses the same
         # svc_count signal as light and the promote rule. No discovery_status filter: the
         # clock records "this observation got an answer", not a status transition.
-        bump_alive_clock(
+        if bump_alive_clock(
             cur, ctx.asset_id,
             svc_count=len({p["port"] for p in (ctx.open_ports or [])
                            if isinstance(p, dict) and isinstance(p.get("port"), int)}),
             logfn=log,
-        )
+        ):
+            # U6 — resurrection, on the SAME evidence that just bumped the clock.
+            # ⛔ WITHOUT THIS LINE THE SCANNERS COULD BUMP BUT NOT REVIVE (Q7 audit, relay
+            # 167): a dark asset scanned here answered, got a fresh last_alive_at, and
+            # stayed `went_dark` forever — because the only resurrection path was ASM
+            # discovery, which never enumerates manually-added assets at all. No-op for
+            # every asset that was not dark (the WHERE matches nothing): one statement per
+            # completed scan, and it cannot misfire.
+            resurrect_if_dark(cur, ctx.asset_id, logfn=log)
 
         # 226 — heavy-tier ASM surface write-back (225 Option B). SAVEPOINT-isolated +
         # best-effort: a surface-write error must NEVER roll back the scan close-out above.

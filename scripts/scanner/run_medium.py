@@ -114,7 +114,7 @@ from finding_history_writer import write_finding_history_for_scan_run
 
 # U7 alive clock — shared liveness SSOT (scripts/db/asset_liveness.py), psycopg-free.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "db"))
-from asset_liveness import bump_alive_clock  # noqa: E402
+from asset_liveness import bump_alive_clock, resurrect_if_dark  # noqa: E402
 
 # ─── 4.7 I1 — nikto header classifier SSOT ──────────────────────────────
 # Lives in the normalize package so BOTH parser paths (cs_parsers/nikto.py and
@@ -5024,7 +5024,15 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
         # prober, so httpx=ok is positive evidence the host answered. The alternative —
         # bumping because close_out was reached — would infer liveness from the absence
         # of a crash, which is the exact error class this lane exists to kill.
-        bump_alive_clock(cur, ctx.asset_id, tool_status=ctx.tool_status, logfn=log)
+        if bump_alive_clock(cur, ctx.asset_id, tool_status=ctx.tool_status, logfn=log):
+            # U6 — resurrection, on the SAME evidence that just bumped the clock.
+            # ⛔ WITHOUT THIS LINE THE SCANNERS COULD BUMP BUT NOT REVIVE (Q7 audit, relay
+            # 167): a dark asset scanned here answered, got a fresh last_alive_at, and
+            # stayed `went_dark` forever — because the only resurrection path was ASM
+            # discovery, which never enumerates manually-added assets at all. No-op for
+            # every asset that was not dark (the WHERE matches nothing): one statement per
+            # completed scan, and it cannot misfire.
+            resurrect_if_dark(cur, ctx.asset_id, logfn=log)
 
         # #35 — live-path delta-close. Called ONLY from close_out (the clean
         # exit); degraded_out NEVER calls it, so a degraded scan can't close
