@@ -113,6 +113,38 @@ _POSITIVE_CLASSES = frozenset(CLOUD_CLASSES | {"origin_host", "edge_firewall", "
 # DEEP_SWEEP_QUEUE_MARKER. If you rename one, the pin fails.
 _PASSIVE_TOOL_NAMES = ("stack_id_passive", "light_stack_passive")
 
+# ── EVIDENCE-COLLECTION CAPABILITY — ONE SOURCE OF TRUTH (4.7 ruling 201/1) ──
+# Every artifact name/pattern gather_observations actually reads, in ONE place,
+# consumed by BOTH gather_observations and _evidence_capable_scan_runs.
+#
+# ⛔ WHY THIS EXISTS. _fresh_scan_exists used to ask "did ANY scan_run complete
+# in the window" — no tier filter, no artifact filter. Measured on Command
+# 2026-09-16: a LIGHT scan emits common_paths / csp_nonce_check / dns_posture /
+# headers_check / httpx_tech / naabu / tls_check and NOT ONE name below. Its
+# empty evidence is absence of COLLECTION, not absence of the thing (169's
+# principle). 27 of 51 fresh-scanned assets (53%) were light-only, so a
+# tier-blind downgrade streak would have stripped real labels at fleet scale
+# the moment --write flipped.
+#
+# ⚠ ARTIFACT-BASED, NOT TIER-BASED, AND THAT IS DELIBERATE. `intensity != 'light'`
+# would be wrong in fact as well as in principle: 2 of 225 light runs in the 30d
+# window DID emit light_stack_passive. Capability is a property of what a RUN
+# produced, never of what its tier is usually able to produce.
+#
+# ⚠ nuclei is the one indirection: the classifier reads the nuclei SIGNAL from
+# `findings`, not from an artifact. The nuclei artifact is therefore the
+# CAPABILITY MARKER for that run ("this run was able to look"), while the
+# finding is the evidence. Both halves are needed and they live in different
+# tables; conflating them is what this comment exists to prevent.
+_ART_FINGERPRINT = "fingerprint%"      # -> extract_ssh_banner
+_ART_TESTSSL     = "testssl%"          # -> extract_cert
+_ART_WAFW00F     = "stack_id_wafw00f"  # -> waf_vendor_from_wafw00f
+_ART_NUCLEI      = "nuclei%"           # capability marker only (see above)
+
+EVIDENCE_ARTIFACT_PATTERNS = (
+    _ART_FINGERPRINT, _ART_TESTSSL, _ART_WAFW00F, _ART_NUCLEI,
+) + _PASSIVE_TOOL_NAMES
+
 _STATUS_READS_OK = "reads_ok"                        # got observations -> classify normally
 _STATUS_GENUINE_EMPTY = "genuine_empty"              # fresh scan existed, nothing matched -> unknown (streak candidate, Q4)
 _STATUS_NO_FRESH_COLLECTION = "no_fresh_collection"  # nothing fresh to read at all -> unreadable (Q2 Layer A)
@@ -154,6 +186,83 @@ def _collection_status(has_observations: bool, fresh_scan_exists: bool) -> str:
     if fresh_scan_exists:
         return _STATUS_GENUINE_EMPTY
     return _STATUS_NO_FRESH_COLLECTION
+
+
+_DOWNGRADE_STREAK_REQUIRED = 3
+
+_DECISION_WRITE = "write"          # let the unknown verdict through to assets
+_DECISION_PRESERVE = "preserve"    # keep the positive prior; audit + log, no assets write
+_DECISION_NO_WRITE = "no_write"    # prior already unknown; nothing to preserve or lose
+
+
+def apply_2b_matrix(prior_class: str, status: str, streak_met: bool) -> str:
+    """THE 2b WRITE MATRIX (4.7 ruling, relay 153; replaces 175 Q5). Pure.
+
+    Called only when the computed class is `unknown` — a computed POSITIVE class always
+    writes and never reaches here.
+
+      prior POSITIVE + no_fresh_collection  -> PRESERVE  (nothing could have been seen)
+      prior POSITIVE + genuine_empty        -> PRESERVE, unless the downgrade streak is
+                                               met (3 distinct EVIDENCE-CAPABLE runs)
+      prior UNKNOWN  + no_fresh_collection  -> no write  (Q5b DROPPED: measured 2026-09-16,
+      prior UNKNOWN  + genuine_empty        -> no write   that branch would have stamped
+                                               `unreadable` on ~365 of 416 assets — 88%)
+
+    `unreadable` stays in the taxonomy and nothing here writes it."""
+    if prior_class not in _POSITIVE_CLASSES:
+        return _DECISION_NO_WRITE
+    if status == _STATUS_NO_FRESH_COLLECTION:
+        return _DECISION_PRESERVE
+    if status == _STATUS_GENUINE_EMPTY:
+        return _DECISION_WRITE if streak_met else _DECISION_PRESERVE
+    return _DECISION_NO_WRITE
+
+
+def _downgrade_streak_met(cur, asset_id: str, capable_runs: list,
+                          required: int = _DOWNGRADE_STREAK_REQUIRED) -> bool:
+    """Q4 streak, DERIVED from rows we already write — no migration (4.7 201/2+3).
+
+    Counts device_class_dryrun rows that are ALL of:
+      * event_type = 'TRANSITION_DOWNGRADE'   (4.7 ruling 3: the event type IS the test.
+        A STAMP from unknown->unknown is not a downgrade candidate and must not count.)
+      * prior_state.device_class was POSITIVE  (what preserve-prior is protecting)
+      * device_class = 'unknown'               (the computed verdict)
+      * scan_run_id is one of THIS asset's EVIDENCE-CAPABLE runs, each counted ONCE
+        (one scan re-read by four passes a day is ONE observation, not four)
+
+    Requires `required` DISTINCT such runs. Rows accumulate because preserve keeps the
+    prior POSITIVE, so every pass re-emits TRANSITION_DOWNGRADE — measured 291 rows over
+    11 assets in 7 days, 0 with a NULL scan_run_id."""
+    capable = set(capable_runs or ())
+    if len(capable) < required:
+        return False
+    cur.execute(
+        """select scan_run_id::text as scan_run_id, prior_state, device_class
+             from public.device_class_dryrun
+            where asset_id = %s and event_type = 'TRANSITION_DOWNGRADE'
+            order by evaluated_at desc limit 500""", (asset_id,))
+    seen = []
+    for r in (cur.fetchall() or []):
+        # ⚠ event_type is filtered in SQL AND re-checked here on purpose. By
+        # construction of event_for() a row with a POSITIVE prior and a computed
+        # `unknown` can only be a TRANSITION_DOWNGRADE, so the two checks are
+        # redundant TODAY — which is exactly why the SQL filter alone was
+        # unobservable: every test that tried to exercise it was actually being
+        # caught by the prior/class checks. Re-checking here makes the rule the
+        # test can see, and keeps the derivation honest if event_for ever changes.
+        if r.get("event_type") not in (None, "TRANSITION_DOWNGRADE"):
+            continue
+        if r.get("device_class") != "unknown":
+            continue
+        prior = (r.get("prior_state") or {}).get("device_class")
+        if prior not in _POSITIVE_CLASSES:
+            continue
+        sid = r.get("scan_run_id")
+        if sid and sid in capable and sid not in seen:
+            seen.append(sid)
+            if len(seen) >= required:
+                return True
+    return False
 
 
 # ── pure signal extractors (unit-tested, no DB) ──────────────────────────
@@ -332,15 +441,35 @@ def _discovery_waf(cur, asset_id: str):
 
 
 # ── DB signal gather (fresh signals for one asset) ───────────────────────
-def _fresh_scan_exists(cur, asset_id: str, freshness_days: int) -> bool:
-    """Layer A absence probe (4.7 Q2, Obsidian 175): did ANY scan_run for this asset
-    complete within the freshness window? Distinguishes 'no collection happened'
-    (-> unreadable) from 'collection happened, nothing matched' (-> unknown). Read-only."""
+def _evidence_capable_scan_runs(cur, asset_id: str, freshness_days: int) -> list:
+    """scan_run_ids for this asset, inside the freshness window, that produced AT LEAST
+    ONE artifact the classifier actually reads (EVIDENCE_ARTIFACT_PATTERNS — the single
+    source; do NOT restate the names here). Newest first. Read-only.
+
+    This is the unit of "an observation that could have seen something". A run absent
+    from this list did not fail to find evidence; it was never able to collect it."""
     cur.execute(
-        f"""select 1 from scan_run
-             where asset_id = %s and completed_at > now() - interval '{int(freshness_days)} days'
-             limit 1""", (asset_id,))
-    return cur.fetchone() is not None
+        f"""select distinct on (r.completed_at, r.scan_run_id)
+                   r.scan_run_id::text as scan_run_id, r.completed_at
+              from scan_run r
+              join scan_run_artifacts a on a.scan_run_id = r.scan_run_id
+             where r.asset_id = %s
+               and r.completed_at > now() - interval '{int(freshness_days)} days'
+               and a.tool_name ilike any(%s)
+             order by r.completed_at desc, r.scan_run_id""",
+        (asset_id, list(EVIDENCE_ARTIFACT_PATTERNS)))
+    return [r["scan_run_id"] for r in (cur.fetchall() or [])]
+
+
+def _fresh_scan_exists(cur, asset_id: str, freshness_days: int) -> bool:
+    """Layer A absence probe (4.7 Q2, Obsidian 175; CAPABILITY-AWARE per 4.7 201/1):
+    did any EVIDENCE-CAPABLE scan_run complete within the window? Distinguishes 'no
+    collection happened' (-> preserve prior) from 'collection happened, nothing matched'
+    (-> genuine_empty, the only downgrade candidate). Read-only.
+
+    ⚠ Was "did ANY scan_run complete". That counted light scans, which emit nothing the
+    classifier reads — see EVIDENCE_ARTIFACT_PATTERNS for the measurement."""
+    return bool(_evidence_capable_scan_runs(cur, asset_id, freshness_days))
 
 
 def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str) -> dict:
@@ -349,9 +478,9 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
     cur.execute(
         f"""select coalesce(a.content_jsonb->>'raw', a.content_jsonb::text) as raw
               from scan_run_artifacts a join scan_run r on r.scan_run_id = a.scan_run_id
-             where r.asset_id = %s and a.tool_name ilike 'fingerprint%%'
+             where r.asset_id = %s and a.tool_name ilike %s
                and r.completed_at > {fresh}
-             order by r.completed_at desc limit 1""", (asset_id,))
+             order by r.completed_at desc limit 1""", (asset_id, _ART_FINGERPRINT))
     row = cur.fetchone()
     banner = extract_ssh_banner(row["raw"] if row else None)
     if banner:
@@ -359,9 +488,9 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
     cur.execute(
         f"""select coalesce(a.content_jsonb->>'raw', a.content_jsonb::text) as raw
               from scan_run_artifacts a join scan_run r on r.scan_run_id = a.scan_run_id
-             where r.asset_id = %s and a.tool_name ilike 'testssl%%'
+             where r.asset_id = %s and a.tool_name ilike %s
                and r.completed_at > {fresh}
-             order by r.completed_at desc limit 1""", (asset_id,))
+             order by r.completed_at desc limit 1""", (asset_id, _ART_TESTSSL))
     row = cur.fetchone()
     obs.update(extract_cert(row["raw"] if row else None))
     cur.execute(
@@ -418,7 +547,7 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
         rows.sort(key=lambda t: t[0], reverse=True)
         return [o for _, o in rows]
 
-    verdict = _fresh_json("stack_id_wafw00f")
+    verdict = _fresh_json(_ART_WAFW00F)
     kind = waf_vendor_from_wafw00f(verdict)      # kind string if detected & named, else None
     if kind and kind != "generic":
         obs["waf_vendor"] = kind                 # named vendor -> wafw00f_high_confidence
@@ -638,6 +767,10 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
     conn.autocommit = False
 
     tally = {"STAMP": 0, "CHANGE": 0, "TRANSITION_UPGRADE": 0, "TRANSITION_DOWNGRADE": 0}
+    # per-matrix-row counters for the heartbeat (169's third condition)
+    m2b = {"preserve_no_collection": 0, "preserve_genuine_empty": 0,
+           "downgrade_streak_met": 0, "no_write_unknown_prior": 0}
+    _pass_started = datetime.now(timezone.utc)
     unknown = cloud_endpoint_ct = cdn_ct = conf_subset = conf_full = 0
     with conn.cursor() as cur:
         # F1/F3: classification no longer reads assets.is_cloud_endpoint/cloud_provider
@@ -663,22 +796,36 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
                         and "wafw00f_high_confidence" not in _sigs:
                     print(f"  · {a['asset_id']}: capped at suspected: "
                           f"source=discovery_wafw00f, heavy_wafw00f_absent=true")
+            # PHASE 2b (4.7 ruling, relay 201). A computed POSITIVE class always
+            # writes — row 5 of the matrix — so the decision starts as write and is
+            # narrowed only when the verdict is `unknown`.
+            decision = _DECISION_WRITE
             if nc == "unknown":
                 unknown += 1
-                # ── UNREADABLE phase 2a — MEASURE ONLY (4.7 Q6, Obsidian 175) ──
-                # The final verdict is unknown. Would phase 2b relabel it unreadable?
-                # Compute the would-be status and LOG it. This writes NOTHING different
-                # (the audit row + any assets write below are unchanged) — it exists
-                # solely to measure the flip-rate for 7+ days before enabling writes.
                 had_evidence = bool(res.get("evidence"))
-                status2a = _collection_status(
-                    had_evidence, _fresh_scan_exists(cur, a["asset_id"], fresh_days))
-                if status2a == _STATUS_NO_FRESH_COLLECTION:
-                    print(f"  · {a['asset_id']}: [2a-measure] would-be UNREADABLE "
-                          f"(no fresh collection; prior={a['device_class']}/{a['device_class_confidence']})")
-                elif status2a == _STATUS_GENUINE_EMPTY and a["device_class"] in _POSITIVE_CLASSES:
-                    print(f"  · {a['asset_id']}: [2a-measure] genuine-empty over positive "
-                          f"prior={a['device_class']}/{a['device_class_confidence']} (Q4 downgrade-streak candidate)")
+                capable = _evidence_capable_scan_runs(cur, a["asset_id"], fresh_days)
+                status2b = _collection_status(had_evidence, bool(capable))
+                streak_met = (
+                    status2b == _STATUS_GENUINE_EMPTY
+                    and a["device_class"] in _POSITIVE_CLASSES
+                    and _downgrade_streak_met(cur, a["asset_id"], capable))
+                decision = apply_2b_matrix(a["device_class"], status2b, streak_met)
+                prior_s = f"{a['device_class']}/{a['device_class_confidence']}"
+                if decision == _DECISION_PRESERVE and status2b == _STATUS_NO_FRESH_COLLECTION:
+                    m2b["preserve_no_collection"] += 1
+                    print(f"  · {a['asset_id']}: [2b-preserve] kept {prior_s} "
+                          f"(no evidence-capable collection in {fresh_days}d)")
+                elif decision == _DECISION_PRESERVE:
+                    m2b["preserve_genuine_empty"] += 1
+                    print(f"  · {a['asset_id']}: [2b-preserve] kept {prior_s} "
+                          f"(genuine-empty; streak {len(capable)}/{_DOWNGRADE_STREAK_REQUIRED} "
+                          f"evidence-capable runs, not met)")
+                elif decision == _DECISION_WRITE:
+                    m2b["downgrade_streak_met"] += 1
+                    print(f"  · {a['asset_id']}: [2b-downgrade] {prior_s} -> unknown "
+                          f"({_DOWNGRADE_STREAK_REQUIRED} distinct evidence-capable runs, all genuine-empty)")
+                else:
+                    m2b["no_write_unknown_prior"] += 1
             if from_cloud:
                 if nc == "cdn":
                     cdn_ct += 1
@@ -718,13 +865,41 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
                  json.dumps({"device_class": a["device_class"], "confidence": a["device_class_confidence"]}),
                  would_reroute, _latest_scan_run(cur, a["asset_id"]), soak_generation))
 
-            if write:
+            # ⛔ THE PRESERVE GATE. A preserved row keeps its POSITIVE prior, so the
+            # next pass re-emits TRANSITION_DOWNGRADE and the audit row lands again —
+            # which is exactly what lets the streak accumulate without a migration.
+            if write and decision == _DECISION_WRITE:
                 cur.execute(
                     "update public.assets set device_class=%s, device_class_confidence=%s, "
                     "vendor_product_confidence=%s, device_class_evidence=%s::jsonb, "
                     "vendor_product=%s::jsonb where asset_id=%s",
                     (nc, ncf, vpc, json.dumps(res["evidence"]),
                      json.dumps(res["vendor_product"]), a["asset_id"]))
+        # ── HEARTBEAT (169's third condition, relay 153/201 item 3) ──────────
+        # "A soak with no heartbeat is indistinguishable from a soak that never ran."
+        # ONE row per pass, ALWAYS — dry-run included, and before any early return.
+        #
+        # ⚠ HOSTED IN meta_alerter_runs, WHICH IS NAMED FOR THE ALERTER. Deliberate,
+        # and flagged rather than done quietly: device_class_dryrun.asset_id is an FK
+        # to assets, so a synthetic `_heartbeat` asset_id cannot be inserted there, and
+        # a purpose-built device_class_runs table is a MIGRATION — which halts scanning
+        # and which 4.7 told me not to default to. meta_alerter_runs is the existing
+        # per-run heartbeat shape in this schema (alerter_name / window / status /
+        # notes). If the name grates, renaming it is a migration and a separate call.
+        cur.execute(
+            "insert into public.meta_alerter_runs "
+            "(alerter_name, window_start, window_end, status, notes) "
+            "values (%s,%s,%s,%s,%s)",
+            ("device_class_runner", _pass_started, datetime.now(timezone.utc),
+             "complete",
+             json.dumps({"mode": "write" if write else "dry-run",
+                         "soak_generation": soak_generation,
+                         "assets_evaluated": len(assets),
+                         "unknown": unknown,
+                         "events": tally,
+                         "matrix_2b": m2b,
+                         "streak_required": _DOWNGRADE_STREAK_REQUIRED,
+                         "evidence_artifact_patterns": list(EVIDENCE_ARTIFACT_PATTERNS)})))
     conn.commit()
     conn.close()
 
@@ -733,6 +908,11 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
     print(f"\n{'WROTE' if write else 'DRY-RUN'} (soak_generation={soak_generation}, audit rows committed):")
     print(f"  events: STAMP={tally['STAMP']} CHANGE={tally['CHANGE']} "
           f"UPGRADE={tally['TRANSITION_UPGRADE']} DOWNGRADE={tally['TRANSITION_DOWNGRADE']}")
+    print(f"  2b matrix: preserve(no-collection)={m2b['preserve_no_collection']} "
+          f"preserve(genuine-empty)={m2b['preserve_genuine_empty']} "
+          f"downgrade(streak met)={m2b['downgrade_streak_met']} "
+          f"no-write(unknown prior)={m2b['no_write_unknown_prior']}")
+    print("  heartbeat: 1 row -> meta_alerter_runs(alerter_name='device_class_runner')")
     print(f"  cloud fallback (F1/F2, re-derived from surface_data): "
           f"cloud_endpoint={cloud_endpoint_ct} cdn={cdn_ct}")
     print(f"  fingerprint confirmed: via_subset={conf_subset} via_full_signals={conf_full}")
@@ -819,6 +999,21 @@ def _selftest() -> int:
     ok &= _collection_status(False, True)  == _STATUS_GENUINE_EMPTY
     ok &= _collection_status(False, False) == _STATUS_NO_FRESH_COLLECTION
     print(f"  layer C retry (2/3-attempt + raise-propagates) + layer A status: 4 cases ok")
+    # 2b write matrix (4.7 relay 201). Pure; the DB-shaped cases live in
+    # test_device_class_2b.py. Q5b's absence is asserted, not assumed.
+    _m = apply_2b_matrix
+    _matrix = [
+        (("waf", _STATUS_NO_FRESH_COLLECTION, False), _DECISION_PRESERVE),
+        (("waf", _STATUS_GENUINE_EMPTY,       False), _DECISION_PRESERVE),
+        (("waf", _STATUS_GENUINE_EMPTY,       True),  _DECISION_WRITE),
+        (("unknown", _STATUS_NO_FRESH_COLLECTION, False), _DECISION_NO_WRITE),
+        (("unknown", _STATUS_GENUINE_EMPTY,       True),  _DECISION_NO_WRITE),
+    ]
+    for args, want in _matrix:
+        ok &= _m(*args) == want
+    print(f"  2b matrix: {len(_matrix)} cases "
+          f"{'ok' if all(_m(*a) == w for a, w in _matrix) else 'FAIL'} "
+          f"(Q5b dropped: unknown prior never writes)")
     # Tripwire, not a correctness check: _routing_bucket imports CLOUD_CLASSES so
     # it cannot drift behaviourally. This fires when someone CHANGES the gate's
     # routing semantics, which is a signal to re-review what would_reroute means.
