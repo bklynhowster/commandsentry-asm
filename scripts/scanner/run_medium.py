@@ -2636,6 +2636,32 @@ def detect_waf(ctx: ScanContext) -> None:
         # least one of its probes. Establishes target reachability for
         # the prior-tool-success short-circuit in ensure_healthy_egress.
         ctx.target_proven_reachable = True
+    # ⛔ THE FOLD (relay 217, ruling 8). The structured verdict is written HERE,
+    # as detect_waf's last act, so EVERY caller gets both artifacts — the registry
+    # (heavy) and run_medium's linear body (medium) alike.
+    #
+    # Before 2026-09-16 the persist was a separate call sitting next to detect_waf
+    # in run_medium.run() only. phase_registry registers the FUNCTION, so when the
+    # heavy cutover (b51ef0c1, 2026-08-29) started dispatching detect_waf through
+    # run_phases, heavy inherited the parse and not the persist: 18 of 18 heavy runs
+    # wrote the raw wafw00f artifact and never the parsed one, so every heavy-derived
+    # WAF confirmation was discarded. wafw00f named FortiWeb on commandcommcentral.com
+    # on 2026-09-03 and the classifier never heard.
+    #
+    # Same shape as bump_alive_clock/resurrect_if_dark: a PAIR held together by
+    # adjacency in one caller comes apart the moment a second caller appears.
+    _classify_wafw00f_output(ctx, stdout, rc)
+    persist_stack_id_wafw00f(ctx)
+
+
+def _classify_wafw00f_output(ctx: ScanContext, stdout: str, rc: int) -> None:
+    """The wafw00f verdict parse, extracted from detect_waf VERBATIM.
+
+    ⛔ EXTRACTED SO THE PERSIST CANNOT BE SKIPPED. This block has three early
+    `return`s — including the named-vendor path, the one that matters. While the
+    persist sat after them inside detect_waf it would have been unreachable on
+    every successful detection; moving the returns in here makes detect_waf's
+    final persist unconditional. Logic unchanged, line for line."""
     if rc != 0:
         log(f"wafw00f rc={rc} — assuming no WAF for tuning purposes")
         return
@@ -5775,9 +5801,10 @@ def run(descriptor_path: str, dsn: str) -> int:
         # ─── Phase 1: WAF detection ─────────────────────────────────
         log("→ detect_waf")
         detect_waf(ctx)
-        # E1 (Obsidian 146): persist the parsed wafw00f verdict as a structured
-        # stack_id_wafw00f artifact for P1. Persist-only, additive, no reset.
-        persist_stack_id_wafw00f(ctx)
+        # E1 (Obsidian 146) + relay 217: the stack_id_wafw00f persist now lives
+        # INSIDE detect_waf, so every caller gets it — the registry (heavy) as
+        # well as this linear body. The separate call that used to sit here is
+        # DELETED, not moved: keeping it would persist twice on the medium path.
         log("→ detect_tech_stack")
         detect_tech_stack(ctx)
 

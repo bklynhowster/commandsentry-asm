@@ -345,8 +345,16 @@ def test_the_prefix_consumers_only_ever_see_chunk_dicts(monkeypatch):
 
 # ── ⛔ EVERY MEDIUM-REGISTERED PHASE MUST BE REACHABLE FROM THE MEDIUM RUNNER ──
 # THE DEFECT CLASS, and it has now appeared in BOTH directions in one day:
-#   * persist_stack_id_wafw00f lives in run_medium.run()'s LINEAR BODY, so
-#     HEAVY — which dispatches through the registry — never reaches it.
+#   * persist_stack_id_wafw00f lived in run_medium.run()'s LINEAR BODY, so
+#     HEAVY — which dispatches through the registry — never reached it.
+#     ⛔ FIXED 2026-09-16 (relay 216/217) — but NOT when this comment was written.
+#     It was recorded here as an EXAMPLE of the class while its mirror image was
+#     being fixed, and then left live for 18 days: measured, 18 of 18 heavy runs
+#     discarded their wafw00f verdict, including the FortiWeb detection on
+#     commandcommcentral.com on 09-03. Naming a defect in a comment is not fixing
+#     it, and the file whose job is to catch the class is the worst place to
+#     leave an instance of it. The persist is now folded INSIDE detect_waf; see
+#     test_wafw00f_persist_fold.py.
 #   * corpus_prewarm was registered at MEDIUM only, so MEDIUM — which has NO
 #     registry dispatch at all (no run_phases, no phases_for_tier, no
 #     `import phase_registry`) — never reached IT.
