@@ -429,6 +429,8 @@ jobs:
           # MIN_FILES: a lane that scans nothing must FAIL, not pass quietly —
           # the same failure mode lanes 0 and 4 exist to prevent. Floor set well
           # below the real count so deleting a few files never cries wolf.
+          # Absent-linter probe FIRST — under -e this aborts the step loudly.
+          python -m pyflakes --version >/dev/null
           MIN_FILES=100
           n=$(find $PYTEST_ROOTS -name '*.py' | wc -l)
           if [ "$n" -lt "$MIN_FILES" ]; then
@@ -445,7 +447,25 @@ jobs:
           # to prevent it. Capture in a variable and READ THE EXIT CODE instead:
           #   pyflakes 0 = clean · 1 = findings · >1 = it did not run.
           # "It did not run" must never look like "it found nothing".
-          out=$(python -m pyflakes $PYTEST_ROOTS 2>&1); rc=$?
+          # ⛔ GITHUB RUNS EVERY `run:` BLOCK UNDER `bash --noprofile --norc -e -o
+          # pipefail`. `set -uo pipefail` above does NOT clear -e. pyflakes exits 1
+          # on ANY finding — and there are ~85 cosmetic ones per repo — so a bare
+          # `out=$(pyflakes …); rc=$?` aborts ON THE ASSIGNMENT, before rc is ever
+          # read. Nothing after it runs: not this branch, not the grep, not the
+          # summary. This lane was RED on every run from the day it landed, with no
+          # output at all, on both instances, and three pushes went out on top of it.
+          #
+          # `|| rc=$?` is an `||` list, which -e exempts — so this line now behaves
+          # identically under GitHub's shell and a bare `bash`. The local run and the
+          # CI run are finally the same run.
+          #
+          # ⚠ AND THE --version PROBE ABOVE IS THE SECOND DEFECT, not decoration: with
+          # pyflakes ABSENT, `python -m pyflakes` prints "No module named pyflakes"
+          # and exits 1 — which the old code classified as "findings", grepped for
+          # undefined names, found none, and reported "0 undefined names … (1 other
+          # findings)". A silent PASS with the linter missing. The probe fails loudly
+          # under -e instead, which is the one failure most likely to actually happen.
+          rc=0; out=$(python -m pyflakes $PYTEST_ROOTS 2>&1) || rc=$?
           if [ "$rc" -gt 1 ]; then
             echo "::error::pyflakes exited $rc — it did not complete. This is NOT a pass."
             echo "$out"
