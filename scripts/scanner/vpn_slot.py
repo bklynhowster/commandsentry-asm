@@ -189,10 +189,10 @@ def main() -> None:
     ap.add_argument("command", choices=["claim", "release"])
     ap.add_argument("--scan-run-id", required=True)
     ap.add_argument("--dsn", default=os.environ.get("SUPABASE_DSN"))
-    ap.add_argument("--n", type=int, default=int(os.environ.get("VPN_SLOTS_N", "1")))
-    ap.add_argument("--stale-min", type=int, default=int(os.environ.get("VPN_SLOT_STALE_MIN", "40")))
-    ap.add_argument("--backoff-min", type=int, default=int(os.environ.get("VPN_SLOT_BACKOFF_MIN", "5")))
-    ap.add_argument("--max-wait-min", type=int, default=int(os.environ.get("VPN_SLOT_MAX_WAIT_MIN", "120")))
+    ap.add_argument("--n", type=int, default=int(os.environ.get("VPN_SLOTS_N") or "1"))
+    ap.add_argument("--stale-min", type=int, default=int(os.environ.get("VPN_SLOT_STALE_MIN") or "40"))
+    ap.add_argument("--backoff-min", type=int, default=int(os.environ.get("VPN_SLOT_BACKOFF_MIN") or "5"))
+    ap.add_argument("--max-wait-min", type=int, default=int(os.environ.get("VPN_SLOT_MAX_WAIT_MIN") or "120"))
     args = ap.parse_args()
 
     if not args.dsn:

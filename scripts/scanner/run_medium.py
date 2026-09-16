@@ -263,12 +263,12 @@ NUCLEI_URLS_PER_CHUNK = 40     # ~30-50s of work per chunk
 # explicit "false" (honour the operator unchecking it).
 _stats_env = os.environ.get("NUCLEI_STATS_ENABLED", "").strip().lower()
 NUCLEI_STATS_ENABLED = (_stats_env in ("1", "true", "yes")) if _stats_env else True
-NUCLEI_STATS_INTERVAL_S = int(os.environ.get("NUCLEI_STATS_INTERVAL_S", "5"))
+NUCLEI_STATS_INTERVAL_S = int(os.environ.get("NUCLEI_STATS_INTERVAL_S") or "5")
 # Yield floor (4.7 ⑲/④). Below this many requests a cut chunk is BROKEN, not
 # partial. Generous on purpose: observed rps on real cut chunks is 4-7 and the
 # smallest legitimately-complete chunk seen is 10 requests (medium:tech, #2637),
 # so 5 sits under every real run and over zero. Calibrate from observed data.
-NUCLEI_YIELD_MIN_REQUESTS = int(os.environ.get("NUCLEI_YIELD_MIN_REQUESTS", "5"))
+NUCLEI_YIELD_MIN_REQUESTS = int(os.environ.get("NUCLEI_YIELD_MIN_REQUESTS") or "5")
 
 NIKTO_PAUSE_S = 1
 NIKTO_WALL_S = 600
@@ -444,14 +444,14 @@ PATIENT_MODE = os.environ.get("PATIENT_MODE", "").lower() in ("true", "1", "yes"
 # Seconds to sleep after a post-chunk healthcheck shows BANNED, before
 # rotating to the next region. Mac runbook = 1800 (30 min). Tunable
 # for faster experiments. Only used when PATIENT_MODE is true.
-PATIENT_BAN_COOLDOWN_S = int(os.environ.get("PATIENT_BAN_COOLDOWN_S", "1800"))
+PATIENT_BAN_COOLDOWN_S = int(os.environ.get("PATIENT_BAN_COOLDOWN_S") or "1800")
 
 # Seconds to sleep between chunks regardless of ban state. Mac runbook
 # uses 5s between phases. Only used when PATIENT_MODE is true.
-PATIENT_INTER_CHUNK_DELAY_S = int(os.environ.get("PATIENT_INTER_CHUNK_DELAY_S", "5"))
+PATIENT_INTER_CHUNK_DELAY_S = int(os.environ.get("PATIENT_INTER_CHUNK_DELAY_S") or "5")
 
 # Rate-limit override when PATIENT_MODE is true. Matches Mac runbook.
-PATIENT_RATE_LIMIT = int(os.environ.get("PATIENT_RATE_LIMIT", "10"))
+PATIENT_RATE_LIMIT = int(os.environ.get("PATIENT_RATE_LIMIT") or "10")
 
 # ─── Softened rate (Plan A2 + B, 2026-05-31 PM) ────────────────────────
 # Gentler nuclei rate for non-FortiGate targets that nevertheless have a
@@ -465,7 +465,7 @@ PATIENT_RATE_LIMIT = int(os.environ.get("PATIENT_RATE_LIMIT", "10"))
 # uses --rate-limit 2 + per-phase delays against the same target and
 # finds the WP plugin CVEs cleanly. Cloud rate of 5 is a defensive
 # middle ground between cloud's broken 30 and Mac's gentle 2.
-SOFTENED_RATE_LIMIT = int(os.environ.get("SOFTENED_RATE_LIMIT", "5"))
+SOFTENED_RATE_LIMIT = int(os.environ.get("SOFTENED_RATE_LIMIT") or "5")
 
 # ─── Stealth UA mode (advisor-brief audit fallout, 2026-05-31 PM) ──────
 # Mirrors the Mac stringent script line 94: "Browser-like headers —
@@ -476,7 +476,7 @@ SOFTENED_RATE_LIMIT = int(os.environ.get("SOFTENED_RATE_LIMIT", "5"))
 # UA-vs-rate-vs-content as the surviving lever instead of flipping
 # multiple variables at once.
 STEALTH_UA = os.environ.get("STEALTH_UA", "").lower() in ("true", "1", "yes")
-STEALTH_RATE_LIMIT = int(os.environ.get("STEALTH_RATE_LIMIT", "2"))
+STEALTH_RATE_LIMIT = int(os.environ.get("STEALTH_RATE_LIMIT") or "2")
 # Pinned UA matches the Mac runbook test-stringent-retest-2026-05-14.sh
 # line 95 exactly. If we want to vary later, env-override-able.
 STEALTH_FIXED_UA = os.environ.get(
@@ -495,15 +495,15 @@ STEALTH_FIXED_UA = os.environ.get(
 # 529 URLs`). Composable with STEALTH_UA — typical use is both together.
 CRAWL_FIRST_MODE = os.environ.get("CRAWL_FIRST_MODE", "").lower() in ("true", "1", "yes")
 # katana depth cap. Mac uses default (3). Bound it to keep crawl quick.
-CRAWL_DEPTH = int(os.environ.get("CRAWL_DEPTH", "3"))
+CRAWL_DEPTH = int(os.environ.get("CRAWL_DEPTH") or "3")
 # katana wall (seconds). Crawl runs once at scan start, so budget enough.
-CRAWL_WALL_S = int(os.environ.get("CRAWL_WALL_S", "300"))
+CRAWL_WALL_S = int(os.environ.get("CRAWL_WALL_S") or "300")
 # Spec 221 ruling ①: crawl-empty is DEGRADED, never a silent fall-back to
 # path-enum. The crawl must yield at least this many URLs or the run degrades.
 # Start conservative (floor=1 → only a truly-empty crawl degrades); tighten from
 # OBSERVED healthy-crawl yields once the viability canary calibrates it — better
 # to under-DEGRADE a thin-but-real crawl than over-DEGRADE a small legit site.
-CRAWL_MIN_URLS = int(os.environ.get("CRAWL_MIN_URLS", "1"))
+CRAWL_MIN_URLS = int(os.environ.get("CRAWL_MIN_URLS") or "1")
 # Match the regions for which we've shipped WireGuard configs in the
 # vpn-tools GH release. Add more by generating + uploading more confs.
 

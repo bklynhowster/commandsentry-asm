@@ -252,8 +252,8 @@ from surface_diff import (  # noqa: E402
 # without ratification — flag drift breaks parity with the existing 85-row
 # backlog AND can break the auto-closer (see module docstring).
 TESTSSL_BINARY = os.environ.get("TESTSSL_BINARY", "testssl.sh")
-TESTSSL_WALL_S = int(os.environ.get("TESTSSL_WALL_S", "600"))  # 10 min — generous for slow TLS stacks
-TESTSSL_PORT = int(os.environ.get("TESTSSL_PORT", "443"))
+TESTSSL_WALL_S = int(os.environ.get("TESTSSL_WALL_S") or "600")  # 10 min — generous for slow TLS stacks
+TESTSSL_PORT = int(os.environ.get("TESTSSL_PORT") or "443")
 
 
 # ============================================================================
@@ -1938,7 +1938,7 @@ def run_fwbbot_check_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
 # ============================================================================
 
 _WAF_PROBE_HEADER = "X-CS-Stack-ID-Probe: 1"                   # Q4 self-identifying probe marker
-_WAF_PROBE_PACING_S = float(os.environ.get("WAF_PROBE_PACING_S", "5") or "5")   # Q4 pacing between requests
+_WAF_PROBE_PACING_S = float(os.environ.get("WAF_PROBE_PACING_S") or "5")   # Q4 pacing between requests
 _WAF_BENIGN_VALUE = "commandsentry-baseline"                   # benign baseline query value
 _WAF_TOKEN_CAP = 40                                            # bound the app-context token set
 # Q4 payloads: signature-tripping but INERT as GET query values. LFI is pre-percent-
@@ -2180,7 +2180,7 @@ def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> N
 # ============================================================================
 
 _EXPLOIT_LIVE = os.environ.get("EXPLOIT_LIVE", "").strip().lower() in ("1", "true", "yes")
-_EXPLOIT_RATE_CEILING = int(os.environ.get("EXPLOIT_RATE_CEILING", "10") or "10")   # 4.7 Q5: attempts/asset/24h
+_EXPLOIT_RATE_CEILING = int(os.environ.get("EXPLOIT_RATE_CEILING") or "10")   # 4.7 Q5: attempts/asset/24h
 _EXPLOIT_CONTACT = os.environ.get("EXPLOIT_CONTACT", "").strip()   # 4.7 B: instance-appropriate (Command=Dave, Prodex=Howie)
 
 
@@ -2454,8 +2454,8 @@ def run_safe_exploit_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
 # service is mutable TITLE metadata so a fingerprintx flap re-observes, not churns.
 # ============================================================================
 
-NAABU_RATE = int(os.environ.get("NAABU_RATE", "250"))        # 4.7 D5 pilot rate; ratchet -> 500 after clean single-asset runs
-NAABU_TOP_PORTS = int(os.environ.get("NAABU_TOP_PORTS", "1000"))
+NAABU_RATE = int(os.environ.get("NAABU_RATE") or "250")        # 4.7 D5 pilot rate; ratchet -> 500 after clean single-asset runs
+NAABU_TOP_PORTS = int(os.environ.get("NAABU_TOP_PORTS") or "1000")
 FPX_SKIP_PORTS = {80, 443}                                   # 4.7 D5: WAF L7 exposure + already covered by httpx / medium
 
 
@@ -2513,8 +2513,8 @@ import socket as _socket
 
 _CLOUD_CHECK = Path(__file__).resolve().parent.parent / "asm" / "cloud_ip_check.py"
 NAABU_CURATED_PORTS = [int(x) for x in os.environ.get("CLOUD_CURATED_PORTS", "80 443 8080 8443").split()]
-_RECONFIRM_ATTEMPTS = int(os.environ.get("NAABU_RECONFIRM_ATTEMPTS", "3"))
-_RECONFIRM_TIMEOUT = float(os.environ.get("NAABU_RECONFIRM_TIMEOUT", "3"))
+_RECONFIRM_ATTEMPTS = int(os.environ.get("NAABU_RECONFIRM_ATTEMPTS") or "3")
+_RECONFIRM_TIMEOUT = float(os.environ.get("NAABU_RECONFIRM_TIMEOUT") or "3")
 
 
 def _resolve_ips(host: str) -> list[str]:

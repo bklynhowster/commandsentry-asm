@@ -1405,7 +1405,7 @@ def legacy_adapter(fn, tier, *args, _phase_name=None, **kwargs):
 # Coverage aspirations do not override fleet-level constraints. If you are here
 # because a number looks nearly achievable, that is the exact itch this comment
 # exists to stop. See Obsidian 205.
-CUMULATIVE_WALL_CLOCK_S = int(os.environ.get("CUMULATIVE_WALL_CLOCK_S", "1800"))
+CUMULATIVE_WALL_CLOCK_S = int(os.environ.get("CUMULATIVE_WALL_CLOCK_S") or "1800")
 
 WALL_CLOCK_REASON = "wall_clock_ceiling_reached"
 
