@@ -2654,6 +2654,9 @@ def detect_waf(ctx: ScanContext) -> None:
     persist_stack_id_wafw00f(ctx)
 
 
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
 def _classify_wafw00f_output(ctx: ScanContext, stdout: str, rc: int) -> None:
     """The wafw00f verdict parse, extracted from detect_waf VERBATIM.
 
@@ -2662,6 +2665,25 @@ def _classify_wafw00f_output(ctx: ScanContext, stdout: str, rc: int) -> None:
     persist sat after them inside detect_waf it would have been unreachable on
     every successful detection; moving the returns in here makes detect_waf's
     final persist unconditional. Logic unchanged, line for line."""
+    # ⛔ STRIP ANSI BEFORE ANY MATCH (relay 222, ruling 9). wafw00f COLOURISES the
+    # vendor name, and the Path-1 regex needs [A-Za-z] immediately after "is behind":
+    #
+    #     is behind \x1b[1;96mFortiWeb (Fortinet)\x1b[0m WAF.
+    #
+    # \s+ stops at the escape, Path 1 never matched, and Path 2 ("seems to be
+    # behind") caught every one of them as "generic". MEASURED on Command 2026-09-16:
+    # 93 raw wafw00f artifacts, 81 carrying escapes, 32 naming FortiWeb, ZERO ever
+    # matched — so wafw00f_high_confidence, the signal that carries waf/confirmed
+    # from a named vendor, had NEVER fired in production since E1 (2026-07-20).
+    # "generic" is not "we do not know": it is a positive claim of a weaker fact,
+    # which is worse than absence.
+    #
+    # ⚠ STRIP WHAT WE READ, NOT WHAT WE STORE. The raw artifact keeps its escapes —
+    # that is the provenance, and it is what let this be reconstructed at all.
+    # ⚠ NOT fixed with --no-colors on the invocation: that would fix future runs and
+    # leave the 81 historical artifacts unparseable, and it would make the parser
+    # depend on how it was called.
+    stdout = _ANSI_ESCAPE.sub("", stdout)
     if rc != 0:
         log(f"wafw00f rc={rc} — assuming no WAF for tuning purposes")
         return

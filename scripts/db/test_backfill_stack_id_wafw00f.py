@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""Backfill safety — relay 220. No DB, no network: a fake PostgREST.
+
+The three properties that matter are the three ways this script could do harm:
+  1. it could MISS rows (a clamped read that looks like a small result set);
+  2. it could OVERWRITE a verdict a real scan wrote;
+  3. it could INVENT a negative from a raw it could not read.
+
+(1) is not hypothetical. The enrich worker was blind for weeks because
+`max_rows=1000` silently clamped a `.limit(5000)` — the read returned a full page
+and the caller treated it as the whole set.
+
+⚠ The contract here CHANGED mid-build. The first draft stopped on a short page,
+which a server-side `max_rows` below our page size defeats in exactly the same
+way. It now stops only on an EMPTY page, and the two tests below were updated to
+the new contract rather than left asserting the old one.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scanner"))
+
+import backfill_stack_id_wafw00f as bf  # noqa: E402
+
+FORTIWEB = "[+] The site https://x/ is behind FortiWeb (Fortinet) WAF.\n"
+NO_WAF = "[-] No WAF detected by the generic detection\n"
+
+
+class FakeRest:
+    """Serves keyset pages and records inserts. Mirrors Rest's surface only."""
+
+    def __init__(self, rows_by_path, page_size=None):
+        self.rows_by_path = rows_by_path
+        self.page_size = page_size or bf.PAGE
+        self.inserted = []
+        self.page_calls = 0
+
+    def _key(self, path):
+        for k in self.rows_by_path:
+            if k in path:
+                return k
+        return None
+
+    def page(self, path, after, order_col="artifact_id"):
+        self.page_calls += 1
+        rows = self.rows_by_path.get(self._key(path), [])
+        rows = sorted(rows, key=lambda r: r[order_col])
+        if after is not None:
+            rows = [r for r in rows if r[order_col] > after]
+        return rows[: self.page_size]
+
+    def insert(self, path, rows):
+        self.inserted.extend(rows)
+
+
+def _art(i, run, raw=None):
+    d = {"artifact_id": f"a{i:04d}", "scan_run_id": run}
+    if raw is not None:
+        d["content_jsonb"] = {"raw": raw}
+    return d
+
+
+# ---------------------------------------------------------------------------
+# 1. pagination — the enrich-worker failure mode
+# ---------------------------------------------------------------------------
+
+def test_paginate_walks_past_a_full_page():
+    """⛔ THE ENRICH-WORKER SHAPE. 2 500 rows with a 1 000-row page must yield all
+    2 500. A caller that stopped at the first full page would report 1 000 and look
+    entirely healthy."""
+    rows = [_art(i, f"r{i:04d}") for i in range(2500)]
+    rest = FakeRest({"wafw00f": rows}, page_size=1000)
+    got = list(bf.paginate(rest, "scan_run_artifacts?select=x&tool_name=eq.wafw00f"))
+    assert len(got) == 2500, f"paginate stopped early: {len(got)}"
+    assert len({r['artifact_id'] for r in got}) == 2500, "duplicate rows across pages"
+    assert rest.page_calls == 4, "1000 + 1000 + 500 + an empty probe"
+
+
+def test_paginate_probes_once_past_even_a_tiny_result_set():
+    """The cost of not being clampable: one extra empty round-trip per read. That
+    is the whole price, and it is worth paying — see the clamp test below."""
+    rows = [_art(i, f"r{i:04d}") for i in range(10)]
+    rest = FakeRest({"wafw00f": rows}, page_size=1000)
+    got = list(bf.paginate(rest, "scan_run_artifacts?tool_name=eq.wafw00f"))
+    assert len(got) == 10 and rest.page_calls == 2
+
+
+def test_a_server_side_clamp_below_our_page_size_does_not_truncate(monkeypatch):
+    """⛔ THE BUG THIS TEST FOUND IN ITS OWN SUBJECT.
+
+    PostgREST enforces its own `max_rows`. The first draft of `paginate` stopped
+    when `len(rows) < PAGE` — so a server capping at 20 while we ask for 1000
+    returns a "short" page every time and the loop exits after ONE. A truncated
+    read that looks like a small result set: the enrich-worker defect, reproduced
+    inside the guard written to prevent it.
+
+    Here the server clamps to 20 and there are 50 rows. Terminating only on an
+    EMPTY page is what makes the clamp survivable."""
+    rows = [_art(i, f"r{i:04d}") for i in range(50)]
+    rest = FakeRest({"wafw00f": rows}, page_size=20)      # server caps below bf.PAGE
+    got = list(bf.paginate(rest, "scan_run_artifacts?tool_name=eq.wafw00f"))
+    assert len(got) == 50, f"a server-side clamp truncated the read: got {len(got)}"
+    assert rest.page_calls == 4, "20 + 20 + 10 + an empty probe"
+
+
+def test_an_exactly_full_final_page_is_not_mistaken_for_the_end():
+    """The boundary: the last page is exactly the page size. One more call must
+    happen and return empty."""
+    rows = [_art(i, f"r{i:04d}") for i in range(40)]
+    rest = FakeRest({"wafw00f": rows}, page_size=20)
+    got = list(bf.paginate(rest, "scan_run_artifacts?tool_name=eq.wafw00f"))
+    assert len(got) == 40
+    assert rest.page_calls == 3, "20 + 20 + an empty probe"
+
+
+# ---------------------------------------------------------------------------
+# 2. never overwrite
+# ---------------------------------------------------------------------------
+
+def test_a_run_that_already_has_a_parsed_verdict_is_skipped(monkeypatch, capsys):
+    """A real scan's verdict outranks anything reconstructed from text."""
+    rest = FakeRest({
+        "eq.wafw00f": [_art(1, "run-A", FORTIWEB), _art(2, "run-B", FORTIWEB)],
+        "eq.stack_id_wafw00f": [_art(9, "run-A")],
+    })
+    monkeypatch.setattr(bf, "Rest", lambda *a, **k: rest)
+    monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sb_secret_test")
+    monkeypatch.setattr(sys, "argv", ["bf", "--write"])
+    bf.main()
+    runs = {r["scan_run_id"] for r in rest.inserted}
+    assert runs == {"run-B"}, f"must skip run-A, which already has one: {runs}"
+
+
+def test_dry_run_writes_nothing(monkeypatch):
+    rest = FakeRest({"eq.wafw00f": [_art(1, "run-A", FORTIWEB)],
+                     "eq.stack_id_wafw00f": []})
+    monkeypatch.setattr(bf, "Rest", lambda *a, **k: rest)
+    monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sb_secret_test")
+    monkeypatch.setattr(sys, "argv", ["bf"])          # no --write
+    bf.main()
+    assert rest.inserted == [], "dry-run must insert nothing"
+
+
+# ---------------------------------------------------------------------------
+# 3. never invent
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("raw", ["", "   \n  ", None])
+def test_an_unreadable_raw_yields_no_verdict(raw):
+    """⛔ THE WHOLE POINT. 'no verdict' and 'no WAF' are different facts. Returning
+    a negative here would write `wafw00f_detected: False` on a host nobody looked
+    at — a label from absent evidence, which is the defect family this repo has
+    spent the week on."""
+    assert bf.verdict_from_raw(raw) is None
+
+
+def test_an_unreadable_raw_is_not_inserted(monkeypatch):
+    rest = FakeRest({"eq.wafw00f": [_art(1, "run-ok", FORTIWEB),
+                                    _art(2, "run-bad", "   ")],
+                     "eq.stack_id_wafw00f": []})
+    monkeypatch.setattr(bf, "Rest", lambda *a, **k: rest)
+    monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sb_secret_test")
+    monkeypatch.setattr(sys, "argv", ["bf", "--write"])
+    bf.main()
+    runs = {r["scan_run_id"] for r in rest.inserted}
+    assert runs == {"run-ok"}, f"the unreadable raw must be skipped, not defaulted: {runs}"
+
+
+# ---------------------------------------------------------------------------
+# the parse itself — imported, and it must stay that way
+# ---------------------------------------------------------------------------
+
+def test_the_real_fortiweb_output_round_trips():
+    """commandcommcentral.com, 2026-09-03, the verdict that was discarded."""
+    v = bf.verdict_from_raw(
+        "[*] Checking https://commandcommcentral.com/\n"
+        "[+] The site https://commandcommcentral.com/ is behind FortiWeb (Fortinet) WAF.\n")
+    assert v["wafw00f_detected"] is True and v["wafw00f_kind"] == "fortiweb"
+
+
+def test_a_genuine_negative_is_preserved_as_a_negative():
+    v = bf.verdict_from_raw(NO_WAF)
+    assert v["wafw00f_detected"] is False and v["wafw00f_kind"] is None
+
+
+def test_backfilled_rows_are_marked_as_such():
+    """Provenance. The consumer reads only detected/kind, so this is inert to it —
+    but a verdict recovered from text months later must not be indistinguishable
+    from one a live scan wrote."""
+    assert bf.verdict_from_raw(FORTIWEB)["backfilled_from_raw"] is True
+
+
+def test_the_parse_is_imported_not_reimplemented():
+    """A second copy of the regexes would be a third home for this defect class —
+    the reason ruling 8 was FOLD and not register-a-pair."""
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "backfill_stack_id_wafw00f.py"), encoding="utf-8").read()
+    assert "_medium._classify_wafw00f_output" in src
+    assert "is behind" not in src, "the wafw00f signature regex has been copied in here"
+
+
+def test_the_insert_shape_matches_a_real_artifact_row():
+    """Column names verified against a live stack_id_wafw00f row, 2026-09-16:
+    the table has `output_format`, NOT `content_type` — the psycopg draft had that
+    wrong and would have failed on the first insert."""
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "backfill_stack_id_wafw00f.py"), encoding="utf-8").read()
+    assert '"output_format": "json"' in src
+    assert "content_type" not in src, "content_type is not a column on scan_run_artifacts"
