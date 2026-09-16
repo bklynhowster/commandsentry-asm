@@ -352,39 +352,39 @@ def test_detect_ffuf_catchall_probe_exhaustion_is_calib_false(monkeypatch):
     """Hole 5: probe exhaustion (status 0) → calib_ok=False → caller fails
     closed and skips ffuf. Must NOT return calib_ok=True."""
     monkeypatch.setattr(M, "_probe_calibration_path", _two_probe((0, None, None), (0, None, None)))
-    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == (None, None, None, False)
+    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == (None, None, None, False, None)
 
 
 def test_detect_ffuf_catchall_status_catchall_captures_stable_size(monkeypatch):
     # Both probes 200 AND same size 870 → status catch-all with a STABLE
     # baseline size (edit #2) carried so real different-size routes can survive.
     monkeypatch.setattr(M, "_probe_calibration_path", _two_probe((200, None, 870), (200, None, 870)))
-    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == (None, 200, 870, True)
+    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == (None, 200, 870, True, None)
 
 
 def test_detect_ffuf_catchall_status_catchall_variable_size_falls_back(monkeypatch):
     # Both 200 but DIFFERENT sizes → path-variable body → baseline_size None →
     # suppression falls back to status-only (no regression).
     monkeypatch.setattr(M, "_probe_calibration_path", _two_probe((200, None, 870), (200, None, 915)))
-    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == (None, 200, None, True)
+    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == (None, 200, None, True, None)
 
 
 def test_detect_ffuf_catchall_redirect_catchall_is_calib_true(monkeypatch):
     # Both probes 301 → same Location → redirect catch-all (size irrelevant).
     monkeypatch.setattr(M, "_probe_calibration_path", _two_probe((301, "/x", None), (301, "/x", None)))
-    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == ("/x", None, None, True)
+    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == ("/x", None, None, True, None)
 
 
 def test_detect_ffuf_catchall_discriminating_host_is_calib_true(monkeypatch):
     # 200 then 404 → host discriminates → no catch-all, calib clean.
     monkeypatch.setattr(M, "_probe_calibration_path", _two_probe((200, None, 870), (404, None, 400)))
-    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == (None, None, None, True)
+    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == (None, None, None, True, None)
 
 
 def test_detect_ffuf_catchall_both_404_is_not_catchall(monkeypatch):
     # 404==404 but 404 is excluded (expected random-path answer) → discriminates.
     monkeypatch.setattr(M, "_probe_calibration_path", _two_probe((404, None, 400), (404, None, 400)))
-    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == (None, None, None, True)
+    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == (None, None, None, True, None)
 
 
 def test_backward_compat_redirect_wrapper_unpacks_4_tuple(monkeypatch):
@@ -497,3 +497,161 @@ def test_waf_blocked_clean_200_is_false():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+# ═══════════════════════════════════════════════════════════════════════════
+# S3 Part 2 — the PATH-ECHOING catch-all (relay 177/182)
+#
+# ⛔ NOTE 92 SHIPPED AND RAN FOR THREE MONTHS AND STILL LET 98 PHANTOMS THROUGH,
+# because its acceptance test named ONE host. ftp.sciimage.com redirects every
+# path to a CONSTANT Location, so exact equality worked there. oauth2-proxy
+# echoes the requested path in ?rd=, so the two calibration probes see different
+# Locations and no catch-all is detected at all.
+#
+# ⇒ Every test below names which SHAPE it covers, and the constant case is
+#   re-asserted here so this change cannot fix one shape by breaking the other.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_OAUTH_BASE = "https://atlantis-gcp.prodexlabs.com/oauth2/start"
+_FTP_CONST = "https://ftp.sciimage.com/Web/Account/Login.htm"
+
+
+def test_shape_constant_still_detected_and_pattern_is_none():
+    """SHAPE 1 — ftp.sciimage.com, the June host. Unchanged behaviour: the
+    exact-equality branch fires and NO echo pattern is recorded."""
+    monkey = M.detect_path_echo_pattern(_FTP_CONST, _FTP_CONST)
+    assert monkey is None, "a constant Location must not be read as an echo"
+
+
+def test_shape_path_echo_detected():
+    """SHAPE 2 — oauth2-proxy. Two impossible probes, two different Locations,
+    same base, one differing param, and that param carries the probed path."""
+    pat = M.detect_path_echo_pattern(
+        f"{_OAUTH_BASE}?rd=%2Fcs-calib-aaaaaaaaaaaa",
+        f"{_OAUTH_BASE}?rd=%2Fcs-calib-bbbbbbbbbbbb",
+    )
+    assert pat == (_OAUTH_BASE, "rd")
+
+
+def test_the_near_miss_a_nonce_is_not_a_path_echo():
+    """⛔ THE TEST THAT GUARDS THE GUARD. Two probes, same base, one differing
+    param — but the value is a per-request nonce, not the path. If this were
+    read as an echo, every nonce-issuing host would have its real findings
+    suppressed. Drop the contains-the-probed-path check and this fails."""
+    assert M.detect_path_echo_pattern(
+        f"{_OAUTH_BASE}?nonce=abc123", f"{_OAUTH_BASE}?nonce=def456") is None
+
+
+def test_a_different_base_is_not_a_pattern():
+    assert M.detect_path_echo_pattern(
+        f"{_OAUTH_BASE}?rd=%2Fcs-calib-aaa",
+        "https://elsewhere.example/login?rd=%2Fcs-calib-bbb") is None
+
+
+def test_two_differing_params_is_not_a_pattern():
+    """Ambiguous: we cannot say which one is the echo, so we do not guess."""
+    assert M.detect_path_echo_pattern(
+        f"{_OAUTH_BASE}?rd=%2Fcs-calib-aaa&t=1",
+        f"{_OAUTH_BASE}?rd=%2Fcs-calib-bbb&t=2") is None
+
+
+def test_no_query_string_is_not_a_pattern():
+    assert M.detect_path_echo_pattern(
+        "https://h.example/a", "https://h.example/b") is None
+
+
+def test_the_oauth2_host_collapses_98_to_1():
+    """⭐ THE ACCEPTANCE, IN THE FORM THE MEASUREMENT TOOK. 4.7 measured 98
+    "Path exists (redirect → …)" rows on atlantis-gcp, one per wordlist path,
+    all to the same base with the path echoed. Every one must suppress."""
+    pat = (_OAUTH_BASE, "rd")
+    paths = ["actuator", "admin", "analytics", "api", "backup", "config",
+             "console", "debug", "env", "health", "metrics", "status"]
+    suppressed = [
+        p for p in paths
+        if M.should_suppress_ffuf_redirect_pattern(
+            f"{_OAUTH_BASE}?rd=%2F{p}", pat, p)
+    ]
+    assert suppressed == paths, f"these would still emit per-path: " \
+        f"{sorted(set(paths) - set(suppressed))}"
+
+
+def test_the_mixed_host_emits_the_real_signal():
+    """⛔ A host can echo AND have real routes. Only the echoed redirects
+    suppress; a 200, and a redirect to a DIFFERENT base, both survive."""
+    pat = (_OAUTH_BASE, "rd")
+    assert M.should_suppress_ffuf_redirect_pattern(
+        f"{_OAUTH_BASE}?rd=%2Fadmin", pat, "admin") is True
+    # ⛔ A DIFFERENT BASE, WITH THE SAME ECHO PARAM CARRYING THE SAME PATH.
+    # This exact case is why the base check exists, and my first version of this
+    # test used "https://cdn.example/assets/" — which has NO query string, so it
+    # returned False whether or not the base was checked. The mutation sweep
+    # caught it: removing `if r_base != base` left all 76 tests green. A test
+    # that passes for the wrong reason is worth less than no test, because it
+    # advertises coverage it does not have.
+    assert M.should_suppress_ffuf_redirect_pattern(
+        "https://someone-else.example/login?rd=%2Fadmin", pat, "admin") is False, \
+        "a redirect to a DIFFERENT base must never be suppressed, even when its " \
+        "echo param happens to carry the probed path"
+    # and the no-query case too, which is a different failure
+    assert M.should_suppress_ffuf_redirect_pattern(
+        "https://cdn.example/assets/", pat, "assets") is False
+    # same base but the echo param carries someone ELSE's path
+    assert M.should_suppress_ffuf_redirect_pattern(
+        f"{_OAUTH_BASE}?rd=%2Fsomething-else", pat, "admin") is False
+    # no pattern calibrated at all -> never suppress
+    assert M.should_suppress_ffuf_redirect_pattern(
+        f"{_OAUTH_BASE}?rd=%2Fadmin", None, "admin") is False
+
+
+def test_raw_and_encoded_slashes_both_match():
+    pat = (_OAUTH_BASE, "rd")
+    assert M.should_suppress_ffuf_redirect_pattern(
+        f"{_OAUTH_BASE}?rd=/admin", pat, "admin") is True
+    assert M.should_suppress_ffuf_redirect_pattern(
+        f"{_OAUTH_BASE}?rd=%2Fadmin", pat, "/admin") is True
+
+
+def test_the_exact_equality_predicate_is_untouched():
+    """⛔ THE PIN THAT MATTERS MOST. #33's predicate keeps `==`. Loosening it to
+    prefix/substring is what the 59ad6a13 regression did — a blanket filter that
+    hid a real /admin. This change adds a SIBLING; it does not soften the
+    original, and this asserts the original still refuses a near-match."""
+    assert M.should_suppress_ffuf_redirect(_FTP_CONST, _FTP_CONST) is True
+    assert M.should_suppress_ffuf_redirect(_FTP_CONST + "?x=1", _FTP_CONST) is False
+    assert M.should_suppress_ffuf_redirect(f"{_OAUTH_BASE}?rd=%2Fadmin",
+                                           f"{_OAUTH_BASE}?rd=%2Fother") is False
+
+
+def test_calibration_returns_the_pattern_for_the_echoing_shape():
+    """The wiring: detect_ffuf_catchall must surface the pattern as its 5th
+    element, or ctx.ffuf_catchall_pattern is never set and the emit-site guard
+    can never fire. Drives the real function with stubbed probes."""
+    import types
+    monkey = _two_probe(
+        (302, f"{_OAUTH_BASE}?rd=%2Fcs-calib-aaaaaaaaaaaa", None),
+        (302, f"{_OAUTH_BASE}?rd=%2Fcs-calib-bbbbbbbbbbbb", None),
+    )
+    import pytest as _pt
+    mp = _pt.MonkeyPatch()
+    try:
+        mp.setattr(M, "_probe_calibration_path", monkey)
+        out = M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h"))
+    finally:
+        mp.undo()
+    assert out == (None, None, None, True, (_OAUTH_BASE, "rd")), out
+
+
+def test_calibration_still_returns_the_constant_for_the_june_shape():
+    """And the other host in the acceptance: ftp.sciimage.com must STILL
+    collapse via the unchanged exact-equality path, pattern None."""
+    import types
+    import pytest as _pt
+    mp = _pt.MonkeyPatch()
+    try:
+        mp.setattr(M, "_probe_calibration_path",
+                   _two_probe((302, _FTP_CONST, None), (302, _FTP_CONST, None)))
+        out = M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h"))
+    finally:
+        mp.undo()
+    assert out == (_FTP_CONST, None, None, True, None), out
+

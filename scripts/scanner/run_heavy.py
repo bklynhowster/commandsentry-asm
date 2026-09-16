@@ -367,6 +367,13 @@ class HeavyScanContext:
     ffuf_catchall_status: int | None = None
     ffuf_catchall_size: int | None = None
     ffuf_catchall_status_count: int = 0
+    # S3 Part 2 (relay 177/182) — mirrors the medium ScanContext. A cumulative
+    # heavy runs medium phases against THIS context, so a field medium reads and
+    # heavy lacks is an AttributeError in production, not a type-checker note.
+    # test_heavy_context_is_a_superset_of_medium_context caught exactly that when
+    # these two were added to medium alone — the guard doing its job.
+    ffuf_catchall_pattern: "tuple[str, str] | None" = None
+    ffuf_catchall_pattern_count: int = 0
     auth_gated: bool = False
 
     # Canonical host for HTTP-layer phases (4.7 rulings 77-82). Medium's

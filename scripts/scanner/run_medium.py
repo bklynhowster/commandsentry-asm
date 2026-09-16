@@ -818,6 +818,17 @@ class ScanContext:
     # ffuf_catchall_status. Drives the collapsed status summary finding at
     # end of run_ffuf_chunked.
     ffuf_catchall_status_count: int = 0
+
+    # S3 Part 2 (relay 177/182) — the PATH-ECHOING catch-all, e.g. oauth2-proxy
+    # 302ing every path to /oauth2/start?rd=<that path>. (base, echo_param), or
+    # None when the host is not path-echoing. Distinct from
+    # ffuf_catchall_redirect, which is the CONSTANT-Location case and keeps its
+    # exact-equality predicate untouched. Both can be None; they are never both
+    # set, because a constant Location means L1 == L2 and an echoing one means
+    # L1 != L2.
+    ffuf_catchall_pattern: "tuple[str, str] | None" = None
+    # Suppressed-by-pattern count, drives its own collapsed summary finding.
+    ffuf_catchall_pattern_count: int = 0
     # #32 (2026-06-16) — set True the FIRST time any tool successfully
     # gets a real HTTP response from the target (wafw00f verdict
     # parsed / httpx tech-detect parsed / nuclei chunk completed with
@@ -1971,6 +1982,138 @@ def should_suppress_ffuf_redirect(
     return bool(redirect_to and baseline and redirect_to == baseline)
 
 
+# ── S3 Part 2 — PATH-ECHOING catch-all (relay 177/182, 2026-09-16) ──────────
+#
+# ⛔ WHY THE EXACT-EQUALITY PATH COULD NEVER FIRE ON atlantis-gcp. #33 was built
+# for a CONSTANT catch-all Location: ftp.sciimage.com redirects every path to
+# /Web/Account/Login.htm, so probe1 == probe2 and exact equality works.
+# oauth2-proxy redirects every path to /oauth2/start?rd=<the path it asked for>,
+# so the two calibration probes get DIFFERENT Locations, no catch-all is
+# detected at all, and ffuf mints one "Path exists (redirect → …)" finding per
+# wordlist entry. 98 of them on one host, none of which was shown to exist. It
+# is also good security news — the host is fully auth-gated — reported as 98
+# problems.
+#
+# ⚠ NOTE 92's ACCEPTANCE NAMED ONE HOST. That is why this took three months to
+# resurface: the fix was verified against the single instance that motivated it,
+# and a second SHAPE of the same class was never tested.
+#
+# ⛔ THE EXACT-EQUALITY PREDICATE IS NOT LOOSENED. should_suppress_ffuf_redirect
+# keeps its `==` and its test. This is a SIBLING predicate for a different shape.
+# Loosening the original to prefix/substring is what the 59ad6a13 regression did
+# (a blanket -fc/-fs filter that hid a real /admin), and there is a test that
+# fails if anyone tries.
+#
+# ⚠ DEVIATION FROM 177's SPEC, STATED: the spec says "two calibration probes,
+# not one — today: one probe → literal L". Measured: detect_ffuf_catchall ALREADY
+# fires two probes, and _probe_calibration_path_once already generates a fresh
+# `cs-calib-<uuid4>` per call. So the second probe did not need adding; only the
+# L1 != L2 branch did. The spec also says to compare against "the probed path" —
+# rather than thread both paths out through _probe_calibration_path (whose
+# 3-tuple six existing tests monkeypatch), the calibration side keys on the
+# constant `cs-calib-` marker those paths always carry. Same condition, no arity
+# change, and the near-miss test below is what proves it still discriminates.
+_CALIB_PATH_MARKER = "cs-calib-"
+
+
+def _split_qs(url: str) -> "tuple[str, list[tuple[str, str]]]":
+    """(base, [(key, value), …]). No urllib import: run_medium keeps these
+    predicates pure and dependency-free so they are testable without a host."""
+    base, sep, query = url.partition("?")
+    if not sep:
+        return base, []
+    pairs = []
+    for part in query.split("&"):
+        if not part:
+            continue
+        k, _, v = part.partition("=")
+        pairs.append((k, v))
+    return base, pairs
+
+
+def _unquote_loose(v: str) -> str:
+    """Percent-decode enough to compare a path echoed as %2Fadmin or /admin.
+    Deliberately tiny — a full urllib.parse.unquote would also decode things we
+    then compare loosely, and this only ever runs on our own probe marker."""
+    out = v.replace("+", " ")
+    for enc, dec in (("%2F", "/"), ("%2f", "/"), ("%25", "%")):
+        out = out.replace(enc, dec)
+    return out
+
+
+def detect_path_echo_pattern(loc1: str, loc2: str) -> "tuple[str, str] | None":
+    """Both calibration probes redirected but to DIFFERENT Locations. Decide
+    whether that difference is the host echoing the requested path back.
+
+    Returns (base, echo_param) — e.g. ("https://…/oauth2/start", "rd") — or None.
+
+    Requires ALL of:
+      * both Locations present and NOT equal (equal is #33's constant case)
+      * identical base (everything before '?') — a different base is a
+        different destination, not an echo
+      * identical query KEYS in identical order
+      * EXACTLY ONE key whose value differs
+      * that differing value, percent-decoded, CONTAINS the calibration marker
+    The last condition is the load-bearing one: it is what separates a
+    path-echoing gateway from a host that simply mints a fresh nonce or
+    timestamp per request. Drop it and the near-miss test fails.
+    """
+    if not loc1 or not loc2 or loc1 == loc2:
+        return None
+    base1, q1 = _split_qs(loc1)
+    base2, q2 = _split_qs(loc2)
+    if not base1 or base1 != base2:
+        return None
+    if not q1 or [k for k, _ in q1] != [k for k, _ in q2]:
+        return None
+
+    differing = [(k, v1, v2) for (k, v1), (_, v2) in zip(q1, q2) if v1 != v2]
+    if len(differing) != 1:
+        return None
+    key, v1, v2 = differing[0]
+    if _CALIB_PATH_MARKER not in _unquote_loose(v1):
+        return None
+    if _CALIB_PATH_MARKER not in _unquote_loose(v2):
+        return None
+    return base1, key
+
+
+def should_suppress_ffuf_redirect_pattern(
+    redirect_to: str, pattern: "tuple[str, str] | None", probed_path: str
+) -> bool:
+    """Sibling of should_suppress_ffuf_redirect for the path-ECHOING shape.
+
+    True iff this result's redirect goes to the calibrated base AND the echo
+    parameter carries THIS result's own probed path. A redirect to a different
+    base, or to the same base without the path echoed back, still emits
+    per-path exactly as before — as does any non-redirect status.
+
+    ⚠ WHY A REAL /admin IS NOT LOST HERE, the 59ad6a13 question asked again:
+    suppression requires (a) two impossible probes to have redirected to this
+    same base, (b) the echo param to have carried each probed path, and (c) this
+    candidate's echo param to carry ITS path. A real /admin behind oauth2-proxy
+    meets all three — and on such a host its existence is genuinely
+    indistinguishable from noise, exactly as note 92 already argued for the
+    constant case: ffuf has no signal there. A real /admin on a host that does
+    NOT catch-all fails (a) and emits. Nothing is filtered by status or size.
+    """
+    if not redirect_to or not pattern or not probed_path:
+        return False
+    base, key = pattern
+    if not base or not key:
+        return False
+    r_base, r_q = _split_qs(redirect_to)
+    if r_base != base:
+        return False
+    needle = probed_path.lstrip("/")
+    if not needle:
+        return False
+    for k, v in r_q:
+        if k == key and needle in _unquote_loose(v):
+            return True
+    return False
+
+
 def should_suppress_ffuf_status(
     status: int, baseline: int | None, redirect_to: str,
     result_size: int | None = None, baseline_size: int | None = None,
@@ -2009,6 +2152,52 @@ def should_suppress_ffuf_status(
     if baseline_size is not None:
         return result_size == baseline_size
     return True
+
+
+def emit_ffuf_catchall_pattern_summary(ctx: ScanContext) -> None:
+    """S3 Part 2 collapsed PATH-ECHO summary (relay 177/182). ONE finding
+    instead of N per-path "Path exists (redirect → …)" rows — 98 of them on
+    atlantis-gcp, not one of which was shown to exist.
+
+    ⚠ MY FIRST DRAFT OF THIS CALLED AN `emit_finding(...)` HELPER THAT DOES NOT
+    EXIST IN THIS MODULE. Findings are appended as MediumFinding dataclasses,
+    exactly as the two sibling summaries do. That is the same mistake as
+    `logfn=log`: a call idiom carried in from elsewhere without checking what
+    this module actually provides. Caught by grepping for the definition instead
+    of assuming it.
+
+    Says the thing the 98 rows obscured: the host is fully auth-gated — good
+    posture — and content discovery has no signal there. Idempotent.
+    """
+    if ctx.ffuf_catchall_pattern_count <= 0 or not ctx.ffuf_catchall_pattern:
+        return
+    base, key = ctx.ffuf_catchall_pattern
+    n = ctx.ffuf_catchall_pattern_count
+    ctx.findings.append(MediumFinding(
+        check_name="ffuf-catchall-redirect-echo",
+        title=(
+            f"Auth gateway redirects {n} paths to {base}, echoing each "
+            f"requested path in ?{key}="
+        ),
+        severity="INFO",
+        category="info_disclosure",
+        description=(
+            f"{n} wordlist path(s) on {ctx.hostname} each returned a redirect "
+            f"to {base} with the requested path echoed back in the '{key}' "
+            f"parameter. An authentication gateway answers every request that "
+            f"way, existent or not, so none of these paths was shown to exist. "
+            f"Content discovery is not meaningful while the host is fully "
+            f"auth-gated — which is a good posture, not {n} problems. "
+            f"Distinct redirects and any non-redirect status still emit "
+            f"individually."
+        ),
+        tags=["ffuf", "directory", "discovery", "catchall_redirect_echo"],
+        raw_excerpt=(
+            f"Calibration: 2 random paths -> same base, path echoed in ?{key}=\n"
+            f"Catch-all base: {base}\n"
+            f"Suppressed per-path matches: {n}"
+        ),
+    ))
 
 
 def emit_ffuf_catchall_status_summary(ctx: ScanContext) -> None:
@@ -2203,7 +2392,7 @@ def _probe_calibration_path_once(ctx: ScanContext) -> tuple[int, str | None, int
 
 def detect_ffuf_catchall(
     ctx: ScanContext,
-) -> tuple[str | None, int | None, int | None, bool]:
+) -> "tuple[str | None, int | None, int | None, bool, tuple[str, str] | None]":
     """S3 Part 1 (2026-06-18) ffuf catch-all calibration. Generalizes #33's
     redirect-only catch-all to also detect a uniform non-discriminating
     STATUS (403/401/200/etc) that ffuf would otherwise mint N findings for.
@@ -2235,10 +2424,10 @@ def detect_ffuf_catchall(
     # 4.7 hole 5). True = probes landed; classification below is trustworthy.
     status1, redirect1, size1 = _probe_calibration_path(ctx)
     if status1 == 0:
-        return None, None, None, False
+        return None, None, None, False, None
     status2, redirect2, size2 = _probe_calibration_path(ctx)
     if status2 == 0:
-        return None, None, None, False
+        return None, None, None, False, None
 
     # Redirect catch-all (#33 path): both probes 30x AND same Location.
     # (Body size is irrelevant here — the Location is the discriminator.)
@@ -2248,7 +2437,21 @@ def detect_ffuf_catchall(
         and redirect1
         and redirect1 == redirect2
     ):
-        return redirect1, None, None, True
+        return redirect1, None, None, True, None
+
+    # S3 Part 2 (relay 177/182) — PATH-ECHOING catch-all. Both probes redirected
+    # but to DIFFERENT Locations, which is why the constant branch above could
+    # never fire on oauth2-proxy and 98 phantom findings emitted instead. This
+    # is a SIBLING branch: the exact-equality case above is untouched.
+    if (
+        status1 in (301, 302, 307)
+        and status2 in (301, 302, 307)
+        and redirect1
+        and redirect2
+    ):
+        pattern = detect_path_echo_pattern(redirect1, redirect2)
+        if pattern:
+            return None, None, None, True, pattern
 
     # Status catch-all (S3 Part 1): both probes same non-404 non-redirect
     # status. 404 is the expected response to a random path, so it indicates
@@ -2265,12 +2468,12 @@ def detect_ffuf_catchall(
         # regression). A stable size lets a real same-status/different-size
         # route (/health 200/8B vs the 200/870B soft-404) survive.
         baseline_size = size1 if (size1 is not None and size1 == size2) else None
-        return None, status1, baseline_size, True
+        return None, status1, baseline_size, True, None
 
     # Otherwise: discrimination present (different responses across probes,
     # or 404 = real not-found behavior). No catch-all — but calibration DID
     # run cleanly, so calib_ok=True (do not fail-closed).
-    return None, None, None, True
+    return None, None, None, True, None
 
 
 def detect_ffuf_catchall_redirect(ctx: ScanContext) -> str | None:
@@ -2278,7 +2481,7 @@ def detect_ffuf_catchall_redirect(ctx: ScanContext) -> str | None:
     Returns only the redirect Location, dropping the status component.
     Preserved for any external/test caller still using the old name.
     """
-    redirect, _, _, _ = detect_ffuf_catchall(ctx)
+    redirect, _, _, _, _ = detect_ffuf_catchall(ctx)
     return redirect
 
 
@@ -4352,6 +4555,17 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str],
             ctx.ffuf_catchall_count += 1
             continue
 
+        # S3 Part 2 (relay 177/182) — the PATH-ECHOING sibling. Runs only if the
+        # exact-equality check above did not fire, and only on a host where two
+        # impossible calibration paths both came back echoed. `word` is this
+        # result's own probed path; the echo param must carry IT, not merely
+        # match the base. Everything else emits per-path exactly as before.
+        if should_suppress_ffuf_redirect_pattern(
+            redirect_to_norm, ctx.ffuf_catchall_pattern, word
+        ):
+            ctx.ffuf_catchall_pattern_count += 1
+            continue
+
         # S3 Part 1 (2026-06-18) — catch-all STATUS suppression. Generalizes
         # the redirect path to any uniform non-discriminating status (403 on
         # a FortiGate-blanket-deny host, 401 on a uniformly auth-gated host,
@@ -4479,7 +4693,8 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
     # 59ad6a13 regression (blanket -fc/-fs/-fr filter that hid real
     # /admin/swagger). Both suppression paths use EXACT-equality, never
     # blanket filtering — distinct statuses (real signal) always survive.
-    ctx.ffuf_catchall_redirect, ctx.ffuf_catchall_status, ctx.ffuf_catchall_size, _calib_ok = (
+    (ctx.ffuf_catchall_redirect, ctx.ffuf_catchall_status,
+     ctx.ffuf_catchall_size, _calib_ok, ctx.ffuf_catchall_pattern) = (
         detect_ffuf_catchall(ctx)
     )
     if not _calib_ok:
@@ -4499,6 +4714,11 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
         log(f"  ffuf catch-all calibration: host redirects random paths "
             f"→ {ctx.ffuf_catchall_redirect} (per-path matches will be "
             f"suppressed + collapsed into one summary INFO)")
+    elif ctx.ffuf_catchall_pattern:
+        _b, _k = ctx.ffuf_catchall_pattern
+        log(f"  ffuf catch-all calibration: host ECHOES the requested path "
+            f"→ {_b}?{_k}=<path> (per-path matches will be suppressed + "
+            f"collapsed into one summary INFO)")
     elif ctx.ffuf_catchall_status is not None:
         log(f"  ffuf catch-all calibration: host returns HTTP "
             f"{ctx.ffuf_catchall_status} uniformly to random paths "
@@ -4606,6 +4826,8 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
             f"{ctx.ffuf_catchall_status_count} per-path matches collapsed "
             f"into 1 finding (all → HTTP {ctx.ffuf_catchall_status})")
     emit_ffuf_catchall_status_summary(ctx)
+    # S3 Part 2 — the path-echoing sibling of the two summaries above.
+    emit_ffuf_catchall_pattern_summary(ctx)
 
 
 # ─── SQL helpers (DUPED from run_light — TODO: refactor) ───────────────
