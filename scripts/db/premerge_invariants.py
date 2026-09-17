@@ -1310,3 +1310,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+raise SystemExit(1)  # protection-test: deliberately red, never merged
