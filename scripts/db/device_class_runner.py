@@ -722,20 +722,95 @@ def apply_r5_confidence_rule(prior_class, prior_conf, new_class, new_conf,
     return _DECISION_WRITE
 
 
+# ⛔ `evidence` HAS TWO SHAPES, AND ONLY ONE OF THEM IS A LIST OF ROWS.
+# `classify_asset` has two return paths and they do not agree:
+#
+#   fingerprint path (derive_device_class.classify)
+#       [{"signal": "wafw00f_high_confidence", "weight": "high", …}, …]     LIST of rows
+#   cloud-fallback path (_cloud_fallback, :1001)
+#       {"signals": [], "inherited_from": "cloud_provider", "cloud_provider": …}   DICT
+#
+# Iterating the dict yields its KEYS — strings — so `e.get("signal")` raises
+# `AttributeError: 'str' object has no attribute 'get'`. That is exactly what
+# killed classify #242 on both instances (relay 241): R5's `still_firing`
+# set-comp met the first cloud-classified asset and the whole pass died.
+#
+# ⚠ THE OLD CODE SURVIVED BY ACCIDENT, NOT BY DESIGN. `_has_wafw00f` guards with
+# `isinstance(evidence, list)`; the `:797` cap-print set-comp has the SAME unguarded
+# form as the one that crashed, and escaped only because it runs under
+# `nc == "waf"`, which the cloud fallback never produces. Two readers of one shape,
+# one of them guarded, and the guard living in the reader rather than the shape —
+# so the next reader added inherits nothing. THIS is that reader, and it is why the
+# answer is a single function all three call rather than a third isinstance check.
+#
+# ⚠ AND THE FIXTURES NEVER CARRIED THE DICT. Every 2c fixture was built from the
+# shape the new code expected instead of from what production returns — the same
+# class of miss as utc_now, PATIENT_BAN_COOLDOWN_S, and the ANSI bytes. A parser
+# tested only against text a human typed is not tested; a reader tested against
+# only one of its producer's two return shapes is not tested either.
+def signals_in(evidence) -> set:
+    """Signal names out of an `evidence` value, WHATEVER SHAPE IT ARRIVED IN. Pure.
+
+      list of rows -> the non-empty `signal` values, rows without one ignored
+      dict         -> `evidence["signals"]`, itself either rows or bare names
+                      (cloud-inherited evidence carries `"signals": []` — it rests
+                      on no fingerprint signal at all, which is the true answer)
+      JSON string  -> parsed, then as above
+      anything else / unparseable -> empty set
+
+    ⇒ ONE reader of this shape, for every caller. Not three isinstance checks that
+    agree today."""
+    if isinstance(evidence, str):
+        try:
+            evidence = json.loads(evidence)
+        except Exception:
+            return set()
+    if isinstance(evidence, dict):
+        evidence = evidence.get("signals") or []
+    if not isinstance(evidence, (list, tuple)):
+        return set()
+    out = set()
+    for r in evidence:
+        if isinstance(r, dict):
+            s = r.get("signal")
+        elif isinstance(r, str):
+            s = r
+        else:
+            continue
+        if s:
+            out.add(s)
+    return out
+
+
 def prior_signals_of(prior_evidence) -> list:
     """The signal names the asset's CURRENT stored class rests on, from
     assets.device_class_evidence — the blob every --write pass already stores. No
-    migration, no new column; the runner simply starts reading what it writes."""
+    migration, no new column; the runner simply starts reading what it writes.
+
+    ⚠ Deterministic ORDER, which `signals_in` cannot give: the R5 log line names the
+    incapable signals and a set would reorder them between passes, turning a stable
+    audit line into noise. Membership comes from the one reader; the ordering is
+    this function's own job.
+
+    ⚠ This tolerated a dict BY ACCIDENT before (iterating keys, the isinstance
+    filter dropping them, returning []). Same answer, no rule behind it. Now the
+    rule is the rule."""
+    names = signals_in(prior_evidence)
+    if not names:
+        return []
     rows = prior_evidence
     if isinstance(rows, str):
         try:
             rows = json.loads(rows)
         except Exception:
-            return []
+            return sorted(names)
+    if isinstance(rows, dict):
+        rows = rows.get("signals") or []
     out = []
     for r in rows or ():
-        if isinstance(r, dict) and r.get("signal") and r["signal"] not in out:
-            out.append(r["signal"])
+        s = r.get("signal") if isinstance(r, dict) else (r if isinstance(r, str) else None)
+        if s in names and s not in out:
+            out.append(s)
     return out
 
 
@@ -1039,8 +1114,14 @@ def classify_asset(cur, a: dict, fps, th, fresh_days, nuclei_re, cloud_reg) -> t
 def _has_wafw00f(evidence) -> bool:
     # any wafw00f-sourced signal — named vendor OR the generic presence signal —
     # for the conf_full vs conf_subset soak tally.
-    return isinstance(evidence, list) and any(
-        s.get("signal") in ("wafw00f_high_confidence", "waf_present_wafw00f") for s in evidence)
+    #
+    # ⚠ WAS `isinstance(evidence, list) and any(...)`. Right answer, private rule:
+    # the guard lived in the reader, so the two readers added after it inherited
+    # nothing and one of them crashed production (relay 241). Same behaviour now,
+    # through the shared reader — a cloud-fallback dict carries no fingerprint
+    # signals, so it still answers False.
+    return bool(signals_in(evidence)
+                & {"wafw00f_high_confidence", "waf_present_wafw00f"})
 
 
 def run(dsn: str, write: bool, soak_generation: int) -> int:
@@ -1106,7 +1187,10 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
             # discovery wafw00f alone (no heavy wafw00f corroboration) — so an operator
             # asking "why not confirmed?" has the answer in the run log.
             if nc == "waf" and ncf == "suspected":
-                _sigs = {e.get("signal") for e in res["evidence"]}
+                # Same unguarded set-comp as the one that crashed :1153; it escaped
+                # only because `nc == "waf"` is never a cloud-fallback result. Routed
+                # through the one reader so it cannot be the next surprise.
+                _sigs = signals_in(res["evidence"])
                 if "wafw00f_discovery_confidence" in _sigs \
                         and "wafw00f_high_confidence" not in _sigs:
                     print(f"  · {a['asset_id']}: capped at suspected: "
@@ -1150,7 +1234,7 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
                 incapable = []
                 # Only the signals that STOPPED firing are worth asking about — a
                 # signal present in this pass's evidence was, self-evidently, capable.
-                still_firing = {e.get("signal") for e in (res.get("evidence") or [])}
+                still_firing = signals_in(res.get("evidence"))
                 for sig in prior_sigs:
                     if sig in still_firing:
                         continue
