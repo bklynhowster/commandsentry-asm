@@ -62,6 +62,17 @@ except ImportError:  # pragma: no cover — --selftest needs no DB driver
 # (4.7 ruling 8: FOLD, not register-a-pair).
 import run_medium as _medium  # noqa: E402
 
+# `signals_in` and `event_for` are IMPORTED, never re-implemented (4.7 ruling 8 / R26).
+# `signals_in` is the one reader of `evidence`'s two shapes — the function the 241
+# hotfix created precisely because a second isinstance check is a second home for the
+# defect. `event_for` is the event taxonomy I4's population relies on; asserting a
+# property of a COPY of it would assert nothing.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import device_class_runner as _dcr  # noqa: E402
+
+signals_in = _dcr.signals_in
+event_for = _dcr.event_for
+
 WINDOW_DAYS = 30
 RECENT_HOURS = 24
 PASSIVE_FIELDS = ("set_cookie_names", "headers", "cert")
@@ -390,8 +401,19 @@ def i3_empty_envelopes(runs, floor_pct: int = 90,
             "population_too_thin": thin}
 
 
-def i3_state(r3) -> str:
-    """I3's three-state verdict — PURE, so the WORD is testable.
+# ⛔ R27 — ZERO ARMED ROWS IS INCONCLUSIVE FOR EVERY INVARIANT, NOT JUST I3.
+# Prodex's gate #3 printed `PASS I1 0 violation(s) of 0 armed run(s)`. Nothing was
+# checked and the word was PASS — the same vacuous pass R25 was written against,
+# wearing PASS's coat one level in. I3 had a floor because it is a RATIO; the other
+# three have one now because "no rows" and "no violations" must never read alike.
+#
+#   I1 / I2 / I4  floor 1   any armed row arms it; zero is INCONCLUSIVE
+#   I3            floor 5   a ratio needs a population (I3_MIN_POPULATION)
+INVARIANT_FLOOR = {"I1": 1, "I2": 1, "I3": None, "I4": 1}   # None -> I3_MIN_POPULATION
+
+
+def state_for(armed_n: int, ok: bool, floor: int) -> str:
+    """The three-state verdict for ANY invariant — PURE, so the WORD is testable.
 
     ⛔ WHY THIS FUNCTION EXISTS AT ALL (4.7's mutation D, entry 266). This decision
     used to be an expression inside `run_live()`, which needs a live DSN, so neither
@@ -411,10 +433,175 @@ def i3_state(r3) -> str:
 
     THIN WINS OVER `ok`, unconditionally. A thin population's percentage is not
     evidence either way — 100% of one host is not a pass, and 0% of one host is not
-    a regression."""
-    if r3["population_too_thin"]:
+    a regression. R27 generalises that from I3's ratio to all four: `armed_n` is the
+    number of rows THE CHECK ACTUALLY RAN ON, after every named exclusion — not the
+    number of armed rows fetched. ⚠ THAT DISTINCTION IS THE WHOLE POINT and it is
+    measured: Command has 15 armed same-class downgrade rows and I4 excludes all 15
+    (full envelopes), so counting the fetched rows would print PASS on a population
+    of zero — which is what it did."""
+    if armed_n < floor:
         return INCONCLUSIVE
-    return HELD if r3["ok"] else FAILED
+    return HELD if ok else FAILED
+
+
+def i3_state(r3) -> str:
+    """I3 in R27's terms. Kept as a named function because the AST pin asks whether
+    `run_live` CALLS the decision rather than re-deciding inline, and because I3's
+    floor is a ratio's floor rather than R27's 'any row arms it'."""
+    return state_for(0 if r3["population_too_thin"] else r3["total"],
+                     r3["ok"], r3["min_population"])
+
+
+def floor_for(iid: str) -> int:
+    """The floor for one invariant. I3's entry is None because its floor is a RATIO's
+    minimum population, which lives with the ratio."""
+    f = INVARIANT_FLOOR[iid]
+    return I3_MIN_POPULATION if f is None else f
+
+
+def i1_scoped(rows) -> dict:
+    """I1's scope. No exclusions — every armed row is checked — but it is returned in
+    the SAME shape as I4's so the verdict function is the same function.
+
+    ⛔ WHY THIS TRIVIAL WRAPPER EXISTS: `run_live` used to compute I1's population
+    size itself (`state_for(len(armed), not v, INVARIANT_FLOOR["I1"])`). 4.7 mutated
+    that to `len(armed) + 1` and **118 tests and the selftest all passed**, printing
+    PASS on zero armed I1 rows — the exact Prodex line R27 was written to kill,
+    surviving inside the commit that implements R27. I had declared "the caller gets
+    no arithmetic" 270 lines above and then not applied it here.
+    ⇒ NO CALLER DOES ARITHMETIC FOR ANY OF THE FOUR. The scope is built by a pure
+      function, the verdict is taken from a pure function, and `run_live` prints."""
+    return {"counted": list(rows), "violations": i1_violations(rows)}
+
+
+def i2_scoped(rows) -> dict:
+    """I2's scope — same shape, same reason as i1_scoped."""
+    return {"counted": list(rows), "violations": i2_laundered(rows)}
+
+
+def invariant_state(scope, iid: str) -> str:
+    """The verdict for a scoped invariant — PURE, and the ONLY place the operand
+    choice is made. `counted` is what the check ran on; `violations` is what it
+    found; the floor comes from the table. Every caller passes a scope and a name and
+    computes nothing."""
+    return state_for(len(scope["counted"]), not scope["violations"], floor_for(iid))
+
+
+def i4_state(s4) -> str:
+    """I4's verdict, from the SCOPED result — PURE.
+
+    ⛔ WHY THIS EXISTS, AND IT IS MUTANT D ALL OVER AGAIN. Having extracted `i3_state`
+    to stop `run_live` from deciding a verdict where no test could reach it, I then
+    wrote I4's verdict as `state_for(len(s4["counted"]), …)` — INSIDE `run_live`. 4.7's
+    mutation style applied to my own commit: change that argument to `len(armed)` and
+    **every one of the 99 tests and the whole selftest still pass**, while I4 prints
+    PASS over a population of zero. That is the precise defect this commit exists to
+    remove, re-created by the fix for it, one function to the left.
+
+    ⇒ THE RULE, THIRD STATEMENT AND NOW A HABIT: the CHOICE OF ARGUMENT is part of
+      the decision. A pure function called with the wrong operand from an untestable
+      caller is an untested decision wearing a tested function's name. So the operand
+      choice moves inside the pure function too, and the caller gets no arithmetic."""
+    return invariant_state(s4, "I4")
+
+
+_I4_NO_ENVELOPE = "no passive envelope on record (newest heavy predates the collector)"
+_I4_FULL_ENVELOPE = "newest envelope is full — nothing was uncollected"
+_I4_NO_BASIS = "no recorded prior basis (R5: write, not preserve)"
+
+
+def basis_signals_of_row(r) -> set:
+    """The signals the asset's stored class rested on, for THIS row.
+
+    Prefers `prior_state.basis_signals` — the runner-turn change that makes the row
+    self-describing — and falls back to `assets.device_class_evidence` read at gate
+    time. ⚠ KEY-PRESENT-BUT-EMPTY IS NOT KEY-ABSENT (R12's `_CAP_JSON_KEY_PRESENT`
+    vs `_CAP_JSON_NONEMPTY`, the distinction that cut in opposite directions there):
+    `basis_signals: []` is the runner SAYING the basis was empty, which is an answer;
+    an absent key is no answer and sends us to `assets`.
+
+    ⚠ THE FALLBACK IS A TIME-OF-CHECK READ. `assets.device_class_evidence` is the
+    basis NOW; the row was evaluated up to 24h ago, and a `--write` pass rewrites
+    that blob. 4.7 corrected me on the blast radius (271): `--write` is OFF on BOTH
+    instances, so today the two are identical and the read is exact. The caveat is
+    printed on the line anyway, because "exact today" is a property of the
+    configuration, not of the code."""
+    prior = _as_dict(r.get("prior_state"))
+    if "basis_signals" in prior:
+        return signals_in(prior.get("basis_signals"))
+    return signals_in(r.get("asset_basis"))
+
+
+def _as_dict(v):
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except Exception:
+            return {}
+    return v if isinstance(v, dict) else {}
+
+
+def i4_scoped(rows) -> dict:
+    """I4's population and its NAMED exclusions (R26) — pure.
+
+    ⛔ WHY EXCLUSIONS AND NOT `continue`. v1 skipped two shapes silently:
+    a full envelope, and a NULL one. Measured on Command's live rows this turn:
+    **15 of 15 armed same-class downgrade rows have a FULL envelope**, so the check
+    ran on ZERO rows and printed `PASS I4 0 unmarked of 12 armed`. A pass over an
+    empty population, announced with the count of the rows it had thrown away. Same
+    species as I3's population (ruling 23) and R27's zero-armed — third time.
+
+    The three reasons, each counted on the line:
+
+      no passive envelope on record   NULL. demo-tour.prodexlabs.com's only heavy is
+                                      2026-07-11 and it has never had a
+                                      stack_id_passive artifact, so `newest_envelope`
+                                      is NULL and `envelope_is_empty(None)` read it
+                                      as "collected nothing". ⛔ NULL IS "NEVER
+                                      ASKED". For I3 the same NULL on an ARMED heavy
+                                      IS a defect (the collector should have written)
+                                      — the identical value means opposite things in
+                                      the two invariants, which is why it is a named
+                                      bucket here rather than a shared helper.
+      newest envelope is full         nothing was uncollected in that run, so R5 has
+                                      nothing to preserve and no marker is owed.
+      no recorded prior basis         R5's own documented WRITE path: an empty basis
+                                      cannot be preserved (it would build a ratchet),
+                                      so demanding a marker asks for a key the rule
+                                      forbids. Every positive prior on Prodex is the
+                                      2026-07-13 cloud-inherited seed with
+                                      `signals: []` — the whole of its I4 red.
+
+    ⚠ 4.7 NAMED A FOURTH — `basis not recorded on the row (pre-fix)` — AND IT CANNOT
+    FIRE, so it is not here. With the `assets` fallback, an absent key is not an
+    absent answer; and `device_class_dryrun.asset_id` is an FK to `assets`, so the
+    asset is always readable. A branch that cannot execute is a comment pretending to
+    be code (the same call I made on I3's third reason). What IS reported instead is
+    where each basis came from — `basis from row` / `basis from assets (current)` —
+    so the runner-turn migration is visible as those counts move.
+
+    BAD TREE (pre-2c): api/edelivery/testapi.commandcommcentral.com, cookie and cert
+    evidence 55-57d old, downgrade with no marker -> 3 violations -> FAIL."""
+    counted, excluded = [], []
+    src = {"row": 0, "assets": 0}
+    for r in rows:
+        if r.get("newest_envelope") is None:
+            excluded.append({"asset_id": r.get("asset_id"), "reason": _I4_NO_ENVELOPE})
+            continue
+        if not r.get("newest_envelope_empty"):
+            excluded.append({"asset_id": r.get("asset_id"), "reason": _I4_FULL_ENVELOPE})
+            continue
+        if "basis_signals" in _as_dict(r.get("prior_state")):
+            src["row"] += 1
+        else:
+            src["assets"] += 1
+        if not basis_signals_of_row(r):
+            excluded.append({"asset_id": r.get("asset_id"), "reason": _I4_NO_BASIS})
+            continue
+        counted.append(r)
+    return {"counted": counted, "excluded": excluded,
+            "violations": i4_unmarked_downgrades(counted),
+            "basis_source": src}
 
 
 def i4_unmarked_downgrades(rows) -> list:
@@ -432,17 +619,16 @@ def i4_unmarked_downgrades(rows) -> list:
     2b's territory and has its own, untouched audit shape.
 
     BAD TREE (pre-2c): api/edelivery/testapi.commandcommcentral.com, whose cookie
-    evidence is 55-57d old, downgrade with no marker -> 3 violations -> FAIL."""
+    evidence is 55-57d old, downgrade with no marker -> 3 violations -> FAIL.
+
+    ⛔ THE MARKER TEST ALONE, SINCE R26. The population questions — is there an
+    envelope, is it empty, does the prior have a basis — belong to `i4_scoped`, which
+    NAMES and COUNTS each exclusion. They used to be `continue`s in here, and that is
+    how I4 came to print PASS over an empty population: a predicate that narrows its
+    own input silently cannot tell you it checked nothing."""
     out = []
     for r in rows:
-        if not r.get("newest_envelope_empty"):
-            continue
-        prior = r.get("prior_state") or {}
-        if isinstance(prior, str):
-            try:
-                prior = json.loads(prior)
-            except Exception:
-                prior = {}
+        prior = _as_dict(r.get("prior_state"))
         if not (prior.get("preserve") or {}).get("reason"):
             out.append(r)
     return out
@@ -518,7 +704,13 @@ select d.asset_id, d.device_class, d.confidence, d.prior_state, d.evaluated_at,
           join scan_run r2 on r2.scan_run_id = a.scan_run_id
          where r2.asset_id = d.asset_id and r2.intensity = 'heavy'
            and a.tool_name = 'stack_id_passive'
-         order by r2.completed_at desc limit 1) as newest_envelope
+         order by r2.completed_at desc limit 1) as newest_envelope,
+       -- R26: the prior BASIS, which the audit row does not carry. Read-only, same
+       -- credential, and `signals_in` (imported) is the only thing that reads it.
+       -- ⚠ This is the basis NOW, not as-of the row — exact only while `--write` is
+       -- off, which it is on both instances. The line says so when it prints.
+       (select a2.device_class_evidence::text
+          from public.assets a2 where a2.asset_id = d.asset_id) as asset_basis
   from public.device_class_dryrun d
  where d.event_type = 'TRANSITION_DOWNGRADE'
    and d.evaluated_at > now() - interval '%s hours'
@@ -563,20 +755,22 @@ def run_live(dsn: str) -> int:
         with conn.cursor() as cur:
             # ── I1 ──────────────────────────────────────────────────────────
             armed, back = armed_split(_rows(cur, Q_I1, WINDOW_DAYS), "I1", instance)
-            v, vb = i1_violations(armed), i1_violations(back)
+            s1, s1b = i1_scoped(armed), i1_scoped(back)
+            v, vb = s1["violations"], s1b["violations"]
             backlog_total += _report(
                 "I1", "heavy with a raw wafw00f and no parsed verdict",
-                FAILED if v else HELD,
+                invariant_state(s1, "I1"),
                 f"{len(v)} violation(s) of {len(armed)} armed run(s)",
                 [f"{x['asset_id']} {x['scan_run_id'][:8]}" for x in v[:5]],
                 vb, [x["asset_id"] for x in vb[:5]], tally)
 
             # ── I2 ──────────────────────────────────────────────────────────
             armed, back = armed_split(_rows(cur, Q_I2, WINDOW_DAYS), "I2", instance)
-            v, vb = i2_laundered(armed), i2_laundered(back)
+            s2, s2b = i2_scoped(armed), i2_scoped(back)
+            v, vb = s2["violations"], s2b["violations"]
             backlog_total += _report(
                 "I2", "stored verdict generic/null while the raw names a vendor",
-                FAILED if v else HELD,
+                invariant_state(s2, "I2"),
                 f"{len(v)} laundered of {len(armed)} armed run(s)",
                 [f"{x['asset_id']} raw={x['raw_says']} stored={x['stored_kind']}" for x in v[:5]],
                 vb, [f"{x['asset_id']} raw={x['raw_says']}" for x in vb[:5]], tally)
@@ -607,12 +801,28 @@ def run_live(dsn: str) -> int:
             for r in raw4:
                 r["newest_envelope_empty"] = envelope_is_empty(r.get("newest_envelope"))
             armed, back = armed_split(raw4, "I4", instance)
-            v, vb = i4_unmarked_downgrades(armed), i4_unmarked_downgrades(back)
+            s4, s4b = i4_scoped(armed), i4_scoped(back)
+            v, vb = s4["violations"], s4b["violations"]
+            by_reason4 = {}
+            for e in s4["excluded"]:
+                by_reason4[e["reason"]] = by_reason4.get(e["reason"], 0) + 1
+            detail4 = (f"{len(v)} unmarked of {len(s4['counted'])} checked "
+                       f"(of {len(armed)} armed row(s), floor {INVARIANT_FLOOR['I4']})")
+            lines4 = [x["asset_id"] for x in v[:5]]
+            lines4 += [f"excluded {n}x: {reason}" for reason, n in sorted(by_reason4.items())]
+            if s4["basis_source"]["assets"]:
+                # ⚠ SAID ON THE LINE, NOT IN A COMMENT. The basis for these rows was read
+                # from `assets` as it is NOW; it is as-of the row only because --write is
+                # off. When the runner starts writing `prior_state.basis_signals`, this
+                # count falls to zero and that is the signal the migration landed.
+                lines4.append(f"basis from assets (current, not as-of the row — exact "
+                              f"while --write is off): {s4['basis_source']['assets']}")
+            if s4["basis_source"]["row"]:
+                lines4.append(f"basis from the row itself: {s4['basis_source']['row']}")
             backlog_total += _report(
                 "I4", "same-class downgrade on an empty envelope carries the preserve marker",
-                FAILED if v else HELD,
-                f"{len(v)} unmarked of {len(armed)} armed same-class downgrade(s)",
-                [x["asset_id"] for x in v[:5]],
+                i4_state(s4),                 # pure: the operand choice is inside it
+                detail4, lines4,
                 vb, [x["asset_id"] for x in vb[:5]], tally)
     finally:
         conn.close()
@@ -789,12 +999,123 @@ def _selftest() -> int:
              # a FULL envelope is not this invariant's business, marker or not
              {**base4, "newest_envelope_empty": False,
               "prior_state": {"device_class": "waf", "confidence": "confirmed"}}]
-    ok &= len(i4_unmarked_downgrades(bad4)) == 1
-    ok &= i4_unmarked_downgrades(good4) == []
-    ok &= len(i4_unmarked_downgrades(
-        [{**base4, "prior_state": json.dumps(bad4[0]["prior_state"])}])) == 1   # jsonb as text
+    # ⚠ THE FIXTURE ROWS NOW CARRY A BASIS AND AN ENVELOPE, because R26's population
+    #   asks about both. `_BASIS3` is api.commandcommcentral.com's REAL stored basis,
+    #   read from Command's DB this turn — not typed from memory.
+    _BASIS3 = json.dumps({"signals": ["wafw00f_discovery_confidence",
+                                      "fortiweb_cookiesession1",
+                                      "cert_issuer_subject_pattern"]})
+    base4 = {"asset_id": "api.commandcommcentral.com", "device_class": "waf",
+             "confidence": "suspected", "newest_envelope_empty": True,
+             "newest_envelope": empty_env, "asset_basis": _BASIS3}
+    bad4 = [{**base4, "prior_state": {"device_class": "waf", "confidence": "confirmed"}}]
+    good4 = [{**base4, "prior_state": {"device_class": "waf", "confidence": "confirmed",
+                                       "preserve": {"reason": "EVIDENCE_AGED",
+                                                    "evidence_age_days": {"set_cookie_names": 56}}}},
+             # a FULL envelope is not this invariant's business, marker or not
+             {**base4, "newest_envelope_empty": False, "newest_envelope": full_env,
+              "prior_state": {"device_class": "waf", "confidence": "confirmed"}}]
+    ok &= len(i4_scoped(bad4)["violations"]) == 1
+    ok &= i4_scoped(good4)["violations"] == []
+    ok &= len(i4_scoped([{**base4, "prior_state": json.dumps(bad4[0]["prior_state"])}]
+                        )["violations"]) == 1                       # jsonb arriving as text
     print(f"  I4 fires on an unmarked same-class downgrade over an empty envelope: "
-          f"{'ok' if len(i4_unmarked_downgrades(bad4)) == 1 and not i4_unmarked_downgrades(good4) else 'FAIL'}")
+          f"{'ok' if len(i4_scoped(bad4)['violations']) == 1 and not i4_scoped(good4)['violations'] else 'FAIL'}")
+
+    # ══ R26 — I4's POPULATION, and every exclusion named. The three fixtures below
+    #    are PRODUCTION ROWS (relay 271's Prodex reads + my Command read), because a
+    #    population predicate tested on invented rows is tested on the shape I
+    #    expected rather than the shape that exists.
+    _PDX_CLOUD_BASIS = json.dumps({"signals": [], "inherited_at": "2026-07-13T21:13:42Z",
+                                   "surface_stale": False, "cloud_provider": "gcp",
+                                   "inherited_from": "cloud_provider",
+                                   "cloud_match_tier": "asn", "is_cloud_endpoint": False})
+    _scope4 = [
+        # ⛔ demo-tour.prodexlabs.com — ONE heavy (2026-07-11) and ZERO stack_id_passive
+        #   artifacts EVER, so the correlated subquery returns NULL. NULL IS "NEVER
+        #   ASKED": v1 ran envelope_is_empty(None) -> True and demanded a marker for an
+        #   envelope nobody ever collected. Two of Prodex's I4 FAIL rows were this.
+        {"asset_id": "demo-tour.prodexlabs.com", "device_class": "cloud_endpoint",
+         "confidence": "suspected", "newest_envelope": None, "newest_envelope_empty": True,
+         "asset_basis": _PDX_CLOUD_BASIS,
+         "prior_state": {"device_class": "cloud_endpoint", "confidence": "confirmed"}},
+        # ⛔ the same host WITH an empty envelope — still excluded, now for the OTHER
+        #   reason: every positive prior on Prodex is the 07-13 cloud-inherited seed
+        #   with `signals: []`, and R5 says an empty basis WRITES (preserving would
+        #   build a ratchet). Demanding a marker asks for a key the rule forbids.
+        {"asset_id": "demo-tour.prodexlabs.com", "device_class": "cloud_endpoint",
+         "confidence": "suspected", "newest_envelope": empty_env,
+         "newest_envelope_empty": True, "asset_basis": _PDX_CLOUD_BASIS,
+         "prior_state": {"device_class": "cloud_endpoint", "confidence": "confirmed"}},
+        # ⭐ azure-demo.prodexlabs.com — a FULL envelope: nothing was uncollected, so no
+        #   marker is owed. ⚠ AND THIS IS THE REASON THAT FIRES ON COMMAND 15 TIMES OUT
+        #   OF 15, measured this turn. v1 skipped it with a `continue`, which is how I4
+        #   printed "PASS 0 unmarked of 12 armed" while checking ZERO rows.
+        {"asset_id": "azure-demo.prodexlabs.com", "device_class": "cdn",
+         "confidence": "suspected", "newest_envelope": full_env,
+         "newest_envelope_empty": False, "asset_basis": _PDX_CLOUD_BASIS,
+         "prior_state": {"device_class": "cdn", "confidence": "confirmed"}},
+        # ⭐ and ONE row that is genuinely in the population: real basis, artifact
+        #   present, envelope empty, no marker -> the violation I4 exists to print.
+        {**base4, "prior_state": {"device_class": "waf", "confidence": "confirmed"}},
+    ]
+    _s4 = i4_scoped(_scope4)
+    _r4 = sorted(e["reason"] for e in _s4["excluded"])
+    ok &= len(_s4["counted"]) == 1 and len(_s4["violations"]) == 1
+    ok &= _r4 == sorted([_I4_NO_ENVELOPE, _I4_NO_BASIS, _I4_FULL_ENVELOPE])
+    print(f"  R26 I4 population: 4 production rows -> 1 checked, 3 excluded under THREE "
+          f"distinct reasons: {'ok' if len(_s4['counted']) == 1 and len(_r4) == 3 else 'FAIL'}")
+
+    # ⛔ R27 — ZERO CHECKED ROWS IS INCONCLUSIVE, NOT PASS. Prodex printed
+    #   "PASS I1 0 violation(s) of 0 armed run(s)" and Command's I4 checked nothing
+    #   behind a PASS. Both are the vacuous pass in PASS's coat.
+    ok &= state_for(0, True, 1) is INCONCLUSIVE
+    ok &= state_for(0, False, 1) is INCONCLUSIVE          # no rows -> no verdict, either way
+    ok &= state_for(1, True, 1) is HELD
+    ok &= state_for(1, False, 1) is FAILED
+    ok &= state_for(4, True, 5) is INCONCLUSIVE           # I3's ratio floor
+    ok &= state_for(5, True, 5) is HELD
+    _empty4 = i4_scoped([_scope4[0]])                     # only the NULL-envelope row
+    ok &= i4_state(_empty4) is INCONCLUSIVE
+    # ⛔ AND I4's VERDICT TAKES THE SCOPED RESULT, NOT THE FETCHED ROWS. 15 full
+    #   envelopes = 15 armed rows and ZERO checked: PASS there is the vacuous pass.
+    # ⛔ MUTANT R (4.7, relay 273) — I1/I2 WERE STILL DECIDED IN run_live. `len(armed)
+    #   + 1` there passed 118 tests and this selftest, printing PASS on zero armed I1
+    #   rows: R27's own target, inside R27's own commit. Mirrored here so the selftest
+    #   claims no more than it checks.
+    ok &= invariant_state(i1_scoped([]), "I1") is INCONCLUSIVE
+    ok &= invariant_state(i2_scoped([]), "I2") is INCONCLUSIVE
+    ok &= invariant_state(i1_scoped(good1), "I1") is HELD
+    ok &= invariant_state(i1_scoped(bad1), "I1") is FAILED
+    ok &= invariant_state(i2_scoped(good2), "I2") is HELD
+    ok &= invariant_state(i2_scoped(bad2), "I2") is FAILED
+    ok &= floor_for("I3") == I3_MIN_POPULATION and floor_for("I1") == 1
+    print(f"  I1/I2 verdicts are PURE too (mutant R): zero armed -> INCONCLUSIVE, "
+          f"clean -> PASS, dirty -> FAIL: "
+          f"{'ok' if invariant_state(i1_scoped([]), 'I1') is INCONCLUSIVE else 'FAIL'}")
+
+    _all_full = i4_scoped([{**base4, "newest_envelope": full_env,
+                            "newest_envelope_empty": False,
+                            "prior_state": {"device_class": "waf", "confidence": "confirmed"}}
+                           for _ in range(15)])
+    ok &= len(_all_full["excluded"]) == 15 and _all_full["counted"] == []
+    ok &= i4_state(_all_full) is INCONCLUSIVE
+    print(f"  R27 zero CHECKED rows is INCONCLUSIVE for every invariant (floor 1 for "
+          f"I1/I2/I4, 5 for I3): "
+          f"{'ok' if state_for(0, True, 1) is INCONCLUSIVE and state_for(1, True, 1) is HELD else 'FAIL'}")
+
+    # ⛔ 2b CANNOT PRODUCE AN I4 ROW, and event_for is IMPORTED to prove it. A computed
+    #   `unknown` against a positive prior IS a TRANSITION_DOWNGRADE, but its classes
+    #   DIFFER, so Q_I4's `prior_state->>device_class = device_class` filter drops it —
+    #   which means every row I4 ever sees comes from R5's branch. §1 of relay 270
+    #   leaned on that and nothing asserted it.
+    ok &= event_for("waf", "confirmed", "unknown", "unknown") == "TRANSITION_DOWNGRADE"
+    ok &= event_for("waf", "confirmed", "waf", "suspected") == "TRANSITION_DOWNGRADE"
+    ok &= event_for("unknown", "unknown", "waf", "confirmed") == "STAMP"      # prior first
+    ok &= event_for("waf", "confirmed", "waf", "confirmed") is None
+    print(f"  2b cannot reach I4: unknown-target downgrades have DIFFERENT classes, so "
+          f"the same-class filter excludes them (event_for imported): "
+          f"{'ok' if event_for('waf', 'confirmed', 'unknown', 'unknown') == 'TRANSITION_DOWNGRADE' else 'FAIL'}")
 
     # ══ R25 — the instance resolution, the anchor, and the armed split ══════
     # ⚠ BOTH DSN SHAPES ARE IN USE and the refusal is the important case.
@@ -923,6 +1244,29 @@ def _selftest() -> int:
     ok &= _reasons == ["no wafw00f artifact (tool did not run)", "wafw00f ran, no verdict"]
     print(f"  fixture scope: ftp.sciimage.com COUNTED (it answers HTTP); the two "
           f"exclusion reasons are distinct: {'ok' if len(_reasons) == 2 else 'FAIL'}")
+
+    # ⛔ AND THE ARITHMETIC PIN RUNS HERE TOO. Mutant R died in pytest (the AST pin)
+    #   and the selftest still exited 0 — so a dead `unit` lane would hide it, which is
+    #   lane 6's whole lesson. The gate runs --selftest in its own job, so the pin has
+    #   to be reachable from both. Asked of the AST: this comment contains `len(`.
+    import ast as _ast
+    _tree = _ast.parse(Path(__file__).read_text())
+    _fn = next(n for n in _ast.walk(_tree)
+               if isinstance(n, _ast.FunctionDef) and n.name == "run_live")
+    _bad = []
+    for _c in _ast.walk(_fn):
+        if not (isinstance(_c, _ast.Call) and isinstance(_c.func, _ast.Name)
+                and _c.func.id in ("state_for", "invariant_state", "i3_state", "i4_state")):
+            continue
+        for _a in list(_c.args) + [k.value for k in _c.keywords]:
+            for _n in _ast.walk(_a):
+                if (isinstance(_n, (_ast.BinOp, _ast.Compare))
+                        or (isinstance(_n, _ast.Call) and isinstance(_n.func, _ast.Name)
+                            and _n.func.id == "len")):
+                    _bad.append(_c.lineno)
+    ok &= not _bad
+    print(f"  no verdict call site in run_live passes arithmetic (mutants L and R): "
+          f"{'ok' if not _bad else 'FAIL at line ' + str(_bad[0])}")
 
     # ⛔ THE QUERIES MUST BE READ-ONLY. Stated as a test rather than a promise:
     # this runs against production with a service-role credential.

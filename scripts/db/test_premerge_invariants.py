@@ -360,10 +360,18 @@ def test_i4_is_silent_when_the_preserve_marker_is_present():
 
 
 def test_i4_ignores_a_downgrade_over_a_FULL_envelope():
-    """A capable observation that saw weaker evidence SHOULD write. Not I4's business."""
-    assert pi.i4_unmarked_downgrades([{
-        "asset_id": "x", "newest_envelope_empty": False,
-        "prior_state": {"device_class": "waf", "confidence": "confirmed"}}]) == []
+    """A capable observation that saw weaker evidence SHOULD write. Not I4's business.
+
+    ⚠ SINCE R26 THIS IS A POPULATION QUESTION, NOT A PREDICATE ONE — so it is asked of
+    `i4_scoped`, which EXCLUDES the row under a named, counted reason. It used to be a
+    `continue` inside the predicate, and on Command that silent skip swallowed 15 of 15
+    armed rows behind a PASS."""
+    rows = [{"asset_id": "x", "newest_envelope": "{}", "newest_envelope_empty": False,
+             "asset_basis": json.dumps({"signals": ["fortiweb_cookiesession1"]}),
+             "prior_state": {"device_class": "waf", "confidence": "confirmed"}}]
+    s = pi.i4_scoped(rows)
+    assert s["violations"] == [] and s["counted"] == []
+    assert [e["reason"] for e in s["excluded"]] == [pi._I4_FULL_ENVELOPE]
 
 
 def test_i4_reads_prior_state_whether_it_arrives_as_jsonb_or_text():
@@ -709,3 +717,322 @@ def test_the_since_column_follows_the_instance_argument():
     # same row, same call, different instance -> different answer. That is the property.
     assert (pi.armed_split(between, "I3", "command")[0]
             != pi.armed_split(between, "I3", "prodex")[0])
+
+
+# ══ R26 — I4's POPULATION, FROM PRODUCTION ROWS ═══════════════════════════════
+# The fixtures below are rows that exist: relay 271's Prodex reads and my own read of
+# Command's armed set this turn. ⛔ The reason that matters most is the one nobody
+# specified — `newest envelope is full` — because it fires on COMMAND 15 TIMES OUT OF
+# 15, so v1's silent `continue` meant I4 printed "PASS 0 unmarked of 12 armed" having
+# checked ZERO rows. A predicate that narrows its own input silently cannot report that
+# it checked nothing; that is the third instance of this shape (I3's population, R27).
+
+_FULL_ENV = json.dumps({"schema": 1, "hostname": "api.commandcommcentral.com",
+                        "set_cookie_names": ["CCC", "cookiesession1"],
+                        "headers": {"server": "Microsoft-IIS/10.0"},
+                        "cert": {"issuer_o": "GoDaddy.com"}})
+_EMPTY_ENV = json.dumps({"schema": 1, "hostname": "api.commandcommcentral.com",
+                         "collected_at": "2026-09-03T20:14:56Z"})
+# api.commandcommcentral.com's REAL stored basis (read from Command, this turn)
+_CMD_BASIS = json.dumps({"signals": ["wafw00f_discovery_confidence",
+                                     "fortiweb_cookiesession1",
+                                     "cert_issuer_subject_pattern"]})
+# demo-tour / azure-demo's REAL basis: the 2026-07-13 cloud-inherited seed
+_PDX_BASIS = json.dumps({"signals": [], "inherited_at": "2026-07-13T21:13:42Z",
+                         "surface_stale": False, "cloud_provider": "gcp",
+                         "inherited_from": "cloud_provider",
+                         "cloud_match_tier": "asn", "is_cloud_endpoint": False})
+
+
+def _row4(**kw):
+    r = {"asset_id": "api.commandcommcentral.com", "device_class": "waf",
+         "confidence": "suspected", "newest_envelope": _EMPTY_ENV,
+         "newest_envelope_empty": True, "asset_basis": _CMD_BASIS,
+         "prior_state": {"device_class": "waf", "confidence": "confirmed"}}
+    r.update(kw)
+    return r
+
+
+def test_i4_excludes_a_NULL_envelope_because_NULL_IS_NEVER_ASKED():
+    """⛔ demo-tour.prodexlabs.com: ONE heavy (2026-07-11), ZERO stack_id_passive
+    artifacts ever, so Q_I4's correlated subquery returns NULL. v1 ran
+    envelope_is_empty(None) -> True and demanded a preserve marker for an envelope
+    nobody ever collected — "not asked" read as "found nothing". Two of Prodex's I4
+    FAIL rows were exactly this.
+
+    ⚠ AND THE SAME NULL MEANS THE OPPOSITE IN I3: there, an ARMED heavy with no
+    artifact is the collector failing to write, which IS the defect. Identical value,
+    opposite meaning, which is why this is a named bucket and not a shared helper."""
+    s = pi.i4_scoped([_row4(asset_id="demo-tour.prodexlabs.com", newest_envelope=None,
+                            asset_basis=_PDX_BASIS)])
+    assert s["counted"] == [] and s["violations"] == []
+    assert [e["reason"] for e in s["excluded"]] == [pi._I4_NO_ENVELOPE]
+
+
+def test_i4_excludes_an_empty_prior_basis_because_R5_WRITES_on_one():
+    """Prodex's whole I4 red. Every positive prior there is the 2026-07-13
+    cloud-inherited seed with `signals: []`; `apply_r5_confidence_rule` returns WRITE
+    on an empty basis BY DESIGN (preserving would build a ratchet), so demanding the
+    marker asks for a key the rule forbids."""
+    s = pi.i4_scoped([_row4(asset_id="demo-tour.prodexlabs.com", asset_basis=_PDX_BASIS)])
+    assert s["counted"] == []
+    assert [e["reason"] for e in s["excluded"]] == [pi._I4_NO_BASIS]
+
+
+def test_the_cloud_inherited_basis_really_yields_no_signals_through_the_imported_reader():
+    """`signals_in` is IMPORTED from device_class_runner, not re-implemented — the
+    function the 241 crash produced. The cloud-fallback blob is a DICT whose
+    `signals` is `[]`; iterating the dict itself would yield its keys."""
+    assert pi.signals_in.__module__ == "device_class_runner"
+    assert pi.signals_in(_PDX_BASIS) == set()
+    assert pi.signals_in(_CMD_BASIS) == {"wafw00f_discovery_confidence",
+                                         "fortiweb_cookiesession1",
+                                         "cert_issuer_subject_pattern"}
+
+
+def test_i4_counts_one_violation_when_the_row_is_genuinely_in_the_population():
+    s = pi.i4_scoped([_row4()])
+    assert len(s["counted"]) == 1 and len(s["violations"]) == 1
+    assert s["excluded"] == []
+
+
+def test_i4_is_silent_on_that_same_row_once_it_carries_the_marker():
+    marked = _row4(prior_state={"device_class": "waf", "confidence": "confirmed",
+                                "preserve": {"reason": "EVIDENCE_AGED",
+                                             "incapable_signals": ["fortiweb_cookiesession1"],
+                                             "evidence_age_days": {"set_cookie_names": 57}}})
+    s = pi.i4_scoped([marked])
+    assert len(s["counted"]) == 1 and s["violations"] == []
+
+
+def test_i4_prefers_the_basis_on_the_row_over_the_assets_blob():
+    """The runner-turn change makes the row self-describing. ⚠ KEY-PRESENT-BUT-EMPTY
+    IS NOT KEY-ABSENT (R12's two cap modes, which cut in opposite directions):
+    `basis_signals: []` is the runner ANSWERING "empty"; an absent key is no answer
+    and falls back to `assets`."""
+    # key present and empty -> the row's answer wins over a non-empty assets blob
+    r = _row4(prior_state={"device_class": "waf", "confidence": "confirmed",
+                           "basis_signals": []})
+    s = pi.i4_scoped([r])
+    assert [e["reason"] for e in s["excluded"]] == [pi._I4_NO_BASIS]
+    assert s["basis_source"] == {"row": 1, "assets": 0}
+    # key present and non-empty, assets blob EMPTY -> still in the population
+    r2 = _row4(asset_basis=_PDX_BASIS,
+               prior_state={"device_class": "waf", "confidence": "confirmed",
+                            "basis_signals": ["fortiweb_cookiesession1"]})
+    s2 = pi.i4_scoped([r2])
+    assert len(s2["counted"]) == 1 and s2["basis_source"] == {"row": 1, "assets": 0}
+    # key absent -> assets, and the count says so (that count falling to zero is how
+    # we will see the runner change land)
+    s3 = pi.i4_scoped([_row4()])
+    assert s3["basis_source"] == {"row": 0, "assets": 1}
+
+
+def test_every_i4_exclusion_reason_is_reachable_and_distinct():
+    """The rule I applied to I3's third reason, applied here: a branch that cannot
+    execute is a comment pretending to be code. All three of these fire on production
+    rows; 4.7's proposed fourth (`basis not recorded on the row`) cannot, because the
+    assets fallback always answers and asset_id is an FK to assets."""
+    rows = [_row4(newest_envelope=None),                      # NO_ENVELOPE
+            _row4(newest_envelope=_FULL_ENV, newest_envelope_empty=False),  # FULL
+            _row4(asset_basis=_PDX_BASIS),                    # NO_BASIS
+            _row4()]                                          # counted
+    s = pi.i4_scoped(rows)
+    got = sorted(e["reason"] for e in s["excluded"])
+    assert got == sorted([pi._I4_NO_ENVELOPE, pi._I4_FULL_ENVELOPE, pi._I4_NO_BASIS])
+    assert len(set(got)) == 3 and len(s["counted"]) == 1
+
+
+def test_the_full_envelope_reason_is_the_one_that_fires_on_every_command_row():
+    """MEASURED, relay 272: all 15 of Command's armed same-class downgrade rows have a
+    full envelope — because their preserves fire on 57-DAY-OLD observations while the
+    newest heavy (2026-07-22) collected cookies, headers and a cert. So I4's population
+    on Command is EMPTY, and under R27 that is INCONCLUSIVE, not PASS."""
+    rows = [_row4(newest_envelope=_FULL_ENV, newest_envelope_empty=False) for _ in range(15)]
+    s = pi.i4_scoped(rows)
+    assert s["counted"] == [] and len(s["excluded"]) == 15
+    assert {e["reason"] for e in s["excluded"]} == {pi._I4_FULL_ENVELOPE}
+    assert pi.state_for(len(s["counted"]), not s["violations"],
+                        pi.INVARIANT_FLOOR["I4"]) == pi.INCONCLUSIVE
+
+
+# ══ R27 — ZERO CHECKED ROWS IS INCONCLUSIVE FOR EVERY INVARIANT ══════════════
+
+def test_state_for_zero_armed_is_INCONCLUSIVE_whatever_ok_says():
+    """Prodex printed `PASS I1 0 violation(s) of 0 armed run(s)`. Nothing was checked
+    and the word was PASS."""
+    assert pi.state_for(0, True, 1) == pi.INCONCLUSIVE
+    assert pi.state_for(0, False, 1) == pi.INCONCLUSIVE
+
+
+def test_state_for_one_armed_row_arms_I1_I2_I4():
+    assert pi.state_for(1, True, 1) == pi.HELD
+    assert pi.state_for(1, False, 1) == pi.FAILED
+
+
+def test_state_for_keeps_I3s_ratio_floor():
+    assert pi.state_for(4, True, pi.I3_MIN_POPULATION) == pi.INCONCLUSIVE
+    assert pi.state_for(5, True, pi.I3_MIN_POPULATION) == pi.HELD
+    assert pi.state_for(5, False, pi.I3_MIN_POPULATION) == pi.FAILED
+
+
+def test_the_floor_table_covers_every_invariant_and_I3_defers_to_its_ratio():
+    assert set(pi.INVARIANT_FLOOR) == {"I1", "I2", "I3", "I4"}
+    assert pi.INVARIANT_FLOOR["I1"] == pi.INVARIANT_FLOOR["I2"] == pi.INVARIANT_FLOOR["I4"] == 1
+    assert pi.INVARIANT_FLOOR["I3"] is None      # the ratio's own min_population governs
+
+
+def test_i3_state_still_answers_through_state_for():
+    """i3_state is now a thin call into state_for, so mutant D stays dead and I3's
+    floor stays a ratio's floor rather than R27's any-row-arms-it."""
+    thin = pi.i3_empty_envelopes([])
+    assert pi.i3_state(thin) == pi.INCONCLUSIVE
+
+
+def test_run_live_asks_state_for_for_all_four_invariants():
+    """⛔ THE AST PIN, WIDENED. Mutant D survived because the verdict lived inside the
+    DB-only path; three of the four invariants still decided inline (`FAILED if v else
+    HELD`) after that fix, which is the same defect with a different invariant's name
+    on it. Asked of the AST, not the text: a text search for `state_for` matches this
+    docstring."""
+    tree = ast.parse(pi.Path(pi.__file__).read_text())
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "run_live")
+    calls = [n for n in ast.walk(fn)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id in _VERDICT_FNS]
+    assert len(calls) >= 4, f"only {len(calls)} invariant verdicts go through state_for"
+    # ...and no invariant re-decides inline any more. ⚠ THE FIRST VERSION OF THIS
+    # ASSERTION WAS TOO WIDE: it flagged `return 1 if tally[FAILED] else 0`, the exit
+    # code, which is not a verdict — the guard failed on a correct tree and would have
+    # been "fixed" by deleting it. The verdict shape is specifically a state CONSTANT
+    # as the ternary's value (`FAILED if v else HELD`); FAILED appearing in the TEST
+    # (`if tally[FAILED]`) is a different sentence. Ask for the shape, not the word.
+    def _is_state_name(node):
+        return isinstance(node, ast.Name) and node.id in ("FAILED", "HELD", "INCONCLUSIVE")
+    inline = [n for n in ast.walk(fn) if isinstance(n, ast.IfExp)
+              and (_is_state_name(n.body) or _is_state_name(n.orelse))]
+    assert inline == [], (f"an invariant's verdict is decided inline in run_live at "
+                          f"line {inline[0].lineno if inline else '-'}")
+
+
+# ══ 2b CANNOT REACH I4 — event_for IMPORTED, not re-implemented ══════════════
+
+def test_2b_cannot_produce_a_row_in_I4s_population():
+    """Relay 270 §1 leaned on this and nothing asserted it: a computed `unknown`
+    against a positive prior IS a TRANSITION_DOWNGRADE, but the two classes DIFFER, so
+    Q_I4's `prior_state->>'device_class' = d.device_class` filter drops it. Every row
+    I4 ever sees therefore comes from R5's branch — one producer."""
+    assert pi.event_for.__module__ == "device_class_runner"
+    assert pi.event_for("waf", "confirmed", "unknown", "unknown") == "TRANSITION_DOWNGRADE"
+    # ... and the classes differ, which is what the SQL filter tests
+    assert "waf" != "unknown"
+    # a same-class downgrade is only ever positive-class-both-sides with a rank drop
+    assert pi.event_for("waf", "confirmed", "waf", "suspected") == "TRANSITION_DOWNGRADE"
+    assert pi.event_for("unknown", "unknown", "waf", "confirmed") == "STAMP"
+    assert pi.event_for("waf", "confirmed", "waf", "confirmed") is None
+    assert "and d.prior_state->>'device_class' = d.device_class" in pi.Q_I4
+
+
+def test_Q_I4_reads_the_prior_basis_and_stays_read_only():
+    assert "asset_basis" in pi.Q_I4 and "device_class_evidence" in pi.Q_I4
+    low = " ".join(pi.Q_I4.split()).lower()
+    assert low.startswith("select")
+    for verb in ("insert ", "update ", "delete ", "drop ", "alter ", "truncate "):
+        assert verb not in low
+
+
+def test_i4_state_takes_the_SCOPED_result_not_the_fetched_rows():
+    """⛔ 4.7's mutation style, turned on my own commit. Having extracted i3_state so
+    no verdict lives where tests cannot reach, I wrote I4's as
+    `state_for(len(s4["counted"]), …)` INSIDE run_live — and `len(armed)` there passes
+    every test while printing PASS over an empty population. The operand choice IS
+    part of the decision, so it moved inside the pure function."""
+    rows = [_row4(newest_envelope=_FULL_ENV, newest_envelope_empty=False) for _ in range(15)]
+    s = pi.i4_scoped(rows)
+    assert len(s["excluded"]) == 15 and s["counted"] == []
+    assert pi.i4_state(s) == pi.INCONCLUSIVE          # NOT pass, on 15 armed rows
+    assert pi.i4_state(pi.i4_scoped([_row4()])) == pi.FAILED
+    marked = _row4(prior_state={"device_class": "waf", "confidence": "confirmed",
+                                "preserve": {"reason": "EVIDENCE_AGED"}})
+    assert pi.i4_state(pi.i4_scoped([marked])) == pi.HELD
+
+
+_VERDICT_FNS = ("state_for", "invariant_state", "i3_state", "i4_state")
+
+
+def test_no_verdict_call_site_in_run_live_passes_any_arithmetic():
+    """⛔ THE PIN THAT MUTANTS L AND R BOTH NEEDED, GENERALISED.
+
+    L: I4's verdict was `state_for(len(s4["counted"]), …)` in run_live — swap the
+       operand for `len(armed)` and every test passed while I4 printed PASS on zero.
+    R: 4.7 then found I1's `state_for(len(armed), …)` still inline — `len(armed) + 1`
+       passed 118 tests and the selftest, printing PASS on zero armed I1 rows: the
+       exact Prodex line R27 exists to kill, inside the commit implementing R27.
+
+    Two instances of one defect: the CALLER doing the arithmetic. So the pin is not
+    "I4 calls i4_state" any more, it is: **no verdict call site in run_live may pass
+    a len(), a BinOp or a Compare**. The population size and the ok/not-ok decision
+    are the pure functions' business; run_live passes a scope and a name.
+    ⚠ Asked of the AST, because the text of this very docstring contains `len(`."""
+    tree = ast.parse(pi.Path(pi.__file__).read_text())
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "run_live")
+    offenders = []
+    for call in ast.walk(fn):
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                and call.func.id in _VERDICT_FNS):
+            continue
+        for arg in list(call.args) + [k.value for k in call.keywords]:
+            for node in ast.walk(arg):
+                if (isinstance(node, ast.BinOp) or isinstance(node, ast.Compare)
+                        or (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                            and node.func.id == "len")):
+                    offenders.append(f"line {call.lineno}: {ast.unparse(call)}")
+    assert offenders == [], "run_live computes a verdict operand: " + "; ".join(offenders)
+
+
+def test_all_four_invariants_take_their_verdict_from_a_pure_function():
+    tree = ast.parse(pi.Path(pi.__file__).read_text())
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "run_live")
+    got = [n.func.id for n in ast.walk(fn)
+           if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+           and n.func.id in _VERDICT_FNS]
+    assert len(got) >= 4, f"only {len(got)} verdicts go through a pure function: {got}"
+
+
+def test_i1_and_i2_scopes_are_pure_and_zero_armed_is_INCONCLUSIVE():
+    """R's target, as a value test rather than a shape test: no rows in, no verdict
+    out. Prodex's `PASS I1 0 violation(s) of 0 armed run(s)` is what this kills."""
+    assert pi.invariant_state(pi.i1_scoped([]), "I1") == pi.INCONCLUSIVE
+    assert pi.invariant_state(pi.i2_scoped([]), "I2") == pi.INCONCLUSIVE
+    clean = [{"asset_id": "a", "scan_run_id": "s", "has_raw": True, "has_parsed": True}]
+    assert pi.invariant_state(pi.i1_scoped(clean), "I1") == pi.HELD
+    dirty = [{"asset_id": "a", "scan_run_id": "s", "has_raw": True, "has_parsed": False}]
+    assert pi.invariant_state(pi.i1_scoped(dirty), "I1") == pi.FAILED
+    assert pi.i1_scoped(dirty)["counted"] == dirty and len(pi.i1_scoped(dirty)["violations"]) == 1
+
+
+def test_floor_for_resolves_I3s_ratio_floor_and_leaves_the_others_at_one():
+    assert pi.floor_for("I3") == pi.I3_MIN_POPULATION
+    assert pi.floor_for("I1") == pi.floor_for("I2") == pi.floor_for("I4") == 1
+
+
+def test_run_live_gets_I4s_verdict_from_i4_state_and_does_no_arithmetic_itself():
+    """The AST pin for the operand choice: run_live must not compute I4's population
+    size. If `len(armed)` ever appears as an argument to a verdict call again, this
+    fails — which is the only thing that would have caught mutant L."""
+    tree = ast.parse(pi.Path(pi.__file__).read_text())
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "run_live")
+    verdict_calls = [n for n in ast.walk(fn)
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                     and n.func.id in ("state_for", "i3_state", "i4_state")]
+    assert any(c.func.id == "i4_state" for c in verdict_calls), "I4's verdict is not i4_state's"
+    # I1/I2 legitimately pass len(armed) — they have no exclusions. I4 must not.
+    for c in verdict_calls:
+        if c.func.id != "state_for":
+            continue
+        src = ast.unparse(c)
+        assert "INVARIANT_FLOOR['I4']" not in src, f"I4 verdict computed inline: {src}"
