@@ -43,6 +43,16 @@ FULL_ENV = json.dumps({"schema": 1, "hostname": "commandcommcentral.com",
                        "set_cookie_names": ["cookiesession1"],
                        "headers": {"server": "nginx"}, "cert": "CN=*.x"})
 
+# wafw00f output, by what the tool prints. These decide I3's POPULATION (ruling 23).
+W_VERDICT = ("[+] The site https://commandcommcentral.com/ is behind "
+             "FortiWeb (Fortinet) WAF.\n")
+W_NOWAF = "[-] No WAF detected by the generic detection\n"
+W_DOWN = "[*] The site https://ftp.sciimage.com/ appears to be down.\n"
+
+
+def _host(aid, envelope, raw=W_VERDICT):
+    return {"asset_id": aid, "envelope": envelope, "wafw00f_raw": raw}
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ⛔ READ-ONLY. This is the one that matters most.
@@ -140,9 +150,11 @@ def test_i2_parser_does_not_leave_the_scanner_log_muted():
 
 
 def test_i3_fires_at_the_measured_post_cutover_ratio():
-    """5 of 11 full is what production actually did between 09-02 and 09-17."""
-    runs = ([{"asset_id": f"e{i}", "envelope": EMPTY_ENV} for i in range(6)] +
-            [{"asset_id": f"f{i}", "envelope": FULL_ENV} for i in range(5)])
+    """5 of 11 full is what production actually did between 09-02 and 09-17 — with
+    every host confirmed to have an HTTP surface in its own run, so the ratio is
+    about the COLLECTOR and not about the population."""
+    runs = ([_host(f"e{i}", EMPTY_ENV) for i in range(6)] +
+            [_host(f"f{i}", FULL_ENV) for i in range(5)])
     r = pi.i3_empty_envelopes(runs)
     assert r["full_pct"] == 45 and r["ok"] is False
 
@@ -150,15 +162,146 @@ def test_i3_fires_at_the_measured_post_cutover_ratio():
 def test_i3_passes_at_the_pre_cutover_ratio():
     """130 of 130 full is what it did before. The floor sits between the two."""
     assert pi.i3_empty_envelopes(
-        [{"asset_id": f"f{i}", "envelope": FULL_ENV} for i in range(11)])["ok"] is True
+        [_host(f"f{i}", FULL_ENV) for i in range(11)])["ok"] is True
 
 
 def test_i3_tolerates_one_genuinely_banned_run_without_flapping():
     """⚠ A GATE THAT FLAPS GETS BYPASSED — the same failure as one that passes
     vacuously. 10 of 11 (91%) clears a 90% floor; 5 of 11 does not."""
-    runs = ([{"asset_id": "e0", "envelope": EMPTY_ENV}] +
-            [{"asset_id": f"f{i}", "envelope": FULL_ENV} for i in range(10)])
+    runs = [_host("e0", EMPTY_ENV)] + [_host(f"f{i}", FULL_ENV) for i in range(10)]
     assert pi.i3_empty_envelopes(runs)["ok"] is True
+
+
+# ── ruling 23: the POPULATION, which is the half that was wrong ─────────────
+
+def test_i3_is_silent_on_the_sftp_pair():
+    """⛔ THE FAILURE premerge-gate #2 ACTUALLY PRODUCED — 80% of 10, naming
+    ftp.sciimage.com and ftp.unimacgraphics.com. 443 is open on both and nothing
+    HTTP is behind it, so an empty envelope is the TRUE answer and counting it made
+    the invariant fail on healthy production. The POPULATION was wrong, not the
+    fleet. With them excluded this reads 8/8."""
+    runs = ([_host(f"f{i}", FULL_ENV) for i in range(8)] +
+            [_host("ftp.sciimage.com", EMPTY_ENV, W_DOWN),
+             _host("ftp.unimacgraphics.com", EMPTY_ENV, W_DOWN)])
+    r = pi.i3_empty_envelopes(runs)
+    assert r["total"] == 8 and r["full_pct"] == 100 and r["ok"] is True
+    assert {e["asset_id"] for e in r["excluded"]} == {
+        "ftp.sciimage.com", "ftp.unimacgraphics.com"}
+
+
+def test_the_excluded_hosts_are_returned_not_silently_dropped():
+    """An invariant that quietly narrows its own population until it passes is the
+    vacuous-pass shape wearing a ratio. The exclusions are reported with reasons."""
+    r = pi.i3_empty_envelopes(
+        [_host(f"f{i}", FULL_ENV) for i in range(5)] +
+        [_host("ftp.sciimage.com", EMPTY_ENV, W_DOWN)])
+    assert len(r["excluded"]) == 1 and "no HTTP surface" in r["excluded"][0]["reason"]
+
+
+def test_a_collapsed_population_FAILS_rather_than_passing():
+    """⛔ THE OLD CODE RETURNED ok=True ON total==0. So a predicate bug that
+    excluded every host would have read as a clean pass — "nothing to check" and
+    "everything checked out" must never look the same."""
+    r = pi.i3_empty_envelopes([_host("ftp.sciimage.com", EMPTY_ENV, W_DOWN)])
+    assert r["ok"] is False and r["population_too_thin"] is True
+    assert pi.i3_empty_envelopes([])["ok"] is False
+
+
+def test_a_thin_but_FULL_population_still_fails():
+    """⛔ MUTANT M3 (4.7, relay 259): `"ok": (not thin) and pct >= floor` →
+    `"ok": pct >= floor`. It SURVIVED my tests, because every fixture that
+    exercised the floor had pct=0 — an empty list, where `ok` is False with or
+    without the floor wired in. A population of 3, all full, read GREEN.
+
+    ⇒ THE FLOOR HAS TO BE TESTED WHERE IT IS THE ONLY THING FAILING. 100% full and
+    below the floor: the ratio says perfect, the population says nothing was
+    checked, and "nothing to check" must not read as "everything checked out"."""
+    r = pi.i3_empty_envelopes([_host(f"f{i}", FULL_ENV) for i in range(3)])
+    assert r["full_pct"] == 100, "the ratio alone would pass this"
+    assert r["population_too_thin"] is True
+    assert r["ok"] is False, (
+        "a 3-host population reads GREEN — the floor is not wired to the verdict")
+
+
+@pytest.mark.parametrize("full,empty,want_pct,want_ok", [
+    (9, 1, 90, True),    # ⭐ EXACTLY the design point the docstring claims
+    (8, 2, 80, False),   # one step below it
+    (10, 0, 100, True),
+])
+def test_the_ninety_percent_boundary_is_where_the_docstring_says_it_is(
+        full, empty, want_pct, want_ok):
+    """⛔ MUTANT M6 (4.7): `pct >= floor_pct` → `pct > floor_pct`. SURVIVED — the
+    docstring says 90% "passes with room for one genuinely banned run", i.e. 9 of
+    10, and no fixture sat on that line. A claim in a docstring that no test
+    touches is a comment about what someone intended."""
+    runs = ([_host(f"f{i}", FULL_ENV) for i in range(full)] +
+            [_host(f"e{i}", EMPTY_ENV) for i in range(empty)])
+    r = pi.i3_empty_envelopes(runs)
+    assert r["full_pct"] == want_pct
+    assert r["ok"] is want_ok, (
+        f"{full} full + {empty} empty = {want_pct}% against a "
+        f"{r['floor_pct']}% floor -> expected ok={want_ok}")
+
+
+def test_the_population_floor_is_below_todays_real_count():
+    """Grounded, not chosen: the gate's first live run saw 10 hosts, 8 with a real
+    HTTP surface. A floor above 8 would fail on healthy production."""
+    assert pi.I3_MIN_POPULATION <= 8
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (W_VERDICT, True),      # named vendor — definitely HTTP
+    (W_NOWAF, True),        # "no WAF" is still a verdict: the tool reached the host
+    (W_DOWN, False),        # ⭐ the SFTP pair
+    (None, False), ("", False), ("   \n", False),
+    ("Traceback (most recent call last):\n", False),   # tool died — not countable
+])
+def test_the_population_predicate_both_ways(raw, expected):
+    assert pi.wafw00f_saw_http(raw) is expected
+
+
+def test_the_population_predicate_is_imported_not_reimplemented():
+    """⚠ `wafw00f_is_degraded` is the scanner's own shipped test for "did wafw00f
+    produce a verdict". A second copy here would be one more home for a judgement
+    that must not drift from what a live scan makes."""
+    # ⚠ THIS GUARD TOOK THREE GOES, AND THE THIRD IS THE ONE WORTH KEEPING.
+    #   v1  `"appears to be down" not in SRC`   — failed: the DOCSTRING explains it
+    #   v2  same, docstrings excluded           — failed: the SELFTEST FIXTURE is
+    #                                             that string, and a fixture is code
+    #   v3  this                                — a FIXTURE holding the phrase is
+    #                                             fine; a PREDICATE deciding on it
+    #                                             is not. So check for a membership
+    #                                             TEST, inside the function whose
+    #                                             judgement is at issue.
+    #
+    # ⇒ "no copy of X" is not a text question. It is "does any code path DECIDE on
+    #   X", and that is an operator, not a substring. Sixth prose-vs-checker
+    #   instance this week, and the previous fix is forty lines above.
+    fn = next(n for n in ast.walk(ast.parse(SRC))
+              if isinstance(n, ast.FunctionDef) and n.name == "wafw00f_saw_http")
+    body = ast.get_source_segment(SRC, fn)
+    assert "_medium.wafw00f_is_degraded" in body, (
+        "wafw00f_saw_http no longer delegates to the scanner's own predicate")
+    decided_locally = []
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Compare) and any(
+                isinstance(o, (ast.In, ast.NotIn)) for o in n.ops):
+            src = ast.unparse(n)
+            if any(k in src for k in ("appears to be down", "is behind",
+                                      "No WAF detected", "[+] ")):
+                decided_locally.append(src[:70])
+    assert not decided_locally, (
+        f"wafw00f_saw_http decides on wafw00f's output text itself instead of asking "
+        f"the scanner: {decided_locally}")
+
+
+def test_i3_no_longer_walks_asset_surface_for_port_443():
+    """⚠ THE 443 WALK IS GONE, AND WITH IT A SECOND READER of the surface port
+    shape that deliberately disagreed with demotion_writer.known_ports() about
+    defaulting. One fewer footnote waiting to become a bug."""
+    assert "jsonb_array_elements" not in pi.Q_I3
+    assert "443" not in pi.Q_I3
+    assert "wafw00f_raw" in pi.Q_I3, "the population source must come from the query"
 
 
 @pytest.mark.parametrize("blob", [None, "not json", "[]", "{}", 42,

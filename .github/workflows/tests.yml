@@ -240,7 +240,11 @@ jobs:
           bad=0; n=0
           while IFS= read -r f; do
             n=$((n+1))
-            mod_dir=$(dirname "$f"); mod=$(basename "$f" .py)
+            # EVERY capture, including these two — `dirname`/`basename` on a path
+          # find just emitted will not fail, and "will not fail" is the judgement
+          # that left the lane-7 counting line unguarded. The guard is cheap.
+          mod_dir=$(dirname "$f") || { echo "::error::dirname failed on $f"; exit 1; }
+          mod=$(basename "$f" .py) || { echo "::error::basename failed on $f"; exit 1; }
             if ! out=$(cd "$mod_dir" && python3 -c "import $mod" 2>&1); then
               echo "::error file=$f::cannot be imported — pytest collection would INTERNALERROR here"
               echo "$out" | tail -5
@@ -432,7 +436,17 @@ jobs:
           # Absent-linter probe FIRST — under -e this aborts the step loudly.
           python -m pyflakes --version >/dev/null
           MIN_FILES=100
-          n=$(find $PYTEST_ROOTS -name '*.py' | wc -l)
+          # ⛔ THE LANE-7 BUG, STILL LIVE HERE — found by the new pin
+          # (test_workflow_shell_guards.py), not by reading. `find` exits 1 if a
+          # root is missing, pipefail carries it, -e kills the assignment, and
+          # this lane would print pyflakes' version and then nothing. EVERY
+          # capture gets the guard, including the ones that look like counting.
+          rc_n=0
+          n=$(find $PYTEST_ROOTS -name '*.py' | wc -l) || rc_n=$?
+          if [ "$rc_n" -ne 0 ]; then
+            echo "::error::could not count .py files (rc=$rc_n) — this lane did NOT run"
+            exit 1
+          fi
           if [ "$n" -lt "$MIN_FILES" ]; then
             echo "::error::pyflakes lane found only $n .py files under '$PYTEST_ROOTS', expected >= $MIN_FILES."
             echo "         Either the roots are wrong or the checkout is incomplete. Refusing to pass."
@@ -541,7 +555,34 @@ jobs:
           # ⚠ FLOOR ON FILE COUNT. An empty glob makes any linter exit 0, which reads
           # identically to "everything passed" — the vacuous-pass shape lane 6 was
           # born with and lane 4's stale directory list before it.
-          n=$(ls -1 .github/workflows/*.yml .github/workflows/*.yaml 2>/dev/null | wc -l)
+          #
+          # ⛔ AND THIS LINE KILLED THE WHOLE STEP ON MAIN, BOTH REPOS. It was:
+          #
+          #     n=$(ls -1 .github/workflows/*.yml .github/workflows/*.yaml 2>/dev/null | wc -l)
+          #
+          #   No `.yaml` exists, so `ls` exits 2; `2>/dev/null` hides the message but
+          #   not the status; `pipefail` carries it out of the pipe; `bash -e` kills
+          #   the assignment. `tests` #138/#116 printed actionlint's version banner
+          #   and then nothing. LANE 6'S BUG, IN THE LANE WHOSE OWN COMMENT QUOTES
+          #   LANE 6'S RULE — and the one capture in this step I had left unguarded,
+          #   because it looked like a counting line rather than a risky one.
+          #
+          # ⇒ `find`, which does not care that one pattern matches nothing, AND
+          #   `|| rc=$?` on the capture regardless. The rule is EVERY capture, not
+          #   the ones that look dangerous. A pin over every `run:` block in both
+          #   workflow files now enforces that (test_workflow_shell_guards.py).
+          #
+          # ⚠ 253 claimed this lane was "shown RED on today's tree, then green".
+          #   That was the BINARY, run directly. It was never the STEP under
+          #   GitHub's shell — rule 14 in the lane about rule 14. Both directions
+          #   are now demonstrated on the extracted step itself.
+          rc_n=0
+          n=$(find .github/workflows -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) \
+              | wc -l) || rc_n=$?
+          if [ "$rc_n" -ne 0 ]; then
+            echo "::error::could not count workflow files (rc=$rc_n) — this lane did NOT run"
+            exit 1
+          fi
           if [ "$n" -lt "$MIN_WORKFLOWS" ]; then
             echo "::error::actionlint saw only $n workflow file(s), expected >= $MIN_WORKFLOWS — the glob is wrong, this is not a pass"
             exit 1
