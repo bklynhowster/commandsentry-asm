@@ -43,7 +43,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+import urllib.parse
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scanner"))
@@ -62,6 +65,151 @@ import run_medium as _medium  # noqa: E402
 WINDOW_DAYS = 30
 RECENT_HOURS = 24
 PASSIVE_FIELDS = ("set_cookie_names", "headers", "cert")
+
+# ══ R25 — AN INVARIANT IS A REGRESSION DETECTOR, NOT AN AUDIT (relay 262/264) ══
+#
+# ⛔ WHAT THE GATE'S FIRST REAL PR PROVED. premerge-gate #3/#2 went red on both
+# repos and NOT ONE of the four failures was caused by the PR's code:
+#
+#   Command  I3 FAIL 83% of 6 — ftp.sciimage.com's newest heavy is 2026-09-06,
+#            eleven days BEFORE the collector-first fix. A pre-fix empty envelope.
+#   Prodex   I1 FAIL 15 · I2 FAIL 11 — the deferred Prodex backfill, i.e. debt the
+#            gate correctly found on its first run and cannot be fixed by a PR.
+#   Prodex   I4 FAIL 6 of 12 — a 24h window straddling 2c's landing.
+#
+# The invariants were written as statements about PRODUCTION. Read over 30 days of
+# history they are statements about the BACKLOG, so they block every PR — including
+# the ones that would clear the backlog — until the fleet is re-scanned end to end.
+# ⇒ A GATE THAT CANNOT GO GREEN IS A GATE PEOPLE LEARN TO BYPASS, and it arrived on
+#   day one. Same species as ruling 23 (I3's population) one level up.
+#
+# ⇒ Each invariant is ARMED only for rows at/after the fix IT guards. Older rows are
+#   counted and printed as BACKLOG with a named remedy, and never block.
+#
+# ⚠ THE ANCHOR IS `started_at`, NOT `completed_at` (ruling 264/1). A run that BEGAN
+# on the old code ran the old code, whatever it finished on. Not hypothetical:
+# bcbsma.commandcommcentral.com's heavy ran 2026-09-15T12:00:41 → 12:41:01 — forty
+# minutes, which straddles a commit easily. `completed_at` would arm a run that
+# executed the pre-fix code, and a wrongly-armed row looks exactly like a regression.
+#
+# ⚠ DEFERRED, AND IT WOULD DELETE ALL OF THIS TIME ARITHMETIC: `scan_run` already has
+# a `matrix_version_sha` column and it is NULL on every heavy. Populated from
+# GITHUB_SHA at run start, `since` becomes a sha-MEMBERSHIP test with no timestamps
+# at all. When that lands the timestamp path is DELETED, not kept as a fallback —
+# two ways to decide the same thing is the second-reader defect (ruling 264/2).
+
+# The instance each project ref belongs to. Both repos ship this file byte-identical
+# (the push script's one-stamp check asserts it), so the column is chosen at RUNTIME.
+_PROJECT_REFS = {
+    "hdygktppfvuspnumpfuq": "command",
+    "bxcvzpbmxsdtalyfanee": "prodex",
+}
+
+# ⚠ EVERY PAIR BELOW CAME FROM `git log -1 --format='%H %cI' <sha>` IN ITS OWN REPO.
+# Not retyped from an entry, not inferred from a date. The commits are the fixes each
+# invariant guards; a row from before its own fix cannot be a regression in it.
+#
+#   I1  the persist fold           Cmd ea74b16a  ·  Pdx 3353667
+#   I2  the ANSI strip             Cmd 5d6703e8  ·  Pdx 675cb97
+#   I3  collector runs first       Cmd f8cc3a3e  ·  Pdx 4ee5f4a
+#   I4  the 2c evidence-shape fix  Cmd 2edf0770  ·  Pdx b45c5b4
+#
+# ⚠ THE VALUES CARRY GIT'S COMMITTER OFFSET (-04:00), NOT UTC. That is deliberate —
+# it is the provenance, unaltered — but it is easy to misread by eye, and it caught
+# me while writing the tests: a fixture row at 12:06:15+00:00 is FOUR HOURS BEFORE a
+# cut at 12:06:14-04:00. The comparison itself is safe (both datetimes are aware).
+# UTC equivalents, for reading only:
+#   I1  22:05:40Z  ·  I2  23:34:01Z  ·  I3  12:09:34Z  ·  I4  16:06:14Z
+SINCE = {
+    "command": {
+        "I1": ("ea74b16a", "2026-09-16T18:05:40-04:00"),
+        "I2": ("5d6703e8", "2026-09-16T19:34:01-04:00"),
+        "I3": ("f8cc3a3e", "2026-09-17T08:09:34-04:00"),
+        "I4": ("2edf0770", "2026-09-17T12:06:14-04:00"),
+    },
+    "prodex": {
+        "I1": ("3353667", "2026-09-16T18:05:42-04:00"),
+        "I2": ("675cb97", "2026-09-16T19:34:02-04:00"),
+        "I3": ("4ee5f4a", "2026-09-17T08:09:36-04:00"),
+        "I4": ("b45c5b4", "2026-09-17T12:06:16-04:00"),
+    },
+}
+
+# Which timestamp each invariant is armed by. I1-I3 are facts about a SCAN, so the
+# anchor is when the scan started. I4 is a fact about a CLASSIFY PASS, so it is the
+# audit row's own evaluated_at.
+ANCHOR = {"I1": "started_at", "I2": "started_at", "I3": "started_at",
+          "I4": "evaluated_at"}
+
+# The remedy printed on a BACKLOG line — because a count with no next step is a
+# number someone learns to scroll past. They do not clear the same way:
+BACKLOG_REMEDY = {
+    "I1": "backfill_stack_id_wafw00f.py --write            (only the backfill clears these)",
+    "I2": "backfill_stack_id_wafw00f.py --write --reparse-generic",
+    "I3": "clears itself as the sweep re-covers each host with a post-fix heavy",
+    "I4": "self-clearing: the 24h window rolls past the fix within a day",
+}
+
+HELD, FAILED, INCONCLUSIVE = "PASS", "FAIL", "INCONCLUSIVE"
+
+_FRAC = re.compile(r"\.(\d{1,6})")
+
+
+def iso(ts):
+    """Postgres emits 1-6 fractional digits; `datetime.fromisoformat` on 3.10 accepts
+    ONLY 3 or 6 and raises on the rest. Met twice in this session's read scripts
+    (`.47312`). Pad — never hand-roll a timestamp parser."""
+    if ts is None:
+        return None
+    if not isinstance(ts, str):
+        return ts                                   # psycopg already gave a datetime
+    return datetime.fromisoformat(_FRAC.sub(lambda m: "." + m.group(1).ljust(6, "0"), ts))
+
+
+def instance_from_dsn(dsn):
+    """Which instance this credential points at, or None.
+
+    ⚠ FROM THE DSN, NOT FROM `SUPABASE_URL` (ruling 264/5). Job 4 runs on
+    `SUPABASE_DSN` and may not carry `SUPABASE_URL` at all — deriving the instance
+    from a variable the job might not have is how a gate silently picks the wrong
+    column. Both DSN shapes are in use:
+
+        postgresql://postgres:…@db.<ref>.supabase.co:5432/postgres     direct
+        postgresql://postgres.<ref>:…@aws-0-….pooler.supabase.com:…    pooler
+
+    ⚠ The password is never read, never logged. urlsplit exposes hostname/username
+    without it."""
+    if not dsn:
+        return None
+    try:
+        parts = urllib.parse.urlsplit(dsn)
+    except Exception:
+        return None
+    host = (parts.hostname or "")
+    if host.startswith("db.") and host.endswith(".supabase.co"):
+        ref = host[len("db."):-len(".supabase.co")]
+        if ref in _PROJECT_REFS:
+            return _PROJECT_REFS[ref]
+    user = (parts.username or "")
+    if "." in user:
+        ref = user.split(".", 1)[1]
+        if ref in _PROJECT_REFS:
+            return _PROJECT_REFS[ref]
+    return None
+
+
+def armed_split(rows, iid, instance, anchor=None):
+    """(armed, backlog) — rows at/after this invariant's own fix, and rows before it.
+
+    A row with no anchor timestamp is BACKLOG, not armed: we cannot show it ran the
+    fixed code, and 'cannot show' is not 'did'."""
+    field = anchor or ANCHOR[iid]
+    cut = iso(SINCE[instance][iid][1])
+    armed, backlog = [], []
+    for r in rows:
+        when = iso(r.get(field))
+        (armed if (when is not None and when >= cut) else backlog).append(r)
+    return armed, backlog
 # ⚠ I3's population floor. The gate's first live run counted 10 hosts, of which
 # 8 had a real HTTP surface. A population below this is a PREDICATE BUG, not a
 # pass — see i3_empty_envelopes for why "nothing to check" must not look like
@@ -79,11 +227,19 @@ def i1_violations(runs) -> list:
     """I1 — THE PERSIST FOLD. A heavy that produced a raw `wafw00f` artifact must
     also have produced the parsed `stack_id_wafw00f`.
 
-    ⚠ STATED AS AN IMPLICATION, NOT A CONJUNCTION. `ftp.sciimage.com` and
-    `ftp.unimacgraphics.com` are the SFTP pair with no HTTPS surface; a heavy there
-    legitimately has NEITHER artifact. "has both" would fail on them forever and
+    ⚠ STATED AS AN IMPLICATION, NOT A CONJUNCTION. A host with no HTTP surface in
+    that run legitimately has NEITHER artifact — `ftp.unimacgraphics.com`'s newest
+    heavy is the read case (entry 263): the wafw00f artifact holds only
+    `[*] Checking …` and no verdict. "has both" would fail on such hosts forever and
     the gate would be turned off. "has the parsed one IF it has the raw one" is the
     actual rule.
+
+    ⛔ AND NOT "THE SFTP PAIR" — that phrase was false and this docstring was still
+    carrying it. `ftp.sciimage.com` ANSWERS HTTP: its 09-06 heavy's wafw00f made four
+    requests and got different responses by user-agent (entry 263, read from the DB).
+    The pair was never a pair; the two hosts differ in the only way that matters here.
+    Ruling 264 killed the claim in the fixtures and it survived in the prose one
+    function away — a fact that has only ever been repeated has never been checked.
 
     BAD TREE (pre-217): 18 of 18 heavy runs -> 18 violations -> FAIL."""
     return [r for r in runs if r.get("has_raw") and not r.get("has_parsed")]
@@ -194,7 +350,7 @@ def i3_empty_envelopes(runs, floor_pct: int = 90,
     ⛔ AND THE POPULATION IS THE HALF THAT WAS WRONG (ruling 23). A host with no
     HTTP surface has nothing to collect, so its empty envelope is CORRECT and
     counting it makes the invariant fail on healthy production — which is what
-    premerge-gate #2 did, at 80% of 10, naming the SFTP pair. Excluded hosts are
+    premerge-gate #2 did, at 80% of 10. Excluded hosts are
     RETURNED, not silently dropped: an invariant that quietly narrows its own
     population until it passes is the vacuous-pass shape wearing a ratio.
 
@@ -205,13 +361,25 @@ def i3_empty_envelopes(runs, floor_pct: int = 90,
     look the same.
 
     BAD TREE (post-93e8acea, pre-233): 45% -> FAIL."""
+    # ⚠ TWO REASONS, NOT ONE — and the difference is a fact, not a nicety.
+    #   `no wafw00f artifact (tool did not run)`  geisinger, test.commandcommcentral,
+    #                                             portal-tims: pre-08-29 plans that
+    #                                             never invoked wafw00f at all
+    #   `wafw00f ran, no verdict`                 ftp.unimacgraphics: the artifact is
+    #                                             there and holds only "[*] Checking …"
+    # ⚠ A THIRD REASON WAS SPECIFIED AND IS DROPPED AS IMPOSSIBLE HERE: "not a heavy
+    #   in window" cannot occur, because Q_I3 already filters `intensity = 'heavy'`
+    #   and the window. A reason that can never print is a comment pretending to be
+    #   a branch. Said out loud rather than left in as reassurance.
     counted, excluded = [], []
     for r in runs:
         if wafw00f_saw_http(r.get("wafw00f_raw")):
             counted.append(r)
         else:
-            excluded.append({"asset_id": r.get("asset_id"),
-                             "reason": "no HTTP surface in that run (wafw00f: no verdict)"})
+            excluded.append({
+                "asset_id": r.get("asset_id"),
+                "reason": ("wafw00f ran, no verdict" if r.get("wafw00f_present")
+                           else "no wafw00f artifact (tool did not run)")})
     total = len(counted)
     empty = [r for r in counted if envelope_is_empty(r.get("envelope"))]
     pct = round(100 * (total - len(empty)) / total) if total else 0
@@ -220,6 +388,33 @@ def i3_empty_envelopes(runs, floor_pct: int = 90,
             "ok": (not thin) and pct >= floor_pct,
             "floor_pct": floor_pct, "min_population": min_population,
             "population_too_thin": thin}
+
+
+def i3_state(r3) -> str:
+    """I3's three-state verdict — PURE, so the WORD is testable.
+
+    ⛔ WHY THIS FUNCTION EXISTS AT ALL (4.7's mutation D, entry 266). This decision
+    used to be an expression inside `run_live()`, which needs a live DSN, so neither
+    pytest nor --selftest ever executed it. 4.7 mutated it to
+
+        state = HELD if r3["population_too_thin"] else …
+
+    and **every test and the whole selftest still passed.** Under that mutant a
+    population of one host prints PASS, the summary reads `inconclusive 0`, and the
+    gate is green on nothing — the exact vacuous pass R25 was written to name. The
+    word INCONCLUSIVE was enforced by nothing but the fact that I had typed it.
+
+    ⚠ The lesson is the file's own header turned on itself: keeping the decision pure
+    is what makes "would it have failed?" a test. The decision had drifted one
+    function downstream of where the tests stop, so the guard stopped covering it.
+    A verdict that only a DB connection can reach is a verdict nobody checks.
+
+    THIN WINS OVER `ok`, unconditionally. A thin population's percentage is not
+    evidence either way — 100% of one host is not a pass, and 0% of one host is not
+    a regression."""
+    if r3["population_too_thin"]:
+        return INCONCLUSIVE
+    return HELD if r3["ok"] else FAILED
 
 
 def i4_unmarked_downgrades(rows) -> list:
@@ -256,7 +451,7 @@ def i4_unmarked_downgrades(rows) -> list:
 # ══ THE QUERIES — read-only, bounded, one per invariant ════════════════════
 
 Q_I1 = """
-select r.scan_run_id::text as scan_run_id, r.asset_id, r.completed_at,
+select r.scan_run_id::text as scan_run_id, r.asset_id, r.started_at, r.completed_at,
        exists (select 1 from scan_run_artifacts a
                 where a.scan_run_id = r.scan_run_id and a.tool_name = 'wafw00f') as has_raw,
        exists (select 1 from scan_run_artifacts a
@@ -269,7 +464,7 @@ select r.scan_run_id::text as scan_run_id, r.asset_id, r.completed_at,
 """
 
 Q_I2 = """
-select r.scan_run_id::text as scan_run_id, r.asset_id,
+select r.scan_run_id::text as scan_run_id, r.asset_id, r.started_at,
        (select coalesce(a.content_jsonb->>'raw', a.content_jsonb::text)
           from scan_run_artifacts a
          where a.scan_run_id = r.scan_run_id and a.tool_name = 'wafw00f' limit 1) as raw,
@@ -294,14 +489,22 @@ select r.scan_run_id::text as scan_run_id, r.asset_id,
 #   defaulting, which was a footnote waiting to become a bug. One fewer home.
 Q_I3 = """
 select distinct on (r.asset_id)
-       r.asset_id, r.scan_run_id::text as scan_run_id, r.completed_at,
+       r.asset_id, r.scan_run_id::text as scan_run_id, r.started_at, r.completed_at,
        (select a.content_jsonb::text from scan_run_artifacts a
          where a.scan_run_id = r.scan_run_id and a.tool_name = 'stack_id_passive'
          order by a.artifact_id desc limit 1) as envelope,
        (select coalesce(a.content_jsonb->>'raw', a.content_jsonb::text)
           from scan_run_artifacts a
          where a.scan_run_id = r.scan_run_id and a.tool_name = 'wafw00f'
-         order by a.artifact_id desc limit 1) as wafw00f_raw
+         order by a.artifact_id desc limit 1) as wafw00f_raw,
+       -- ⚠ SEPARATE FROM THE RAW, ON PURPOSE (ruling 264/4). A NULL raw cannot tell
+       -- "the tool never ran" from "it ran and said nothing", and READ 3 in relay 263
+       -- found THREE of four excluded hosts in the first class while the line printed
+       -- the second. Absence vs evidence of absence, in the reporting, inside the file
+       -- built to stop it.
+       exists (select 1 from scan_run_artifacts a
+                where a.scan_run_id = r.scan_run_id and a.tool_name = 'wafw00f')
+         as wafw00f_present
   from scan_run r
  where r.intensity = 'heavy'
    and r.completed_at > now() - interval '%s days'
@@ -332,59 +535,116 @@ def _rows(cur, sql, arg):
 
 
 def run_live(dsn: str) -> int:
+    # ⛔ REFUSE ON AN UNRECOGNISED PROJECT REF (ruling 264/5). Guessing an instance
+    # would silently pick the wrong `since` column, and a wrong `since` produces a
+    # verdict that LOOKS like a regression. The ref is printed so the fix is obvious.
+    instance = instance_from_dsn(dsn)
+    if instance is None:
+        try:
+            pr = urllib.parse.urlsplit(dsn)
+            seen = f"host={pr.hostname!r} user={pr.username!r}"   # never the password
+        except Exception:
+            seen = "unparseable DSN"
+        print(f"{SUMMARY_PREFIX} REFUSED — unrecognised project ref ({seen}). "
+              f"Known: {sorted(_PROJECT_REFS)}. Add it to _PROJECT_REFS with its "
+              f"own SINCE column; do not guess.")
+        return 1
+    print(f"instance: {instance}   (from the DSN, never from SUPABASE_URL)")
+    for iid in ("I1", "I2", "I3", "I4"):
+        sha, when = SINCE[instance][iid]
+        print(f"  armed {iid}: rows with {ANCHOR[iid]} >= {when}  ({sha})")
+    print()
+
     conn = psycopg.connect(dsn, row_factory=dict_row, connect_timeout=15)
     conn.autocommit = True                      # read-only; never opens a write txn
-    failures = []
+    tally = {HELD: 0, FAILED: 0, INCONCLUSIVE: 0}
+    backlog_total = 0
     try:
         with conn.cursor() as cur:
-            r1 = i1_violations(_rows(cur, Q_I1, WINDOW_DAYS))
-            _report("I1", "heavy with a raw wafw00f and no parsed verdict",
-                    not r1, f"{len(r1)} violation(s)",
-                    [f"{v['asset_id']} {v['scan_run_id'][:8]}" for v in r1[:5]], failures)
+            # ── I1 ──────────────────────────────────────────────────────────
+            armed, back = armed_split(_rows(cur, Q_I1, WINDOW_DAYS), "I1", instance)
+            v, vb = i1_violations(armed), i1_violations(back)
+            backlog_total += _report(
+                "I1", "heavy with a raw wafw00f and no parsed verdict",
+                FAILED if v else HELD,
+                f"{len(v)} violation(s) of {len(armed)} armed run(s)",
+                [f"{x['asset_id']} {x['scan_run_id'][:8]}" for x in v[:5]],
+                vb, [x["asset_id"] for x in vb[:5]], tally)
 
-            r2 = i2_laundered(_rows(cur, Q_I2, WINDOW_DAYS))
-            _report("I2", "stored verdict says generic/null while the raw names a vendor",
-                    not r2, f"{len(r2)} laundered row(s)",
-                    [f"{v['asset_id']} raw={v['raw_says']} stored={v['stored_kind']}"
-                     for v in r2[:5]], failures)
+            # ── I2 ──────────────────────────────────────────────────────────
+            armed, back = armed_split(_rows(cur, Q_I2, WINDOW_DAYS), "I2", instance)
+            v, vb = i2_laundered(armed), i2_laundered(back)
+            backlog_total += _report(
+                "I2", "stored verdict generic/null while the raw names a vendor",
+                FAILED if v else HELD,
+                f"{len(v)} laundered of {len(armed)} armed run(s)",
+                [f"{x['asset_id']} raw={x['raw_says']} stored={x['stored_kind']}" for x in v[:5]],
+                vb, [f"{x['asset_id']} raw={x['raw_says']}" for x in vb[:5]], tally)
 
-            r3 = i3_empty_envelopes(_rows(cur, Q_I3, WINDOW_DAYS))
-            _report("I3", "newest heavy on a host that answered HTTP carries a full envelope",
-                    r3["ok"],
-                    f"{r3['full_pct']}% full of {r3['total']} host(s) "
-                    f"(floor {r3['floor_pct']}%, min population {r3['min_population']})"
-                    + ("  ⛔ POPULATION TOO THIN — predicate bug, not a pass"
-                       if r3["population_too_thin"] else ""),
-                    [f"EMPTY {v['asset_id']}" for v in r3["empty"][:5]]
-                    + [f"excluded: {v['asset_id']} — {v['reason']}"
-                       for v in r3["excluded"][:5]], failures)
+            # ── I3 ──────────────────────────────────────────────────────────
+            armed, back = armed_split(_rows(cur, Q_I3, WINDOW_DAYS), "I3", instance)
+            r3 = i3_empty_envelopes(armed)
+            state = i3_state(r3)        # pure — tested; see i3_state's docstring
+            ex = r3["excluded"]
+            by_reason = {}
+            for e in ex:
+                by_reason[e["reason"]] = by_reason.get(e["reason"], 0) + 1
+            detail = (f"{r3['full_pct']}% full of {r3['total']} armed host(s) "
+                      f"(floor {r3['floor_pct']}%, min population {r3['min_population']})")
+            if state is INCONCLUSIVE:
+                detail += f" — UNARMED: {len(back)} host(s) still on a pre-fix heavy"
+            lines = [f"EMPTY {x['asset_id']}" for x in r3["empty"][:5]]
+            lines += [f"excluded {n}x: {reason}" for reason, n in sorted(by_reason.items())]
+            backlog_total += _report(
+                "I3", "newest heavy on a host that answered HTTP carries a full envelope",
+                state, detail, lines,
+                [r for r in back if envelope_is_empty(r.get("envelope"))],
+                [r["asset_id"] for r in back
+                 if envelope_is_empty(r.get("envelope"))][:5], tally)
 
+            # ── I4 ──────────────────────────────────────────────────────────
             raw4 = _rows(cur, Q_I4, RECENT_HOURS)
             for r in raw4:
                 r["newest_envelope_empty"] = envelope_is_empty(r.get("newest_envelope"))
-            r4 = i4_unmarked_downgrades(raw4)
-            _report("I4", "same-class downgrade on an empty envelope carries the preserve marker",
-                    not r4, f"{len(r4)} unmarked of {len(raw4)} same-class downgrade(s)",
-                    [v["asset_id"] for v in r4[:5]], failures)
+            armed, back = armed_split(raw4, "I4", instance)
+            v, vb = i4_unmarked_downgrades(armed), i4_unmarked_downgrades(back)
+            backlog_total += _report(
+                "I4", "same-class downgrade on an empty envelope carries the preserve marker",
+                FAILED if v else HELD,
+                f"{len(v)} unmarked of {len(armed)} armed same-class downgrade(s)",
+                [x["asset_id"] for x in v[:5]],
+                vb, [x["asset_id"] for x in vb[:5]], tally)
     finally:
         conn.close()
 
-    # ⛔ RULING 21 — the summary line. A job that ran nothing must FAIL, not pass;
-    # the gate greps for this exact prefix, so a step that died early cannot read
-    # as green. This is what caught lane 6, and it is the only cover for the
-    # "step exited silently" class.
-    print(f"{SUMMARY_PREFIX} {4 - len(failures)}/4 held"
-          + (f" — FAILED: {', '.join(failures)}" if failures else ""))
-    return 1 if failures else 0
+    # ⛔ RULING 21 + 264/3 — THE SUMMARY LINE, WITH ALL FOUR COUNTS OR NONE.
+    # `3/4 held` is exactly the phrasing that lets INCONCLUSIVE read as fine, so that
+    # form is gone. INCONCLUSIVE is a third word, never a shade of PASS. The line is
+    # printed on the pass AND the fail path, so its ABSENCE means the step died rather
+    # than failed — and the gate greps only for the prefix, because the counts vary.
+    print(f"{SUMMARY_PREFIX} held {tally[HELD]} · inconclusive {tally[INCONCLUSIVE]} "
+          f"· failed {tally[FAILED]} · backlog {backlog_total}")
+    return 1 if tally[FAILED] else 0
 
 
-def _report(iid, title, ok, measured, examples, failures):
-    print(f"  {'PASS' if ok else '⛔ FAIL'}  {iid}  {title}")
+def _report(iid, title, state, measured, examples, backlog_rows, backlog_names, tally):
+    """One invariant's three-state line, plus its BACKLOG line if it has one.
+    Returns the backlog count so the caller can total it."""
+    mark = {HELD: "PASS        ", FAILED: "⛔ FAIL      ",
+            INCONCLUSIVE: "⚠ INCONCLUSIVE"}[state]
+    print(f"  {mark}  {iid}  {title}")
     print(f"          measured: {measured}")
     for e in examples:
         print(f"          · {e}")
-    if not ok:
-        failures.append(iid)
+    n = len(backlog_rows)
+    if n:
+        # ⚠ A BACKLOG COUNT WITH NO NEXT STEP IS A NUMBER PEOPLE SCROLL PAST.
+        print(f"  BACKLOG       {iid}  {n} pre-fix row(s) — NOT blocking")
+        for b in backlog_names:
+            print(f"          · {b}")
+        print(f"          clears with: {BACKLOG_REMEDY[iid]}")
+    tally[state] += 1
+    return n
 
 
 # ══ SELFTEST — every invariant, BAD shape then GOOD shape ══════════════════
@@ -394,14 +654,14 @@ def _report(iid, title, ok, measured, examples, failures):
 def _selftest() -> int:
     ok = True
 
-    # I1 — the persist fold. Bad: raw without parsed (18 of 18). Good: both, and
-    # the SFTP pair with NEITHER, which must not count as a violation.
+    # I1 — the persist fold. Bad: raw without parsed (18 of 18). Good: both, and a
+    # host with NEITHER artifact, which must not count as a violation.
     bad1 = [{"asset_id": "commandcommcentral.com", "scan_run_id": "a", "has_raw": True, "has_parsed": False}]
     good1 = [{"asset_id": "commandcommcentral.com", "scan_run_id": "a", "has_raw": True, "has_parsed": True},
              {"asset_id": "ftp.sciimage.com", "scan_run_id": "b", "has_raw": False, "has_parsed": False}]
     ok &= len(i1_violations(bad1)) == 1
     ok &= i1_violations(good1) == []
-    print(f"  I1 fires on raw-without-parsed, silent on the SFTP pair (neither artifact): "
+    print(f"  I1 fires on raw-without-parsed, silent on a host with NEITHER artifact: "
           f"{'ok' if len(i1_violations(bad1)) == 1 and not i1_violations(good1) else 'FAIL'}")
 
     # I2 — the ANSI parse. The raw is the PRODUCTION bytes, escapes and all.
@@ -445,8 +705,11 @@ def _selftest() -> int:
              for i in range(5)])
     r_bad = i3_empty_envelopes(bad3)
     ok &= r_bad["ok"] is False and r_bad["full_pct"] == 45
-    # ⭐ SILENT: the SFTP pair — empty envelope, but no HTTP surface, so EXCLUDED.
-    #   This is the exact shape that failed premerge-gate #2 at 80% of 10.
+    # ⭐ SILENT: two hosts that were DOWN in that run — empty envelope, but no HTTP
+    #   surface, so EXCLUDED. The shape that failed premerge-gate #2 at 80% of 10.
+    #   ⚠ NOT "the SFTP pair": ftp.sciimage.com answers HTTP when it is up (entry 263).
+    #   Here both rows carry "appears to be down", which is the property being tested —
+    #   the hostnames are incidental and must not be read as a standing fact.
     good3 = ([{"asset_id": f"g{i}", "envelope": full_env, "wafw00f_raw": W_VERDICT}
               for i in range(8)] +
              [{"asset_id": "ftp.sciimage.com", "envelope": empty_env, "wafw00f_raw": W_DOWN},
@@ -454,8 +717,8 @@ def _selftest() -> int:
     r_good = i3_empty_envelopes(good3)
     ok &= r_good["ok"] is True and r_good["total"] == 8 and r_good["full_pct"] == 100
     ok &= len(r_good["excluded"]) == 2
-    print(f"  I3 fires at 45% on a banned egress, and is SILENT on the SFTP pair "
-          f"(8/8, 2 excluded): "
+    print(f"  I3 fires at 45% on a banned egress, and is SILENT on hosts that were "
+          f"down in that run (8/8, 2 excluded): "
           f"{'ok' if not r_bad['ok'] and r_good['ok'] and r_good['total'] == 8 else 'FAIL'}")
     # ⛔ AND A POPULATION THAT COLLAPSES IS A FAILURE, NOT A PASS. The old code
     #   returned ok=True on total==0, so a predicate bug that excluded everything
@@ -485,6 +748,34 @@ def _selftest() -> int:
     print(f"  I3 floor is wired to the verdict (3 full hosts -> FAIL) and 90% is the "
           f"boundary (9/10 pass, 8/10 fail): "
           f"{'ok' if not r_m3['ok'] and _b(9,1)['ok'] and not _b(8,2)['ok'] else 'FAIL'}")
+    # ⛔ MUTANT D (4.7, relay 266) — THE WORD ITSELF WAS UNGUARDED. The mapping from
+    #   `population_too_thin` to the word INCONCLUSIVE lived inside run_live(), which
+    #   needs a DSN, so `thin -> HELD` passed every test AND this selftest: a thin
+    #   population printed PASS and the summary read `inconclusive 0`. R25's own
+    #   vacuous pass, one function downstream of where the tests stopped.
+    ok &= i3_state(r_m3) is INCONCLUSIVE               # 3 hosts, 100% full -> still thin
+    ok &= i3_state(_b(9, 1)) is HELD                   # 10 hosts, 90%      -> PASS
+    ok &= i3_state(_b(8, 2)) is FAILED                 # 10 hosts, 80%      -> FAIL
+    ok &= i3_state(i3_empty_envelopes([])) is INCONCLUSIVE      # nothing at all
+    # ⚠ THE VERDICT IS COMPUTED INTO A NAME FIRST. My first version split the
+    #   condition across two concatenated f-strings, which python 3.10 cannot parse —
+    #   an f-string expression may not straddle two literals. It failed at IMPORT, so
+    #   the whole test file errored on collection rather than one test failing: a
+    #   syntax error in the reporting line takes down the thing it reports on.
+    _d_ok = (i3_state(r_m3) is INCONCLUSIVE and i3_state(_b(9, 1)) is HELD
+             and i3_state(_b(8, 2)) is FAILED)
+    print(f"  i3_state: thin -> INCONCLUSIVE EVEN AT 100% full (mutant D), "
+          f"10 hosts 90% -> PASS, 80% -> FAIL: {'ok' if _d_ok else 'FAIL'}")
+    # ⚠ AND THE SUMMARY LINE'S OWN FORMAT, exercised with a non-zero inconclusive —
+    #   the count that used to be unreachable is now printed here.
+    _tally = {HELD: 2, FAILED: 0, INCONCLUSIVE: 1}
+    _summary = (f"{SUMMARY_PREFIX} held {_tally[HELD]} · inconclusive "
+                f"{_tally[INCONCLUSIVE]} · failed {_tally[FAILED]} · backlog 15")
+    _fmt_ok = "inconclusive 1" in _summary and "/4" not in _summary
+    ok &= _fmt_ok
+    print(f"  the summary line carries all four counts and no N/4 form: "
+          f"{'ok' if _fmt_ok else 'FAIL'}")
+    print(f"          {_summary}")
     ok &= envelope_is_empty(empty_env) and not envelope_is_empty(full_env)
     ok &= envelope_is_empty(None) and envelope_is_empty("not json") and envelope_is_empty("[]")
 
@@ -505,18 +796,152 @@ def _selftest() -> int:
     print(f"  I4 fires on an unmarked same-class downgrade over an empty envelope: "
           f"{'ok' if len(i4_unmarked_downgrades(bad4)) == 1 and not i4_unmarked_downgrades(good4) else 'FAIL'}")
 
+    # ══ R25 — the instance resolution, the anchor, and the armed split ══════
+    # ⚠ BOTH DSN SHAPES ARE IN USE and the refusal is the important case.
+    _dsns = [
+        ("postgresql://postgres:pw@db.hdygktppfvuspnumpfuq.supabase.co:5432/postgres", "command"),
+        ("postgresql://postgres.bxcvzpbmxsdtalyfanee:pw@aws-0-us-east-1.pooler.supabase.com:6543/postgres", "prodex"),
+        ("postgresql://postgres:pw@db.bxcvzpbmxsdtalyfanee.supabase.co:5432/postgres", "prodex"),
+        ("postgresql://postgres.hdygktppfvuspnumpfuq:pw@aws-0-eu-west-1.pooler.supabase.com:6543/postgres", "command"),
+        # ⛔ the refusals — an unknown ref must NEVER resolve to a guess
+        ("postgresql://postgres:pw@db.zzzzzzzzzzzzzzzzzzzz.supabase.co:5432/postgres", None),
+        ("postgresql://postgres@localhost:5432/postgres", None),
+        ("not a dsn at all", None), ("", None), (None, None),
+    ]
+    for dsn, want in _dsns:
+        got = instance_from_dsn(dsn)
+        ok &= got == want
+        if got != want:
+            print(f"  ⛔ instance_from_dsn mis-resolved: want {want}, got {got}")
+    print(f"  R25 instance from the DSN (both shapes, both instances, 5 refusals): "
+          f"{'ok' if all(instance_from_dsn(d) == w for d, w in _dsns) else 'FAIL'}")
+    # ⚠ and it must never surface the password, whatever it is handed
+    _secret = "postgresql://postgres:SUPERSECRET@db.hdygktppfvuspnumpfuq.supabase.co:5432/postgres"
+    ok &= instance_from_dsn(_secret) == "command"
+
+    # The fractional-seconds parser — 1 to 6 digits, all of which Postgres emits.
+    for _t in ("2026-09-17T12:18:32.47312+00:00", "2026-09-17T12:18:32.4+00:00",
+               "2026-09-17T12:18:32.473120+00:00", "2026-09-17T12:18:32+00:00"):
+        ok &= iso(_t) is not None
+    ok &= iso(None) is None
+    print(f"  iso() takes 1-6 fractional digits (the '.47312' trap): "
+          f"{'ok' if iso('2026-09-17T12:18:32.47312+00:00') else 'FAIL'}")
+
+    # ⭐ THE ARMED SPLIT, ON THE REAL BOUNDARY. f8cc3a3e is Command's I3 fix at
+    #   2026-09-17T08:09:34-04:00 = 12:09:34Z. #3050 STARTED 12:12:20Z -> armed.
+    #   ftp.sciimage.com's newest heavy started 2026-09-06 -> backlog.
+    _rows3 = [
+        {"asset_id": "commandcommcentral.com", "started_at": "2026-09-17T12:12:20.1+00:00"},
+        {"asset_id": "ftp.sciimage.com",       "started_at": "2026-09-06T12:11:00+00:00"},
+        {"asset_id": "no-timestamp",           "started_at": None},
+    ]
+    _a, _b = armed_split(_rows3, "I3", "command")
+    ok &= [r["asset_id"] for r in _a] == ["commandcommcentral.com"]
+    ok &= len(_b) == 2
+    print(f"  armed_split on the real f8cc3a3e boundary (#3050 armed, 09-06 backlog, "
+          f"NULL anchor -> backlog): {'ok' if len(_a) == 1 and len(_b) == 2 else 'FAIL'}")
+
+    # ⚠ THE ANCHOR IS started_at. A run that STARTED before the fix and COMPLETED
+    #   after it ran the OLD code — bcbsma's real 40-minute window. Under
+    #   completed_at it would be armed, and a wrongly-armed row looks like a
+    #   regression. This is the case that makes the ruling concrete.
+    _straddle = [{"asset_id": "bcbsma", "started_at": "2026-09-17T12:00:41+00:00",
+                  "completed_at": "2026-09-17T12:41:01+00:00"}]
+    ok &= armed_split(_straddle, "I3", "command")[0] == []
+    ok &= len(armed_split(_straddle, "I3", "command", anchor="completed_at")[0]) == 1
+    print(f"  a run STARTING pre-fix and FINISHING post-fix is BACKLOG on started_at "
+          f"and would be armed on completed_at: "
+          f"{'ok' if not armed_split(_straddle, 'I3', 'command')[0] else 'FAIL'}")
+
+    # ⛔ MUTANT A (4.7, relay 266): `>= cut` -> `> cut` SURVIVED — nothing sat exactly
+    #   ON the cut second. The docstring says "at/after", so the boundary row is the
+    #   spec, and a spec with no fixture is a sentence.
+    _at_cut = [{"asset_id": "exactly-at-the-cut",
+                "started_at": SINCE["command"]["I3"][1]}]           # the cut, verbatim
+    ok &= len(armed_split(_at_cut, "I3", "command")[0]) == 1
+    _one_before = [{"asset_id": "one-second-before",
+                    "started_at": "2026-09-17T08:09:33-04:00"}]
+    ok &= armed_split(_one_before, "I3", "command")[0] == []
+    _a_ok = (len(armed_split(_at_cut, "I3", "command")[0]) == 1
+             and not armed_split(_one_before, "I3", "command")[0])
+    print(f"  a row exactly AT the cut second is ARMED, one second before is BACKLOG "
+          f"(mutant A): {'ok' if _a_ok else 'FAIL'}")
+
+    # ⛔ MUTANT F (4.7, relay 266): SINCE[instance] -> SINCE["command"] SURVIVED,
+    #   because every fixture asked for "command". The instance columns differ by two
+    #   seconds in production, so ONE row placed between them separates them — and
+    #   this is the only check that would catch a future column swap. If job 4 ever
+    #   reads the wrong instance's `since`, it arms the wrong rows and every verdict
+    #   after that is about a different repo's history.
+    _between = [{"asset_id": "between-the-two-cuts",
+                 "started_at": "2026-09-17T08:09:35-04:00"}]        # Cmd 08:09:34, Pdx 08:09:36
+    ok &= len(armed_split(_between, "I3", "command")[0]) == 1        # armed on Command
+    ok &= armed_split(_between, "I3", "prodex")[0] == []             # backlog on Prodex
+    _f_ok = (len(armed_split(_between, "I3", "command")[0]) == 1
+             and not armed_split(_between, "I3", "prodex")[0])
+    print(f"  the SINCE column FOLLOWS the instance: one row between Command's cut "
+          f"and Prodex's is armed on command, backlog on prodex (mutant F): "
+          f"{'ok' if _f_ok else 'FAIL'}")
+
+    # Per-repo columns, and every invariant present in both.
+    ok &= set(SINCE) == {"command", "prodex"}
+    for _inst in SINCE:
+        ok &= set(SINCE[_inst]) == {"I1", "I2", "I3", "I4"} == set(ANCHOR) == set(BACKLOG_REMEDY)
+        for _iid, (_sha, _when) in SINCE[_inst].items():
+            ok &= iso(_when) is not None and len(_sha) >= 7
+    ok &= SINCE["command"]["I3"][1] != SINCE["prodex"]["I3"][1]   # they really differ
+    print(f"  SINCE has both instances x 4 invariants, all parseable, Cmd != Pdx: "
+          f"{'ok' if set(SINCE) == {'command','prodex'} else 'FAIL'}")
+
+    # ⚠ FIXTURE SCOPE CORRECTED (ruling 264/8, from relay 263's byte-read):
+    #   ftp.sciimage.com ANSWERS HTTP — its wafw00f produced a generic verdict off
+    #   four requests — so it is a COUNTED host, not an excluded one. The old fixture
+    #   called it part of "the SFTP pair with no HTTPS surface", which was false and
+    #   was repeated across four entries before anyone read the bytes.
+    _scoped = [
+        # ⚠ VERBATIM FROM THE DB — scan_run e6360fac, 2026-09-06, relay 263 READ 1.
+        # My first hand-typed version of this fixture dropped the
+        # "[+] Generic Detection results:" line, and WITHOUT it wafw00f_saw_http
+        # returns False, because that `[+] ` IS the verdict marker. The selftest
+        # caught it: the code was right and the fixture I typed was not. The ANSI
+        # rule again — a fixture a human composed is not the bytes a tool emits.
+        {"asset_id": "ftp.sciimage.com", "envelope": full_env, "wafw00f_present": True,
+         "wafw00f_raw": ("[*] Checking https://ftp.sciimage.com/\n"
+                         "[+] Generic Detection results:\n"
+                         "[*] The site https://ftp.sciimage.com/ seems to be behind a WAF "
+                         "or some sort of security solution\n"
+                         "[~] Reason: The response was different when the request "
+                         "wasn't made from a browser.\n")},
+        {"asset_id": "ftp.unimacgraphics.com", "envelope": empty_env,
+         "wafw00f_raw": "[*] Checking https://ftp.unimacgraphics.com/\n", "wafw00f_present": True},
+        {"asset_id": "geisinger.commandcommcentral.com", "envelope": full_env,
+         "wafw00f_raw": None, "wafw00f_present": False},
+    ]
+    _rs = i3_empty_envelopes(_scoped, min_population=1)
+    ok &= [c["asset_id"] for c in _scoped if wafw00f_saw_http(c["wafw00f_raw"])] == ["ftp.sciimage.com"]
+    _reasons = sorted(e["reason"] for e in _rs["excluded"])
+    ok &= _reasons == ["no wafw00f artifact (tool did not run)", "wafw00f ran, no verdict"]
+    print(f"  fixture scope: ftp.sciimage.com COUNTED (it answers HTTP); the two "
+          f"exclusion reasons are distinct: {'ok' if len(_reasons) == 2 else 'FAIL'}")
+
     # ⛔ THE QUERIES MUST BE READ-ONLY. Stated as a test rather than a promise:
     # this runs against production with a service-role credential.
+    # ⚠ THIS LINE USED TO REPORT THE CUMULATIVE `ok`, so an unrelated failure earlier
+    # in the selftest made it announce that the QUERIES were not read-only. A control
+    # that misattributes a failure sends the next reader to the wrong file — and it
+    # did exactly that to me one run ago.
+    _ro_ok = True
     for name, q in (("Q_I1", Q_I1), ("Q_I2", Q_I2), ("Q_I3", Q_I3), ("Q_I4", Q_I4)):
         low = " ".join(q.split()).lower()
         bad = [v for v in ("insert ", "update ", "delete ", "drop ", "alter ", "truncate ")
                if v in low]
-        ok &= not bad
-        ok &= low.startswith("select") or low.startswith("with")
+        _sw = low.startswith("select") or low.startswith("with")
+        ok &= not bad; ok &= _sw
+        _ro_ok = _ro_ok and (not bad) and _sw
         if bad:
             print(f"  ⛔ {name} contains {bad}")
     print(f"  all four queries are read-only and start with SELECT/WITH: "
-          f"{'ok' if ok else 'FAIL'}")
+          f"{'ok' if _ro_ok else 'FAIL'}")
 
     print(f"{SUMMARY_PREFIX} selftest {'PASS' if ok else 'FAIL'} "
           f"(4 invariants, each proven to fire AND to stay silent)")

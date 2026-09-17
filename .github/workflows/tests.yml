@@ -588,17 +588,38 @@ jobs:
             exit 1
           fi
 
-          echo "── full output, INCLUDING findings this lane does not gate on ──"
+          # ⚠ THE UNFILTERED CALL LEAVES shellcheck/pyflakes ON (ruling 264/7) so the
+          # pin sweep can read CI's own shell findings — 21 of them on the runner.
+          # ⚠ AND rc_all IS PRINTED (ruling 264/6). A captured-and-ignored status is
+          # the exact shape we keep finding: lane 6's swallowed rc, lane 7's killed
+          # assignment, the 127 I nearly reported as a result. If it is captured, it
+          # is printed.
           rc_all=0
           all=$(/tmp/actionlint -no-color .github/workflows/*.yml 2>&1) || rc_all=$?
+          echo "── full output (actionlint rc=$rc_all, NOT gated) ──"
           printf '%s\n' "$all"
           echo "──"
 
           # `|| rc=$?` — an `||` list, which -e exempts. A bare capture would abort ON
           # THE ASSIGNMENT under GitHub's `bash -e` and the lane would be silently red
           # with no output, exactly as lane 6 was for three pushes.
+          # ⛔ -shellcheck= -pyflakes= — THE GATED CALL MUST NOT DEPEND ON THE HOST.
+          # actionlint shells out to shellcheck/pyflakes when it finds them on PATH
+          # and folds their findings into its own. The GitHub runner HAS shellcheck;
+          # my machine and 4.7's do not. So "0 gated findings across 24" was true on
+          # our hosts and FALSE on the runner: `tests` #139 ran this step end to end
+          # and failed on 21 SC20xx STYLE findings, not one of them a workflow-syntax
+          # or expression error.
+          #
+          # ⇒ RULE 14, THIRD TIME IN THIS LANE, AND THE AXIS IS NEW EACH TIME:
+          #     253  the binary, not the step          (what was run)
+          #     257  bash -e, not a bare shell         (the shell)
+          #     262  shellcheck present, not absent    (the ambient tool inventory)
+          #   Measured both ways with a stub shellcheck on PATH: with these flags the
+          #   answer is rc=0 whether the tool is there or not. This lane is "workflow
+          #   syntax + expressions"; shell style is the pin's job and the sweep's.
           rc=0
-          out=$(/tmp/actionlint -no-color \
+          out=$(/tmp/actionlint -no-color -shellcheck= -pyflakes= \
                 -ignore 'maximum number of inputs for "workflow_dispatch"' \
                 .github/workflows/*.yml 2>&1) || rc=$?
           if [ "$rc" -ne 0 ]; then

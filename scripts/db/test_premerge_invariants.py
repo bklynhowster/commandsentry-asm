@@ -194,8 +194,39 @@ def test_the_excluded_hosts_are_returned_not_silently_dropped():
     vacuous-pass shape wearing a ratio. The exclusions are reported with reasons."""
     r = pi.i3_empty_envelopes(
         [_host(f"f{i}", FULL_ENV) for i in range(5)] +
-        [_host("ftp.sciimage.com", EMPTY_ENV, W_DOWN)])
-    assert len(r["excluded"]) == 1 and "no HTTP surface" in r["excluded"][0]["reason"]
+        [{"asset_id": "down-host", "envelope": EMPTY_ENV, "wafw00f_raw": W_DOWN,
+          "wafw00f_present": True}])
+    assert len(r["excluded"]) == 1
+    assert r["excluded"][0]["reason"] == "wafw00f ran, no verdict"
+
+
+@pytest.mark.parametrize("present,raw,want", [
+    (True,  W_DOWN, "wafw00f ran, no verdict"),
+    (True,  "[*] Checking https://x/\n", "wafw00f ran, no verdict"),
+    (False, None, "no wafw00f artifact (tool did not run)"),
+])
+def test_the_two_exclusion_reasons_are_distinct(present, raw, want):
+    """⛔ RELAY 263 READ 3. THREE of the four excluded Command hosts had NO wafw00f
+    artifact at all, and the line printed "no verdict" over every one of them —
+    conflating "we looked and could not tell" with "we did not look". The
+    absence-vs-evidence-of-absence error, in the reporting, inside the file built to
+    stop it. Two reasons now, and they are checked apart."""
+    r = pi.i3_empty_envelopes(
+        [_host(f"f{i}", FULL_ENV) for i in range(5)] +
+        [{"asset_id": "x", "envelope": EMPTY_ENV, "wafw00f_raw": raw,
+          "wafw00f_present": present}])
+    assert r["excluded"][0]["reason"] == want
+
+
+def test_the_third_exclusion_reason_is_dropped_as_impossible():
+    """⚠ "not a heavy in window" was specified and CANNOT occur: Q_I3 already filters
+    `intensity = 'heavy'` and the window. A reason that can never print is a comment
+    pretending to be a branch, so it is absent — and its absence is asserted rather
+    than left to be noticed."""
+    q = " ".join(pi.Q_I3.split()).lower()
+    assert "intensity = 'heavy'" in q and "interval" in q
+    src = open(os.path.join(HERE, "premerge_invariants.py"), encoding="utf-8").read()
+    assert "not a heavy in window" not in src.split("def i3_empty_envelopes")[1].split("def ")[0]
 
 
 def test_a_collapsed_population_FAILS_rather_than_passing():
@@ -369,11 +400,46 @@ def test_the_live_path_also_prints_the_summary_line():
     prints = [n for n in ast.walk(fn)
               if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "print"
               and "SUMMARY_PREFIX" in ast.unparse(n)]
-    assert len(prints) == 1, "run_live must print the summary line exactly once"
-    body_last = fn.body[-2:]
+    # ⚠ TWO now, and both are load-bearing: the REFUSED line on an unrecognised
+    # project ref (ruling 264/5) and the four-count summary at the end. Both carry
+    # the prefix, so the gate's grep cannot tell a refusal from a silent death —
+    # which is the point: neither is a pass, and both must be visible.
+    assert len(prints) == 2, (
+        f"run_live prints the summary prefix {len(prints)}x; expected 2 — the "
+        f"unrecognised-ref refusal and the final four-count line")
+    body_last = fn.body[-3:]
     assert any(any(p is c for c in ast.walk(stmt)) for stmt in body_last for p in prints), (
-        "the summary print is no longer at the end of run_live — a mid-function "
-        "return would skip it and the job would read as 'died' instead of 'failed'")
+        "no summary print near the end of run_live — a mid-function return would "
+        "skip it and the job would read as 'died' instead of 'failed'")
+
+
+def test_the_summary_line_carries_all_four_counts_or_none():
+    """⛔ RULING 264/3. `3/4 held` is exactly the phrasing that lets INCONCLUSIVE read
+    as fine, so that form is gone. Four counts or none."""
+    fn = next(n for n in ast.walk(ast.parse(SRC))
+              if isinstance(n, ast.FunctionDef) and n.name == "run_live")
+    body = ast.get_source_segment(SRC, fn)
+    # ⚠ COMMENTS STRIPPED. The first version of this assert searched the whole
+    # function body for "/4 held" and found it in the COMMENT that explains why we
+    # do NOT use that form. SEVENTH prose-vs-checker instance this week — and I
+    # wrote it minutes after writing two comments about this exact class. The rule
+    # is not "be careful with substrings"; it is that a check over a region
+    # containing prose must strip the prose FIRST, every time, without deciding
+    # whether this particular one needs it.
+    code = "\n".join(l for l in body.split("\n") if not l.lstrip().startswith("#"))
+    final = code.split("SUMMARY_PREFIX")[-1]
+    for word in ("held", "inconclusive", "failed", "backlog"):
+        assert word in final, f"the summary line omits {word!r}"
+    assert "/4 held" not in code, "the N/4 form is back — it hides INCONCLUSIVE"
+
+
+def test_exit_code_is_zero_unless_something_actually_FAILED():
+    """Backlog and inconclusive never block. A gate that cannot go green is a gate
+    people learn to bypass, and it arrived on day one."""
+    fn = next(n for n in ast.walk(ast.parse(SRC))
+              if isinstance(n, ast.FunctionDef) and n.name == "run_live")
+    body = ast.get_source_segment(SRC, fn)
+    assert "return 1 if tally[FAILED] else 0" in body
 
 
 def test_no_argument_means_selftest_never_live():
@@ -383,3 +449,263 @@ def test_no_argument_means_selftest_never_live():
               if isinstance(n, ast.FunctionDef) and n.name == "main")
     body = ast.get_source_segment(SRC, fn)
     assert "if a.selftest or not a.live:" in body
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R25 — armed vs backlog, the anchor, and the instance (relay 262/264)
+# ═══════════════════════════════════════════════════════════════════════════
+
+CMD_DSN = "postgresql://postgres:pw@db.hdygktppfvuspnumpfuq.supabase.co:5432/postgres"
+PDX_POOL = ("postgresql://postgres.bxcvzpbmxsdtalyfanee:pw@"
+            "aws-0-us-east-1.pooler.supabase.com:6543/postgres")
+
+
+@pytest.mark.parametrize("dsn,want", [
+    (CMD_DSN, "command"),
+    (PDX_POOL, "prodex"),
+    ("postgresql://postgres:pw@db.bxcvzpbmxsdtalyfanee.supabase.co:5432/postgres", "prodex"),
+    ("postgresql://postgres.hdygktppfvuspnumpfuq:pw@aws-0-eu-west-1.pooler.supabase.com:6543/x",
+     "command"),
+])
+def test_the_instance_comes_from_the_dsn_both_shapes(dsn, want):
+    """⚠ FROM THE DSN, NOT `SUPABASE_URL` (ruling 264/5). Job 4 runs on SUPABASE_DSN
+    and may not carry SUPABASE_URL at all; deriving the instance from a variable the
+    job might not have is how a gate silently picks the wrong `since` column."""
+    assert pi.instance_from_dsn(dsn) == want
+
+
+@pytest.mark.parametrize("dsn", [
+    "postgresql://postgres:pw@db.zzzzzzzzzzzzzzzzzzzz.supabase.co:5432/postgres",
+    "postgresql://postgres@localhost:5432/postgres",
+    "postgresql://postgres.notaref:pw@aws-0.pooler.supabase.com:6543/postgres",
+    "not a dsn", "", None,
+])
+def test_an_unrecognised_ref_REFUSES_rather_than_guessing(dsn):
+    """⛔ A guessed instance picks the wrong `since`, and a wrong `since` produces a
+    verdict that LOOKS like a regression. Refusing is the only honest answer."""
+    assert pi.instance_from_dsn(dsn) is None
+
+
+def test_the_dsn_password_is_never_returned_or_logged():
+    """It is handed a credential on every gate run."""
+    secret = "postgresql://postgres:SUPERSECRET@db.hdygktppfvuspnumpfuq.supabase.co:5432/x"
+    assert pi.instance_from_dsn(secret) == "command"
+    fn = next(n for n in ast.walk(ast.parse(SRC))
+              if isinstance(n, ast.FunctionDef) and n.name == "instance_from_dsn")
+    body = ast.get_source_segment(SRC, fn)
+    assert ".password" not in body, "instance_from_dsn reads the password"
+
+
+def test_the_refusal_path_reads_host_and_user_and_NEVER_the_password():
+    """⛔ THE FOURTH ATTEMPT AT THIS ONE ASSERT, AND THE FOURTH IS THE RULE.
+
+        v1  split on "REFUSED", searched AFTER it — hostname/username are read
+            BEFORE that word, so it searched the wrong half of its own subject
+        v2  searched the right half — failed because the code comment there says
+            "never the password", which the assert read as the password being used
+        v3  stripped comment LINES — failed again: that comment is TRAILING, on the
+            same line as the code
+        v4  this — ask the AST whether `.password` is ACCESSED
+
+    ⇒ THE GENERALISATION, and it is the story of this whole week: every guard that
+      kept failing was a TEXT check over a region containing prose. Every guard that
+      works asks the AST about an OPERATION. "Does any code path read the password"
+      is an attribute access, not a substring — the same correction as signals_in,
+      as the wafw00f-copy guard, and as the N/4 form."""
+    fn = next(n for n in ast.walk(ast.parse(SRC))
+              if isinstance(n, ast.FunctionDef) and n.name == "run_live")
+    reads = {n.attr for n in ast.walk(fn)
+             if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+             and n.value.id == "pr"}
+    assert "hostname" in reads and "username" in reads, (
+        f"the refusal does not report host/user — it reports {sorted(reads)}")
+    assert "password" not in reads, "the refusal path READS the DSN password"
+    # and the same question of instance_from_dsn itself
+    fn2 = next(n for n in ast.walk(ast.parse(SRC))
+               if isinstance(n, ast.FunctionDef) and n.name == "instance_from_dsn")
+    reads2 = {n.attr for n in ast.walk(fn2)
+              if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+              and n.value.id == "parts"}
+    assert "password" not in reads2, "instance_from_dsn READS the DSN password"
+
+
+@pytest.mark.parametrize("ts", [
+    "2026-09-17T12:18:32.47312+00:00",      # ⭐ 5 digits — the real trap, twice met
+    "2026-09-17T12:18:32.4+00:00",
+    "2026-09-17T12:18:32.473120+00:00",
+    "2026-09-17T12:18:32+00:00",
+])
+def test_iso_takes_one_to_six_fractional_digits(ts):
+    """Postgres emits 1-6; `fromisoformat` on 3.10 accepts only 3 or 6 and RAISES on
+    the rest. Pad — never hand-roll a timestamp parser."""
+    assert pi.iso(ts) is not None
+
+
+def test_armed_split_on_the_real_boundary():
+    """⭐ REAL ROWS. f8cc3a3e (Command's I3 fix) is 2026-09-17T12:09:34Z. #3050 STARTED
+    12:12:20Z -> armed. ftp.sciimage.com's newest heavy started 2026-09-06 -> backlog."""
+    rows = [
+        {"asset_id": "commandcommcentral.com", "started_at": "2026-09-17T12:12:20.1+00:00"},
+        {"asset_id": "ftp.sciimage.com", "started_at": "2026-09-06T12:11:00+00:00"},
+    ]
+    armed, backlog = pi.armed_split(rows, "I3", "command")
+    assert [r["asset_id"] for r in armed] == ["commandcommcentral.com"]
+    assert [r["asset_id"] for r in backlog] == ["ftp.sciimage.com"]
+
+
+def test_a_row_with_no_anchor_timestamp_is_BACKLOG_not_armed():
+    """'Cannot show it ran the fixed code' is not 'did'."""
+    armed, backlog = pi.armed_split([{"asset_id": "x", "started_at": None}], "I3", "command")
+    assert armed == [] and len(backlog) == 1
+
+
+def test_the_anchor_is_started_at_and_that_CHANGES_the_answer():
+    """⛔ RULING 264/1, AND THE CASE IS REAL. bcbsma.commandcommcentral.com's heavy ran
+    2026-09-15T12:00:41 → 12:41:01 — forty minutes. A run that BEGAN on the old code
+    ran the old code, whatever it finished on. Under `completed_at` it would be ARMED,
+    and a wrongly-armed row looks exactly like a regression."""
+    straddle = [{"asset_id": "bcbsma", "started_at": "2026-09-17T12:00:41+00:00",
+                 "completed_at": "2026-09-17T12:41:01+00:00"}]
+    assert pi.armed_split(straddle, "I3", "command")[0] == []
+    assert len(pi.armed_split(straddle, "I3", "command", anchor="completed_at")[0]) == 1
+    assert pi.ANCHOR["I3"] == "started_at"
+
+
+def test_moving_since_one_second_past_a_row_flips_it_to_backlog(monkeypatch):
+    """⚠ THE MUTATION 4.7 ASKED FOR, as a test. A `since` one second later than a
+    row's anchor must move that row out of the armed set — otherwise the constant is
+    decorative and a wrong date would never be noticed."""
+    row = [{"asset_id": "x", "started_at": "2026-09-17T12:12:20+00:00"}]
+    assert len(pi.armed_split(row, "I3", "command")[0]) == 1
+    bumped = dict(pi.SINCE)
+    bumped["command"] = dict(pi.SINCE["command"], I3=("deadbeef", "2026-09-17T12:12:21+00:00"))
+    monkeypatch.setattr(pi, "SINCE", bumped)
+    armed, backlog = pi.armed_split(row, "I3", "command")
+    assert armed == [] and len(backlog) == 1
+
+
+def test_every_invariant_has_a_since_an_anchor_and_a_remedy_in_both_instances():
+    assert set(pi.SINCE) == {"command", "prodex"}
+    for inst in pi.SINCE:
+        assert set(pi.SINCE[inst]) == {"I1", "I2", "I3", "I4"}
+        for iid, (sha, when) in pi.SINCE[inst].items():
+            assert len(sha) >= 7 and pi.iso(when) is not None
+    assert set(pi.ANCHOR) == set(pi.BACKLOG_REMEDY) == {"I1", "I2", "I3", "I4"}
+
+
+def test_the_two_instances_really_have_different_constants():
+    """Both repos ship this file byte-identical, so a copy-paste that left one column
+    equal to the other would be invisible — and would silently arm Prodex on
+    Command's timeline."""
+    for iid in ("I1", "I2", "I3", "I4"):
+        assert pi.SINCE["command"][iid] != pi.SINCE["prodex"][iid]
+
+
+def test_I4_is_anchored_on_its_own_audit_row_not_on_a_scan():
+    """I4 is a fact about a CLASSIFY PASS. Anchoring it to a scan's start would arm
+    it by something unrelated to when the classifier ran."""
+    assert pi.ANCHOR["I4"] == "evaluated_at"
+    # ⚠ AND MIND THE OFFSET. The SINCE values carry git's committer offset (-04:00),
+    # so Command's I4 cut is 2026-09-17T12:06:14-04:00 = 16:06:14Z. My first version
+    # of this row used 12:06:15+00:00 and was FOUR HOURS EARLY — the comparison is
+    # correct (both datetimes are aware), but it is easy to misread by eye, and I did.
+    rows = [{"asset_id": "x", "evaluated_at": "2026-09-17T16:06:15+00:00",
+             "newest_envelope_empty": True, "prior_state": {"device_class": "waf",
+                                                            "confidence": "confirmed"}}]
+    assert len(pi.armed_split(rows, "I4", "command")[0]) == 1
+
+
+# ══ i3_state — THE THREE-STATE DECISION, WHICH NOTHING TESTED UNTIL NOW ═══════
+# ⛔ 4.7's mutant D (relay 266): the mapping from `population_too_thin` to the word
+#   INCONCLUSIVE lived inside `run_live()`, which needs a DSN. `thin -> HELD` passed
+#   all 92 tests AND the selftest: a one-host population printed PASS and the summary
+#   read `inconclusive 0`. The gate would have been green on nothing — R25's own
+#   vacuous-pass shape, sitting one function past where the tests stopped.
+#   ⇒ The rule this is the third instance of: A DECISION ONLY A LIVE CREDENTIAL CAN
+#     REACH IS A DECISION NOBODY CHECKS. Keep the verdict pure; call it from the DB path.
+
+def _r3(full, empty, floor=90, minpop=pi.I3_MIN_POPULATION):
+    env_full = json.dumps({"schema": 1, "headers": {"server": "nginx"},
+                           "set_cookie_names": ["c"], "cert": "CN=x"})
+    env_empty = json.dumps({"schema": 1, "hostname": "h"})
+    w = "[-] No WAF detected by the generic detection\n"
+    runs = ([{"asset_id": f"f{i}", "envelope": env_full, "wafw00f_raw": w} for i in range(full)] +
+            [{"asset_id": f"e{i}", "envelope": env_empty, "wafw00f_raw": w} for i in range(empty)])
+    return pi.i3_empty_envelopes(runs, floor_pct=floor, min_population=minpop)
+
+
+def test_i3_state_thin_population_is_INCONCLUSIVE_even_at_100_percent():
+    """THE mutant-D test. 3 hosts, every one of them full: the percentage is perfect
+    and the answer is still not PASS, because 100% of three hosts is not evidence."""
+    r = _r3(3, 0)
+    assert r["full_pct"] == 100 and r["population_too_thin"] is True
+    assert pi.i3_state(r) == pi.INCONCLUSIVE
+    assert pi.i3_state(r) != pi.HELD
+
+
+def test_i3_state_healthy_population_over_the_floor_is_PASS():
+    r = _r3(9, 1)
+    assert r["full_pct"] == 90 and r["population_too_thin"] is False
+    assert pi.i3_state(r) == pi.HELD
+
+
+def test_i3_state_healthy_population_under_the_floor_is_FAIL():
+    r = _r3(8, 2)
+    assert r["full_pct"] == 80
+    assert pi.i3_state(r) == pi.FAILED
+
+
+def test_i3_state_empty_population_is_INCONCLUSIVE_not_PASS():
+    """`total == 0` used to return ok=True — a predicate bug that excluded every host
+    read as a clean pass. It must reach the third word, not the first."""
+    assert pi.i3_state(pi.i3_empty_envelopes([])) == pi.INCONCLUSIVE
+
+
+def test_the_three_states_are_three_distinct_words_and_INCONCLUSIVE_is_not_PASS():
+    assert len({pi.HELD, pi.FAILED, pi.INCONCLUSIVE}) == 3
+    assert pi.INCONCLUSIVE == "INCONCLUSIVE" and pi.HELD == "PASS"
+
+
+def test_run_live_uses_i3_state_rather_than_its_own_expression():
+    """⛔ THE POINT OF THE EXTRACTION, PINNED — and asked of the AST, not of the text,
+    because a text search for "INCONCLUSIVE if" hits this file's own prose (four
+    guards died that way; see the password test below). `run_live` must CALL
+    i3_state; if the ternary ever migrates back inline, the pure tests above stop
+    covering the live path and stop saying so."""
+    src = (pi.Path(pi.__file__).read_text())
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "run_live")
+    calls = {n.func.id for n in ast.walk(fn)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    assert "i3_state" in calls, "run_live no longer calls i3_state"
+    # and the decision is NOT re-made inline: no IfExp in run_live mentions the flag
+    inline = [n for n in ast.walk(fn) if isinstance(n, ast.IfExp)
+              for s in ast.walk(n)
+              if isinstance(s, ast.Constant) and s.value == "population_too_thin"]
+    assert inline == [], "the thin->state decision is inline again in run_live"
+
+
+# ══ armed_split BOUNDARY AND INSTANCE COLUMN (4.7's surviving mutants A and F) ══
+
+def test_a_row_exactly_AT_the_cut_second_is_armed():
+    """⛔ Mutant A survived: `>= cut` -> `> cut` changed no test, because no fixture
+    sat ON the cut. The docstring says at/after, so the boundary second is the spec."""
+    at = [{"asset_id": "at-the-cut", "started_at": pi.SINCE["command"]["I3"][1]}]
+    assert len(pi.armed_split(at, "I3", "command")[0]) == 1
+    before = [{"asset_id": "one-before", "started_at": "2026-09-17T08:09:33-04:00"}]
+    assert pi.armed_split(before, "I3", "command")[0] == []
+
+
+def test_the_since_column_follows_the_instance_argument():
+    """⛔ Mutant F survived: SINCE[instance] -> SINCE["command"] passed everything,
+    because every fixture asked for command. The two columns differ by two seconds in
+    production, so a single row placed between them separates them. This is the only
+    check that catches a future column swap — and a swap means every armed/backlog
+    verdict is computed against the other repo's history."""
+    between = [{"asset_id": "between", "started_at": "2026-09-17T08:09:35-04:00"}]
+    assert len(pi.armed_split(between, "I3", "command")[0]) == 1
+    assert pi.armed_split(between, "I3", "prodex")[0] == []
+    # same row, same call, different instance -> different answer. That is the property.
+    assert (pi.armed_split(between, "I3", "command")[0]
+            != pi.armed_split(between, "I3", "prodex")[0])
