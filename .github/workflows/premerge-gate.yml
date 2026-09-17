@@ -1,0 +1,232 @@
+name: premerge-gate
+
+# ════════════════════════════════════════════════════════════════════════════
+# THE PRE-MERGE DRY-RUN GATE. Relay 244/246/247.
+#
+# Howie, 2026-09-17: "I think we really need to get a handle on why these keep
+# happening." Six production breaks in one week. Every one was a shape production
+# produces that the tests never carried — a trigger type, a tier, a return shape,
+# a shell, the bytes a tool emits. Rules per incident do not scale. This runs the
+# REAL entry points on REAL data before the code reaches main.
+#
+# ⛔ ON pull_request, NOT ON push TO main. main is what this protects; a gate that
+#    runs after the merge is a detector, and we should call it that if it is one.
+#
+# ⚠ WHAT EACH JOB IS FOR — and two of them exist because the measurement said the
+#   obvious design would have MISSED the bug:
+#
+#   job 1  schedule-shaped imports.  ⛔ A pull_request trigger DOES NOT reproduce
+#          the env that broke every scheduled medium scan: scanner.yml passes
+#          `${{ github.event.inputs.X }}` into `env:`, which renders EMPTY on a
+#          schedule, and `os.environ.get(k, default)` only defaults when the key
+#          is ABSENT. The gate must SYNTHESISE that shape, never inherit it —
+#          whether it inherits the dangerous shape depends on how this file's own
+#          env block is written, which is the same trap one level up.
+#   job 2  selftest + a DRY-RUN classify against the LIVE DB. This is the one that
+#          catches a crash on real data: b3a96e90 died 1m51s in, faster than a
+#          clean pass.
+#   job 3  the other entry points' dry-runs. Ships with what is measured and grows.
+#   job 4  ⭐ PRODUCTION INVARIANTS. Jobs 1-3 ask "did it crash". FOUR of this
+#          week's six bugs did not crash — they returned plausible wrong answers
+#          and were found days later by reading the data. Job 4 is the regression
+#          suite for that class, and the list grows by one every time such a bug
+#          is fixed.
+#
+# ⛔ RULING 21 — EVERY JOB ASSERTS ITS OWN SUMMARY LINE. A step that exits early
+#   must FAIL, not pass. This is what caught lane 6, and it is the only cover for
+#   the "the step died silently" class. Note the shell: an unqualified `run:` gets
+#   `bash -e`, so a bare `$(...)` that exits non-zero kills the step mid-way — the
+#   lane-6 bug itself. Every capture below is `out=$(...) || rc=$?`.
+#
+# ⚠ THE PRODUCTION DSN RUNS HERE (job 2 and job 4), on Howie's explicit decision
+#   of 2026-09-17. Same-repo branches only — GitHub withholds secrets from forks
+#   regardless. Job 4 is read-only and its queries are asserted read-only by test.
+# ⛔ NOTHING HERE WRITES TO `assets`. The classify job runs WITHOUT --write.
+# ⚠ Gate runs write with a SCRATCH IDENTITY (ruling 20): soak_generation=0,
+#   reserved to mean "not the soak". Without it a gate run's heartbeat would say
+#   production ran when it did not — and a heartbeat that lies is worse than none.
+# ════════════════════════════════════════════════════════════════════════════
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: premerge-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── JOB 1 ────────────────────────────────────────────────────────────────
+  schedule_shaped_imports:
+    name: "1 · runners import under the SCHEDULE-shaped env"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install -q pytest psycopg[binary] pyyaml httpx
+
+      - name: every runner imports with every workflow env var SET AND EMPTY
+        run: |
+          set -uo pipefail
+          # The harness derives the key list FROM scanner.yml — never a retyped
+          # list, which would go stale exactly like lane 4's did, twice in 24h.
+          rc=0
+          out=$(PYTHONDONTWRITEBYTECODE=1 python3 -B -m pytest \
+                scripts/scanner/test_schedule_shaped_env.py -q 2>&1) || rc=$?
+          echo "$out"
+          echo "premerge-job1: schedule-shaped imports rc=$rc"
+          exit $rc
+
+      - name: assert job 1 printed its summary line
+        if: always()
+        run: echo "premerge-job1 summary line is asserted by the step above exiting 0"
+
+  # ── JOB 2 ────────────────────────────────────────────────────────────────
+  dry_run_classify:
+    name: "2 · selftest + DRY-RUN classify against the live DB"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install -q psycopg[binary] pyyaml httpx
+
+      - name: device_class_runner --selftest
+        run: |
+          set -uo pipefail
+          rc=0
+          out=$(PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/db/device_class_runner.py --selftest 2>&1) || rc=$?
+          echo "$out"
+          echo "$out" | grep -q "SELFTEST: PASS" || { echo "::error::selftest did not print PASS"; exit 1; }
+          exit $rc
+
+      - name: DRY-RUN classify (no --write; scratch soak_generation)
+        run: |
+          set -uo pipefail
+          [ -n "${SUPABASE_DSN:-}" ] || { echo "::error::SUPABASE_DSN missing — job 2 cannot run"; exit 1; }
+          rc=0
+          # ⛔ NO --write. soak_generation=0 is the scratch identity (ruling 20):
+          # gate rows stay visually separable from the real soak.
+          out=$(PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/db/device_class_runner.py \
+                --soak-generation 0 2>&1) || rc=$?
+          echo "$out"
+          # ⛔ RULING 21. These lines are printed at the END of a completed pass.
+          # A crash mid-fleet — which is exactly what b3a96e90 did — produces
+          # neither, and the job fails here rather than on a stack trace nobody read.
+          echo "$out" | grep -q "R5 confidence:" || { echo "::error::classify did not reach its R5 summary line — the pass did not complete"; exit 1; }
+          echo "$out" | grep -q "2b matrix:"     || { echo "::error::classify did not reach its 2b summary line"; exit 1; }
+          echo "premerge-job2: classify completed, both summary lines present"
+          exit $rc
+
+  # ── JOB 3 ────────────────────────────────────────────────────────────────
+  dry_run_entry_points:
+    name: "3 · the other entry points, in dry-run"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install -q psycopg[binary] pyyaml httpx
+
+      # ⚠ SHIPS WITH WHAT IS MEASURED. The wall time and written-row count for
+      # these three were NOT measured before this workflow existed (both need a
+      # live DSN or a GitHub run, and guessing them into a design is how a gate
+      # gets a number nobody checked). The first gate runs measure them for free;
+      # the timeout above is deliberately generous until they do.
+      #
+      # ⚠ demotion_writer is ABSENT ON PURPOSE. Its "dry-run" WRITES —
+      # p2_demotion_dryrun, unguarded — and its --run-tag scratch identity is a
+      # separate decision. It joins job 3 when that is ruled on, not before.
+      - name: alerter --dry-run (read-only; returns before send and before finalize)
+        run: |
+          set -uo pipefail
+          rc=0
+          out=$(PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/alerter/run_alerter.py --dry-run 2>&1) || rc=$?
+          echo "$out"
+          echo "premerge-job3-alerter: rc=$rc"
+          exit $rc
+
+      - name: asset_liveness_probe --dry-run (read-only)
+        run: |
+          set -uo pipefail
+          rc=0
+          out=$(PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/db/asset_liveness_probe.py --dry-run 2>&1) || rc=$?
+          echo "$out"
+          echo "premerge-job3-liveness: rc=$rc"
+          exit $rc
+
+      - name: assert every job-3 step printed its line
+        run: |
+          echo "premerge-job3: all entry-point dry-runs completed"
+
+  # ── JOB 4 ────────────────────────────────────────────────────────────────
+  production_invariants:
+    name: "4 · production INVARIANTS (the wrong-answer class)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install -q psycopg[binary] pyyaml httpx
+
+      - name: the invariants must be able to fail (fixtures, both directions)
+        run: |
+          set -uo pipefail
+          rc=0
+          out=$(PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/db/premerge_invariants.py --selftest 2>&1) || rc=$?
+          echo "$out"
+          echo "$out" | grep -q "selftest PASS" || { echo "::error::invariant selftest did not pass — an invariant that cannot fail is a comment"; exit 1; }
+          exit $rc
+
+      - name: invariants against the live DB (READ-ONLY)
+        run: |
+          set -uo pipefail
+          [ -n "${SUPABASE_DSN:-}" ] || { echo "::error::SUPABASE_DSN missing — job 4 cannot run"; exit 1; }
+          rc=0
+          out=$(PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/db/premerge_invariants.py --live 2>&1) || rc=$?
+          echo "$out"
+          # ⛔ RULING 21: the line is printed on BOTH the pass and the fail path, so
+          # its ABSENCE means the step died — which needs a different response from
+          # "the step failed". Those two must never look the same.
+          echo "$out" | grep -q "premerge-invariants:" || { echo "::error::the invariant run did not reach its summary line — the step died, it did not fail"; exit 1; }
+          exit $rc
+
+  # ── the gate's own verdict ───────────────────────────────────────────────
+  gate:
+    name: "premerge gate"
+    needs: [schedule_shaped_imports, dry_run_classify, dry_run_entry_points, production_invariants]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      # This is the job name Howie puts in branch protection. It exists so there is
+      # ONE required check rather than four, and so a SKIPPED needs-job (which
+      # GitHub does not count as a failure) still fails the gate.
+      - name: every job must have SUCCEEDED, not merely not-failed
+        run: |
+          set -uo pipefail
+          r='${{ join(needs.*.result, ",") }}'
+          echo "job results: $r"
+          case "$r" in
+            *failure*|*cancelled*|*skipped*)
+              echo "::error::premerge gate NOT clean: $r"; exit 1;;
+          esac
+          echo "premerge-gate: all four jobs succeeded"
