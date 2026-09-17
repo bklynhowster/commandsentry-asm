@@ -483,3 +483,93 @@ jobs:
             exit 1
           fi
           echo "pyflakes: 0 undefined names across $n files ($(printf '%s\n' "$out" | grep -c . ) other findings, not gated)"
+
+      # ── Lane 7: GitHub WORKFLOW syntax (actionlint) ──
+      # ⛔ WHY THIS EXISTS, AND IT COST A DEAD GATE TO LEARN. The premerge gate
+      # landed and GitHub REFUSED TO RUN IT:
+      #
+      #   Invalid workflow file: .github/workflows/premerge-gate.yml#L1
+      #   (Line: 224, Col: 14): Unexpected symbol: '"'.
+      #   Located at position 22 within expression: join(needs.*.result, ",")
+      #
+      # GitHub's expression language takes ONLY single-quoted strings. The file was
+      # VALID YAML and that was checked — `yaml.safe_load` parsed it happily, because
+      # expression syntax lives INSIDE a YAML string and the YAML parser never looks
+      # at it. ⇒ THE INSTRUMENT WE RAN WAS NOT THE INSTRUMENT THAT RUNS THE FILE.
+      # That is lane 6's lesson one layer up: 76 unit tests said green and the tree
+      # said otherwise, so trust the tree — and here, nothing local read the tree at
+      # all. Expression syntax was validated ONLY by GitHub, at trigger time, after
+      # the merge.
+      #
+      # ⚠ SAME REASONING AS LANE 6 (D-012): a standard instrument already exists for
+      # exactly this class — expression syntax, `needs` references, unknown keys,
+      # shellcheck over `run:` blocks. Writing our own would be a fifth home for a
+      # defect family we keep re-learning.
+      #
+      # ⚠ IT EARNED ITS PLACE ON ITS FIRST USE — and the claim is bounded, because I
+      # checked it rather than asserting it. It flags the exact line GitHub rejected.
+      # It does NOT flag the first attempted fix, which was broken a different way
+      # (single quotes on BOTH the shell and expression side, so the shell string
+      # ended at the comma): actionlint returns rc=0 on that, since the GitHub
+      # expression is valid and the shell breakage is downstream of the substitution
+      # it models. MEASURED, both directions. Lane 7 covers expression syntax, not
+      # shell-quoting interactions with it — knowing where an instrument stops is the
+      # difference between a control and a comfort.
+      #
+      # ⚠ ONE RULE IS IGNORED, AND IT IS A REAL FINDING, NOT NOISE. scanner.yml
+      # declares 13 workflow_dispatch inputs against GitHub's documented max of 10.
+      # Measured: the three over the line are stealth_ua, active_probe_live and
+      # crawl_first_mode — all booleans defaulting false, and NOT the numeric input
+      # that caused the empty-env crash (patient_ban_cooldown_s is 9th, inside the
+      # limit). It is filed, not fixed here: this push is the quote and this lane.
+      # The UNFILTERED output is printed below, so the ignored finding stays visible
+      # rather than suppressed — the lane-6 rule that a gate must not pass quietly.
+      - name: actionlint (workflow syntax + expressions)
+        run: |
+          set -uo pipefail
+          ACTIONLINT_VERSION=1.7.7
+          MIN_WORKFLOWS=10
+
+          # ⛔ PINNED, like the scanner toolchain. An unpinned linter that changes its
+          # rule set overnight turns a green gate red for reasons nobody changed.
+          curl -fsSL -o /tmp/actionlint.tgz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            || { echo "::error::could not download actionlint — this lane did NOT run"; exit 1; }
+          tar xzf /tmp/actionlint.tgz -C /tmp actionlint
+          /tmp/actionlint --version
+
+          # ⚠ FLOOR ON FILE COUNT. An empty glob makes any linter exit 0, which reads
+          # identically to "everything passed" — the vacuous-pass shape lane 6 was
+          # born with and lane 4's stale directory list before it.
+          n=$(ls -1 .github/workflows/*.yml .github/workflows/*.yaml 2>/dev/null | wc -l)
+          if [ "$n" -lt "$MIN_WORKFLOWS" ]; then
+            echo "::error::actionlint saw only $n workflow file(s), expected >= $MIN_WORKFLOWS — the glob is wrong, this is not a pass"
+            exit 1
+          fi
+
+          echo "── full output, INCLUDING findings this lane does not gate on ──"
+          rc_all=0
+          all=$(/tmp/actionlint -no-color .github/workflows/*.yml 2>&1) || rc_all=$?
+          printf '%s\n' "$all"
+          echo "──"
+
+          # `|| rc=$?` — an `||` list, which -e exempts. A bare capture would abort ON
+          # THE ASSIGNMENT under GitHub's `bash -e` and the lane would be silently red
+          # with no output, exactly as lane 6 was for three pushes.
+          rc=0
+          out=$(/tmp/actionlint -no-color \
+                -ignore 'maximum number of inputs for "workflow_dispatch"' \
+                .github/workflows/*.yml 2>&1) || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            printf '%s\n' "$out" | while IFS= read -r line; do
+              case "$line" in
+                .github/*) f=${line%%:*}; rest=${line#*:}; l=${rest%%:*}
+                           echo "::error file=$f,line=$l::$line";;
+              esac
+            done
+            echo
+            echo "A workflow file that GitHub rejects does not run AT ALL — it is not"
+            echo "a failing job, it is an absent one. Fix it before merging."
+            exit 1
+          fi
+          echo "actionlint $ACTIONLINT_VERSION: 0 gated findings across $n workflow file(s)"

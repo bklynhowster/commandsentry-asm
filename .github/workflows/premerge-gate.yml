@@ -223,7 +223,35 @@ jobs:
       - name: every job must have SUCCEEDED, not merely not-failed
         run: |
           set -uo pipefail
-          r='${{ join(needs.*.result, ",") }}'
+          # ⛔ SINGLE QUOTES INSIDE A GITHUB EXPRESSION. Its language accepts ONLY
+          # single-quoted string literals; a double quote is a lex error and the whole
+          # workflow file is rejected at trigger time as "Invalid workflow file".
+          #
+          # ⚠ THE FILE WAS VALID YAML AND I CHECKED THAT IT WAS. `yaml.safe_load`
+          # parsed it happily — expression syntax lives INSIDE a YAML string, so the
+          # YAML parser never looks at it. The instrument I ran was not the instrument
+          # that runs the file, which is the lane-6 shape one layer up. Lane 7
+          # (actionlint) is the consumer that now reads this.
+          #
+          # ⚠ AND DO NOT WRITE AN EXPRESSION DELIMITER IN A COMMENT HERE. The first
+          # version of this note spelled the empty delimiter out, and actionlint
+          # lexed it as an expression and failed the file — prose breaking a checker
+          # rather than satisfying one, which is the same family as the nikto grep
+          # and the order pin. A `run:` block's comments are part of the string.
+          # ⚠ DOUBLE quotes on the SHELL side, single INSIDE the expression. My first
+          # fix used single on BOTH and broke a different way — the shell string ends
+          # at the quote before the comma.
+          #
+          # ⛔ AND LANE 7 DOES NOT CATCH THAT ONE. Measured, not assumed: actionlint
+          # returns rc=0 on the single-quotes-both-sides version, because the GitHub
+          # expression is valid and the shell breakage is downstream of the
+          # substitution actionlint models. I found it only because the file was still
+          # failing for an unrelated reason and I looked. That was luck, and lane 7's
+          # limit is written down here rather than discovered later.
+          #
+          # Substitution happens before the shell runs, and the values are job results
+          # (success/failure/cancelled/skipped), never user input.
+          r="${{ join(needs.*.result, ',') }}"
           echo "job results: $r"
           case "$r" in
             *failure*|*cancelled*|*skipped*)
