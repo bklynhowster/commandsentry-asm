@@ -3281,6 +3281,33 @@ def run(descriptor_path: str, dsn: str) -> int:
         # ADDITIVE to the existing block, not a replacement, until those land.
         # content_fetch is registered, so it is executed by the loop and its
         # hand-call below is skipped to avoid tripping the double-exec guard.
+        # ⛔ PASSIVE COLLECTOR RUNS FIRST — BEFORE ANYTHING THAT CAN EARN A BAN.
+        # Relay 233, ruling 14. Two quiet requests (openssl s_client, curl -I);
+        # it reads ctx.hostname and appends one artifact, and depends on no
+        # earlier phase.
+        #
+        # ESTABLISHED FROM THE LOG, not inferred — Scanner #2697, Command,
+        # commandcommcentral.com heavy, 2026-09-03:
+        #     20:13:31  post-chunk healthcheck on 23.234.111.163   HTTP 200
+        #     20:13:32  nikto starts on the same egress
+        #     20:14:21  nikto rc=-13, 0 reported          <- the ban lands HERE
+        #     20:14:33  ffuf calibration probes failed (same egress, now dead)
+        #     20:14:44  httpx DEGRADED reason=no_output
+        #     20:14:56  stack_id_passive: collected nothing (cookies=0)
+        # Reachable at 20:13:31, unreachable from 20:14:21, no VPN rotation in
+        # between, and the only phase in the gap was nikto.
+        #
+        # 93e8acea (2026-09-02) made heavy cumulative, which put medium's noisy
+        # phases AHEAD of this collector for the first time. Before that it ran on
+        # a fresh egress and collected fine: 130/130 full envelopes pre-cutover,
+        # 5/11 after. The cookie + cert tells it collects are two of the three
+        # signals that make waf/confirmed reachable at all, so losing them costs
+        # the classifier its corroboration on exactly the FortiGate hosts that
+        # earn the ban.
+        #
+        # This is why wafw00f sits at ORDER_BAN_DETECT. Same reasoning, same place.
+        run_stack_id_passive_phase(ctx, work_dir)
+
         cumulative_abort = None
         import phase_registry  # noqa: F401  — import registers the phases
         selected = phases_for_tier(TIER_HEAVY)
@@ -3326,12 +3353,6 @@ def run(descriptor_path: str, dsn: str) -> int:
         # executes it. The old hand-call here ran only when cumulative was off;
         # with cumulative unconditional it would be a second execution and would
         # (correctly) raise DoubleExecutionError. Deleted with the flag.
-
-        # Security-stack identification P0 — passive collectors (Obsidian 146).
-        # ADDITIVE, persist-only: appends a `stack_id_passive` artifact and
-        # touches no findings/tool machinery. P1 wires these signals into the
-        # classifier (with its own single soak reset).
-        run_stack_id_passive_phase(ctx, work_dir)
 
         # Active-probe tier — FortiWeb /fwbbot_check challenge (4.7 Q3, Obsidian 146).
         # DRY-RUN by default (fires nothing); gated on assets.active_probe_authorized
