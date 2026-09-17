@@ -3,8 +3,15 @@
 
 Relay 216/217/220. DRY-RUN BY DEFAULT — `--write` is Howie's, after 4.7 reads the plan.
 
-    . ./.env && python3 scripts/db/backfill_stack_id_wafw00f.py            # plan only
-    . ./.env && python3 scripts/db/backfill_stack_id_wafw00f.py --write    # Howie, after review
+    set -a && . ./.env && set +a && python3 scripts/db/backfill_stack_id_wafw00f.py          # plan
+    set -a && . ./.env && set +a && python3 scripts/db/backfill_stack_id_wafw00f.py --write  # Howie
+
+⚠ `set -a` IS REQUIRED, and `. ./.env` ALONE IS NOT ENOUGH. The .env file is bare
+`KEY=value` lines with no `export`, so sourcing it in zsh creates SHELL variables,
+not ENVIRONMENT variables — `os.environ.get("SUPABASE_URL")` sees nothing and the
+script exits telling you to source the file you just sourced. `set -a` marks
+everything assigned until `set +a` for export. (Command's run on 2026-09-16 hit
+exactly this; the usage line above is what it should have said.)
 
 ⛔ WHY THERE IS ANYTHING TO BACKFILL. `phase_registry` registers the FUNCTION
 `_medium.detect_waf`, which parses wafw00f and writes the RAW artifact. The
@@ -55,6 +62,7 @@ them.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -123,6 +131,33 @@ def paginate(rest: Rest, path: str, order_col: str = "artifact_id"):
         after = rows[-1][order_col]
 
 
+@contextlib.contextmanager
+def quiet_parser():
+    """Silence the SCANNER's logging for the duration — not ours.
+
+    ⚠ WHY THIS EXISTS. `_classify_wafw00f_output` and `persist_stack_id_wafw00f` each
+    `log()` their verdict to stderr, which is right during a scan and wrong here: a
+    --reparse-generic pass calls the parser once per candidate run, so 93 rows buried
+    the PLAN — the only output a reviewer needs — under ~180 lines of
+    "WAF detected: fortiweb". A plan you have to scroll to find is a plan that gets
+    skimmed.
+
+    ⚠ RESTORED IN A `finally`, AND THE SAVE IS TAKEN BEFORE THE SWAP. If the parser
+    raises mid-row, a runner left permanently mute would silence the NEXT caller in
+    the same process — the tests import this module and run_medium together. Swapping
+    the module attribute is the narrowest available seam: run_medium's functions call
+    the global `log`, so rebinding the name is what a no-op has to touch."""
+    saved = getattr(_medium, "log", None)
+    _medium.log = lambda *_a, **_k: None
+    try:
+        yield
+    finally:
+        if saved is not None:
+            _medium.log = saved
+        else:                                    # pragma: no cover — defensive
+            delattr(_medium, "log")
+
+
 def verdict_from_raw(raw: str) -> dict | None:
     """Reparse a stored raw wafw00f artifact with the SCANNER'S OWN parser.
 
@@ -133,8 +168,14 @@ def verdict_from_raw(raw: str) -> dict | None:
     ctx = types.SimpleNamespace(waf_detected=False, waf_kind=None, artifacts=[])
     # rc=0: the artifact exists, so wafw00f produced output. _classify_wafw00f_output
     # treats rc != 0 as "assume no WAF" — exactly the fabricated negative refused here.
-    _medium._classify_wafw00f_output(ctx, raw, 0)
-    _medium.persist_stack_id_wafw00f(ctx)
+    #
+    # ⚠ QUIET HERE, NOT AT THE CALL SITES. Both loops (backfill and --reparse-generic)
+    # call this, and the plan table calls it again per row; silencing at each call site
+    # is three places to forget one. We borrow the scanner's PARSER, not its live-scan
+    # narration — so the borrow is where the narration stops.
+    with quiet_parser():
+        _medium._classify_wafw00f_output(ctx, raw, 0)
+        _medium.persist_stack_id_wafw00f(ctx)
     if not ctx.artifacts:
         return None
     v = json.loads(ctx.artifacts[-1][2])
@@ -167,7 +208,9 @@ def main() -> int:
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
-        sys.exit("set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (run: . ./.env)")
+        sys.exit("set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
+                 "(run: set -a && . ./.env && set +a  — `. ./.env` alone leaves them "
+                 "as shell variables, not environment variables)")
 
     rest = Rest(url, key)
     mode = "WRITE" if args.write else "DRY-RUN"

@@ -217,3 +217,65 @@ def test_the_insert_shape_matches_a_real_artifact_row():
                             "backfill_stack_id_wafw00f.py"), encoding="utf-8").read()
     assert '"output_format": "json"' in src
     assert "content_type" not in src, "content_type is not a column on scan_run_artifacts"
+
+
+# ---------------------------------------------------------------------------
+# housekeeping (relay 236 item 4) — the two things that cost a real run
+# ---------------------------------------------------------------------------
+
+def test_the_usage_line_exports_the_env():
+    """⛔ MEASURED THE HARD WAY, Command 2026-09-16. `.env` is bare KEY=value with no
+    `export`, so `. ./.env` in zsh makes SHELL variables — os.environ sees nothing and
+    the script exits telling you to source the file you just sourced. `set -a` is what
+    marks them for export."""
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "backfill_stack_id_wafw00f.py"), encoding="utf-8").read()
+    doc = src.split('"""')[1]
+    assert "set -a && . ./.env && set +a" in doc, (
+        "the usage line is back to `. ./.env`, which does not export in zsh")
+    assert "\n    . ./.env && python3" not in doc, "a bare `. ./.env` usage line survives"
+
+
+def test_the_error_message_says_how_to_actually_set_them():
+    """The exit path is where someone lands when it fails; it has to carry the fix."""
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "backfill_stack_id_wafw00f.py"), encoding="utf-8").read()
+    assert "set -a && . ./.env && set +a" in src.split("sys.exit(")[1]
+
+
+def test_the_parser_is_silenced_while_reparsing(capsys):
+    """93 rows x 2 log lines buried the PLAN — the only output a reviewer needs.
+    A plan you have to scroll to find is a plan that gets skimmed."""
+    import run_medium as _m
+    v = bf.verdict_from_raw(FORTIWEB)
+    assert v["wafw00f_kind"] == "fortiweb"          # it really did parse
+    err = capsys.readouterr().err
+    assert "WAF detected" not in err, f"parser chatter leaked into the plan: {err!r}"
+    assert "stack_id_wafw00f (persist-only)" not in err
+
+
+def test_the_scanner_log_is_restored_afterwards():
+    """⚠ RESTORED IN A `finally`. A runner left permanently mute would silence the NEXT
+    caller in the same process — these tests import run_medium alongside this module."""
+    import run_medium as _m
+    before = _m.log
+    bf.verdict_from_raw(FORTIWEB)
+    assert _m.log is before, "run_medium.log was not restored after the quiet block"
+
+
+def test_the_scanner_log_is_restored_even_when_the_parse_raises():
+    """The half that matters: an exception mid-row must not leave the process mute."""
+    import run_medium as _m
+    before = _m.log
+    with pytest.raises(RuntimeError):
+        with bf.quiet_parser():
+            assert _m.log is not before      # it really was swapped
+            raise RuntimeError("boom")
+    assert _m.log is before
+
+
+def test_quiet_parser_does_not_silence_our_own_output(capsys):
+    """Plan output is stdout and ours; only the scanner's stderr narration is muted."""
+    with bf.quiet_parser():
+        print("  TO BACKFILL (no verdict yet)   : 68")
+    assert "TO BACKFILL" in capsys.readouterr().out

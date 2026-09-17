@@ -56,6 +56,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "normalize"))
 from derive_device_class import (  # noqa: E402
@@ -440,6 +441,304 @@ def _discovery_waf(cur, asset_id: str):
     return (True, waf.get("vendor"))
 
 
+# ══ R12 — CAPABILITY IS CONTENT-BEARING, PER OBSERVATION (4.7 ruling 12) ════
+#
+# ⛔ WHY THE ARTIFACT'S NAME IS NOT ENOUGH. commandcommcentral.com's 2026-09-03
+# heavy DID write a `stack_id_passive` artifact. Its contents were
+# {schema, collected_at, hostname} — nikto had earned the FortiGate ban 35 seconds
+# earlier and the collector ran on a dead egress (relay 231/233). A capability test
+# keyed on the artifact NAME calls that run "able to see cookies", so the absent
+# `cookiesession1` reads as evidence of absence and the FortiWeb confirmation is
+# downgraded on the strength of a collection that never happened. The
+# same-name/different-content pair is pinned in
+# scripts/scanner/test_passive_collector_runs_first.py.
+#
+#     name-keyed:    artifact `stack_id_passive` exists  -> capable   ❌
+#     content-keyed: does it CARRY set_cookie_names?     -> not capable ✅
+#
+# ⚠ KEYED ON THE OBSERVATION, NOT THE SIGNAL, AND THAT IS DELIBERATE.
+# device_fingerprints.yaml ALREADY owns signal -> observation (19 rows over 11
+# observations). A second signal->artifact table here would be a SECOND HOME for
+# that mapping: add a registry row, forget this constant, and the new signal is
+# silently either always-capable (writes downgrades it should not) or never-capable
+# (preserves forever) — with no test failing either way. Keying on the observation
+# leaves the registry as the only place the mapping lives, and
+# validate_capability_coverage() below turns "forgot one" into a refuse-to-run —
+# the same treatment validate_fingerprints() already gives weights (R6).
+#
+# ⚠ READ DEPTH MUST MATCH gather_observations. If capability looked deeper than the
+# gather does, a 4th-newest artifact could make a signal "capable" that the gather
+# never read — a capable-but-unseen downgrade, which is fail-open wearing the new
+# rule's clothes. `depth` carries the alignment and a test pins it.
+_PASSIVE_MERGE_DEPTH = 3          # == _fresh_json_many(limit=) in gather_observations
+
+_CAP_ARTIFACT_PRESENT = "artifact_present"   # the row existing IS the capability
+_CAP_JSON_KEY_PRESENT = "json_key_present"   # key present, ANY value (false is a verdict)
+_CAP_JSON_NONEMPTY    = "json_nonempty"      # key present AND truthy ({} [] "" null = absence)
+_CAP_TEXT_EXTRACT     = "text_extract"       # a pure extractor must return truthy
+_CAP_ASSET_SURFACE    = "asset_surface"      # not an artifact at all
+
+
+class _Cap(NamedTuple):
+    mode: str
+    sources: tuple = ()
+    field: str | None = None
+    extract: object = None
+    depth: int = 1
+
+
+OBSERVATION_CAPABILITY: dict[str, _Cap] = {
+    "ssh_banner":   _Cap(_CAP_TEXT_EXTRACT, (_ART_FINGERPRINT,), extract=extract_ssh_banner),
+    "cert_issuer":  _Cap(_CAP_TEXT_EXTRACT, (_ART_TESTSSL,),
+                         extract=lambda raw: extract_cert(raw).get("cert_issuer")),
+    "cert_subject": _Cap(_CAP_TEXT_EXTRACT, (_ART_TESTSSL,),
+                         extract=lambda raw: extract_cert(raw).get("cert_subject")),
+    # ⚠ KEY-PRESENT, NOT NON-EMPTY, AND THE DIFFERENCE IS LOAD-BEARING.
+    # `wafw00f_detected: false` is a REAL verdict — wafw00f ran, probed five ways,
+    # and found no WAF. Testing it for truthiness would call every genuine negative
+    # "not capable" and make a WAF class UNFALSIFIABLE: once confirmed, no wafw00f
+    # run could ever lower it again. Both wafw00f observations share one artifact
+    # and one dedupe_key, so they share one capability spec.
+    "waf_vendor":   _Cap(_CAP_JSON_KEY_PRESENT, (_ART_WAFW00F,), field="wafw00f_detected"),
+    "waf_present":  _Cap(_CAP_JSON_KEY_PRESENT, (_ART_WAFW00F,), field="wafw00f_detected"),
+    # ⚠ NON-EMPTY, and THIS is the 09-03 case. {} / [] / "" / null are absence of
+    # COLLECTION, not evidence of absence — the same rule _passive_signal applies
+    # when merging the two producers, applied here to capability. Either producer
+    # satisfies it, exactly as either can supply the signal.
+    "http_headers":     _Cap(_CAP_JSON_NONEMPTY, _PASSIVE_TOOL_NAMES, field="headers",
+                             depth=_PASSIVE_MERGE_DEPTH),
+    "set_cookie_names": _Cap(_CAP_JSON_NONEMPTY, _PASSIVE_TOOL_NAMES, field="set_cookie_names",
+                             depth=_PASSIVE_MERGE_DEPTH),
+    # nuclei: the ARTIFACT is the capability marker, the FINDING is the evidence, and
+    # they live in different tables — see EVIDENCE_ARTIFACT_PATTERNS for why both
+    # halves are needed.
+    "nuclei_fortinet_hit": _Cap(_CAP_ARTIFACT_PRESENT, (_ART_NUCLEI,)),
+    # the probe records its OWN outcome (banned / no-challenge / corroborated), so the
+    # artifact existing is the capability; _fwbbot_corroborated reads the verdict.
+    "fwbbot_check": _Cap(_CAP_ARTIFACT_PRESENT, ("stack_id_fwbbot_check",)),
+    # not an artifact at all — the ASM import writes this into asset_surface.
+    "waf_vendor_discovery": _Cap(_CAP_ASSET_SURFACE),
+}
+
+# Registry observations with NO producer in gather_observations. DECLARED, not
+# discovered: the coverage guard would otherwise refuse to start, and a silent
+# `else: assume capable` is precisely the fail-open shape being removed fleet-wide.
+# waf_present_differential is a ratified-but-dormant row — nothing emits it yet.
+DORMANT_OBSERVATIONS = frozenset({"waf_present_differential"})
+
+
+def signal_observation_map(fps) -> dict:
+    """signal -> frozenset(observations), READ FROM THE REGISTRY, never restated.
+
+    Multi-valued on purpose: `cert_issuer_subject_pattern` fires from cert_issuer OR
+    cert_subject, and three separate signals read http_headers. A signal is capable
+    if ANY of its observations is — the question being asked is "could this signal
+    have fired again this pass", not "was every input present"."""
+    out: dict[str, set] = {}
+    for row in fps or ():
+        if not isinstance(row, dict):
+            continue
+        sig, obs = row.get("signal"), row.get("observation")
+        if sig and obs:
+            out.setdefault(sig, set()).add(obs)
+    return {k: frozenset(v) for k, v in out.items()}
+
+
+def validate_capability_coverage(fps) -> list:
+    """R6-shaped startup guard for R12. Every observation the registry names must have
+    a capability spec or be declared dormant. Returns a list of errors (empty = ok).
+
+    ⛔ THE FAILURE THIS PREVENTS is not a crash, it is a silent behaviour change: an
+    unmapped observation has no capability answer, and whichever way the code defaults
+    is wrong for half the fleet with nothing failing. Refusing to start is the only
+    honest response, and it is what the weight rule already does."""
+    errs = []
+    known = set(OBSERVATION_CAPABILITY) | set(DORMANT_OBSERVATIONS)
+    for obs in sorted({r.get("observation") for r in (fps or ())
+                       if isinstance(r, dict) and r.get("observation")} - known):
+        errs.append(f"observation {obs!r} has no OBSERVATION_CAPABILITY entry and is not "
+                    f"declared in DORMANT_OBSERVATIONS — capability for it is undefined")
+    return errs
+
+
+def _cap_satisfied(cap: _Cap, row) -> bool:
+    """Does ONE artifact row actually CARRY the observation? Pure."""
+    if not row:
+        return False
+    if cap.mode == _CAP_ARTIFACT_PRESENT:
+        return True
+    raw = row.get("raw")
+    if raw is None:
+        return False
+    if cap.mode == _CAP_TEXT_EXTRACT:
+        try:
+            return bool(cap.extract(raw))
+        except Exception:
+            return False
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return False
+    if not isinstance(obj, dict):
+        return False
+    if cap.mode == _CAP_JSON_KEY_PRESENT:
+        return cap.field in obj          # ANY value — `false` is a real verdict
+    return bool(obj.get(cap.field))      # NONEMPTY: {} [] "" null all fall through
+
+
+def _surface_carries_waf(cur, asset_id: str) -> bool:
+    """Capability for the discovery-tier observation: did the ASM import record a
+    `waf` block for this asset at all? Distinct from _discovery_waf, which returns
+    (False, None) both for 'no surface' and for 'waf.detected is false' — capability
+    must tell those apart, because only the first is a collection failure."""
+    cur.execute("select surface_data from public.asset_surface where asset_id=%s", (asset_id,))
+    row = cur.fetchone()
+    if not row or not row.get("surface_data"):
+        return False
+    sd = row["surface_data"]
+    if isinstance(sd, str):
+        try:
+            sd = json.loads(sd)
+        except Exception:
+            return False
+    subs = sd.get("subdomains") if isinstance(sd, dict) else None
+    if not isinstance(subs, list) or not subs:
+        return False
+    aid = str(asset_id).lower()
+    entry = next((s for s in subs
+                  if isinstance(s, dict) and str(s.get("name", "")).lower() == aid), None)
+    if entry is None and len(subs) == 1 and isinstance(subs[0], dict):
+        entry = subs[0]
+    return isinstance(entry, dict) and isinstance(entry.get("waf"), dict)
+
+
+def _capability_rows(cur, asset_id: str, cap: _Cap, freshness_days: int | None):
+    """Newest `cap.depth` rows per source, with completed_at. freshness_days=None
+    drops the window (used for evidence_age_days, which asks 'when did we last
+    actually see it', not 'is it fresh')."""
+    out = []
+    for src in cap.sources:
+        op = "ilike" if "%" in src else "="
+        window = (f"and r.completed_at > now() - interval '{int(freshness_days)} days'"
+                  if freshness_days is not None else "")
+        limit = cap.depth if freshness_days is not None else 50
+        cur.execute(
+            f"""select coalesce(a.content_jsonb->>'raw', a.content_jsonb::text) as raw,
+                       r.completed_at
+                  from scan_run_artifacts a join scan_run r on r.scan_run_id = a.scan_run_id
+                 where r.asset_id = %s and a.tool_name {op} %s {window}
+                 order by r.completed_at desc limit {int(limit)}""", (asset_id, src))
+        out.extend(cur.fetchall() or [])
+    return out
+
+
+def observation_capable(cur, asset_id: str, observation: str, freshness_days: int) -> bool:
+    """Could this observation have been COLLECTED for this asset, in-window?
+
+    ⛔ FAILS CLOSED on an unmapped observation. Reaching that branch means the startup
+    guard was bypassed; 'not capable' preserves the prior, which is the recoverable
+    error. 'Capable' would strip a real label on absent evidence — the whole defect
+    family this rule exists to close."""
+    cap = OBSERVATION_CAPABILITY.get(observation)
+    if cap is None:
+        return False
+    if cap.mode == _CAP_ASSET_SURFACE:
+        return _surface_carries_waf(cur, asset_id)
+    return any(_cap_satisfied(cap, r)
+               for r in _capability_rows(cur, asset_id, cap, freshness_days))
+
+
+def signal_capable(cur, asset_id: str, signal: str, sig2obs: dict, freshness_days: int) -> bool:
+    """A signal is capable if ANY observation it can fire from was collectible."""
+    return any(observation_capable(cur, asset_id, o, freshness_days)
+               for o in (sig2obs.get(signal) or ()))
+
+
+def observation_age_days(cur, asset_id: str, observation: str) -> int | None:
+    """Days since the newest collection that actually CARRIED this observation, at any
+    age. None = we have never collected it. This is the number an operator wants when
+    a verdict is being preserved: 'the cookie evidence is 14 days old'."""
+    cap = OBSERVATION_CAPABILITY.get(observation)
+    if cap is None or cap.mode == _CAP_ASSET_SURFACE:
+        return None
+    now = datetime.now(timezone.utc)
+    best = None
+    for r in _capability_rows(cur, asset_id, cap, None):
+        if not _cap_satisfied(cap, r):
+            continue
+        when = r.get("completed_at")
+        if when is None:
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        age = (now - when).days
+        if best is None or age < best:
+            best = age
+    return best
+
+
+# ══ R5 — THE CLASS RULE, APPLIED TO CONFIDENCE (4.7 ruling 5, relay 236) ════
+_DECISION_PRESERVE_AGED = "preserve_aged"   # same-class confidence drop on uncollected evidence
+_R5_REASON = "EVIDENCE_AGED"
+
+
+def apply_r5_confidence_rule(prior_class, prior_conf, new_class, new_conf,
+                             prior_signals, incapable_signals) -> str:
+    """PURE. 2b gave the CLASS a preserve rule; R5 gives CONFIDENCE the same one.
+
+    A same-class confidence drop writes ONLY when a CAPABLE observation saw weaker
+    evidence. Otherwise the drop is an artifact of what we failed to collect, and the
+    prior confidence is preserved with reason EVIDENCE_AGED.
+
+    This is the 09-03 shape exactly: wafw00f still named FortiWeb (waf survives), but
+    the passive collector ran on a banned egress, so `cookiesession1` and the cert
+    were absent — waf/confirmed -> waf/suspected on two signals that were never
+    collected. Nothing about the host got weaker.
+
+      class changed              -> WRITE   (not this rule's business; 2b owns unknown)
+      confidence same or higher  -> WRITE   (nothing to protect)
+      no recorded prior basis    -> WRITE   (see below)
+      any prior signal INCAPABLE -> PRESERVE_AGED
+      every prior signal capable -> WRITE   (a real observation of weaker evidence)
+
+    ⚠ NO STREAK, unlike 2b, and deliberately. 2b counts repeat observations because
+    it cannot tell whether a genuine-empty run looked hard enough. R5 does not need a
+    counter because capability answers that question directly, per signal, for THIS
+    pass.
+
+    ⚠ EMPTY PRIOR BASIS -> WRITE, NOT PRESERVE. An asset whose stored class carries no
+    evidence rows did not get there through this runner, so there is nothing to call
+    aged. Preserving on an empty basis would build a RATCHET: a confidence that can
+    rise and never fall. The blast radius is bounded — _routing_bucket pins that a
+    same-class confidence move changes no routing decision at all."""
+    if new_class != prior_class:
+        return _DECISION_WRITE
+    if _CONF_RANK.get(new_conf, 0) >= _CONF_RANK.get(prior_conf, 0):
+        return _DECISION_WRITE
+    if not prior_signals:
+        return _DECISION_WRITE
+    if set(prior_signals) & set(incapable_signals):
+        return _DECISION_PRESERVE_AGED
+    return _DECISION_WRITE
+
+
+def prior_signals_of(prior_evidence) -> list:
+    """The signal names the asset's CURRENT stored class rests on, from
+    assets.device_class_evidence — the blob every --write pass already stores. No
+    migration, no new column; the runner simply starts reading what it writes."""
+    rows = prior_evidence
+    if isinstance(rows, str):
+        try:
+            rows = json.loads(rows)
+        except Exception:
+            return []
+    out = []
+    for r in rows or ():
+        if isinstance(r, dict) and r.get("signal") and r["signal"] not in out:
+            out.append(r["signal"])
+    return out
+
+
 # ── DB signal gather (fresh signals for one asset) ───────────────────────
 def _evidence_capable_scan_runs(cur, asset_id: str, freshness_days: int) -> list:
     """scan_run_ids for this asset, inside the freshness window, that produced AT LEAST
@@ -519,7 +818,7 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
             return None
         return obj if isinstance(obj, dict) else None
 
-    def _fresh_json_many(tool_names: tuple, limit: int = 3) -> list:
+    def _fresh_json_many(tool_names: tuple, limit: int = _PASSIVE_MERGE_DEPTH) -> list:
         """Newest `limit` json artifacts per tool name, merged newest-first.
 
         Explicit NAME LIST, never a prefix — `ilike 'stack_id_passive%'` is the
@@ -570,7 +869,7 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
     # ⇒ each signal takes the newest candidate that actually CONTAINS it, where
     #   "contains" is PRESENT AND NON-EMPTY: {} / [] / "" / null all fall through.
     #   An empty map is ABSENCE, not evidence of absence.
-    passive_candidates = _fresh_json_many(_PASSIVE_TOOL_NAMES, limit=3)
+    passive_candidates = _fresh_json_many(_PASSIVE_TOOL_NAMES, limit=_PASSIVE_MERGE_DEPTH)
 
     def _passive_signal(key):
         for cand in passive_candidates:
@@ -755,6 +1054,15 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
         raise RegistryValidationError(
             "device_fingerprints.yaml weight-rule violation — classifier refuses to run:\n  - "
             + "\n  - ".join(_werrs))
+    # R12 startup guard, same shape and same reason as the weight rule above: an
+    # observation with no capability spec has no capability ANSWER, and whichever way
+    # the code defaults is silently wrong for part of the fleet with nothing failing.
+    _cerrs = validate_capability_coverage(fps)
+    if _cerrs:
+        raise RegistryValidationError(
+            "OBSERVATION_CAPABILITY does not cover the registry — classifier refuses to run:\n  - "
+            + "\n  - ".join(_cerrs))
+    sig2obs = signal_observation_map(fps)
     fresh_days = th["evidence_freshness_days"]
     nuclei_re = load_nuclei_fortinet_regex()
     cloud_reg = None
@@ -770,6 +1078,9 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
     # per-matrix-row counters for the heartbeat (169's third condition)
     m2b = {"preserve_no_collection": 0, "preserve_genuine_empty": 0,
            "downgrade_streak_met": 0, "no_write_unknown_prior": 0}
+    # R5 counters — the fires/doesn't-fire pair, both counted, so a rule that only
+    # ever preserves is visible in the heartbeat instead of looking like it works.
+    m5 = {"preserve_evidence_aged": 0, "downgrade_capable_saw_weaker": 0}
     _pass_started = datetime.now(timezone.utc)
     unknown = cloud_endpoint_ct = cdn_ct = conf_subset = conf_full = 0
     with conn.cursor() as cur:
@@ -777,8 +1088,12 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
         # (is_cloud_endpoint was the wrong topology key — see classify_asset). The cloud
         # fallback RE-DERIVES from surface_data every run (E2 re-derive, no caching), so
         # we only need each asset's CURRENT class to compute the transition event.
-        cur.execute("select asset_id, device_class, device_class_confidence "
-                    "from public.assets order by asset_id")
+        # device_class_evidence is READ here for the first time (R5). It is the blob
+        # every --write pass already stores on this same table — the prior verdict's
+        # own basis. No migration, no new column: the runner starts reading what it
+        # has been writing since D4.
+        cur.execute("select asset_id, device_class, device_class_confidence, "
+                    "device_class_evidence from public.assets order by asset_id")
         assets = cur.fetchall()
         print(f"{'ASSET':38.38s} {'FROM':18s} {'-> TO':18s} EVENT")
         for a in assets:
@@ -800,6 +1115,7 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
             # writes — row 5 of the matrix — so the decision starts as write and is
             # narrowed only when the verdict is `unknown`.
             decision = _DECISION_WRITE
+            r5_note = None
             if nc == "unknown":
                 unknown += 1
                 had_evidence = bool(res.get("evidence"))
@@ -826,6 +1142,45 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
                           f"({_DOWNGRADE_STREAK_REQUIRED} distinct evidence-capable runs, all genuine-empty)")
                 else:
                     m2b["no_write_unknown_prior"] += 1
+            else:
+                # ── R5 (4.7 ruling 5, relay 236). MUTUALLY EXCLUSIVE WITH 2b BY
+                # CONSTRUCTION: a computed `unknown` never reaches here, so the two
+                # rules can never both narrow the same decision. Pinned by test.
+                prior_sigs = prior_signals_of(a.get("device_class_evidence"))
+                incapable = []
+                # Only the signals that STOPPED firing are worth asking about — a
+                # signal present in this pass's evidence was, self-evidently, capable.
+                still_firing = {e.get("signal") for e in (res.get("evidence") or [])}
+                for sig in prior_sigs:
+                    if sig in still_firing:
+                        continue
+                    if not signal_capable(cur, a["asset_id"], sig, sig2obs, fresh_days):
+                        incapable.append(sig)
+                decision = apply_r5_confidence_rule(
+                    a["device_class"], a["device_class_confidence"], nc, ncf,
+                    prior_sigs, incapable)
+                if decision == _DECISION_PRESERVE_AGED:
+                    m5["preserve_evidence_aged"] += 1
+                    ages = {}
+                    for sig in incapable:
+                        for o in sorted(sig2obs.get(sig) or ()):
+                            ages[o] = observation_age_days(cur, a["asset_id"], o)
+                    _seen = [v for v in ages.values() if v is not None]
+                    r5_note = {"reason": _R5_REASON, "incapable_signals": incapable,
+                               "evidence_age_days": ages,
+                               "preserved": f"{a['device_class']}/{a['device_class_confidence']}",
+                               "would_have_written": f"{nc}/{ncf}"}
+                    print(f"  · {a['asset_id']}: [R5-preserve] kept "
+                          f"{a['device_class']}/{a['device_class_confidence']} "
+                          f"(would have been {ncf}; {_R5_REASON} on {','.join(incapable)}; "
+                          f"newest such evidence "
+                          f"{min(_seen) if _seen else 'never'}d old)")
+                elif _CONF_RANK.get(ncf, 0) < _CONF_RANK.get(a["device_class_confidence"], 0) \
+                        and nc == a["device_class"]:
+                    m5["downgrade_capable_saw_weaker"] += 1
+                    print(f"  · {a['asset_id']}: [R5-downgrade] "
+                          f"{a['device_class']}/{a['device_class_confidence']} -> {nc}/{ncf} "
+                          f"(every prior signal was collectible this pass)")
             if from_cloud:
                 if nc == "cdn":
                     cdn_ct += 1
@@ -862,7 +1217,15 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
                 "values (%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s)",
                 (a["asset_id"], ev, nc, ncf, vpc, json.dumps(res["evidence"]),
                  json.dumps(res["vendor_product"]),
-                 json.dumps({"device_class": a["device_class"], "confidence": a["device_class_confidence"]}),
+                 # ⚠ THE R5 REASON RIDES prior_state, NOT A NEW COLUMN. A dedicated
+                 # column on device_class_dryrun is a MIGRATION, and a migration push
+                 # halts scanning. prior_state is a jsonb this runner constructs and
+                 # owns, and the note is about the prior being preserved — the right
+                 # home for it as well as the available one. 2b's audit shape is
+                 # untouched: this key appears only on an R5 preserve.
+                 json.dumps({"device_class": a["device_class"],
+                             "confidence": a["device_class_confidence"],
+                             **({"preserve": r5_note} if r5_note else {})}),
                  would_reroute, _latest_scan_run(cur, a["asset_id"]), soak_generation))
 
             # ⛔ THE PRESERVE GATE. A preserved row keeps its POSITIVE prior, so the
@@ -898,8 +1261,10 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
                          "unknown": unknown,
                          "events": tally,
                          "matrix_2b": m2b,
+                         "matrix_r5": m5,
                          "streak_required": _DOWNGRADE_STREAK_REQUIRED,
-                         "evidence_artifact_patterns": list(EVIDENCE_ARTIFACT_PATTERNS)})))
+                         "evidence_artifact_patterns": list(EVIDENCE_ARTIFACT_PATTERNS),
+                         "capability_observations": sorted(OBSERVATION_CAPABILITY)})))
     conn.commit()
     conn.close()
 
@@ -912,6 +1277,8 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
           f"preserve(genuine-empty)={m2b['preserve_genuine_empty']} "
           f"downgrade(streak met)={m2b['downgrade_streak_met']} "
           f"no-write(unknown prior)={m2b['no_write_unknown_prior']}")
+    print(f"  R5 confidence: preserve(evidence-aged)={m5['preserve_evidence_aged']} "
+          f"downgrade(capable saw weaker)={m5['downgrade_capable_saw_weaker']}")
     print("  heartbeat: 1 row -> meta_alerter_runs(alerter_name='device_class_runner')")
     print(f"  cloud fallback (F1/F2, re-derived from surface_data): "
           f"cloud_endpoint={cloud_endpoint_ct} cdn={cdn_ct}")
@@ -1014,6 +1381,77 @@ def _selftest() -> int:
     print(f"  2b matrix: {len(_matrix)} cases "
           f"{'ok' if all(_m(*a) == w for a, w in _matrix) else 'FAIL'} "
           f"(Q5b dropped: unknown prior never writes)")
+    # R5 confidence rule (4.7 ruling 5, relay 236). Pure; the DB-shaped branches live
+    # in test_device_class_2c.py. BOTH halves are here — a rule that only ever
+    # preserves is indistinguishable from a rule that works.
+    _r5 = apply_r5_confidence_rule
+    _r5_cases = [
+        # same class, confidence DROPS, a prior signal could not be collected -> preserve
+        (("waf", "confirmed", "waf", "suspected",
+          ["wafw00f_high_confidence", "fortiweb_cookiesession1"],
+          ["fortiweb_cookiesession1"]),                          _DECISION_PRESERVE_AGED),
+        # ⭐ the doesn't-fire half: same drop, EVERY prior signal was collectible
+        (("waf", "confirmed", "waf", "suspected",
+          ["wafw00f_high_confidence", "fortiweb_cookiesession1"], []), _DECISION_WRITE),
+        # a class change is 2b's business (or a real CHANGE), never R5's
+        (("waf", "confirmed", "cdn", "suspected",
+          ["wafw00f_high_confidence"], ["wafw00f_high_confidence"]), _DECISION_WRITE),
+        # confidence rises / holds -> nothing to protect
+        (("waf", "suspected", "waf", "confirmed", ["x"], ["x"]),  _DECISION_WRITE),
+        (("waf", "confirmed", "waf", "confirmed", ["x"], ["x"]),  _DECISION_WRITE),
+        # no recorded basis -> WRITE, not preserve (no ratchet)
+        (("waf", "confirmed", "waf", "suspected", [], ["anything"]), _DECISION_WRITE),
+        # an incapable signal NOT in the prior basis is irrelevant
+        (("waf", "confirmed", "waf", "suspected", ["a"], ["b"]),  _DECISION_WRITE),
+    ]
+    for args, want in _r5_cases:
+        got = _r5(*args)
+        ok &= got == want
+    print(f"  R5 confidence rule: {len(_r5_cases)} cases "
+          f"{'ok' if all(_r5(*a) == w for a, w in _r5_cases) else 'FAIL'} "
+          f"(preserve on incapable, WRITE when every prior signal was collectible)")
+    # R12 content-bearing capability (4.7 ruling 12). The two that matter: an empty
+    # passive envelope is NOT capable for cookies (the 09-03 shape), and a wafw00f
+    # NEGATIVE verdict IS capable (false is a verdict, not a failure to look).
+    _empty_envelope = {"raw": json.dumps(
+        {"schema": 1, "collected_at": "2026-09-03T20:14:56Z", "hostname": "commandcommcentral.com"})}
+    _full_envelope = {"raw": json.dumps(
+        {"schema": 1, "hostname": "commandcommcentral.com",
+         "set_cookie_names": ["cookiesession1", "ASP.NET_SessionId"],
+         "headers": {"server": "nginx"}, "cert": "CN=*.commandcommcentral.com"})}
+    _cap_cases = [
+        (OBSERVATION_CAPABILITY["set_cookie_names"], _empty_envelope, False),  # ⭐ 09-03
+        (OBSERVATION_CAPABILITY["set_cookie_names"], _full_envelope,  True),
+        (OBSERVATION_CAPABILITY["http_headers"],     _empty_envelope, False),
+        (OBSERVATION_CAPABILITY["http_headers"],     _full_envelope,  True),
+        (OBSERVATION_CAPABILITY["set_cookie_names"],
+         {"raw": json.dumps({"set_cookie_names": []})}, False),               # [] is absence
+        # ⭐ the key-present/non-empty split: a genuine negative stays CAPABLE
+        (OBSERVATION_CAPABILITY["waf_vendor"],
+         {"raw": json.dumps({"schema": 1, "wafw00f_detected": False, "wafw00f_kind": None})}, True),
+        (OBSERVATION_CAPABILITY["waf_vendor"], {"raw": json.dumps({"schema": 1})}, False),
+        (OBSERVATION_CAPABILITY["ssh_banner"], {"raw": fpx}, True),
+        (OBSERVATION_CAPABILITY["ssh_banner"], {"raw": "no banner here"}, False),
+        (OBSERVATION_CAPABILITY["cert_issuer"], {"raw": ts}, True),
+        (OBSERVATION_CAPABILITY["nuclei_fortinet_hit"], {"raw": None}, True),  # presence only
+        (OBSERVATION_CAPABILITY["set_cookie_names"], None, False),
+    ]
+    for cap, row, want in _cap_cases:
+        got = _cap_satisfied(cap, row)
+        ok &= got == want
+    print(f"  R12 capability (content-bearing): {len(_cap_cases)} cases "
+          f"{'ok' if all(_cap_satisfied(c, r) == w for c, r, w in _cap_cases) else 'FAIL'} "
+          f"(empty envelope != capable; wafw00f False IS capable)")
+    # R12 coverage guard over the REAL registry — the startup condition run() enforces.
+    _fps = load_fingerprints()
+    _cov = validate_capability_coverage(_fps)
+    ok &= not _cov
+    print(f"  R12 coverage over device_fingerprints.yaml: "
+          f"{'ok' if not _cov else 'FAIL — ' + '; '.join(_cov)}")
+    # …and its doesn't-fire half: an unmapped observation MUST be reported.
+    _bogus = validate_capability_coverage([{"signal": "x", "observation": "not_a_real_observation"}])
+    ok &= len(_bogus) == 1
+    print(f"  R12 guard catches an unmapped observation: {'ok' if len(_bogus) == 1 else 'FAIL'}")
     # Tripwire, not a correctness check: _routing_bucket imports CLOUD_CLASSES so
     # it cannot drift behaviourally. This fires when someone CHANGES the gate's
     # routing semantics, which is a signal to re-review what would_reroute means.
