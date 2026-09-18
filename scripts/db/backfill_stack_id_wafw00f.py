@@ -263,7 +263,14 @@ def main() -> int:
     if args.limit:
         todo = todo[: args.limit]
         print(f"  (--limit {args.limit} applied)")
-    if not todo:
+    # ⛔ THE RE-PARSE PLAN IS UNREACHABLE WHEN THE BACKFILL SET IS EMPTY (relay 292).
+    # This was `if not todo:` — so the very first reparse-ONLY run printed
+    # "TO RE-PARSE 56" and then "nothing to do." and exited 0 with 56 rows unfixed.
+    # ⚠ NEVER EXERCISED UNTIL TODAY: every previous run had both sets non-empty
+    # (Command 68 + 8, Prodex 49 + 13), so `todo` was never empty while `relaundered`
+    # was not. A decision only one data shape can reach is a decision nobody checked —
+    # the L-family again, this time in a control-flow guard rather than a verdict.
+    if not todo and not relaundered:
         print("\n  nothing to do.")
         return 0
 
