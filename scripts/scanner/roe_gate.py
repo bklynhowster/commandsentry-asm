@@ -149,6 +149,26 @@ DELIBERATE_REFUSAL_PROBES = (
 )
 
 
+# ⚠ THE OTHER REQUESTS WE ADD ON PURPOSE. Not refusals — these ask for something and
+# expect an answer — but they are still requests the estate did not previously receive,
+# so they are declared for the same reason: "what do we send?" should be one list.
+FOLLOWUP_PROBES = (
+    {
+        "name": "path_followup",
+        "tier": "medium",
+        "trigger": "an ffuf path-exists hit that answered with a redirect",
+        "words": ("swagger", "admin", "actuator", "graphql", "openapi"),
+        "method": "GET",
+        "hops": 1,
+        "same_site_only": True,
+        "retries": 0,
+        "purpose": ("a redirect is not a verdict — read the landing page so the "
+                    "severity describes what is actually exposed"),
+        "authorised_by": "relay 152 action gate + Howie R30 ruling A (relay 303)",
+    },
+)
+
+
 def deliberate_refusal_budget(hosts: int, scans_per_day: int = 1) -> int:
     """Estate-wide extra requests per day from the inventory above. PURE.
 

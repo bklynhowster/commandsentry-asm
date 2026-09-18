@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -185,6 +186,20 @@ ORDER BY
     WHEN 'INFO'          THEN 6
   END,
   f.asset_id, f.finding_id;
+"""
+
+# D-031 — the asset block's device class. ⚠ READ FROM device_class_dryrun, the
+# LATEST row per asset, because `--write` is still off on both instances: the label
+# is a dry-run classification and the digest says so rather than implying it is live.
+# A retired asset is excluded from classify entirely (relay 285), so it simply has no
+# row here and gets no class line — which is the honest answer, not "unknown".
+SQL_ASSET_DEVICE_CLASS = """
+SELECT DISTINCT ON (d.asset_id)
+       d.asset_id, d.device_class, d.confidence, d.vendor_product
+FROM public.device_class_dryrun d
+JOIN assets a ON a.asset_id = d.asset_id
+WHERE a.ownership = 'owned'
+ORDER BY d.asset_id, d.evaluated_at DESC;
 """
 
 SQL_HIGH_RISK_ASSETS_NOW = """
@@ -599,6 +614,144 @@ def _count_overlap(new_findings, confirmed, regressed) -> int:
     return len(created & changed)
 
 
+# ══ 152 PUSH 2 — THE RENDER HALF (P1-P5 + D-031). Relay 304 ══════════════════
+# Howie's words on digest #130: "formatting is kind of crappy". Every finding was
+# real and every count was true — and bcbsma appeared SIXTEEN TIMES because the
+# table repeated the asset on every row. These helpers are PURE so the layout is
+# testable without matching HTML strings: the bug in a digest is almost never a
+# broken tag, it is a decision about what to group, merge, collapse or say.
+
+_SEV_ORDER = {"CRITICAL": 1, "HIGH": 2, "MODERATE-HIGH": 3,
+              "MODERATE": 4, "LOW": 5, "INFO": 6}
+
+# D-031: what produced this finding, in words a reader can act on. `source` is the
+# finding's own enum — never guessed from the title.
+_TIER_LABEL = {
+    "light": "light scan", "medium": "medium scan", "heavy": "deep scan",
+    "asm": "discovery", "importer": "discovery",
+}
+
+
+def scan_tier_label(source: str | None) -> str:
+    """D-031: the tier that produced a finding, in English.
+
+    ⚠ READ FROM `source`, NEVER INFERRED FROM THE TITLE. A title is prose; the
+    source column is the fact. Unknown sources render as the raw value rather than
+    a guess — "unknown" in a digest is information, an invented tier is not."""
+    if not source:
+        return "unknown tier"
+    key = str(source).strip().lower()
+    for prefix, label in _TIER_LABEL.items():
+        if key == prefix or key.startswith(prefix + "_") or key.startswith(prefix + "-"):
+            return label
+    return key
+
+
+# P3: two tools, one fact. naabu says the port is open; fingerprintx names the
+# service on it. They are one sentence about the host, rendered as two rows since
+# the digest existed.
+# ⛔ RENDER-SIDE ONLY. `finding_id` embeds the tool and is load-bearing for
+# identity, dedupe and close-out — a parser-level merge would change what a
+# finding IS. 4.7's instruction, and the reason this lives here and not there.
+_PORT_FINDING_RE = re.compile(r"^(?:open-port|service)-(\d{1,5})(?:-(tcp|udp))?$",
+                              re.IGNORECASE)
+
+
+def _port_of(check_name: str | None) -> str | None:
+    m = _PORT_FINDING_RE.match((check_name or "").strip())
+    return m.group(1) if m else None
+
+
+def merge_service_inventory(rows: list[tuple], check_names: dict | None = None) -> list[tuple]:
+    """P3 — collapse per-port rows into ONE service-inventory row per asset.
+
+    Input rows are (finding_id, asset_id, title, severity, status, source, first_seen).
+    `check_names` maps finding_id -> check_name when the caller has it; without it
+    the port is read from the title, which is the shape the digest already renders.
+
+    ⚠ The merged row keeps the WORST severity of its inputs and the FIRST finding_id,
+    so the link still lands somewhere true. Nothing is dropped silently: the count in
+    the title says how many rows became one."""
+    out, ports = [], {}
+    for r in rows:
+        fid, asset = r[0], r[1]
+        name = (check_names or {}).get(fid) or ""
+        port = _port_of(name) or _port_of(_check_name_from_title(r[2]))
+        if port is None:
+            out.append(r)
+            continue
+        slot = ports.setdefault(asset, {"ports": set(), "rows": [], "first": r})
+        slot["ports"].add(port)
+        slot["rows"].append(r)
+    for asset, slot in ports.items():
+        rs = slot["rows"]
+        worst = min((r[3] for r in rs), key=lambda s: _SEV_ORDER.get(s, 9))
+        listed = ", ".join(f"{p}/tcp" for p in sorted(slot["ports"], key=int))
+        first = slot["first"]
+        out.append((first[0], asset,
+                    f"Service inventory: {listed}  ({len(rs)} rows merged)",
+                    worst, first[4], first[5], first[6]))
+    return out
+
+
+def _check_name_from_title(title: str | None) -> str:
+    """The digest renders titles, not check names. `open-port-53` appears in the
+    title for these rows; this pulls it back out without guessing at anything else."""
+    m = re.search(r"\b((?:open-port|service)-\d{1,5}(?:-(?:tcp|udp))?)\b", title or "")
+    return m.group(1) if m else ""
+
+
+def split_info(rows: list[tuple]) -> tuple[list[tuple], list[tuple]]:
+    """P4 — (shown in full, collapsed to one line). INFO is inventory: worth keeping,
+    not worth a row each. ⚠ The SUBJECT COUNT STILL COUNTS THEM (152) — collapsing a
+    row in the body must never change the number in the header, or the digest starts
+    disagreeing with itself."""
+    full = [r for r in rows if (r[3] or "").upper() != "INFO"]
+    info = [r for r in rows if (r[3] or "").upper() == "INFO"]
+    return full, info
+
+
+def group_by_asset(rows: list[tuple]) -> list[tuple]:
+    """P1 — [(asset_id, worst_severity, [rows])], worst asset first, findings inside
+    each asset worst first. One asset header instead of sixteen repetitions."""
+    by: dict = {}
+    for r in rows:
+        by.setdefault(r[1], []).append(r)
+    blocks = []
+    for asset, rs in by.items():
+        rs = sorted(rs, key=lambda r: (_SEV_ORDER.get((r[3] or "").upper(), 9), r[2] or ""))
+        blocks.append((asset, (rs[0][3] or "").upper(), rs))
+    blocks.sort(key=lambda b: (_SEV_ORDER.get(b[1], 9), b[0]))
+    return blocks
+
+
+def asset_class_line(asset_id: str, classes: dict | None) -> str:
+    """D-031 — the asset's device class, confidence and vendor PRODUCT.
+
+    ⚠ SOURCE STATED, because it is the dry-run table until `--write` flips it onto
+    `assets`: the line says "(dry-run classification)" rather than implying the label
+    is live. ⚠ An asset with no classification gets NO CLASS — not "unknown", which
+    would read as a verdict we never made."""
+    row = (classes or {}).get(asset_id)
+    if not row:
+        return ""
+    cls = row.get("device_class")
+    if not cls:
+        return ""
+    conf = row.get("confidence") or "unknown confidence"
+    product = (row.get("vendor_product") or {}).get("product")
+    vendor = (row.get("vendor_product") or {}).get("vendor")
+    bits = [f"{cls}/{conf}"]
+    if product:
+        bits.append(f"{vendor + ' ' if vendor else ''}{product}")
+    return "  ·  ".join(bits) + "  (dry-run classification)"
+
+
+# P5 / D-031: "new" means DISCOVERED IN THIS WINDOW, not "new to you". Howie ran
+# assets for weeks that the digest still called new.
+NEW_ASSETS_HEADING = "Assets discovered in this window"
+
+
 def render_html(
     *,
     window_start: datetime,
@@ -616,6 +769,7 @@ def render_html(
     baseline: dict,
     dashboard_url: str,
     product_name: str,
+    device_classes: dict | None = None,
 ) -> str:
     today = window_end.strftime("%Y-%m-%d")
     win = (
@@ -633,27 +787,54 @@ def render_html(
         )
 
     def find_table(rows: list[tuple]) -> str:
+        """P1-P4 + D-031: one block per asset, not one row per (asset, finding).
+
+        ⛔ P1 — bcbsma appeared SIXTEEN TIMES in digest #130 because the ASSET column
+        repeated on every row. The asset is now a heading; the column is gone.
+        ⛔ P2 — the FINDING ID column is gone from HTML and the TITLE carries the link
+        instead. Plaintext keeps the id, because plaintext is what gets grepped.
+        ⛔ P3 — per-port rows merge into one service-inventory line (render only).
+        ⛔ P4 — INFO collapses to one line per asset. The SUBJECT COUNT STILL COUNTS
+        THEM: a collapsed row must not change the number in the header.
+        """
         if not rows:
             return ""
-        cells = "".join(
-            f"<tr>"
-            f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:12px;">{escape(r[1])}</td>'
-            f'<td style="padding:6px 12px 6px 0;">{_sev_pill(r[3])}</td>'
-            f'<td style="padding:6px 12px 6px 0;font-size:13px;">{escape(r[2])}</td>'
-            f'<td style="padding:6px 0;font-family:monospace;font-size:11px;color:#888;">{escape(r[0])}</td>'
-            f"</tr>"
-            for r in rows
-        )
-        return (
-            f'<table style="border-collapse:collapse;width:100%;">'
-            f'<thead><tr style="text-align:left;color:#666;font-size:11px;'
-            f'text-transform:uppercase;letter-spacing:0.6px;">'
-            f'<th style="padding:0 12px 8px 0;">Asset</th>'
-            f'<th style="padding:0 12px 8px 0;">Severity</th>'
-            f'<th style="padding:0 12px 8px 0;">Title</th>'
-            f'<th style="padding:0 0 8px 0;">Finding ID</th>'
-            f"</tr></thead><tbody>{cells}</tbody></table>"
-        )
+        blocks = group_by_asset(merge_service_inventory(rows))
+        out = []
+        for asset, worst, rs in blocks:
+            full, info = split_info(rs)
+            cls = asset_class_line(asset, device_classes)
+            head = (
+                f'<div style="margin:18px 0 6px;padding-top:10px;'
+                f'border-top:1px solid #eee;">'
+                f'<span style="font-family:monospace;font-size:13px;color:#1a1a1a;">'
+                f'{escape(asset)}</span> {_sev_pill(worst)} '
+                f'<span style="color:#888;font-size:12px;">{len(rs)} new</span>'
+                + (f'<div style="font-size:11px;color:#888;margin-top:2px;">{escape(cls)}</div>'
+                   if cls else "")
+                + "</div>"
+            )
+            body = "".join(
+                f"<tr>"
+                f'<td style="padding:5px 12px 5px 0;">{_sev_pill(r[3])}</td>'
+                f'<td style="padding:5px 12px 5px 0;font-size:13px;">'
+                f'<a href="{escape(dashboard_url.rstrip("/"))}/findings/{escape(r[0])}" '
+                f'style="color:#1a1a1a;">{escape(r[2])}</a></td>'
+                f'<td style="padding:5px 0;font-size:11px;color:#888;">'
+                f'{escape(scan_tier_label(r[5] if len(r) > 5 else None))}</td>'
+                f"</tr>"
+                for r in full
+            )
+            if info:
+                body += (
+                    f"<tr><td colspan=\"3\" style=\"padding:5px 0;font-size:12px;color:#888;\">"
+                    f'+ {len(info)} informational (inventory, headers, tech) — '
+                    f'<a href="{escape(dashboard_url.rstrip("/"))}/findings?asset={escape(asset)}'
+                    f'&severity=INFO" style="color:#888;">view</a></td></tr>'
+                )
+            out.append(head + f'<table style="border-collapse:collapse;width:100%;">'
+                              f"<tbody>{body}</tbody></table>")
+        return "".join(out)
 
     def asset_table(rows: list[tuple]) -> str:
         if not rows:
@@ -740,8 +921,10 @@ def render_html(
     high_risk_section = section(
         "Assets elevated to HIGH / CRITICAL", len(high_risk), asset_table(high_risk)
     )
+    # P5 / D-031: "new" means DISCOVERED IN THIS WINDOW, not "new to you". Howie had
+    # been running some of these assets for weeks and the digest still called them new.
     new_assets_section = section(
-        "New assets discovered", len(new_assets), surface_event_table(new_assets, dark=False)
+        NEW_ASSETS_HEADING, len(new_assets), surface_event_table(new_assets, dark=False)
     )
     dark_assets_section = section(
         "Assets that went dark", len(dark_assets), surface_event_table(dark_assets, dark=True)
@@ -909,6 +1092,7 @@ def render_text(
     deepscan_stale_hours: int,
     baseline: dict,
     product_name: str,
+    device_classes: dict | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append(f"{product_name} — Daily posture digest — {window_end:%Y-%m-%d}")
@@ -975,9 +1159,20 @@ def render_text(
         lines.append("")
 
     if new_findings:
+        # P1-P4 in plaintext too — same grouping, same merge, same INFO collapse.
+        # ⛔ P2's EXCEPTION: plaintext KEEPS the finding_id. The HTML drops it because
+        # the title is a link; the text version is what gets grepped and pasted into a
+        # ticket, and an id you cannot copy is an id you do not have.
         lines.append(f"NEW FINDINGS — first detected in this window ({len(new_findings)}):")
-        for r in new_findings:
-            lines.append(f"  [{r[3]}] {r[1]} — {r[2]}  ({r[0]})")
+        for asset, worst, rs in group_by_asset(merge_service_inventory(new_findings)):
+            full, info = split_info(rs)
+            cls = asset_class_line(asset, device_classes)
+            lines.append(f"  {asset}  [{worst}]  {len(rs)} new" + (f"   {cls}" if cls else ""))
+            for r in full:
+                tier = scan_tier_label(r[5] if len(r) > 5 else None)
+                lines.append(f"    [{r[3]:<13}] {r[2][:70]}  ({r[0]}, {tier})")
+            if info:
+                lines.append(f"    + {len(info)} informational (inventory, headers, tech)")
         lines.append("")
 
     if confirmed:
@@ -1187,6 +1382,21 @@ def main() -> int:
                 cur.execute(SQL_CANARY_VIOLATIONS, (canary_hosts,))
                 canary_violations = cur.fetchall()
 
+            # D-031 — the per-asset device class, latest row per asset.
+            # ⚠ FAILS SOFT, DELIBERATELY: a digest that does not send because a
+            # decoration query failed is worse than a digest without the decoration.
+            # An empty map renders no class lines at all, which is the same as an
+            # unclassified fleet and reads honestly either way.
+            device_classes: dict = {}
+            try:
+                cur.execute(SQL_ASSET_DEVICE_CLASS)
+                for _aid, _cls, _conf, _vp in cur.fetchall():
+                    device_classes[_aid] = {"device_class": _cls, "confidence": _conf,
+                                            "vendor_product": _vp or {}}
+            except Exception as exc:                       # pragma: no cover - live only
+                print(f"  device-class read failed ({exc!r}) — digest renders without class lines")
+                device_classes = {}
+
         # Render — subject line builds non-zero counters only so a quiet
         # night reads "(0 changes)" and a busy night reads
         # "(3 chng, 1 asset, 2 new, 1 dark)" without padding. Watchdog
@@ -1226,6 +1436,7 @@ def main() -> int:
             deepscan_stale_hours=deepscan_stale_hours,
             baseline=baseline, dashboard_url=dashboard_url,
             product_name=from_name,
+            device_classes=device_classes,
         )
         text = render_text(
             window_start=window_start, window_end=window_end,
@@ -1237,6 +1448,7 @@ def main() -> int:
             deepscan_stale_hours=deepscan_stale_hours,
             baseline=baseline,
             product_name=from_name,
+            device_classes=device_classes,
         )
 
         if args.dry_run:
