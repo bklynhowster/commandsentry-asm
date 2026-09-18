@@ -40,6 +40,7 @@ class FakeRest:
         self.rows_by_path = rows_by_path
         self.page_size = page_size or bf.PAGE
         self.inserted = []
+        self.patched = []
         self.page_calls = 0
 
     def _key(self, path):
@@ -58,6 +59,14 @@ class FakeRest:
 
     def insert(self, path, rows):
         self.inserted.extend(rows)
+
+    # ⛔ THE DOUBLE DID NOT HAVE THIS METHOD, SO THE RE-PARSE WRITE COULD NOT BE
+    #   TESTED EVEN BY SOMEONE TRYING. `insert` covers the backfill path; the
+    #   correction path calls `patch`. A fake that implements only the half of the
+    #   interface the old tests used makes the other half unreachable — which is how
+    #   the early return in front of it survived (relay 292).
+    def patch(self, path, body):
+        self.patched.append((path, body))
 
 
 def _art(i, run, raw=None):
@@ -279,3 +288,85 @@ def test_quiet_parser_does_not_silence_our_own_output(capsys):
     with bf.quiet_parser():
         print("  TO BACKFILL (no verdict yet)   : 68")
     assert "TO BACKFILL" in capsys.readouterr().out
+
+
+# ══ THE RE-PARSE-ONLY RUN (relay 292) ════════════════════════════════════════
+# ⛔ THE FIRST TIME THIS PATH WAS NEEDED, IT RETURNED EARLY. Howie ran
+# `--reparse-generic` on Prodex after the vendor-agnostic parse landed:
+#
+#     runs 67 · already parsed 67 · TO BACKFILL 0 · TO RE-PARSE 56 · nothing to do.
+#
+# `if not todo:` exited before the re-parse plan, so 56 rows stayed wrong and the exit
+# code said success. ⚠ NEVER EXERCISED UNTIL THEN: every earlier run had both sets
+# non-empty (Command 68 + 8, Prodex 49 + 13), so `todo` was never empty while
+# `relaundered` was not. A branch only one data shape can reach is a branch nobody
+# checked — the same family as the verdicts that lived where no test could call them.
+
+_GOOGLE_RAW = ("[+] The site https://prodexlabs.com/ is behind "
+               "Google Cloud App Armor (Google Cloud) WAF.\n")
+
+
+def _parsed(i, run, kind):
+    """An EXISTING stack_id_wafw00f verdict row — the shape the re-parse corrects."""
+    return {"artifact_id": f"p{i:04d}", "scan_run_id": run,
+            "content_jsonb": {"schema": 1, "wafw00f_detected": True,
+                              "wafw00f_kind": kind}}
+
+
+def _env(monkeypatch, rest, argv):
+    monkeypatch.setattr(bf, "Rest", lambda *a, **k: rest)
+    monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sb_secret_test")
+    monkeypatch.setattr(sys, "argv", argv)
+
+
+def test_a_reparse_only_run_still_prints_its_plan(monkeypatch, capsys):
+    """Nothing to BACKFILL, something to RE-PARSE: the plan must appear, not
+    'nothing to do'. This is the exact Prodex shape from 292."""
+    rest = FakeRest({"eq.wafw00f": [_art(1, "run-A", _GOOGLE_RAW)],
+                     "eq.stack_id_wafw00f": [_parsed(1, "run-A", "google")]})
+    _env(monkeypatch, rest, ["bf", "--reparse-generic"])          # dry-run
+    rc = bf.main()
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "TO RE-PARSE" in out and "RE-PARSE plan" in out, out[-800:]
+    assert "nothing to do." not in out, "the early return is back"
+    assert "google_cloud_app_armor" in out
+
+
+def test_a_reparse_only_run_with_write_actually_writes(monkeypatch):
+    """⚠ The plan printing is not the fix — the WRITE has to be reached too. Under the
+    old guard this call returned before either."""
+    rest = FakeRest({"eq.wafw00f": [_art(1, "run-A", _GOOGLE_RAW)],
+                     "eq.stack_id_wafw00f": [_parsed(1, "run-A", "google")]})
+    _env(monkeypatch, rest, ["bf", "--reparse-generic", "--write"])
+    bf.main()
+    assert rest.patched, "the re-parse write never happened"
+    path, body = rest.patched[0]
+    assert "run-A" in path
+    assert body["content_jsonb"]["wafw00f_kind"] == "google_cloud_app_armor"
+
+
+def test_both_sets_empty_is_still_nothing_to_do(monkeypatch, capsys):
+    """The guard must narrow, not disappear: with nothing to backfill AND nothing to
+    re-parse, the run still says so and exits 0."""
+    rest = FakeRest({"eq.wafw00f": [_art(1, "run-A", FORTIWEB)],
+                     "eq.stack_id_wafw00f": [_parsed(1, "run-A", "fortiweb")]})
+    _env(monkeypatch, rest, ["bf", "--reparse-generic"])
+    rc = bf.main()
+    out = capsys.readouterr().out
+    assert rc == 0 and "nothing to do." in out
+    assert rest.inserted == [] and rest.patched == []
+
+
+def test_a_legacy_alias_row_is_reparsed_but_a_named_product_is_not(monkeypatch, capsys):
+    """One direction only. `google` is a key THIS parser wrote and moves forward;
+    `fortiweb` already names a product and is never touched."""
+    rest = FakeRest({"eq.wafw00f": [_art(1, "run-A", _GOOGLE_RAW), _art(2, "run-B", FORTIWEB)],
+                     "eq.stack_id_wafw00f": [_parsed(1, "run-A", "google"),
+                                             _parsed(2, "run-B", "fortiweb")]})
+    _env(monkeypatch, rest, ["bf", "--reparse-generic", "--write"])
+    bf.main()
+    touched = " ".join(p for p, _ in rest.patched)
+    assert "run-A" in touched and "run-B" not in touched, \
+        f"run-B must not be re-parsed: {touched}"
