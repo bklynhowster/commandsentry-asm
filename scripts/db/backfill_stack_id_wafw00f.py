@@ -237,8 +237,16 @@ def main() -> int:
     if args.reparse_generic:
         for rid in sorted(set(raws) & haves):
             cur = existing.get(rid, {}).get("wafw00f_kind")
-            if cur not in (None, "generic"):
-                continue                      # already names a vendor — never touched
+            # ⛔ LEGACY ONE-WORD KEYS ARE ALSO RE-PARSED (relay 279/288). The old
+            # capture took a single token, so "Google Cloud App Armor (Google Cloud)"
+            # was stored as `google` and "Azure Front Door (Microsoft)" as `azure` —
+            # correct as a VENDOR, useless as a product, and the registry matches on
+            # product names. 42 `google` + 1 `azure` rows exist on Prodex today
+            # (relay 286). They name a vendor, so the rule above would skip them
+            # forever; `WAF_KIND_ALIASES` is the one-directional exception, and it
+            # contains ONLY keys this parser itself used to write.
+            if cur not in (None, "generic") and cur not in _medium.WAF_KIND_ALIASES:
+                continue                      # already names a product — never touched
             fresh = verdict_from_raw(_raw_of(raws[rid]))
             if fresh and fresh["wafw00f_kind"] not in (None, "generic"):
                 fresh["reparsed_from_raw"] = True

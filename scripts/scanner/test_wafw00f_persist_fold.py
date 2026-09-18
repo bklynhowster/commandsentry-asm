@@ -204,3 +204,112 @@ def test_detect_waf_has_no_early_returns_before_the_persist():
     assert not rets, (
         f"detect_waf has return(s) at {rets}. The persist is its last statement, so "
         f"any early return skips it — put the branch in _classify_wafw00f_output")
+
+
+# ══ VENDOR-AGNOSTIC STACK ID (relay 279/288) ═════════════════════════════════
+# Howie, 2026-09-17: "the world is full of other web application firewalls other than
+# FortiGate, for example Google Armor. I want our ability to detect to not be limited
+# to just FortiGate. That could go in the garbage tomorrow."
+#
+# ⛔ THE BYTES, NOT OUR PROSE FOR THEM. Every string below is a production wafw00f line
+# read from the two estates on 2026-09-18 — 55 Prodex artifacts say "Google Cloud App
+# Armor", 1 says "Azure Front Door", 33 Command artifacts say "FortiWeb". The spec, the
+# queue entry and my own first draft all said "Google Cloud ARMOR"; the tool says
+# "Google Cloud APP Armor", and a hand-typed key would have matched nothing.
+
+_PROD_LINES = {
+    "[+] The site https://prodexlabs.com/ is behind Google Cloud App Armor (Google Cloud) WAF.":
+        "google_cloud_app_armor",
+    "[+] The site https://azure-demo.prodexlabs.com/ is behind Azure Front Door (Microsoft) WAF.":
+        "azure_front_door",
+    "[+] The site https://commandcommcentral.com/ is behind FortiWeb (Fortinet) WAF.":
+        "fortiweb",
+}
+
+
+def _kind(line):
+    ctx = types.SimpleNamespace(waf_detected=False, waf_kind=None, artifacts=[])
+    saved = m.log
+    m.log = lambda *a, **k: None
+    try:
+        m._classify_wafw00f_output(ctx, line, 0)
+    finally:
+        m.log = saved
+    return ctx.waf_kind
+
+
+def test_the_product_string_survives_the_parse_on_production_bytes():
+    for line, want in _PROD_LINES.items():
+        assert _kind(line) == want, f"{line!r} -> {_kind(line)!r}, wanted {want!r}"
+
+
+def test_the_old_one_word_capture_would_have_lost_the_product():
+    """What the defect cost, stated as a test rather than a story: two of the three
+    production vendors collapsed to a hosting company's name."""
+    import re
+    old = lambda s: (re.search(r"is behind\s+([A-Za-z][A-Za-z0-9_\-]+)", s).group(1).lower())
+    lines = list(_PROD_LINES)
+    assert old(lines[0]) == "google" and _kind(lines[0]) == "google_cloud_app_armor"
+    assert old(lines[1]) == "azure" and _kind(lines[1]) == "azure_front_door"
+    assert old(lines[2]) == _kind(lines[2]) == "fortiweb"      # single token: unchanged
+
+
+def test_a_vendor_nobody_has_written_code_for_still_gets_a_key():
+    """The requirement, mechanised: the key is DERIVED, so a WAF the registry has never
+    heard of is still identified the day wafw00f learns it. No hand-maintained list."""
+    assert _kind("[+] The site https://x/ is behind Imperva SecureSphere WAF.") == "imperva_securesphere"
+    assert _kind("[+] The site https://x/ is behind AWS Elastic Load Balancer (Amazon) WAF.") \
+        == "aws_elastic_load_balancer"
+    assert m.waf_kind_key("Barracuda Application Firewall") == "barracuda_application_firewall"
+
+
+def test_the_widening_is_strict_no_detection_that_worked_can_stop_working():
+    """⚠ A line with no ' WAF.' suffix falls back to the original single-token capture."""
+    assert _kind("[+] The site https://x/ is behind Incapsula") == "incapsula"
+    assert _kind("[*] The site https://x/ seems to be behind a WAF or some sort of "
+                 "security solution") == "generic"
+    assert _kind("[-] No WAF detected by the generic detection") is None
+
+
+def test_waf_kind_key_is_pure_and_total():
+    assert m.waf_kind_key(None) is None and m.waf_kind_key("") is None
+    assert m.waf_kind_key("   ") is None
+    assert m.waf_kind_key("FortiWeb") == m.waf_kind_key("  fortiweb  ") == "fortiweb"
+
+
+def test_the_legacy_aliases_move_forward_only_and_cover_exactly_what_we_wrote():
+    """⛔ ONE DIRECTION. The alias table exists to correct keys THIS PARSER wrote, and
+    nothing else — 42 `google` + 1 `azure` rows on Prodex (relay 286). A canonical key
+    maps to itself; an unknown key is left alone rather than guessed at."""
+    assert m.canonical_waf_kind("google") == "google_cloud_app_armor"
+    assert m.canonical_waf_kind("azure") == "azure_front_door"
+    assert m.canonical_waf_kind("google_cloud_app_armor") == "google_cloud_app_armor"
+    assert m.canonical_waf_kind("fortiweb") == "fortiweb"
+    assert m.canonical_waf_kind("cloudflare") == "cloudflare"
+    assert m.canonical_waf_kind(None) is None
+    assert set(m.WAF_KIND_ALIASES) == {"google", "azure"}
+
+
+def test_the_registry_can_now_reach_the_vendors_the_estates_actually_front():
+    """⛔ THE GAP, MEASURED BEFORE AND AFTER. `wafw00f_high_confidence` matched only
+    fortiweb|fortinet|cloudflare, so the 55 Prodex artifacts naming Google Cloud App
+    Armor could never reach waf/confirmed on the wafw00f path — whatever the backfill
+    wrote. The registry now carries both vendors on BOTH tiers (heavy + discovery)."""
+    import yaml
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fps = yaml.safe_load(open(os.path.join(root, "asm", "device_fingerprints.yaml")))
+    subs = {}
+    def walk(o):
+        if isinstance(o, dict):
+            if str(o.get("signal", "")).startswith("wafw00f"):
+                subs.setdefault(o["signal"], []).extend(o["match_substrings"])
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk(fps)
+    for tier in ("wafw00f_high_confidence", "wafw00f_discovery_confidence"):
+        flat = " ".join(subs[tier])
+        for key in ("google_cloud_app_armor", "azure_front_door", "fortiweb", "cloudflare"):
+            assert key in flat, f"{tier} cannot match {key}"

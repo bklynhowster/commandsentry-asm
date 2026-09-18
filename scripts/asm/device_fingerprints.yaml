@@ -137,6 +137,29 @@ fingerprints:
     vendor_product: {vendor: Cloudflare, product: Cloudflare}
     dedupe_key: wafw00f_detection
 
+  # ⛔ VENDOR COVERAGE, FROM THE ESTATES' OWN BYTES (relay 279/288, Howie's standing
+  # requirement). Before this, `wafw00f_high_confidence` matched ONLY
+  # fortiweb|fortinet|cloudflare — so the 55 Prodex artifacts naming
+  # "Google Cloud App Armor" and the 1 naming "Azure Front Door" could never reach
+  # waf/confirmed on the wafw00f path, whatever the backfill wrote. The names below are
+  # wafw00f's OWN signature strings, read from production, not our prose for them:
+  # the tool says "Google Cloud App Armor", not "Google Cloud Armor".
+  - signal: wafw00f_high_confidence
+    observation: waf_vendor
+    match_substrings: ["google_cloud_app_armor", "google cloud app armor", "cloud_armor"]
+    device_class: waf
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Google Cloud, product: Google Cloud Armor}
+    dedupe_key: wafw00f_detection
+
+  - signal: wafw00f_high_confidence
+    observation: waf_vendor
+    match_substrings: ["azure_front_door", "azure front door"]
+    device_class: waf
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Microsoft, product: Azure Front Door}
+    dedupe_key: wafw00f_detection
+
   # ── Discovery-tier wafw00f (Obsidian 157, 4.7 2026-07-23) ─────────────────
   # The SAME wafw00f detection, but from the LIGHT/discovery scan — its verdict is
   # persisted in asset_surface.surface_data.subdomains[].waf {detected, vendor} (the
@@ -161,6 +184,23 @@ fingerprints:
     device_class: waf
     evidence_class: vendor_identifying
     vendor_product: {vendor: Cloudflare, product: Cloudflare}
+    dedupe_key: wafw00f_detection
+
+  # Same two vendors on the discovery tier — the light scan's verdict, same dedupe_key.
+  - signal: wafw00f_discovery_confidence
+    observation: waf_vendor_discovery
+    match_substrings: ["google_cloud_app_armor", "google cloud app armor", "cloud_armor"]
+    device_class: waf
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Google Cloud, product: Google Cloud Armor}
+    dedupe_key: wafw00f_detection
+
+  - signal: wafw00f_discovery_confidence
+    observation: waf_vendor_discovery
+    match_substrings: ["azure_front_door", "azure front door"]
+    device_class: waf
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Microsoft, product: Azure Front Door}
     dedupe_key: wafw00f_detection
 
   # ── wafw00f WAF presence (HIGH, presence-only) — 4.7 Q1 (Obsidian 146) ────
