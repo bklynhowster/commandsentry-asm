@@ -219,7 +219,48 @@ def apply_2b_matrix(prior_class: str, status: str, streak_met: bool) -> str:
     return _DECISION_NO_WRITE
 
 
+_HEARTBEAT_BASE = "device_class_runner"
+
+
+def heartbeat_name(soak_generation: int, override: str | None = None) -> str:
+    """Whose pass wrote this heartbeat. PURE.
+
+    ⛔ THE GATE MUST NOT IMPERSONATE THE CRON (relay 244/277a). Job 2 of the pre-merge
+    gate runs a full classify pass against PRODUCTION, read-only, on every PR — and it
+    wrote the same `alerter_name` as the scheduled run. `meta_alerter_runs` is the
+    answer to "did the soak run last night"; a gate row in it means a PR can make a
+    dead cron look alive. Ruling 20 already gave the gate a scratch identity —
+    soak_generation 0 — so the heartbeat simply carries it rather than inventing a
+    second switch nobody sets.
+
+    ⚠ DERIVED, NOT PASSED. A flag the workflow must remember is a flag the workflow
+    will eventually forget; the generation is already on every row the pass writes."""
+    if override:
+        return override
+    return f"{_HEARTBEAT_BASE}:gate" if int(soak_generation) == 0 else _HEARTBEAT_BASE
+
+
+def unknown_prior_signals(assets, sig2obs) -> list:
+    """Stored prior-basis signal names that the fingerprint registry no longer knows.
+
+    ⛔ R5's FOURTH PATH, AND IT WAS SILENTLY A PRESERVE (relay 270). `signal_capable`
+    is `any(... for o in (sig2obs.get(signal) or ()))` — an unmapped name yields
+    `any(())` = False = INCAPABLE = PRESERVE_AGED. So a signal deleted from
+    device_fingerprints.yaml produced a preserve citing evidence nothing can ever
+    collect: a marker no one can explain, forever, on an asset whose label is frozen.
+    That is the coverage-guard's territory (R12), so it REFUSES here the same way,
+    at startup, before a single asset is classified.
+
+    ⚠ Measured before shipping: on Command today the stored names are 7 and every one
+    is in the registry, so this fires on nothing. It is a tripwire, not a migration."""
+    seen = set()
+    for a in assets or ():
+        seen |= signals_in(a.get("device_class_evidence"))
+    return sorted(n for n in seen if n and n not in (sig2obs or {}))
+
+
 def _downgrade_streak_met(cur, asset_id: str, capable_runs: list,
+                          soak_generation: int,
                           required: int = _DOWNGRADE_STREAK_REQUIRED) -> bool:
     """Q4 streak, DERIVED from rows we already write — no migration (4.7 201/2+3).
 
@@ -237,11 +278,20 @@ def _downgrade_streak_met(cur, asset_id: str, capable_runs: list,
     capable = set(capable_runs or ())
     if len(capable) < required:
         return False
+    # ⛔ THIS PASS'S GENERATION ONLY (relay 277b). The pre-merge gate runs a full
+    # classify against production on every PR with soak_generation 0 (ruling 20), and
+    # those rows land in the same table. Unfiltered, a day of PRs could ACCUMULATE A
+    # STREAK and demote a real label — the gate would have changed production by
+    # observing it. The filter is in the SQL and re-checked in Python below, because
+    # a filter alone is unobservable: every test that tried to exercise the last one
+    # was actually being caught by the prior/class checks.
     cur.execute(
-        """select scan_run_id::text as scan_run_id, prior_state, device_class
+        """select scan_run_id::text as scan_run_id, prior_state, device_class,
+                  soak_generation
              from public.device_class_dryrun
             where asset_id = %s and event_type = 'TRANSITION_DOWNGRADE'
-            order by evaluated_at desc limit 500""", (asset_id,))
+              and soak_generation = %s
+            order by evaluated_at desc limit 500""", (asset_id, int(soak_generation)))
     seen = []
     for r in (cur.fetchall() or []):
         # ⚠ event_type is filtered in SQL AND re-checked here on purpose. By
@@ -255,6 +305,8 @@ def _downgrade_streak_met(cur, asset_id: str, capable_runs: list,
             continue
         if r.get("device_class") != "unknown":
             continue
+        if r.get("soak_generation") is not None and int(r["soak_generation"]) != int(soak_generation):
+            continue          # the SQL filter, re-checked where a test can see it
         prior = (r.get("prior_state") or {}).get("device_class")
         if prior not in _POSITIVE_CLASSES:
             continue
@@ -1124,7 +1176,8 @@ def _has_wafw00f(evidence) -> bool:
                 & {"wafw00f_high_confidence", "waf_present_wafw00f"})
 
 
-def run(dsn: str, write: bool, soak_generation: int) -> int:
+def run(dsn: str, write: bool, soak_generation: int,
+        heartbeat: str | None = None) -> int:
     # R6 startup guard: load_fingerprints() already RAISES on structural rules
     # (evidence_class present/consistent, device_class enum). Here we also enforce
     # rule 6 (every signal is a ratified weight) now that thresholds are loaded —
@@ -1173,9 +1226,37 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
         # every --write pass already stores on this same table — the prior verdict's
         # own basis. No migration, no new column: the runner starts reading what it
         # has been writing since D4.
+        # ⛔ RETIRED ASSETS ARE NOT CLASSIFIED (relay 271/277c). demo-tour.prodexlabs.com
+        # is `discovery_status = retired` and this pass wrote SIX audit rows against it
+        # in 24 hours — and under `--write` it would have written device_class to a
+        # retired asset. A retired asset is one we have stopped asking about; deriving
+        # a fresh verdict for it is deriving a verdict from nothing.
+        # ⚠ COUNTED, NOT SILENTLY DROPPED: the same rule as I3's population and I4's
+        # exclusions — a pass that narrows its own input without saying so cannot tell
+        # you it checked less than you think.
         cur.execute("select asset_id, device_class, device_class_confidence, "
-                    "device_class_evidence from public.assets order by asset_id")
-        assets = cur.fetchall()
+                    "device_class_evidence, discovery_status from public.assets "
+                    "order by asset_id")
+        all_assets = cur.fetchall()
+        assets = [a for a in all_assets
+                  if (a.get("discovery_status") or "").lower() != "retired"]
+        retired_n = len(all_assets) - len(assets)
+        if retired_n:
+            print(f"  retired: {retired_n} asset(s) excluded from the classify population")
+
+        # ⛔ R5's FOURTH PATH — REFUSE, DO NOT PRESERVE (relay 270/277e). A stored prior
+        # signal the registry no longer knows is INCAPABLE by construction
+        # (`any(())` is False), which R5 reads as "we could not collect it" and
+        # preserves forever, citing evidence nothing can ever produce.
+        _orphans = unknown_prior_signals(assets, sig2obs)
+        if _orphans:
+            print(f"⛔ REFUSING: {len(_orphans)} stored prior-basis signal(s) are not in "
+                  f"device_fingerprints.yaml: {', '.join(_orphans)}")
+            print("   R5 would treat each as INCAPABLE and preserve the prior forever, "
+                  "citing evidence nothing can collect.")
+            print("   Either restore the signal to the registry or clear it from "
+                  "assets.device_class_evidence. The coverage guard refuses either way.")
+            return 1
         print(f"{'ASSET':38.38s} {'FROM':18s} {'-> TO':18s} EVENT")
         for a in assets:
             res, from_cloud = classify_asset(cur, a, fps, th, fresh_days, nuclei_re, cloud_reg)
@@ -1200,6 +1281,12 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
             # narrowed only when the verdict is `unknown`.
             decision = _DECISION_WRITE
             r5_note = None
+            # ⛔ COMPUTED FOR EVERY ROW, NOT JUST R5's BRANCH (relay 277d). I4 needs the
+            # basis AS OF THE DECISION; reading assets.device_class_evidence from the
+            # gate reads it as of NOW. If the key were written only on the R5 path, a
+            # 2b row's missing key would be ambiguous — "no basis" or "other branch"?
+            # One computation, every row, no ambiguity.
+            prior_sigs = prior_signals_of(a.get("device_class_evidence"))
             if nc == "unknown":
                 unknown += 1
                 had_evidence = bool(res.get("evidence"))
@@ -1208,7 +1295,8 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
                 streak_met = (
                     status2b == _STATUS_GENUINE_EMPTY
                     and a["device_class"] in _POSITIVE_CLASSES
-                    and _downgrade_streak_met(cur, a["asset_id"], capable))
+                    and _downgrade_streak_met(cur, a["asset_id"], capable,
+                                              soak_generation))
                 decision = apply_2b_matrix(a["device_class"], status2b, streak_met)
                 prior_s = f"{a['device_class']}/{a['device_class_confidence']}"
                 if decision == _DECISION_PRESERVE and status2b == _STATUS_NO_FRESH_COLLECTION:
@@ -1230,7 +1318,6 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
                 # ── R5 (4.7 ruling 5, relay 236). MUTUALLY EXCLUSIVE WITH 2b BY
                 # CONSTRUCTION: a computed `unknown` never reaches here, so the two
                 # rules can never both narrow the same decision. Pinned by test.
-                prior_sigs = prior_signals_of(a.get("device_class_evidence"))
                 incapable = []
                 # Only the signals that STOPPED firing are worth asking about — a
                 # signal present in this pass's evidence was, self-evidently, capable.
@@ -1307,8 +1394,14 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
                  # owns, and the note is about the prior being preserved — the right
                  # home for it as well as the available one. 2b's audit shape is
                  # untouched: this key appears only on an R5 preserve.
+                 # ⚠ basis_signals: SORTED, and [] when the basis is empty — which is an
+                 # ANSWER, not an absence. Key-present-but-empty vs key-absent is R12's
+                 # `_CAP_JSON_KEY_PRESENT` vs `_CAP_JSON_NONEMPTY` distinction, and I4
+                 # reads it with those words: the key present means this runner decided;
+                 # the key absent means the row predates this commit.
                  json.dumps({"device_class": a["device_class"],
                              "confidence": a["device_class_confidence"],
+                             "basis_signals": sorted(prior_sigs),
                              **({"preserve": r5_note} if r5_note else {})}),
                  would_reroute, _latest_scan_run(cur, a["asset_id"]), soak_generation))
 
@@ -1337,7 +1430,8 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
             "insert into public.meta_alerter_runs "
             "(alerter_name, window_start, window_end, status, notes) "
             "values (%s,%s,%s,%s,%s)",
-            ("device_class_runner", _pass_started, datetime.now(timezone.utc),
+            (heartbeat_name(soak_generation, heartbeat), _pass_started,
+             datetime.now(timezone.utc),
              "complete",
              json.dumps({"mode": "write" if write else "dry-run",
                          "soak_generation": soak_generation,
@@ -1363,7 +1457,8 @@ def run(dsn: str, write: bool, soak_generation: int) -> int:
           f"no-write(unknown prior)={m2b['no_write_unknown_prior']}")
     print(f"  R5 confidence: preserve(evidence-aged)={m5['preserve_evidence_aged']} "
           f"downgrade(capable saw weaker)={m5['downgrade_capable_saw_weaker']}")
-    print("  heartbeat: 1 row -> meta_alerter_runs(alerter_name='device_class_runner')")
+    print(f"  heartbeat: 1 row -> meta_alerter_runs"
+          f"(alerter_name='{heartbeat_name(soak_generation, heartbeat)}')")
     print(f"  cloud fallback (F1/F2, re-derived from surface_data): "
           f"cloud_endpoint={cloud_endpoint_ct} cdn={cdn_ct}")
     print(f"  fingerprint confirmed: via_subset={conf_subset} via_full_signals={conf_full}")
@@ -1588,6 +1683,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true", help="stamp device_class (classify-only); default dry-run")
     ap.add_argument("--soak-generation", type=int, default=1, help="bump after a soak-clock reset")
+    ap.add_argument("--heartbeat-name", default=None,
+                    help="override the meta_alerter_runs identity; by default it is "
+                         "derived from --soak-generation (0 -> device_class_runner:gate)")
     ap.add_argument("--selftest", action="store_true", help="pure-logic self-test (no DB)")
     args = ap.parse_args()
     if args.selftest:
@@ -1597,7 +1695,7 @@ def main() -> int:
     dsn = os.environ.get("SUPABASE_DSN") or os.environ.get("COMMAND_SUPABASE_DSN") or os.environ.get("DSN")
     if not dsn:
         sys.exit("set SUPABASE_DSN (or COMMAND_SUPABASE_DSN / DSN)")
-    return run(dsn, args.write, args.soak_generation)
+    return run(dsn, args.write, args.soak_generation, args.heartbeat_name)
 
 
 if __name__ == "__main__":

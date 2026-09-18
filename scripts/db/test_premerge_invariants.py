@@ -359,19 +359,12 @@ def test_i4_is_silent_when_the_preserve_marker_is_present():
                         "preserve": {"reason": "EVIDENCE_AGED"}}}]) == []
 
 
-def test_i4_ignores_a_downgrade_over_a_FULL_envelope():
-    """A capable observation that saw weaker evidence SHOULD write. Not I4's business.
-
-    ⚠ SINCE R26 THIS IS A POPULATION QUESTION, NOT A PREDICATE ONE — so it is asked of
-    `i4_scoped`, which EXCLUDES the row under a named, counted reason. It used to be a
-    `continue` inside the predicate, and on Command that silent skip swallowed 15 of 15
-    armed rows behind a PASS."""
-    rows = [{"asset_id": "x", "newest_envelope": "{}", "newest_envelope_empty": False,
-             "asset_basis": json.dumps({"signals": ["fortiweb_cookiesession1"]}),
-             "prior_state": {"device_class": "waf", "confidence": "confirmed"}}]
-    s = pi.i4_scoped(rows)
-    assert s["violations"] == [] and s["counted"] == []
-    assert [e["reason"] for e in s["excluded"]] == [pi._I4_FULL_ENVELOPE]
+def test_i4_no_longer_asks_about_the_envelope_at_all():
+    """v2's population predicate is GONE, and this is the pin that says so. It excluded
+    15 of 15 armed rows on Command because a 57-day-old envelope is still a FULL one —
+    the question was never the right question."""
+    assert "newest_envelope" not in pi.Q_I4
+    assert not hasattr(pi, "_I4_FULL_ENVELOPE") and not hasattr(pi, "_I4_NO_ENVELOPE")
 
 
 def test_i4_reads_prior_state_whether_it_arrives_as_jsonb_or_text():
@@ -719,141 +712,130 @@ def test_the_since_column_follows_the_instance_argument():
             != pi.armed_split(between, "I3", "prodex")[0])
 
 
-# ══ R26 — I4's POPULATION, FROM PRODUCTION ROWS ═══════════════════════════════
-# The fixtures below are rows that exist: relay 271's Prodex reads and my own read of
-# Command's armed set this turn. ⛔ The reason that matters most is the one nobody
-# specified — `newest envelope is full` — because it fires on COMMAND 15 TIMES OUT OF
-# 15, so v1's silent `continue` meant I4 printed "PASS 0 unmarked of 12 armed" having
-# checked ZERO rows. A predicate that narrows its own input silently cannot report that
-# it checked nothing; that is the third instance of this shape (I3's population, R27).
+# ══ I4 v3 — R5's OWN AXIS, NOT A PROXY FOR IT ════════════════════════════════
+# ⛔ WHY v2 HAD TO GO, MEASURED: all 15 of Command's armed same-class downgrade rows
+# were excluded by v2 as "full envelope", because api.commandcommcentral.com's newest
+# heavy (2026-07-22) collected cookies, headers and a cert — the preserve fires because
+# those observations are 57 days OLD. v2 asked about emptiness; R5 asks about
+# collectibility in-window. So I4's population was empty on the one instance that has
+# preserves to check, and v1 reported that as PASS.
+#
+# ⚠ DEVIATION FROM RULING 277f, stated with its evidence: 4.7 ruled "newest HEAVY
+# predates evidence_freshness_days". `_capability_rows` has NO intensity filter — a
+# MEDIUM run carries stack_id_wafw00f on api.commandcommcentral.com (2026-06-11) — so a
+# recent non-heavy run can make a signal capable while the newest heavy is old, and the
+# proxy would call R5's correct WRITE a violation. v3 imports `signal_capable`.
 
-_FULL_ENV = json.dumps({"schema": 1, "hostname": "api.commandcommcentral.com",
-                        "set_cookie_names": ["CCC", "cookiesession1"],
-                        "headers": {"server": "Microsoft-IIS/10.0"},
-                        "cert": {"issuer_o": "GoDaddy.com"}})
-_EMPTY_ENV = json.dumps({"schema": 1, "hostname": "api.commandcommcentral.com",
-                         "collected_at": "2026-09-03T20:14:56Z"})
-# api.commandcommcentral.com's REAL stored basis (read from Command, this turn)
 _CMD_BASIS = json.dumps({"signals": ["wafw00f_discovery_confidence",
                                      "fortiweb_cookiesession1",
                                      "cert_issuer_subject_pattern"]})
-# demo-tour / azure-demo's REAL basis: the 2026-07-13 cloud-inherited seed
 _PDX_BASIS = json.dumps({"signals": [], "inherited_at": "2026-07-13T21:13:42Z",
                          "surface_stale": False, "cloud_provider": "gcp",
                          "inherited_from": "cloud_provider",
                          "cloud_match_tier": "asn", "is_cloud_endpoint": False})
 
 
+class _StubCur:
+    """Stands in for the DB cursor. Only `signal_capable`'s answer matters here, and
+    that function is monkeypatched per test — the cursor just carries the answer."""
+    def __init__(self, incapable):
+        self.incapable = set(incapable)
+
+
+def _capability(monkeypatch):
+    monkeypatch.setattr(pi, "signal_capable",
+                        lambda cur, asset, sig, m, days: sig not in cur.incapable)
+
+
 def _row4(**kw):
     r = {"asset_id": "api.commandcommcentral.com", "device_class": "waf",
-         "confidence": "suspected", "newest_envelope": _EMPTY_ENV,
-         "newest_envelope_empty": True, "asset_basis": _CMD_BASIS,
+         "confidence": "suspected", "asset_basis": _CMD_BASIS,
          "prior_state": {"device_class": "waf", "confidence": "confirmed"}}
     r.update(kw)
     return r
 
 
-def test_i4_excludes_a_NULL_envelope_because_NULL_IS_NEVER_ASKED():
-    """⛔ demo-tour.prodexlabs.com: ONE heavy (2026-07-11), ZERO stack_id_passive
-    artifacts ever, so Q_I4's correlated subquery returns NULL. v1 ran
-    envelope_is_empty(None) -> True and demanded a preserve marker for an envelope
-    nobody ever collected — "not asked" read as "found nothing". Two of Prodex's I4
-    FAIL rows were exactly this.
-
-    ⚠ AND THE SAME NULL MEANS THE OPPOSITE IN I3: there, an ARMED heavy with no
-    artifact is the collector failing to write, which IS the defect. Identical value,
-    opposite meaning, which is why this is a named bucket and not a shared helper."""
-    s = pi.i4_scoped([_row4(asset_id="demo-tour.prodexlabs.com", newest_envelope=None,
-                            asset_basis=_PDX_BASIS)])
-    assert s["counted"] == [] and s["violations"] == []
-    assert [e["reason"] for e in s["excluded"]] == [pi._I4_NO_ENVELOPE]
-
-
 def test_i4_excludes_an_empty_prior_basis_because_R5_WRITES_on_one():
     """Prodex's whole I4 red. Every positive prior there is the 2026-07-13
-    cloud-inherited seed with `signals: []`; `apply_r5_confidence_rule` returns WRITE
-    on an empty basis BY DESIGN (preserving would build a ratchet), so demanding the
-    marker asks for a key the rule forbids."""
-    s = pi.i4_scoped([_row4(asset_id="demo-tour.prodexlabs.com", asset_basis=_PDX_BASIS)])
+    cloud-inherited seed with `signals: []`; `apply_r5_confidence_rule` returns WRITE on
+    an empty basis BY DESIGN, so demanding a marker asks for a key the rule forbids."""
+    s = pi.i4_scoped([_row4(asset_id="demo-tour.prodexlabs.com", asset_basis=_PDX_BASIS)],
+                     _StubCur(set()))
     assert s["counted"] == []
     assert [e["reason"] for e in s["excluded"]] == [pi._I4_NO_BASIS]
 
 
-def test_the_cloud_inherited_basis_really_yields_no_signals_through_the_imported_reader():
-    """`signals_in` is IMPORTED from device_class_runner, not re-implemented — the
-    function the 241 crash produced. The cloud-fallback blob is a DICT whose
-    `signals` is `[]`; iterating the dict itself would yield its keys."""
-    assert pi.signals_in.__module__ == "device_class_runner"
-    assert pi.signals_in(_PDX_BASIS) == set()
-    assert pi.signals_in(_CMD_BASIS) == {"wafw00f_discovery_confidence",
-                                         "fortiweb_cookiesession1",
-                                         "cert_issuer_subject_pattern"}
+def test_i4_excludes_a_row_whose_every_prior_signal_was_COLLECTIBLE(monkeypatch):
+    """R5 preserves IFF some prior signal was incapable. All capable -> R5 was RIGHT to
+    write -> no marker owed -> asking for one would fail the gate on correct behaviour."""
+    _capability(monkeypatch)
+    s = pi.i4_scoped([_row4()], _StubCur(set()))
+    assert s["counted"] == []
+    assert [e["reason"] for e in s["excluded"]] == [pi._I4_ALL_CAPABLE]
 
 
-def test_i4_counts_one_violation_when_the_row_is_genuinely_in_the_population():
-    s = pi.i4_scoped([_row4()])
+def test_i4_fires_when_a_prior_signal_was_INCAPABLE_and_no_marker(monkeypatch):
+    _capability(monkeypatch)
+    s = pi.i4_scoped([_row4()], _StubCur({"fortiweb_cookiesession1"}))
     assert len(s["counted"]) == 1 and len(s["violations"]) == 1
-    assert s["excluded"] == []
+    assert s["counted"][0]["incapable_signals"] == ["fortiweb_cookiesession1"]
 
 
-def test_i4_is_silent_on_that_same_row_once_it_carries_the_marker():
+def test_i4_is_silent_on_that_same_row_once_it_carries_the_marker(monkeypatch):
+    _capability(monkeypatch)
     marked = _row4(prior_state={"device_class": "waf", "confidence": "confirmed",
                                 "preserve": {"reason": "EVIDENCE_AGED",
                                              "incapable_signals": ["fortiweb_cookiesession1"],
                                              "evidence_age_days": {"set_cookie_names": 57}}})
-    s = pi.i4_scoped([marked])
+    s = pi.i4_scoped([marked], _StubCur({"fortiweb_cookiesession1"}))
     assert len(s["counted"]) == 1 and s["violations"] == []
 
 
-def test_i4_prefers_the_basis_on_the_row_over_the_assets_blob():
-    """The runner-turn change makes the row self-describing. ⚠ KEY-PRESENT-BUT-EMPTY
-    IS NOT KEY-ABSENT (R12's two cap modes, which cut in opposite directions):
-    `basis_signals: []` is the runner ANSWERING "empty"; an absent key is no answer
-    and falls back to `assets`."""
-    # key present and empty -> the row's answer wins over a non-empty assets blob
+def test_i4_without_a_cursor_says_UNKNOWN_and_never_passes():
+    """⛔ A fixture, --selftest, or a failed capability read cannot answer R5's question.
+    'Cannot tell' is an exclusion WITH A NAME — the absence-vs-evidence-of-absence rule
+    that produced I3's two reasons and I4's NULL bucket."""
+    s = pi.i4_scoped([_row4()])                       # no cursor at all
+    assert s["counted"] == [] and s["violations"] == []
+    assert [e["reason"] for e in s["excluded"]] == [pi._I4_NO_CURSOR]
+
+
+def test_i4_prefers_the_basis_on_the_row_over_the_assets_blob(monkeypatch):
+    """The runner now writes prior_state.basis_signals on EVERY audit row. ⚠ KEY-PRESENT-
+    BUT-EMPTY IS NOT KEY-ABSENT (R12's two cap modes): `basis_signals: []` is the runner
+    ANSWERING "empty"; an absent key is no answer and falls back to `assets`."""
+    _capability(monkeypatch)
     r = _row4(prior_state={"device_class": "waf", "confidence": "confirmed",
                            "basis_signals": []})
-    s = pi.i4_scoped([r])
+    s = pi.i4_scoped([r], _StubCur({"fortiweb_cookiesession1"}))
     assert [e["reason"] for e in s["excluded"]] == [pi._I4_NO_BASIS]
     assert s["basis_source"] == {"row": 1, "assets": 0}
-    # key present and non-empty, assets blob EMPTY -> still in the population
     r2 = _row4(asset_basis=_PDX_BASIS,
                prior_state={"device_class": "waf", "confidence": "confirmed",
                             "basis_signals": ["fortiweb_cookiesession1"]})
-    s2 = pi.i4_scoped([r2])
+    s2 = pi.i4_scoped([r2], _StubCur({"fortiweb_cookiesession1"}))
     assert len(s2["counted"]) == 1 and s2["basis_source"] == {"row": 1, "assets": 0}
-    # key absent -> assets, and the count says so (that count falling to zero is how
-    # we will see the runner change land)
-    s3 = pi.i4_scoped([_row4()])
-    assert s3["basis_source"] == {"row": 0, "assets": 1}
+    assert pi.i4_scoped([_row4()], _StubCur({"x"}))["basis_source"] == {"row": 0, "assets": 1}
 
 
-def test_every_i4_exclusion_reason_is_reachable_and_distinct():
-    """The rule I applied to I3's third reason, applied here: a branch that cannot
-    execute is a comment pretending to be code. All three of these fire on production
-    rows; 4.7's proposed fourth (`basis not recorded on the row`) cannot, because the
-    assets fallback always answers and asset_id is an FK to assets."""
-    rows = [_row4(newest_envelope=None),                      # NO_ENVELOPE
-            _row4(newest_envelope=_FULL_ENV, newest_envelope_empty=False),  # FULL
-            _row4(asset_basis=_PDX_BASIS),                    # NO_BASIS
-            _row4()]                                          # counted
-    s = pi.i4_scoped(rows)
+def test_every_i4_exclusion_reason_is_reachable_and_distinct(monkeypatch):
+    _capability(monkeypatch)
+    rows = [_row4(asset_id="demo-tour.prodexlabs.com", asset_basis=_PDX_BASIS),  # NO_BASIS
+            _row4(asset_id="all-capable.example")]                               # ALL_CAPABLE
+    s = pi.i4_scoped(rows, _StubCur(set()))
     got = sorted(e["reason"] for e in s["excluded"])
-    assert got == sorted([pi._I4_NO_ENVELOPE, pi._I4_FULL_ENVELOPE, pi._I4_NO_BASIS])
-    assert len(set(got)) == 3 and len(s["counted"]) == 1
+    assert got == sorted([pi._I4_NO_BASIS, pi._I4_ALL_CAPABLE])
+    assert pi.i4_scoped([_row4()])["excluded"][0]["reason"] == pi._I4_NO_CURSOR  # third
 
 
-def test_the_full_envelope_reason_is_the_one_that_fires_on_every_command_row():
-    """MEASURED, relay 272: all 15 of Command's armed same-class downgrade rows have a
-    full envelope — because their preserves fire on 57-DAY-OLD observations while the
-    newest heavy (2026-07-22) collected cookies, headers and a cert. So I4's population
-    on Command is EMPTY, and under R27 that is INCONCLUSIVE, not PASS."""
-    rows = [_row4(newest_envelope=_FULL_ENV, newest_envelope_empty=False) for _ in range(15)]
-    s = pi.i4_scoped(rows)
-    assert s["counted"] == [] and len(s["excluded"]) == 15
-    assert {e["reason"] for e in s["excluded"]} == {pi._I4_FULL_ENVELOPE}
-    assert pi.state_for(len(s["counted"]), not s["violations"],
-                        pi.INVARIANT_FLOOR["I4"]) == pi.INCONCLUSIVE
+def test_i4_imports_R5s_capability_rather_than_reimplementing_it():
+    """A property proven about a copy is proven about nothing. `signal_capable`,
+    `signals_in` and `event_for` all come from the runner, and the freshness constant is
+    read from the runner's own thresholds file rather than typed in here."""
+    assert pi.signal_capable.__module__ == "device_class_runner"
+    assert pi.signals_in.__module__ == "device_class_runner"
+    assert pi.fresh_days() == 30                     # scripts/scanner/classifier_thresholds.yaml
+    assert "fortiweb_cookiesession1" in pi.sig2obs()
 
 
 # ══ R27 — ZERO CHECKED ROWS IS INCONCLUSIVE FOR EVERY INVARIANT ══════════════
@@ -948,14 +930,20 @@ def test_i4_state_takes_the_SCOPED_result_not_the_fetched_rows():
     `state_for(len(s4["counted"]), …)` INSIDE run_live — and `len(armed)` there passes
     every test while printing PASS over an empty population. The operand choice IS
     part of the decision, so it moved inside the pure function."""
-    rows = [_row4(newest_envelope=_FULL_ENV, newest_envelope_empty=False) for _ in range(15)]
-    s = pi.i4_scoped(rows)
-    assert len(s["excluded"]) == 15 and s["counted"] == []
-    assert pi.i4_state(s) == pi.INCONCLUSIVE          # NOT pass, on 15 armed rows
-    assert pi.i4_state(pi.i4_scoped([_row4()])) == pi.FAILED
-    marked = _row4(prior_state={"device_class": "waf", "confidence": "confirmed",
-                                "preserve": {"reason": "EVIDENCE_AGED"}})
-    assert pi.i4_state(pi.i4_scoped([marked])) == pi.HELD
+    rows = [_row4(asset_id=f"h{i}.example") for i in range(15)]
+    cur = _StubCur({"fortiweb_cookiesession1"})
+    import unittest.mock as _m
+    with _m.patch.object(pi, "signal_capable",
+                         lambda c, a, sig, mp, d: True):      # every signal capable
+        s = pi.i4_scoped(rows, cur)
+        assert len(s["excluded"]) == 15 and s["counted"] == []
+        assert pi.i4_state(s) == pi.INCONCLUSIVE       # NOT pass, on 15 armed rows
+    with _m.patch.object(pi, "signal_capable",
+                         lambda c, a, sig, mp, d: sig not in c.incapable):
+        assert pi.i4_state(pi.i4_scoped([_row4()], cur)) == pi.FAILED
+        marked = _row4(prior_state={"device_class": "waf", "confidence": "confirmed",
+                                    "preserve": {"reason": "EVIDENCE_AGED"}})
+        assert pi.i4_state(pi.i4_scoped([marked], cur)) == pi.HELD
 
 
 _VERDICT_FNS = ("state_for", "invariant_state", "i3_state", "i4_state")

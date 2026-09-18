@@ -87,8 +87,18 @@ class FakeCursor:
         return self._result[0] if self._result else None
 
 
-def _dryrun_row(run_id, prior="waf", computed="unknown", event="TRANSITION_DOWNGRADE"):
+# ⚠ soak_generation rides every fixture row since relay 277b: the streak counts ONLY
+#   rows of the pass's own generation, because the pre-merge gate writes generation-0
+#   TRANSITION_DOWNGRADE rows into this same table on every PR (ruling 20's scratch
+#   identity). Unfiltered, a day of PRs could accumulate a streak and demote a real
+#   label — the gate would have changed production by observing it.
+_PROD_GEN = 1
+
+
+def _dryrun_row(run_id, prior="waf", computed="unknown", event="TRANSITION_DOWNGRADE",
+                soak_generation=_PROD_GEN):
     return {"scan_run_id": run_id, "device_class": computed, "event_type": event,
+            "soak_generation": soak_generation,
             "prior_state": {"device_class": prior, "confidence": "suspected"}}
 
 
@@ -175,7 +185,7 @@ def test_three_distinct_capable_runs_meet_the_streak():
     caps = ("r1", "r2", "r3")
     cur = FakeCursor(capable_run_ids=caps,
                      dryrun_rows=[_dryrun_row("r3"), _dryrun_row("r2"), _dryrun_row("r1")])
-    assert dcr._downgrade_streak_met(cur, "a", list(caps)) is True
+    assert dcr._downgrade_streak_met(cur, "a", list(caps), _PROD_GEN) is True
 
 
 def test_one_scan_re_read_four_times_is_one_observation():
@@ -190,7 +200,7 @@ def test_one_scan_re_read_four_times_is_one_observation():
     short-circuit; only one of them has rows, so the dedupe is what decides."""
     cur = FakeCursor(capable_run_ids=("r1", "r2", "r3"),
                      dryrun_rows=[_dryrun_row("r1") for _ in range(4)])
-    assert dcr._downgrade_streak_met(cur, "a", ["r1", "r2", "r3"]) is False
+    assert dcr._downgrade_streak_met(cur, "a", ["r1", "r2", "r3"], _PROD_GEN) is False
 
 
 def test_a_stamp_row_does_not_count_toward_the_streak():
@@ -207,7 +217,7 @@ def test_a_stamp_row_does_not_count_toward_the_streak():
                      dryrun_rows=[_dryrun_row("r1", prior="waf", event="STAMP"),
                                   _dryrun_row("r2", prior="waf", event="STAMP"),
                                   _dryrun_row("r3", prior="waf", event="STAMP")])
-    assert dcr._downgrade_streak_met(cur, "a", ["r1", "r2", "r3"]) is False
+    assert dcr._downgrade_streak_met(cur, "a", ["r1", "r2", "r3"], _PROD_GEN) is False
 
 
 def test_the_unknown_prior_stamp_shape_is_also_rejected():
@@ -217,7 +227,7 @@ def test_the_unknown_prior_stamp_shape_is_also_rejected():
                      dryrun_rows=[_dryrun_row("r1", prior="unknown", event="STAMP"),
                                   _dryrun_row("r2", prior="unknown", event="STAMP"),
                                   _dryrun_row("r3", prior="unknown", event="STAMP")])
-    assert dcr._downgrade_streak_met(cur, "a", ["r1", "r2", "r3"]) is False
+    assert dcr._downgrade_streak_met(cur, "a", ["r1", "r2", "r3"], _PROD_GEN) is False
 
 
 def test_rows_from_runs_that_were_not_evidence_capable_do_not_count():
@@ -234,7 +244,7 @@ def test_rows_from_runs_that_were_not_evidence_capable_do_not_count():
                                   _dryrun_row("r-light-1")])
     assert dcr._downgrade_streak_met(
         cur, "mail.unimacgraphics.com",
-        ["r-medium", "r-medium-2", "r-medium-3"]) is False
+        ["r-medium", "r-medium-2", "r-medium-3"], _PROD_GEN) is False
 
 
 def test_a_downgrade_row_whose_prior_was_unknown_does_not_count():
@@ -242,14 +252,14 @@ def test_a_downgrade_row_whose_prior_was_unknown_does_not_count():
                      dryrun_rows=[_dryrun_row("r1", prior="unknown"),
                                   _dryrun_row("r2", prior="unknown"),
                                   _dryrun_row("r3", prior="unknown")])
-    assert dcr._downgrade_streak_met(cur, "a", ["r1", "r2", "r3"]) is False
+    assert dcr._downgrade_streak_met(cur, "a", ["r1", "r2", "r3"], _PROD_GEN) is False
 
 
 def test_streak_short_circuits_before_querying_when_capability_is_short():
     """Cost guard: fewer capable runs than the requirement cannot possibly meet it, so
     the dryrun read must not be issued at all inside a per-asset loop."""
     cur = FakeCursor(capable_run_ids=("r1", "r2"))
-    assert dcr._downgrade_streak_met(cur, "a", ["r1", "r2"]) is False
+    assert dcr._downgrade_streak_met(cur, "a", ["r1", "r2"], _PROD_GEN) is False
     assert not any("device_class_dryrun" in s for s, _ in cur.executed)
 
 
@@ -329,3 +339,32 @@ def test_the_assets_update_is_gated_on_the_2b_decision():
         assert "_DECISION_WRITE" in test_src or "decision" in test_src, (
             "the assets UPDATE is guarded, but NOT by the 2b decision — the matrix would "
             f"be computed and ignored. Guard reads: {test_src!r}")
+
+
+def test_gate_rows_at_soak_generation_0_never_count_toward_the_streak():
+    """⛔ RELAY 277b. Job 2 of the pre-merge gate runs a full classify against PRODUCTION
+    on every PR and writes its audit rows with soak_generation 0 (ruling 20). Those rows
+    land in device_class_dryrun beside the real ones. Unfiltered, a day of PRs would
+    ACCUMULATE A STREAK and demote a real label — the gate changing production by
+    observing it, which is the one thing a read-only gate must never do."""
+    caps = ("r1", "r2", "r3")
+    gate_rows = [_dryrun_row(r, soak_generation=0) for r in caps]
+    cur = FakeCursor(capable_run_ids=caps, dryrun_rows=gate_rows)
+    assert dcr._downgrade_streak_met(cur, "a", list(caps), _PROD_GEN) is False
+    # ...and the same three rows DO count for the generation that wrote them
+    cur2 = FakeCursor(capable_run_ids=caps, dryrun_rows=gate_rows)
+    assert dcr._downgrade_streak_met(cur2, "a", list(caps), 0) is True
+    # the filter is in the SQL too, not only in the re-check
+    sql = [q for q, _ in cur.executed if "device_class_dryrun" in q][0]
+    assert "soak_generation = %s" in " ".join(sql.split())
+
+
+def test_a_row_with_a_NULL_generation_is_not_silently_excluded_by_the_recheck():
+    """Historical rows predate the column. The SQL filter governs; the Python re-check
+    must not ALSO drop a row whose generation is NULL, or a real streak would break the
+    day the column was added. Measured on Command: 1000 sampled rows, all generation 1 —
+    so this is a guard against a shape we do not have, stated rather than assumed."""
+    caps = ("r1", "r2", "r3")
+    rows = [_dryrun_row(r, soak_generation=None) for r in caps]
+    cur = FakeCursor(capable_run_ids=caps, dryrun_rows=rows)
+    assert dcr._downgrade_streak_met(cur, "a", list(caps), _PROD_GEN) is True
