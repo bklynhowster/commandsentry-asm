@@ -170,6 +170,10 @@ CERT_HYGIENE_IDS = {
 }
 CERT_HYGIENE_MAX_SEVERITY = "MODERATE"
 
+# Cert facts that are a DEPLOYMENT CHOICE rather than a weakness — reported as
+# INFO so the fact survives without pretending to be a defect (T2, relay 152).
+_CERT_POLICY_IDS = frozenset({"cert_trust_wildcard"})
+
 _SEV_RANK = {"INFO": 0, "LOW": 1, "MODERATE": 2, "HIGH": 3, "CRITICAL": 4}
 
 # Variant severities WITHIN cert_chain_of_trust. testssl reports all three
@@ -183,6 +187,17 @@ _CERT_CHAIN_VARIANTS = (
     ("self-signed",      "MODERATE"),
     ("expired",          "MODERATE"),
 )
+
+
+def _cipher_protocol_label(grouped_id: str) -> str:
+    """"cipher-tls1_2" -> "TLS 1.2". Falls back to "TLS" rather than inventing a
+    version: a wrong version number in a title is worse than none."""
+    m = re.search(r"tls1[_.]?(\d)", grouped_id or "", re.IGNORECASE)
+    if m:
+        return f"TLS 1.{m.group(1)}"
+    if re.search(r"ssl3", grouped_id or "", re.IGNORECASE):
+        return "SSL 3"
+    return "TLS"
 
 
 def _cert_hygiene_severity(grouped_id: str, finding_text: str, current: str) -> str:
@@ -199,6 +214,16 @@ def _cert_hygiene_severity(grouped_id: str, finding_text: str, current: str) -> 
         # Deliberately NOT defaulted to LOW — an unknown trust failure is not
         # evidence of a small problem, it is absence of evidence either way.
         return CERT_HYGIENE_MAX_SEVERITY
+    # ── T2 (relay 152, Howie reading digest #130) ──────────────────────────
+    # A WILDCARD CERTIFICATE IS A POLICY CHOICE, NOT A WEAKNESS. `*.example.com`
+    # is how most estates issue certs; calling it LOW put a decision in the
+    # findings list next to actual defects, and a list where a deliberate choice
+    # looks like a problem is a list people stop reading.
+    # ⚠ NOT DELETED — INFO. The fact stays visible (an auditor may want to know the
+    # cert is a wildcard); it stops claiming to be a weakness. Same treatment T3
+    # gives the cipher inventory: demote and keep, never drop.
+    if grouped_id in _CERT_POLICY_IDS:
+        return "INFO"
     if _SEV_RANK.get(current, 0) > _SEV_RANK[CERT_HYGIENE_MAX_SEVERITY]:
         return CERT_HYGIENE_MAX_SEVERITY
     return current
@@ -447,6 +472,16 @@ def parse_testssl_file(
                 grouped_id, rec.get("finding") or "", canonical_sev
             )
 
+        # ── T3 (relay 152) — THE CIPHER INVENTORY IS NOT A WEAKNESS ────────
+        # testssl reports every accepted TLS 1.2 suite as its own LOW record, so
+        # one healthy server produced "cipher-tls1_2 (22 reports)" in the digest,
+        # sitting at LOW beside real defects. The WEAKNESS is already its own
+        # finding — cipherlist_OBSOLETED, LUCKY13 — and those are untouched.
+        # ⚠ DEMOTE AND RENAME, NEVER DELETE: the inventory is what an auditor asks
+        # for ("which suites does it accept?"), so it stays, as INFO, saying what
+        # it is. Same shape as T2's wildcard cert.
+        if is_cipher:
+            canonical_sev = "INFO"
         ip_field = rec.get("ip") or ""
         port = rec.get("port") or ""
         key = (grouped_id, canonical_sev, ip_field, str(port))
@@ -483,7 +518,14 @@ def parse_testssl_file(
             # Grouped (cipher list OR dedupe-merged synonym findings)
             n = len(records)
             base = label or f"testssl: {grouped_id}"
-            title = f"{base}  ({n} reports)"
+            # T3: the cipher inventory says what it is, in English, with its count.
+            # "(22 reports)" described our own grouping; "22 suites accepted"
+            # describes the server — which is the thing the reader wants.
+            if grouped_id.startswith("cipher"):
+                proto = _cipher_protocol_label(grouped_id)
+                title = f"{proto} cipher suites accepted ({n})"
+            else:
+                title = f"{base}  ({n} reports)"
             # Pull just the cipher mnemonic from each "TLSv1.2  xc028  ECDHE-RSA-..." line
             cipher_strs: list[str] = []
             for r in records[:20]:  # cap to avoid huge descriptions
