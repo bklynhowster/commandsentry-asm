@@ -118,6 +118,46 @@ class GateResult:
         return self.reason == "ownership_not_allowed"
 
 
+# ══ THE DELIBERATE-REFUSAL INVENTORY (relay 295, Howie's R30 ruling) ═════════
+# ⛔ EVERY REQUEST THIS SCANNER SENDS THAT IS DESIGNED TO BE REFUSED IS DECLARED HERE,
+# and there is exactly one. The ROE position has always been "we only send requests we
+# would be comfortable explaining"; a request whose PURPOSE is to be blocked is a
+# different kind of thing, and it is Howie's ruling (2026-09-18: "Go A+C"), not a
+# scanner-side convenience.
+#
+# ⚠ DECLARED HERE RATHER THAN BURIED IN THE PROBE, so the answer to "what do we send
+# that a WAF will log as an attack?" is one list rather than a code read. A test asserts
+# the probe and this entry agree — if someone changes the path in run_light and not
+# here, the build fails rather than the inventory quietly going stale.
+#
+# ⚠ NOT SMUGGLED INTO common_paths (4.7's instruction, relay 295): it is its own named
+# probe with its own artifact, so it is countable, auditable and removable in one edit.
+DELIBERATE_REFUSAL_PROBES = (
+    {
+        "name": "refusal_probe",
+        "tier": "light",
+        "path": "/%zz",                 # a single invalid percent-escape
+        "method": "GET",
+        "requests_per_host_per_scan": 1,
+        "retries": 0,
+        "escalates": False,
+        "purpose": ("provoke the front end's refusal so its signature can be read — "
+                    "Cloud Armor's 400 body is the tell that lets a non-Fortinet WAF "
+                    "reach waf/confirmed at all"),
+        "authorised_by": "Howie, 2026-09-18, relay 295 (R30 A+C)",
+    },
+)
+
+
+def deliberate_refusal_budget(hosts: int, scans_per_day: int = 1) -> int:
+    """Estate-wide extra requests per day from the inventory above. PURE.
+
+    Stated as a function rather than a paragraph because the number is the thing an
+    operator would be asked about, and a number in prose goes stale silently."""
+    per_host = sum(p["requests_per_host_per_scan"] for p in DELIBERATE_REFUSAL_PROBES)
+    return per_host * int(hosts) * int(scans_per_day)
+
+
 def check_ownership_or_block(
     conn,
     asset_id: str,
