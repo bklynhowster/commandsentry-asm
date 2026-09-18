@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-09-18T11:59:48Z_8c40b611",
-    "started_at": "2026-09-18T11:59:48Z",
-    "completed_at": "2026-09-18T12:08:25Z",
-    "duration_seconds": 517,
+    "id": "scan_2026-09-18T12:43:55Z_14cb5118",
+    "started_at": "2026-09-18T12:43:55Z",
+    "completed_at": "2026-09-18T12:52:07Z",
+    "duration_seconds": 492,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -31,7 +31,7 @@
   "summary": {
     "subdomain_count": 16,
     "live_subdomain_count": 16,
-    "host_count": 7,
+    "host_count": 5,
     "service_count": 46,
     "newest_cert_expiry_days": 30,
     "top_hosting_org": "Automattic, Inc",
@@ -46,8 +46,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -174,8 +174,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:07Z",
+      "last_seen": "2026-09-18T12:52:07Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -308,8 +308,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -442,8 +442,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -551,8 +551,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -660,13 +660,13 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
         "http_status": 200,
-        "title": "Sign in to your account"
+        "title": "Redirecting"
       },
       "probe_status": {
         "naabu": {
@@ -708,9 +708,10 @@
           "banner": null,
           "tls": true,
           "cert": {
-            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=WA, C=US",
-            "issuer": "CN=Microsoft TLS G2 RSA CA OCSP 02, O=Microsoft Corporation, C=US",
+            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
             "san": [
+              "stamp2.login.microsoftonline.com",
               "login.microsoftonline-int.com",
               "login.microsoftonline-p.com",
               "login.microsoftonline.com",
@@ -718,13 +719,12 @@
               "login2.microsoftonline.com",
               "loginex.microsoftonline-int.com",
               "loginex.microsoftonline.com",
-              "stamp2.login.microsoftonline-int.com",
-              "stamp2.login.microsoftonline.com"
+              "stamp2.login.microsoftonline-int.com"
             ],
-            "not_before": "2026-09-08T18:04:45Z",
-            "not_after": "2026-12-17T17:04:45Z",
+            "not_before": "2026-08-14T00:00:00Z",
+            "not_after": "2026-11-22T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 90
+            "days_to_expiry": 65
           }
         }
       ],
@@ -762,8 +762,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -810,9 +810,10 @@
           "banner": null,
           "tls": true,
           "cert": {
-            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=WA, C=US",
-            "issuer": "CN=Microsoft TLS G2 RSA CA OCSP 04, O=Microsoft Corporation, C=US",
+            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
             "san": [
+              "stamp2.login.microsoftonline.com",
               "login.microsoftonline-int.com",
               "login.microsoftonline-p.com",
               "login.microsoftonline.com",
@@ -820,13 +821,12 @@
               "login2.microsoftonline.com",
               "loginex.microsoftonline-int.com",
               "loginex.microsoftonline.com",
-              "stamp2.login.microsoftonline-int.com",
-              "stamp2.login.microsoftonline.com"
+              "stamp2.login.microsoftonline-int.com"
             ],
-            "not_before": "2026-08-14T04:32:13Z",
-            "not_after": "2026-11-22T03:32:13Z",
+            "not_before": "2026-08-14T00:00:00Z",
+            "not_after": "2026-11-22T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 64
+            "days_to_expiry": 65
           }
         }
       ],
@@ -864,8 +864,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -998,8 +998,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1132,8 +1132,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1241,8 +1241,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1262,22 +1262,12 @@
       },
       "hosts": [
         {
-          "ip": "150.171.109.147",
+          "ip": "150.171.109.151",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
           "region": "Arizona",
           "city": "Phoenix",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "150.171.109.154",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Washington",
-          "city": "Redmond",
           "reverse_dns": null,
           "is_private": false
         },
@@ -1290,21 +1280,11 @@
           "city": "Redmond",
           "reverse_dns": null,
           "is_private": false
-        },
-        {
-          "ip": "2603:1061:14:96::1",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Washington",
-          "city": "Redmond",
-          "reverse_dns": null,
-          "is_private": false
         }
       ],
       "services": [
         {
-          "ip": "150.171.109.147",
+          "ip": "150.171.109.151",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -1312,7 +1292,7 @@
           "tls": false
         },
         {
-          "ip": "150.171.109.147",
+          "ip": "150.171.109.151",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
@@ -1333,10 +1313,10 @@
       ],
       "dns": {
         "a": [
-          "150.171.109.154"
+          "150.171.109.151"
         ],
         "aaaa": [
-          "2603:1061:14:96::1"
+          "2603:1061:14:92::1"
         ],
         "cname": "portal-tims-hwe9g3dbgbbnakc8.z03.azurefd.net",
         "mx": [],
@@ -1372,8 +1352,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1481,8 +1461,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1605,8 +1585,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1881,8 +1861,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -2015,8 +1995,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-18T12:08:25Z",
-      "last_seen": "2026-09-18T12:08:25Z",
+      "first_discovered": "2026-09-18T12:52:08Z",
+      "last_seen": "2026-09-18T12:52:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -2128,27 +2108,18 @@
       "services": [
         {
           "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "150.171.109.147",
+          "ip": "150.171.109.151",
           "port": 80,
           "protocol": "tcp"
         },
         {
           "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "150.171.109.147",
+          "ip": "150.171.109.151",
           "port": 443,
           "protocol": "tcp"
         }
       ],
-      "hosts": [
-        {
-          "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "150.171.109.147"
-        },
-        {
-          "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "150.171.109.154"
-        }
-      ]
+      "hosts": []
     },
     "removed": {
       "subdomains": [],
@@ -2173,7 +2144,7 @@
         },
         {
           "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "150.171.109.151"
+          "ip": "2603:1061:14:96::1"
         }
       ]
     },
@@ -20389,12 +20360,12 @@
       }
     },
     {
-      "scan_id": "scan_2026-09-18T11:59:48Z_8c40b611",
-      "started_at": "2026-09-18T11:59:48Z",
-      "completed_at": "2026-09-18T12:08:25Z",
+      "scan_id": "scan_2026-09-18T12:43:55Z_14cb5118",
+      "started_at": "2026-09-18T12:43:55Z",
+      "completed_at": "2026-09-18T12:52:07Z",
       "subdomain_count": 16,
       "live_subdomain_count": 16,
-      "host_count": 7,
+      "host_count": 5,
       "service_count": 46,
       "subdomain_names": [
         "email.unimacgraphics.com",
@@ -20496,7 +20467,7 @@
           ]
         },
         "portal-tims.unimacgraphics.com": {
-          "150.171.109.147": [
+          "150.171.109.151": [
             80,
             443
           ]
