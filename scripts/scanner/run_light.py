@@ -916,6 +916,75 @@ def _body_sha(body: str) -> str:
     return hashlib.sha256(body[:_MAX_BODY].encode("utf-8", "replace")).hexdigest()
 
 
+# ══ (C) REFUSAL CAPTURE — relay 295, Howie's R30 ruling (A + C) ══════════════
+# ⛔ WHY THIS EXISTS. `is_armor_block` (400 + Google's "malformed or illegal request")
+# has been implemented since the Cloud Armor spec and has NEVER fired, because nothing
+# records a refusal body. Measured 2026-09-18: 2419 Prodex artifacts carry ZERO Armor
+# bodies and ZERO 400s of any kind. A predicate with no collector is a predicate that
+# cannot be wrong and cannot be right.
+#
+# ⚠ CAPTURED AT THE ONE SHARED HELPER, not at each caller. Every path probe in this
+# file goes through `_probe_path_body`, so capture lives where the body already is —
+# the same reason `signals_in` is one reader rather than three isinstance checks.
+#
+# ⚠ BOUNDED AND RAW. First REFUSAL_BODY_MAX bytes, exactly as emitted (no lowercasing,
+# no strip) — the vendor signatures we will key on are in those bytes, and the ANSI
+# lesson says store what arrived, read a normalised copy.
+REFUSAL_BODY_MAX = 4096
+REFUSAL_STATUSES = (400,)          # Armor's tell. Widen only with a ruling.
+
+
+def record_refusal(ctx: ScanContext, source: str, path: str,
+                   status: int, body: str | None) -> bool:
+    """Record a refusal response as its own artifact. Returns whether it recorded.
+
+    PURE-ish: appends to ctx.artifacts, touches nothing else. One artifact per
+    refusal, named `refusal_response`, so a consumer can find them without parsing
+    another tool's output — and so the ROE inventory can count them."""
+    if status not in REFUSAL_STATUSES:
+        return False
+    raw = body or ""
+    ctx.artifacts.append(("refusal_response", "json", json.dumps({
+        "schema": 1,
+        "source": source,              # which probe provoked it
+        "path": path,
+        "status": status,
+        "body_sha256": hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest(),
+        "body_bytes": len(raw.encode("utf-8", "replace")),
+        "body_snippet": raw[:REFUSAL_BODY_MAX],
+        "truncated": len(raw) > REFUSAL_BODY_MAX,
+    })))
+    log(f"  refusal recorded: {source} {path} -> {status} "
+        f"({len(raw)} bytes, {'truncated' if len(raw) > REFUSAL_BODY_MAX else 'whole'})")
+    return True
+
+
+# ══ (A) THE ONE DELIBERATELY MALFORMED GET ═══════════════════════════════════
+# ⛔ THE FIRST REQUEST THIS SCANNER SENDS THAT IS DESIGNED TO BE REFUSED, and it is
+# here on Howie's explicit ruling (relay 295: "Go A+C"). Constraints, all of them:
+#   · ONE request per host per LIGHT scan. Never retried. Never escalated.
+#   · A single invalid percent-escape — `/%zz` — which is malformed at the URL layer,
+#     carries no payload, attempts no traversal and asks for nothing that exists.
+#   · Sent AFTER the quiet checks and BEFORE the path enumeration, so the loudest
+#     thing in the log is never the first thing a WAF sees from us.
+#   · Response recorded through the SAME capture path as (C); no special case.
+# ⚠ I CANNOT SHOW IT REFUSED LIVE FROM HERE. Sending it would be an external request
+#   from this session, which the standing rules forbid; and I will not paste a body I
+#   did not read. So the vendor signatures stay UNWRITTEN until the first light scans
+#   carry these artifacts — 4.7's own sequence: capture ships first, fixtures second.
+REFUSAL_PROBE_PATH = "/%zz"
+
+
+def probe_refusal_signature(ctx: ScanContext) -> None:
+    """One malformed GET, recorded if refused. No finding, no retry, no escalation."""
+    code, body, _ = _probe_path_body(ctx, REFUSAL_PROBE_PATH)
+    if code == 0:
+        log("  refusal probe: transport failure — not retried (one request, by design)")
+        return
+    if not record_refusal(ctx, "refusal_probe", REFUSAL_PROBE_PATH, code, body):
+        log(f"  refusal probe: {code} — not a refusal status, nothing recorded")
+
+
 def _probe_path_body(ctx: ScanContext, path: str) -> tuple[int, str, str | None]:
     """GET a path, capturing (status, body, content_type). Accept-Encoding:
     identity dodges the gzip-hash trap (hole 3). content_type is the raw
@@ -1088,6 +1157,8 @@ def check_common_paths(ctx: ScanContext) -> None:
         if code != 0:
             successful_probes += 1
         results.append({"path": path, "status": code or "err", "ctype": ctype})
+        # (C) relay 295: any 400 from any path probe is captured with its body.
+        record_refusal(ctx, "common_paths", path, code, body)
         time.sleep(0.25)                     # inter-probe hygiene (hole 7)
         if code not in (200, 204, 206):
             continue
@@ -3259,6 +3330,11 @@ def run(descriptor_path: str, dsn: str) -> int:
             check_tls(ctx)
             log("  → check_headers")
             check_headers(ctx)
+            # (A) relay 295 — ONE malformed GET, before the noisy path enumeration.
+            # Light has no passive collector (that is heavy-only), so the ordering rule
+            # maps to: after the quiet checks, before the first enumeration.
+            log("  → probe_refusal_signature (1 malformed GET)")
+            probe_refusal_signature(ctx)
             log("  → check_common_paths")
             check_common_paths(ctx)
             log("  → check_httpx_tech")
