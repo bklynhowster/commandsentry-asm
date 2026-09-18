@@ -27,7 +27,35 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
+      # ⛔ SAME DEPLOY KEY, SAME REASON (D-041). This workflow commits
+      #   scripts/asm/cloud_ip_ranges.json to main every Sunday; a GITHUB_TOKEN push
+      #   is rejected by the ruleset exactly as asm-discover's was. It refuses
+      #   without the key rather than failing at the push.
+      - name: Refuse without the deploy key (D-041)
+        env:
+          ASM_DEPLOY_KEY: ${{ secrets.ASM_DEPLOY_KEY }}
+        run: |
+          set -uo pipefail
+          # ⚠ ${VAR:-} NOT ${VAR}: under `set -u` a bare reference to an UNSET
+          #   variable aborts with "unbound variable" and the operator never sees
+          #   the guidance below. Measured both ways. GitHub always defines the
+          #   env key (empty when the secret is missing), so this is belt-and-braces
+          #   — but a refusal whose message appears in only one of its two failure
+          #   modes is half a refusal.
+          if [ -z "${ASM_DEPLOY_KEY:-}" ]; then
+            echo "::error::ASM_DEPLOY_KEY is not set — this workflow pushes to main."
+            echo "::error::See BRANCH-PROTECTION-SETUP.md, 'Who else pushes to main'."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
+        with:
+          # ⚠ A deploy-key push IS an ordinary push, so it triggers `push` workflows.
+          #   This commit touches scripts/asm/cloud_ip_ranges.json, which tests.yml
+          #   does NOT ignore (its paths-ignore is data/**, web/data/**, **.md) —
+          #   so `tests` will now run on the weekly refresh commit where it never did
+          #   before. That is desirable and it is stated rather than discovered.
+          ssh-key: ${{ secrets.ASM_DEPLOY_KEY }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'

@@ -44,6 +44,7 @@ WHAT COUNTS AS GUARDED — any of:
 from __future__ import annotations
 
 import os
+import pathlib
 import re
 import sys
 
@@ -211,3 +212,88 @@ def test_run_blocks_come_from_the_yaml_parser_not_a_grep():
     src = open(os.path.abspath(__file__), encoding="utf-8").read()
     assert "yaml.safe_load" in src
     assert 'grep' not in src.split('"""')[0] or True  # structure, not text search
+
+
+# ══ D-041 — EVERY WORKFLOW THAT PUSHES TO main NEEDS THE DEPLOY KEY ═══════════
+# ⛔ WHAT HAPPENED (relay 280/281). The branch ruleset landed and the first thing it
+# blocked was our own scanner writing its results: `remote: error: GH013 … push
+# declined due to repository rule violations`, four runs across both repos, each
+# after a 17-44 minute scan, and every step past the push skipped — the asset_surface
+# upsert, the demotion-writer dry-run, the Netlify trigger. Production data stopped
+# persisting overnight and nothing said so.
+#
+# ⚠ THE DOC NEVER ASKED "WHO ELSE PUSHES TO main". The setup guide described the
+# ruleset and the required checks and was read twice, and the two workflows that
+# commit to main were not in it. So this is the pin for the question the doc missed:
+# if a workflow runs `git push`, it checks out with `ssh-key:` and it REFUSES up
+# front when the secret is absent. Asked of the parsed YAML, not of the text.
+
+def _push_workflows():
+    """⚠ Uses this file's own WORKFLOWS constant — the one the rest of the pins use.
+    My first version invented a `ROOT` that does not exist here and every new test
+    errored on a correct tree. The instrument has to be the one the file already
+    runs on."""
+    import glob as _glob
+    import yaml
+    out = []
+    for p in sorted(_glob.glob(os.path.join(WORKFLOWS, "*.yml"))):
+        path = pathlib.Path(p)
+        doc = yaml.safe_load(path.read_text())
+        if not isinstance(doc, dict):
+            continue
+        for job in (doc.get("jobs") or {}).values():
+            steps = job.get("steps") or []
+            blob = "\n".join(str(s.get("run", "")) for s in steps)
+            if re.search(r"^\s*git push\b", blob, re.M):
+                out.append((path.name, job, steps))
+                break
+    return out
+
+
+def test_every_workflow_that_pushes_to_main_uses_the_deploy_key():
+    """A `git push` authenticated with GITHUB_TOKEN is rejected by the ruleset, and
+    GITHUB_TOKEN cannot be bypass-listed — the picker offers Roles / Teams / installed
+    Apps / Deploy keys / Users and the GitHub Actions app is not among them."""
+    pushers = _push_workflows()
+    assert pushers, "no workflow pushes to main — the find is wrong, not the repo"
+    for name, job, steps in pushers:
+        checkouts = [s for s in steps if str(s.get("uses", "")).startswith("actions/checkout")]
+        assert checkouts, f"{name}: pushes but never checks out"
+        for c in checkouts:
+            with_ = c.get("with") or {}
+            assert "ssh-key" in with_, (
+                f"{name}: checkout has no ssh-key, so `git push` authenticates as "
+                f"GITHUB_TOKEN and the ruleset rejects it (GH013)")
+            assert "ASM_DEPLOY_KEY" in str(with_["ssh-key"])
+
+
+def test_every_workflow_that_pushes_to_main_refuses_without_the_secret_FIRST():
+    """⚠ FIRST, not eventually. The failure cost a full scan each time: the push is
+    the last thing these workflows do. A missing secret must cost seconds."""
+    for name, job, steps in _push_workflows():
+        first = steps[0]
+        run = str(first.get("run", ""))
+        assert "ASM_DEPLOY_KEY" in run and "exit 1" in run, (
+            f"{name}: the first step is {first.get('name') or first.get('uses')!r}, "
+            f"which does not refuse on a missing ASM_DEPLOY_KEY")
+        # ⛔ and it must not fall back to GITHUB_TOKEN — a silent fallback is how this
+        #   stayed invisible: the scan looked like it ran, because it did.
+        assert "${ASM_DEPLOY_KEY:-}" in run, (
+            f"{name}: uses a bare $ASM_DEPLOY_KEY; under `set -u` an UNSET secret "
+            f"aborts with 'unbound variable' and the operator never sees the guidance")
+
+
+def test_no_workflow_still_chains_the_netlify_deploy_by_hand():
+    """A GITHUB_TOKEN push does not trigger `push` workflows; a DEPLOY-KEY push does.
+    deploy-netlify.yml watches data/assets/** and web/**, which the asm-scan commit
+    writes — so it now fires natively and the manual chain would deploy twice."""
+    import glob as _glob
+    for p in sorted(_glob.glob(os.path.join(WORKFLOWS, "*.yml"))):
+        path = pathlib.Path(p)
+        body = path.read_text()
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue          # the comment explaining the deletion is not the call
+            assert "gh workflow run deploy-netlify" not in stripped, (
+                f"{path.name}: still chains the Netlify deploy by hand")

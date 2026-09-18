@@ -48,11 +48,53 @@ jobs:
                               # the workflow before commit could run.
 
     steps:
+      # ⛔ FIRST STEP, AND IT REFUSES. D-041 (relay 280/281): the branch ruleset
+      #   rejected this workflow's own data commits — `remote: error: GH013 …
+      #   push declined due to repository rule violations` — on FOUR runs across
+      #   both repos, each AFTER a 17-44 minute scan, and every step past the push
+      #   was skipped: the asset_surface upsert, the demotion-writer dry-run, the
+      #   Netlify trigger. The fix is a deploy key that the ruleset bypasses.
+      #
+      #   ⚠ THE CHECK IS FIRST BECAUSE THE FAILURE WAS LAST. A missing secret must
+      #   cost 5 seconds, not 44 minutes of scanning followed by a push that cannot
+      #   land. And it must REFUSE rather than fall back to GITHUB_TOKEN: a silent
+      #   fallback is how this failure stayed invisible overnight — the scan looked
+      #   like it ran, because it did.
+      - name: Refuse without the deploy key (D-041)
+        env:
+          ASM_DEPLOY_KEY: ${{ secrets.ASM_DEPLOY_KEY }}
+        run: |
+          set -uo pipefail
+          # ⚠ ${VAR:-} NOT ${VAR}: under `set -u` a bare reference to an UNSET
+          #   variable aborts with "unbound variable" and the operator never sees
+          #   the guidance below. Measured both ways. GitHub always defines the
+          #   env key (empty when the secret is missing), so this is belt-and-braces
+          #   — but a refusal whose message appears in only one of its two failure
+          #   modes is half a refusal.
+          if [ -z "${ASM_DEPLOY_KEY:-}" ]; then
+            echo "::error::ASM_DEPLOY_KEY is not set. This workflow commits scan"
+            echo "::error::results to main, and the branch ruleset rejects a push"
+            echo "::error::authenticated with GITHUB_TOKEN (GH013). Add the private"
+            echo "::error::half as the ASM_DEPLOY_KEY secret and the public half as a"
+            echo "::error::WRITE deploy key: Settings -> Deploy keys. See"
+            echo "::error::BRANCH-PROTECTION-SETUP.md, 'Who else pushes to main'."
+            echo "Refusing to scan for 44 minutes and then fail to persist."
+            exit 1
+          fi
+          echo "ASM_DEPLOY_KEY present — the push will authenticate as the deploy key."
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           # Need full history for git operations
           fetch-depth: 0
+          # ⛔ THE PUSH AUTHENTICATES AS THE DEPLOY KEY, NOT GITHUB_TOKEN. checkout
+          #   sets the remote to SSH and points core.sshCommand at this key, so the
+          #   later `git push` is the deploy key's push — which the ruleset's bypass
+          #   list admits. GITHUB_TOKEN cannot be bypass-listed: the picker offers
+          #   Roles / Teams / installed Apps / Deploy keys / Users, and the GitHub
+          #   Actions app is not among them (measured, 281).
+          ssh-key: ${{ secrets.ASM_DEPLOY_KEY }}
 
       - name: Configure git identity (for auto-commit)
         run: |
@@ -466,20 +508,21 @@ jobs:
           # DRY-RUN: --write-enable intentionally omitted. Logs only; no asset writes.
           python3 scripts/db/demotion_writer.py --run-tag "${GITHUB_RUN_ID}"
 
-      - name: Trigger Netlify deploy (chain past GITHUB_TOKEN anti-recursion)
-        if: success() && steps.targets.outputs.mode != 'skipped'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Only fire deploy if the scan actually produced a new commit
-          LATEST_MSG=$(git log -1 --format=%s)
-          if [[ "$LATEST_MSG" == asm-scan:* ]]; then
-            echo "Found scan commit on HEAD ($LATEST_MSG) — triggering deploy"
-            gh workflow run deploy-netlify.yml
-          else
-            echo "No asm-scan commit on HEAD — skipping deploy trigger"
-          fi
-
+      # ⛔ THE MANUAL DEPLOY CHAIN IS GONE, AND DELETING IT IS PART OF THE FIX.
+      #   It existed because a GITHUB_TOKEN push does NOT trigger `push` workflows
+      #   (GitHub's anti-recursion rule), so deploy-netlify.yml never fired on its
+      #   own. A DEPLOY-KEY push is an ordinary push and DOES trigger them.
+      #   deploy-netlify.yml watches `web/**` and `data/assets/**`; the asm-scan
+      #   commit writes `data/assets/`, `data/state/` and `web/data/`. So it now
+      #   fires natively — and keeping this step would deploy TWICE per scan.
+      #   ⚠ Second-order effects of the same change, enumerated in relay 282:
+      #     deploy-netlify.yml   data/assets/**, web/**        -> NOW TRIGGERED (this is the point)
+      #     asm-discover.yml     data/targets.yml, scanner/**  -> not reached: the scan commit
+      #                                                           touches neither. No recursion.
+      #     tests.yml            paths-ignore data/**, web/data/**, **.md
+      #                                                       -> not triggered by an asm-scan commit
+      #                                                          (every path it writes is ignored)
+      #     build-scanner-image / migrate / migration-parity / fortigate-*  -> paths do not match
       - name: Summarize run
         if: always()
         run: |
