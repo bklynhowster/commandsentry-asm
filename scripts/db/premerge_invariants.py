@@ -72,6 +72,24 @@ import device_class_runner as _dcr  # noqa: E402
 
 signals_in = _dcr.signals_in
 event_for = _dcr.event_for
+signal_capable = _dcr.signal_capable          # R5's OWN capability test, imported
+_SIG2OBS = None                                # built lazily from the same YAML R5 reads
+
+
+def fresh_days() -> int:
+    """The runner's own `evidence_freshness_days`, read from its own thresholds file —
+    never a number copied into this file. A constant duplicated into the checker is a
+    second source of truth that agrees only until someone edits one of them."""
+    return int(_dcr.load_thresholds()["evidence_freshness_days"])
+
+
+def sig2obs():
+    """signal -> observations, from device_fingerprints.yaml, via the runner's own
+    `signal_observation_map` — the same map R5 hands to `signal_capable`."""
+    global _SIG2OBS
+    if _SIG2OBS is None:
+        _SIG2OBS = _dcr.signal_observation_map(_dcr.load_fingerprints())
+    return _SIG2OBS
 
 WINDOW_DAYS = 30
 RECENT_HOURS = 24
@@ -505,9 +523,30 @@ def i4_state(s4) -> str:
     return invariant_state(s4, "I4")
 
 
-_I4_NO_ENVELOPE = "no passive envelope on record (newest heavy predates the collector)"
-_I4_FULL_ENVELOPE = "newest envelope is full — nothing was uncollected"
+# ══ I4 v3 — R5's OWN AXIS, NOT A PROXY FOR IT (relay 277f, deviation stated) ══
+#
+# ⛔ WHAT v2 MEASURED AND WHY IT COULD NOT WORK. v2's population was "the newest heavy's
+# passive envelope is EMPTY". Measured on Command this week: all 15 armed same-class
+# downgrade rows were EXCLUDED as full-envelope — because api.commandcommcentral.com's
+# newest heavy is 2026-07-22 and that envelope carries cookies, headers and a cert.
+# The preserve fires because those observations are 57 days OLD. So v2 asked "was the
+# envelope empty" while R5 asks "was the evidence COLLECTIBLE IN-WINDOW" — different
+# axes, and I4's population was empty on the one instance with preserves to check.
+#
+# ⚠ DEVIATION FROM RULING 277f, WITH THE MEASUREMENT THAT DROVE IT. 4.7 ruled the
+# population as "the newest HEAVY predates evidence_freshness_days". That is a proxy,
+# and `_capability_rows` joins `scan_run` with NO intensity filter — a MEDIUM run can
+# carry `stack_id_wafw00f` (api.commandcommcentral.com's newest is a medium, 2026-06-11).
+# So a recent non-heavy run can make a signal capable while the newest heavy is old:
+# R5 legitimately writes with no marker and the proxy would call it a violation. A gate
+# that goes red on correct behaviour is the failure mode we have spent three days
+# removing, so I4 v3 imports `signal_capable` and asks R5's own question with R5's own
+# freshness constant. On today's three hosts BOTH give the same answer — the deviation
+# changes nothing now and removes a class of false red later. Reject it and I will
+# rebuild on the heavy-date proxy.
 _I4_NO_BASIS = "no recorded prior basis (R5: write, not preserve)"
+_I4_ALL_CAPABLE = "every prior signal was collectible in-window (R5: a real observation)"
+_I4_NO_CURSOR = "capability unreadable (no DB cursor)"
 
 
 def basis_signals_of_row(r) -> set:
@@ -541,7 +580,7 @@ def _as_dict(v):
     return v if isinstance(v, dict) else {}
 
 
-def i4_scoped(rows) -> dict:
+def i4_scoped(rows, cur=None) -> dict:
     """I4's population and its NAMED exclusions (R26) — pure.
 
     ⛔ WHY EXCLUSIONS AND NOT `continue`. v1 skipped two shapes silently:
@@ -585,23 +624,58 @@ def i4_scoped(rows) -> dict:
     counted, excluded = [], []
     src = {"row": 0, "assets": 0}
     for r in rows:
-        if r.get("newest_envelope") is None:
-            excluded.append({"asset_id": r.get("asset_id"), "reason": _I4_NO_ENVELOPE})
-            continue
-        if not r.get("newest_envelope_empty"):
-            excluded.append({"asset_id": r.get("asset_id"), "reason": _I4_FULL_ENVELOPE})
-            continue
         if "basis_signals" in _as_dict(r.get("prior_state")):
             src["row"] += 1
         else:
             src["assets"] += 1
-        if not basis_signals_of_row(r):
+        basis = basis_signals_of_row(r)
+        if not basis:
             excluded.append({"asset_id": r.get("asset_id"), "reason": _I4_NO_BASIS})
             continue
+        # ⛔ R5's OWN QUESTION, ASKED WITH R5's OWN FUNCTION. `incapable_of` returns the
+        #   prior signals that could NOT have been collected in-window. R5 preserves iff
+        #   that set is non-empty — so a row with an empty set is one R5 was RIGHT to
+        #   write, and asking it for a marker would fail the gate on correct behaviour.
+        incapable = incapable_of(basis, r, cur)
+        if incapable is None:
+            excluded.append({"asset_id": r.get("asset_id"), "reason": _I4_NO_CURSOR})
+            continue
+        if not incapable:
+            excluded.append({"asset_id": r.get("asset_id"), "reason": _I4_ALL_CAPABLE})
+            continue
+        r = dict(r, incapable_signals=sorted(incapable))
         counted.append(r)
     return {"counted": counted, "excluded": excluded,
             "violations": i4_unmarked_downgrades(counted),
             "basis_source": src}
+
+
+def incapable_of(basis, row, cur):
+    """Which of this row's prior-basis signals could NOT have been collected in-window.
+
+    ⛔ IMPORTED, NEVER RE-IMPLEMENTED: `signal_capable` is R5's own predicate, handed the
+    runner's own signal->observation map and the runner's own `evidence_freshness_days`.
+    A copy of R5's capability logic living in the checker would agree with R5 until the
+    day someone edited one of them — and this file exists because facts stop being true.
+
+    Returns None when there is no cursor (fixtures, --selftest): the answer is then
+    UNKNOWN, and unknown is an exclusion with a name, never a silent pass.
+
+    ⚠ TIME OF CHECK. Capability is evaluated NOW; the row was evaluated up to 24h ago
+    (I4's window), so a scan that landed in between can flip a signal from incapable to
+    capable. That bounds the skew at one window and it is stated on the line, the same
+    way the basis read is."""
+    if cur is None:
+        return None
+    asset = row.get("asset_id")
+    if not asset:
+        return None
+    try:
+        m, days = sig2obs(), fresh_days()
+        return {s for s in basis if not signal_capable(cur, asset, s, m, days)}
+    except Exception as exc:                      # a capability read that fails is not a pass
+        print(f"          · capability unreadable for {asset}: {exc}")
+        return None
 
 
 def i4_unmarked_downgrades(rows) -> list:
@@ -699,12 +773,12 @@ select distinct on (r.asset_id)
 
 Q_I4 = """
 select d.asset_id, d.device_class, d.confidence, d.prior_state, d.evaluated_at,
-       (select a.content_jsonb::text
-          from scan_run_artifacts a
-          join scan_run r2 on r2.scan_run_id = a.scan_run_id
-         where r2.asset_id = d.asset_id and r2.intensity = 'heavy'
-           and a.tool_name = 'stack_id_passive'
-         order by r2.completed_at desc limit 1) as newest_envelope,
+       -- ⛔ THE ENVELOPE SUBQUERY IS GONE (I4 v3). v2 asked "is the newest heavy's
+       -- passive envelope empty"; R5 asks "was the prior basis COLLECTIBLE in-window".
+       -- Measured: all 15 of Command's armed rows had a FULL envelope (their preserves
+       -- fire on 57-day-old observations), so v2's population was empty on the only
+       -- instance with preserves to check. Capability is now read through R5's own
+       -- `signal_capable`, per row, with the cursor this query already has.
        -- R26: the prior BASIS, which the audit row does not carry. Read-only, same
        -- credential, and `signals_in` (imported) is the only thing that reads it.
        -- ⚠ This is the basis NOW, not as-of the row — exact only while `--write` is
@@ -798,10 +872,8 @@ def run_live(dsn: str) -> int:
 
             # ── I4 ──────────────────────────────────────────────────────────
             raw4 = _rows(cur, Q_I4, RECENT_HOURS)
-            for r in raw4:
-                r["newest_envelope_empty"] = envelope_is_empty(r.get("newest_envelope"))
             armed, back = armed_split(raw4, "I4", instance)
-            s4, s4b = i4_scoped(armed), i4_scoped(back)
+            s4, s4b = i4_scoped(armed, cur), i4_scoped(back, cur)
             v, vb = s4["violations"], s4b["violations"]
             by_reason4 = {}
             for e in s4["excluded"]:
@@ -820,7 +892,7 @@ def run_live(dsn: str) -> int:
             if s4["basis_source"]["row"]:
                 lines4.append(f"basis from the row itself: {s4['basis_source']['row']}")
             backlog_total += _report(
-                "I4", "same-class downgrade on an empty envelope carries the preserve marker",
+                "I4", "same-class downgrade on evidence R5 could not collect carries the marker",
                 i4_state(s4),                 # pure: the operand choice is inside it
                 detail4, lines4,
                 vb, [x["asset_id"] for x in vb[:5]], tally)
@@ -999,72 +1071,76 @@ def _selftest() -> int:
              # a FULL envelope is not this invariant's business, marker or not
              {**base4, "newest_envelope_empty": False,
               "prior_state": {"device_class": "waf", "confidence": "confirmed"}}]
-    # ⚠ THE FIXTURE ROWS NOW CARRY A BASIS AND AN ENVELOPE, because R26's population
-    #   asks about both. `_BASIS3` is api.commandcommcentral.com's REAL stored basis,
-    #   read from Command's DB this turn — not typed from memory.
+    # I4 — the capability gap. ⚠ THE FIXTURES CARRY A BASIS, NOT AN ENVELOPE, SINCE v3:
+    #   the population is "some prior signal was NOT collectible in-window", which is
+    #   R5's own condition, so an envelope on the fixture would be decoration.
+    #   `_BASIS3` is api.commandcommcentral.com's REAL stored basis, read from Command.
     _BASIS3 = json.dumps({"signals": ["wafw00f_discovery_confidence",
                                       "fortiweb_cookiesession1",
                                       "cert_issuer_subject_pattern"]})
     base4 = {"asset_id": "api.commandcommcentral.com", "device_class": "waf",
-             "confidence": "suspected", "newest_envelope_empty": True,
-             "newest_envelope": empty_env, "asset_basis": _BASIS3}
+             "confidence": "suspected", "asset_basis": _BASIS3}
     bad4 = [{**base4, "prior_state": {"device_class": "waf", "confidence": "confirmed"}}]
     good4 = [{**base4, "prior_state": {"device_class": "waf", "confidence": "confirmed",
                                        "preserve": {"reason": "EVIDENCE_AGED",
-                                                    "evidence_age_days": {"set_cookie_names": 56}}}},
-             # a FULL envelope is not this invariant's business, marker or not
-             {**base4, "newest_envelope_empty": False, "newest_envelope": full_env,
-              "prior_state": {"device_class": "waf", "confidence": "confirmed"}}]
-    ok &= len(i4_scoped(bad4)["violations"]) == 1
-    ok &= i4_scoped(good4)["violations"] == []
-    ok &= len(i4_scoped([{**base4, "prior_state": json.dumps(bad4[0]["prior_state"])}]
-                        )["violations"]) == 1                       # jsonb arriving as text
-    print(f"  I4 fires on an unmarked same-class downgrade over an empty envelope: "
-          f"{'ok' if len(i4_scoped(bad4)['violations']) == 1 and not i4_scoped(good4)['violations'] else 'FAIL'}")
+                                                    "evidence_age_days": {"set_cookie_names": 56}}}}]
 
-    # ══ R26 — I4's POPULATION, and every exclusion named. The three fixtures below
-    #    are PRODUCTION ROWS (relay 271's Prodex reads + my Command read), because a
-    #    population predicate tested on invented rows is tested on the shape I
-    #    expected rather than the shape that exists.
+    # ══ R26/I4 v3 — THE POPULATION IS R5's OWN AXIS. The rows below are production
+    #    (relay 271's Prodex reads + my Command read); the capability answer is None
+    #    here because a fixture has no cursor, which is itself an exclusion WITH A NAME.
     _PDX_CLOUD_BASIS = json.dumps({"signals": [], "inherited_at": "2026-07-13T21:13:42Z",
                                    "surface_stale": False, "cloud_provider": "gcp",
                                    "inherited_from": "cloud_provider",
                                    "cloud_match_tier": "asn", "is_cloud_endpoint": False})
+    _CMD_BASIS = json.dumps({"signals": ["wafw00f_discovery_confidence",
+                                         "fortiweb_cookiesession1",
+                                         "cert_issuer_subject_pattern"]})
     _scope4 = [
-        # ⛔ demo-tour.prodexlabs.com — ONE heavy (2026-07-11) and ZERO stack_id_passive
-        #   artifacts EVER, so the correlated subquery returns NULL. NULL IS "NEVER
-        #   ASKED": v1 ran envelope_is_empty(None) -> True and demanded a marker for an
-        #   envelope nobody ever collected. Two of Prodex's I4 FAIL rows were this.
+        # demo-tour / azure-demo: the 2026-07-13 cloud-inherited seed, signals: [] ->
+        # R5 WRITES on an empty basis by design, so no marker is owed. Prodex's whole red.
         {"asset_id": "demo-tour.prodexlabs.com", "device_class": "cloud_endpoint",
-         "confidence": "suspected", "newest_envelope": None, "newest_envelope_empty": True,
-         "asset_basis": _PDX_CLOUD_BASIS,
+         "confidence": "suspected", "asset_basis": _PDX_CLOUD_BASIS,
          "prior_state": {"device_class": "cloud_endpoint", "confidence": "confirmed"}},
-        # ⛔ the same host WITH an empty envelope — still excluded, now for the OTHER
-        #   reason: every positive prior on Prodex is the 07-13 cloud-inherited seed
-        #   with `signals: []`, and R5 says an empty basis WRITES (preserving would
-        #   build a ratchet). Demanding a marker asks for a key the rule forbids.
-        {"asset_id": "demo-tour.prodexlabs.com", "device_class": "cloud_endpoint",
-         "confidence": "suspected", "newest_envelope": empty_env,
-         "newest_envelope_empty": True, "asset_basis": _PDX_CLOUD_BASIS,
-         "prior_state": {"device_class": "cloud_endpoint", "confidence": "confirmed"}},
-        # ⭐ azure-demo.prodexlabs.com — a FULL envelope: nothing was uncollected, so no
-        #   marker is owed. ⚠ AND THIS IS THE REASON THAT FIRES ON COMMAND 15 TIMES OUT
-        #   OF 15, measured this turn. v1 skipped it with a `continue`, which is how I4
-        #   printed "PASS 0 unmarked of 12 armed" while checking ZERO rows.
         {"asset_id": "azure-demo.prodexlabs.com", "device_class": "cdn",
-         "confidence": "suspected", "newest_envelope": full_env,
-         "newest_envelope_empty": False, "asset_basis": _PDX_CLOUD_BASIS,
+         "confidence": "suspected", "asset_basis": _PDX_CLOUD_BASIS,
          "prior_state": {"device_class": "cdn", "confidence": "confirmed"}},
-        # ⭐ and ONE row that is genuinely in the population: real basis, artifact
-        #   present, envelope empty, no marker -> the violation I4 exists to print.
-        {**base4, "prior_state": {"device_class": "waf", "confidence": "confirmed"}},
+        # a real basis, but no cursor in a fixture -> capability UNKNOWN, named, not passed
+        {"asset_id": "api.commandcommcentral.com", "device_class": "waf",
+         "confidence": "suspected", "asset_basis": _CMD_BASIS,
+         "prior_state": {"device_class": "waf", "confidence": "confirmed"}},
     ]
-    _s4 = i4_scoped(_scope4)
-    _r4 = sorted(e["reason"] for e in _s4["excluded"])
-    ok &= len(_s4["counted"]) == 1 and len(_s4["violations"]) == 1
-    ok &= _r4 == sorted([_I4_NO_ENVELOPE, _I4_NO_BASIS, _I4_FULL_ENVELOPE])
-    print(f"  R26 I4 population: 4 production rows -> 1 checked, 3 excluded under THREE "
-          f"distinct reasons: {'ok' if len(_s4['counted']) == 1 and len(_r4) == 3 else 'FAIL'}")
+    _s4 = i4_scoped(_scope4)                       # no cursor
+    _r4 = sorted({e["reason"] for e in _s4["excluded"]})
+    ok &= _s4["counted"] == [] and _r4 == sorted([_I4_NO_BASIS, _I4_NO_CURSOR])
+    print(f"  I4 v3 population: empty basis -> excluded (R5 writes), no cursor -> "
+          f"UNKNOWN not pass: {'ok' if _r4 == sorted([_I4_NO_BASIS, _I4_NO_CURSOR]) else 'FAIL'}")
+
+    # ⛔ AND THE CAPABILITY AXIS ITSELF, with a stub cursor standing in for the DB.
+    #    R5 preserves IFF some prior signal was incapable; I4 v3 asks exactly that.
+    class _Cur:                                   # only signal_capable's inputs matter
+        def __init__(self, incapable): self.incapable = incapable
+    def _fake_capable(cur, asset, sig, m, days): return sig not in cur.incapable
+    _real = globals()["signal_capable"]
+    globals()["signal_capable"] = _fake_capable
+    try:
+        _row = dict(_scope4[2])
+        _all_cap = i4_scoped([_row], _Cur(set()))
+        ok &= _all_cap["counted"] == [] and [e["reason"] for e in _all_cap["excluded"]] == [_I4_ALL_CAPABLE]
+        _one_incap = i4_scoped([_row], _Cur({"fortiweb_cookiesession1"}))
+        ok &= len(_one_incap["counted"]) == 1 and len(_one_incap["violations"]) == 1
+        _marked = dict(_row, prior_state={"device_class": "waf", "confidence": "confirmed",
+                                          "preserve": {"reason": "EVIDENCE_AGED"}})
+        ok &= i4_scoped([_marked], _Cur({"fortiweb_cookiesession1"}))["violations"] == []
+        # the named fixtures, through the same axis: fires, and stays silent
+        ok &= len(i4_scoped(bad4, _Cur({"fortiweb_cookiesession1"}))["violations"]) == 1
+        ok &= i4_scoped(good4, _Cur({"fortiweb_cookiesession1"}))["violations"] == []
+        ok &= len(i4_scoped([{**base4, "prior_state": json.dumps(bad4[0]["prior_state"])}],
+                            _Cur({"fortiweb_cookiesession1"}))["violations"]) == 1   # jsonb as text
+        print(f"  I4 v3 capability axis: every prior signal collectible -> EXCLUDED; one "
+              f"incapable + no marker -> VIOLATION; with the marker -> silent: "
+              f"{'ok' if len(_one_incap['violations']) == 1 and not _all_cap['counted'] else 'FAIL'}")
+    finally:
+        globals()["signal_capable"] = _real
 
     # ⛔ R27 — ZERO CHECKED ROWS IS INCONCLUSIVE, NOT PASS. Prodex printed
     #   "PASS I1 0 violation(s) of 0 armed run(s)" and Command's I4 checked nothing

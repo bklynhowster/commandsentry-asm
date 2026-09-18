@@ -46,6 +46,7 @@ relay entry as such — see the entry, not this docstring, for the counts.
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import os
 import sys
@@ -503,3 +504,112 @@ def test_observation_age_days_reports_the_newest_carrying_collection():
 
 def test_observation_age_days_is_none_when_never_collected():
     assert dcr.observation_age_days(CapCursor(), "x", "set_cookie_names") is None
+
+
+# ══ THE RUNNER TURN (relay 277) — a-e ════════════════════════════════════════
+
+def test_the_gate_heartbeat_does_not_impersonate_the_cron():
+    """⛔ 277a. Job 2 of the pre-merge gate runs a full classify against PRODUCTION on
+    every PR. It wrote the same `alerter_name` as the scheduled pass, so a PR could make
+    a dead cron look alive in the one table that answers "did the soak run last night".
+    ⚠ DERIVED from soak_generation (ruling 20's scratch identity), not from a flag a
+    workflow has to remember."""
+    assert dcr.heartbeat_name(1) == "device_class_runner"
+    assert dcr.heartbeat_name(0) == "device_class_runner:gate"
+    assert dcr.heartbeat_name(0) != dcr.heartbeat_name(1)
+    assert dcr.heartbeat_name(0, "explicit") == "explicit"     # override still available
+    assert dcr.heartbeat_name("0") == "device_class_runner:gate"   # argparse may hand a str
+
+
+def test_unknown_prior_signals_finds_a_name_the_registry_lost():
+    """⛔ 277e / relay 270's fourth path. `signal_capable` is `any(...)` over the
+    observations a signal maps to, so an UNMAPPED name yields any(()) = False =
+    INCAPABLE = PRESERVE — a marker citing evidence nothing can ever collect, forever.
+    The coverage guard refuses instead, at startup, like R12."""
+    sig2obs = {"fortiweb_cookiesession1": frozenset({"set_cookie_names"})}
+    assets = [{"device_class_evidence": {"signals": [{"signal": "fortiweb_cookiesession1"}]}},
+              {"device_class_evidence": {"signals": [{"signal": "retired_signal_name"}]}}]
+    assert dcr.unknown_prior_signals(assets, sig2obs) == ["retired_signal_name"]
+    assert dcr.unknown_prior_signals(assets[:1], sig2obs) == []
+
+
+def test_unknown_prior_signals_reads_both_evidence_shapes():
+    """The cloud-fallback blob is a DICT whose `signals` is []; the fingerprint path is a
+    LIST of rows. `signals_in` is the one reader (the 241 crash), and this uses it."""
+    sig2obs = {"x": frozenset({"o"})}
+    cloud = {"device_class_evidence": {"signals": [], "inherited_from": "cloud_provider"}}
+    listy = {"device_class_evidence": [{"signal": "x"}]}
+    text = {"device_class_evidence": '{"signals": ["gone"]}'}
+    assert dcr.unknown_prior_signals([cloud, listy], sig2obs) == []
+    assert dcr.unknown_prior_signals([text], sig2obs) == ["gone"]
+
+
+def test_the_streak_query_and_its_recheck_both_filter_soak_generation():
+    """⛔ 277b. The gate writes TRANSITION_DOWNGRADE rows with soak_generation 0 on every
+    PR, into the same table the streak counts. Unfiltered, a day of PRs could accumulate
+    a streak and demote a real label — the gate would have changed production by
+    observing it. Asked of the source: the filter is in the SQL AND re-checked in Python,
+    because a SQL-only filter is unobservable (259: every test that tried to exercise the
+    last one was actually being caught by the prior/class checks)."""
+    src = inspect.getsource(dcr._downgrade_streak_met)
+    assert "soak_generation = %s" in src, "the SQL does not filter the generation"
+    assert "int(r[\"soak_generation\"]) != int(soak_generation)" in src, \
+        "nothing re-checks the generation where a test can see it"
+    assert "soak_generation" in inspect.signature(dcr._downgrade_streak_met).parameters
+
+
+def test_retired_assets_are_excluded_from_the_classify_population_and_counted():
+    """⛔ 277c. demo-tour.prodexlabs.com is discovery_status=retired and the pass wrote
+    SIX audit rows against it in 24h; under --write it would have stamped device_class on
+    a retired asset. Counted, not silently dropped — the I3-population rule."""
+    src = inspect.getsource(dcr.run)
+    assert 'discovery_status' in src
+    assert '!= "retired"' in src
+    assert "excluded from the classify population" in src
+
+
+def test_every_audit_row_carries_basis_signals_not_just_the_R5_branch():
+    """⛔ 277d. I4 needs the basis AS OF THE DECISION. If the key were written only on
+    R5's path, a 2b row's missing key would be ambiguous — 'no basis' or 'other branch'?
+    prior_sigs is computed once, before the branch, for every row."""
+    src = inspect.getsource(dcr.run)
+    i_compute = src.index("prior_sigs = prior_signals_of(")
+    i_branch = src.index('if nc == "unknown":')
+    assert i_compute < i_branch, "the basis is computed inside a branch again"
+    assert '"basis_signals": sorted(prior_sigs)' in src
+    assert src.count("prior_sigs = prior_signals_of(") == 1, "two computations, two answers"
+
+
+def test_run_ACTUALLY_REFUSES_on_an_orphan_prior_signal():
+    """⛔ THE MUTANT THAT SURVIVED MY FIRST PASS, AND IT IS MUTANT L's FAMILY AGAIN.
+    I tested `unknown_prior_signals` in isolation and `if _orphans:` -> `if False:`
+    still passed everything: the guard existed, nothing checked it was WIRED. A pure
+    function nobody calls is a pure function nobody runs.
+
+    Asked of the AST: inside `run`, the orphan list is computed, tested, and the
+    failure path RETURNS non-zero — a refusal that returns 0 is a log line."""
+    tree = ast.parse(inspect.getsource(dcr.run))
+    fn = tree.body[0]
+    calls = [n for n in ast.walk(fn)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "unknown_prior_signals"]
+    assert calls, "run() never calls unknown_prior_signals — the guard is not wired"
+    guards = []
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.If):
+            continue
+        test_src = ast.unparse(node.test)
+        if "_orphans" not in test_src or test_src.strip() in ("False", "True"):
+            continue
+        rets = [n for n in ast.walk(node) if isinstance(n, ast.Return)
+                and isinstance(n.value, ast.Constant) and n.value.value != 0]
+        if rets:
+            guards.append(test_src)
+    assert guards, "no `if <orphans>: ... return <non-zero>` in run() — it would not refuse"
+
+
+def test_the_refusal_names_the_orphans_and_says_what_to_do():
+    """A refusal nobody can act on gets bypassed. It prints the names and both remedies."""
+    src = inspect.getsource(dcr.run)
+    assert "device_fingerprints.yaml" in src
+    assert "clear it from" in src and "assets.device_class_evidence" in src
