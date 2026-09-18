@@ -74,6 +74,17 @@ SKIP_PATTERNS = [
     re.compile(r"\b(?:was|were)\s+not\s+tested\b", re.IGNORECASE),
     re.compile(r"\bno tests?\b.*\bperformed\b", re.IGNORECASE),
     re.compile(r"\bskipping\b.*\btests?\b", re.IGNORECASE),
+    # ── T1 (relay 152, Howie reading digest #130) ───────────────────────────
+    # nikto 999967: "Web Server returns a valid response with junk HTTP methods
+    # which may cause false positives". That is nikto describing ITS OWN
+    # reliability on this host — the same class as "cannot test HTTP/3", one
+    # sentence further on: not "we found something", but "you may not be able to
+    # trust what we find". It sat in the open-findings list looking like a defect.
+    # ⚠ SCOPED TO THE SELF-ASSESSMENT PHRASINGS, not to the words "false positive".
+    # A real finding may legitimately discuss false positives in its remediation
+    # text; what makes this housekeeping is the tool talking about its own output.
+    re.compile(r"\bmay\s+cause\s+false\s+positives?\b", re.IGNORECASE),
+    re.compile(r"\bjunk\s+HTTP\s+methods?\b", re.IGNORECASE),
 ]
 
 # Bracketed test ID: `[NNNNNN] /path: description`
