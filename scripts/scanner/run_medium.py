@@ -58,6 +58,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import urllib.parse
 import os
 import random
 import re
@@ -608,6 +609,106 @@ ADMIN_PATH_RE = re.compile(
     r"^(?:.*/)?(?:" + "|".join(ADMIN_PATHS_PATTERNS) + r")/?$",
     re.IGNORECASE,
 )
+
+
+# ══ T4 = A (relay 152 / 303 / 304) — THE LANDING PAGE IS THE VERDICT ═════════
+# ⛔ WHAT WE DID BEFORE: ffuf saw /swagger answer with a redirect and we emitted
+# "Path exists (redirect → swagger/index.html)" at INFO — and stopped. A redirect is
+# not a verdict; the thing at the end of it is. Howie's read of digest #130 called
+# this out, and 152 specified one bounded follow-up.
+#
+# ⛔ SEVERITY FROM WHAT WE OBSERVED, NOT FROM A SIGNATURE WE TYPED (Howie's ruling A,
+# relay 303). 152 said "200 with Swagger UI content" — but no swagger landing body
+# exists anywhere in either estate (7768 Command artifacts searched, relay 302), and
+# the only /swagger evidence is demo.testfire.net, the public TRAINING target, at 302
+# with length 0. Writing a content test now would mean inventing the bytes. So:
+#     200 + text/html   -> the documentation answered  -> MODERATE (LOW if staging)
+#     200 + other type  -> something answered           -> LOW
+#     401 / 403 / 404   -> gated or absent              -> INFO, as today
+# and the BODY IS RECORDED so the content confirmation can be written from real
+# bytes in its own turn.
+#
+# ⛔ ROE: on-host, ONE hop, GET only, never off eTLD+1, never retried (152's gate).
+_SEV_RANK_FFUF = {"INFO": 1, "LOW": 2, "MODERATE": 3, "MODERATE-HIGH": 4,
+                  "HIGH": 5, "CRITICAL": 6}
+_FOLLOWUP_WORDS = frozenset({"swagger", "admin", "actuator", "graphql", "openapi"})
+FOLLOWUP_BODY_MAX = 4096
+
+
+def followup_severity(status: int, content_type: str | None, is_staging: bool) -> str:
+    """PURE. The severity of what the redirect LANDED ON, from observed facts only.
+
+    ⚠ No content signature. `content_type` is a header the server sent; "Swagger UI
+    content" is a judgement about bytes we have never captured."""
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if status == 200:
+        if ct in ("text/html", "application/xhtml+xml"):
+            return "LOW" if is_staging else "MODERATE"
+        return "LOW"
+    if 200 <= status < 300:
+        # 4.7's 306 nit, folded. My first version had `status in (200, 204)`, so a
+        # 204 with a text/html header scored MODERATE - "the documentation answered"
+        # about a response DEFINED to have no body. A non-200 2xx is "something
+        # answered", which is exactly the LOW the 200+other-type branch already gives.
+        return "LOW"
+    return "INFO"
+
+
+def _same_site(url: str, hostname: str) -> bool:
+    """One hop, and it must stay on the host we were asked to scan. ⛔ Never off
+    eTLD+1 — the standing rule, enforced here rather than trusted."""
+    try:
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    except ValueError:
+        # ⚠ NARROW ON PURPOSE. My first version caught bare Exception, and when
+        # `urllib.parse` was not imported the NameError was swallowed as "off-host":
+        # the guard failed CLOSED, which is the safe direction, and silently gave the
+        # wrong answer for every legitimate target. A fail-closed guard that cannot
+        # distinguish "unsafe" from "broken" tells you nothing when it fires.
+        return False
+    h = (hostname or "").lower()
+    return bool(host) and (host == h or host.endswith("." + h) or h.endswith("." + host))
+
+
+def follow_path_redirect(ctx, word: str, redirect_to: str, is_staging: bool):
+    """ONE GET on the redirect target. Returns (status, content_type, severity) or None.
+
+    Records the landing response as a `path_followup` artifact — the same shape the
+    refusal capture uses — so the content confirmation turn has real bytes."""
+    if word not in _FOLLOWUP_WORDS or not redirect_to:
+        return None
+    # ⛔ ctx.web_host, NOT ctx.hostname — an existing pin caught this the moment I
+    # wrote it (test_canonical_host_wiring: "any https://{ctx.hostname} left in CODE is
+    # a missed call site"). ctx.hostname is the asset's IDENTITY; ctx.web_host is where
+    # the web layer actually answers, and the two differ on the hosts this follow-up is
+    # most likely to fire on. The pin is the ⑭′ lesson: pure tests passed while the
+    # wiring was wrong, so the wiring gets its own assertion.
+    target = urllib.parse.urljoin(f"https://{ctx.web_host}/", redirect_to)
+    if not _same_site(target, ctx.web_host):
+        log(f"  follow-up SKIPPED — {target} is off-host (one hop, same site only)")
+        return None
+    rc, stdout, _ = run_cmd(
+        ["httpx", "-u", target, "-silent", "-no-color", "-json", "-sc", "-ct",
+         "-timeout", "10", "-H", "Accept-Encoding: identity"], timeout=15)
+    if rc != 0 or not stdout.strip():
+        log("  follow-up: transport failure — not retried (one hop, by design)")
+        return None
+    try:
+        rec = json.loads(stdout.strip().splitlines()[0])
+    except (ValueError, IndexError):
+        return None
+    status = int(rec.get("status_code") or 0)
+    ctype = rec.get("content_type") or ""
+    body = rec.get("body") or ""
+    ctx.artifacts.append(("path_followup", "json", json.dumps({
+        "schema": 1, "word": word, "from": redirect_to, "url": target,
+        "status": status, "content_type": ctype,
+        "body_snippet": body[:FOLLOWUP_BODY_MAX],
+        "truncated": len(body) > FOLLOWUP_BODY_MAX,
+    })))
+    sev = followup_severity(status, ctype, is_staging)
+    log(f"  follow-up: {target} -> {status} {ctype or '(no type)'} => {sev}")
+    return status, ctype, sev
 
 
 def classify_ffuf_severity(word: str, url: str, status: int) -> str:
@@ -4747,6 +4848,21 @@ def run_ffuf_chunk(ctx: ScanContext, words: list[str],
         # last_seen_scan_run mismatch independent of severity (verified
         # in test_classify_ffuf_severity_does_not_interfere_with_close).
         severity = classify_ffuf_severity(word, url, status)
+
+        # T4 = A — a redirect is not a verdict; the landing page is. ONE hop, GET,
+        # same-site, never retried. The severity comes from what we OBSERVED there.
+        if status in (301, 302, 307):
+            _fu = follow_path_redirect(ctx, word, redirect_to,
+                                       bool(getattr(ctx, "is_staging", False)))
+            if _fu:
+                _st, _ct, _sev = _fu
+                if _SEV_RANK_FFUF.get(_sev, 0) > _SEV_RANK_FFUF.get(severity, 0):
+                    severity = _sev
+                title_kind = (f"API documentation publicly exposed"
+                              if word in ("swagger", "openapi", "graphql") and _st in (200, 204)
+                              else f"{title_kind} — landed on HTTP {_st}")
+                desc_action = (f"{desc_action} Followed one hop to the landing page: "
+                               f"HTTP {_st} {_ct or '(no content-type)'}.")
 
         interesting += 1
         ctx.findings.append(MediumFinding(

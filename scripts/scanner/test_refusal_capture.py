@@ -203,3 +203,130 @@ def test_the_budget_is_stated_as_a_number_not_a_paragraph():
     assert roe_gate.deliberate_refusal_budget(0) == 0
     assert roe_gate.deliberate_refusal_budget(78) == 78          # Command: 78 live assets
     assert roe_gate.deliberate_refusal_budget(78, scans_per_day=4) == 312
+
+
+# ══ T4 = A — the landing page is the verdict (relay 152 / 303 / 304) ═════════
+
+def test_followup_severity_reads_only_what_was_observed():
+    """⛔ HOWIE'S RULING A. 152 asked for "200 with Swagger UI content"; no swagger
+    landing body exists in either estate (7768 Command artifacts, relay 302), so the
+    content test would be a signature typed from memory. Status and content-type are
+    facts the server sent."""
+    import run_medium as M
+    assert M.followup_severity(200, "text/html", is_staging=False) == "MODERATE"
+    assert M.followup_severity(200, "text/html; charset=utf-8", is_staging=True) == "LOW"
+    assert M.followup_severity(200, "application/json", is_staging=False) == "LOW"
+    for gated in (401, 403, 404, 500):
+        assert M.followup_severity(gated, "text/html", is_staging=False) == "INFO"
+
+
+def test_the_followup_never_leaves_the_host():
+    """⛔ 152's gate: on-host, one hop. Enforced, not trusted."""
+    import run_medium as M
+    assert M._same_site("https://x.example/swagger/index.html", "x.example") is True
+    assert M._same_site("https://a.x.example/s", "x.example") is True
+    assert M._same_site("https://evil.example/x", "x.example") is False
+    assert M._same_site("not a url", "x.example") is False
+
+
+def test_only_the_path_exists_family_is_followed():
+    import run_medium as M
+    assert "swagger" in M._FOLLOWUP_WORDS and "admin" in M._FOLLOWUP_WORDS
+    assert "wp-login" not in M._FOLLOWUP_WORDS and ".env" not in M._FOLLOWUP_WORDS
+
+
+def test_the_followup_is_declared_in_the_request_inventory():
+    """The same rule the refusal probe follows: what we send is one list, not a code read."""
+    import roe_gate
+    (p,) = [x for x in roe_gate.FOLLOWUP_PROBES if x["name"] == "path_followup"]
+    assert p["hops"] == 1 and p["retries"] == 0 and p["same_site_only"] is True
+    assert p["method"] == "GET"
+    import run_medium as M
+    assert set(p["words"]) == set(M._FOLLOWUP_WORDS), "the inventory and the code disagree"
+
+
+# ══ 4.7's 306 hold — the CALLER's use of the guard, not just the guard ════════
+# ⛔ `_same_site` was tested pure and its USE was not: inverting
+# `if not _same_site(...)` to `if _same_site(...)` survived the whole suite. That is
+# the mutant-D/L shape one more time — a safety decision reachable only when the code
+# runs, while pure tests stay green — and it sits on the single line that keeps the
+# one deliberate follow-up request on the host we were asked to scan.
+#
+# The assertion that matters is NOT "returns None". It is THAT NO REQUEST WAS SENT.
+# A guard that returns None after firing the request has already broken the ROE.
+
+def _followup_ctx(web_host="x.example"):
+    return types.SimpleNamespace(web_host=web_host, hostname=web_host,
+                                 artifacts=[], findings=[])
+
+
+def _spy_run_cmd(calls, stdout=""):
+    def fake(cmd, timeout=30, **kw):
+        calls.append(cmd)
+        return (0, stdout, "") if stdout else (1, "", "no such host")
+    return fake
+
+
+def test_an_offsite_redirect_sends_no_request_at_all(monkeypatch):
+    """⛔ THE ROE LINE. An absolute off-host redirect target must be dropped BEFORE
+    httpx runs — the skip is the point, the None is just how it is reported."""
+    import run_medium as M
+    calls = []
+    monkeypatch.setattr(M, "run_cmd", _spy_run_cmd(calls, '{"status_code":200}'))
+    ctx = _followup_ctx()
+    out = M.follow_path_redirect(ctx, "swagger", "https://evil.example/swagger/", False)
+    assert calls == [], "a request was sent to an off-host target"
+    assert out is None
+    assert [a for a in ctx.artifacts if a[0] == "path_followup"] == []
+
+
+def test_an_onsite_redirect_proceeds_and_records_the_landing(monkeypatch):
+    """The other half of the same mutation: inverting the guard skips the LEGITIMATE
+    target, so this test dies too. One inversion, two failures."""
+    import run_medium as M
+    calls = []
+    body = json.dumps({"status_code": 200, "content_type": "text/html",
+                       "body": "<html>doc</html>"})
+    monkeypatch.setattr(M, "run_cmd", _spy_run_cmd(calls, body))
+    ctx = _followup_ctx()
+    out = M.follow_path_redirect(ctx, "swagger", "/swagger/index.html", False)
+    assert len(calls) == 1, "the on-host follow-up did not fire"
+    assert out == (200, "text/html", "MODERATE")
+    (art,) = [json.loads(a[2]) for a in ctx.artifacts if a[0] == "path_followup"]
+    assert art["url"] == "https://x.example/swagger/index.html"
+    assert art["body_snippet"] == "<html>doc</html>"
+
+
+def test_the_request_target_is_the_one_the_guard_approved(monkeypatch):
+    """A guard that checks one URL while the request fetches another is decoration.
+    The URL httpx is handed must be the URL `_same_site` was asked about."""
+    import run_medium as M
+    calls = []
+    monkeypatch.setattr(M, "run_cmd", _spy_run_cmd(calls, '{"status_code":404}'))
+    seen = []
+    real = M._same_site
+    monkeypatch.setattr(M, "_same_site", lambda u, h: (seen.append(u), real(u, h))[1])
+    M.follow_path_redirect(_followup_ctx(), "admin", "/admin/", False)
+    (cmd,) = calls
+    assert seen == [cmd[cmd.index("-u") + 1]]
+
+
+def test_a_subdomain_redirect_is_on_host_and_a_lookalike_is_not(monkeypatch):
+    """The two cases the caller actually meets in this estate, driven THROUGH the
+    caller: www.x.example is ours, x.example.evil.test is not."""
+    import run_medium as M
+    for target, should_fire in (("https://www.x.example/admin/", True),
+                                ("https://x.example.evil.test/admin/", False)):
+        calls = []
+        monkeypatch.setattr(M, "run_cmd", _spy_run_cmd(calls, '{"status_code":403}'))
+        M.follow_path_redirect(_followup_ctx(), "admin", target, False)
+        assert bool(calls) is should_fire, target
+
+
+def test_a_204_is_not_scored_as_a_document(monkeypatch):
+    """4.7's 306 nit, folded. 204 is DEFINED to have no body, so text/html on a 204
+    is a header describing nothing — "something answered" (LOW), never MODERATE."""
+    import run_medium as M
+    assert M.followup_severity(204, "text/html", is_staging=False) == "LOW"
+    assert M.followup_severity(206, "text/html", is_staging=False) == "LOW"
+    assert M.followup_severity(200, "text/html", is_staging=False) == "MODERATE"
