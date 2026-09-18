@@ -2657,6 +2657,48 @@ def detect_waf(ctx: ScanContext) -> None:
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
+# ⛔ VENDOR-AGNOSTIC BY CONSTRUCTION (Howie, 2026-09-17: "the world is full of other
+# web application firewalls other than FortiGate ... that could go in the garbage
+# tomorrow"). The key is DERIVED from whatever product string wafw00f prints — no
+# hand-maintained vendor list to fall behind the tool. A curated alias table exists
+# only to collapse the legacy one-word keys this parser used to write.
+_WAFW00F_NAMED = re.compile(
+    r"is behind\s+(?P<product>.+?)\s*(?:\((?P<vendor>[^)]*)\))?\s*WAF\.", re.IGNORECASE)
+
+# Legacy one-word keys -> the canonical key the widened parse now produces. ONE
+# DIRECTION ONLY, and the raw artifact is never rewritten: the backfill reads these to
+# correct rows written before this commit (relay 286: 42 `google`, 1 `azure` on Prodex).
+WAF_KIND_ALIASES = {
+    "google": "google_cloud_app_armor",
+    "azure": "azure_front_door",
+}
+
+
+def waf_kind_key(product: str | None) -> str | None:
+    """A stable, comparable key for a WAF product string. PURE.
+
+      "Google Cloud App Armor"  -> "google_cloud_app_armor"
+      "FortiWeb"                -> "fortiweb"          (unchanged — single token)
+      "Azure Front Door"        -> "azure_front_door"
+      "  "  / None              -> None
+
+    ⚠ Lowercased and slugged rather than mapped, so a WAF nobody has written code for
+    still gets a usable key the day wafw00f learns it. The registry matches on
+    SUBSTRINGS, so the longer keys keep matching the vendor names already ratified."""
+    if not product:
+        return None
+    key = re.sub(r"[^a-z0-9]+", "_", product.strip().lower()).strip("_")
+    return key or None
+
+
+def canonical_waf_kind(kind: str | None) -> str | None:
+    """The canonical key for a kind that may have been written by the OLD parser.
+    One-directional: a canonical key maps to itself, a legacy key moves forward."""
+    if not kind:
+        return kind
+    return WAF_KIND_ALIASES.get(kind, kind)
+
+
 def _classify_wafw00f_output(ctx: ScanContext, stdout: str, rc: int) -> None:
     """The wafw00f verdict parse, extracted from detect_waf VERBATIM.
 
@@ -2687,12 +2729,38 @@ def _classify_wafw00f_output(ctx: ScanContext, stdout: str, rc: int) -> None:
     if rc != 0:
         log(f"wafw00f rc={rc} — assuming no WAF for tuning purposes")
         return
-    # Path 1: named-signature match. "is behind FortiWeb (Fortinet Inc.)"
+    # Path 1: named-signature match, WHOLE PRODUCT STRING.
+    #
+    # ⛔ THE ONE-WORD CAPTURE LOST THE PRODUCT, AND IT WAS LIVE IN THE DATA. The old
+    # regex was `is behind\s+([A-Za-z][A-Za-z0-9_\-]+)` — one token — so production
+    # wrote:
+    #     "is behind Google Cloud App Armor (Google Cloud) WAF."  ->  kind "google"
+    #     "is behind Azure Front Door (Microsoft) WAF."           ->  kind "azure"
+    # 55 Prodex artifacts say the first, 1 says the second (read 2026-09-18). Correct
+    # as a vendor, useless as a product: "google" is a hosting company, not a WAF, and
+    # the registry's `wafw00f_high_confidence` matches only fortiweb|fortinet|cloudflare
+    # — so every Google-fronted Prodex host was unreachable for waf/confirmed.
+    #
+    # ⚠ AND THE NAME IS NOT THE ONE WE ALL ASSUMED. The spec, the queue entry and my own
+    # first draft said "Google Cloud Armor". wafw00f's signature says **Google Cloud App
+    # Armor**. The key is derived from the bytes, not from what we call it in prose.
+    #
+    # ⚠ STRICTLY WIDENING. If the line has no " WAF." suffix the old one-word capture
+    # still runs, so no detection that worked before can stop working here.
+    m = _WAFW00F_NAMED.search(stdout)
+    if m:
+        ctx.waf_detected = True
+        ctx.waf_kind = waf_kind_key(m.group("product"))
+        log(f"WAF detected: {ctx.waf_kind} "
+            f"(product={m.group('product')!r} vendor={m.group('vendor')!r}) "
+            f"— will gate intrusive templates off")
+        return
     m = re.search(r"is behind\s+([A-Za-z][A-Za-z0-9_\-]+)", stdout)
     if m:
         ctx.waf_detected = True
-        ctx.waf_kind = m.group(1).lower()
-        log(f"WAF detected: {ctx.waf_kind} — will gate intrusive templates off")
+        ctx.waf_kind = waf_kind_key(m.group(1))
+        log(f"WAF detected: {ctx.waf_kind} (single-token fallback) "
+            f"— will gate intrusive templates off")
         return
     # Path 2: generic detection. "seems to be behind a WAF or some sort
     # of security solution" — wafw00f's response-code-heuristic firing
