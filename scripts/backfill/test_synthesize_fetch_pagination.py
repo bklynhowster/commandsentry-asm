@@ -42,19 +42,61 @@ WORKFLOW = os.path.join(
 # (a) the precheck and the worker must ask the same question
 # ---------------------------------------------------------------------------
 
+def _yml_query() -> str:
+    """The precheck's WHOLE filter string, not a fragment of it."""
+    yml = open(WORKFLOW).read()
+    m = re.search(r"^\s*QUERY='(?P<q>.*)'\s*$", yml, re.M)
+    assert m, "could not find the QUERY='…' line in the workflow"
+    return m.group("q")
+
+
 def test_thin_predicate_matches_the_workflow_precheck_query():
     """The two disagreeing IS the defect, so the yml is read, not trusted.
 
     If someone edits one side, this fails and names both strings.
     """
-    yml = open(WORKFLOW).read()
-    m = re.search(r"^\s*QUERY='or=\((?P<pred>.*)\)'\s*$", yml, re.M)
-    assert m, "could not find the QUERY='or=(...)' line in the workflow"
+    q = _yml_query()
+    m = re.search(r"or=\((?P<pred>.*)\)$", q)
+    assert m, f"no or=(…) group in the precheck query: {q}"
     assert m.group("pred") == sfd.THIN_PREDICATE, (
         "precheck and worker predicates have drifted:\n"
         f"  yml    : {m.group('pred')}\n"
         f"  worker : {sfd.THIN_PREDICATE}"
     )
+
+
+def test_the_precheck_pin_compares_the_WHOLE_filter_not_just_the_or_group():
+    """⛔ 4.7's condition, relay 154, and it is the reason the pin was widened.
+
+    The precheck filter is now TWO terms ANDed: the sticky-reject exclusion and
+    the thin or-group. A pin that reads only the or-group would stay green while
+    someone deleted the rejection term — the precheck would go back to counting
+    rejected rows as work, the worker would keep refusing them, and the run log
+    would report a denominator it never processes. That is the exact drift this
+    file exists to catch, one term to the left.
+
+    So: reconstruct the WHOLE expected string from the worker's own constants and
+    compare it to the whole line. Nothing in the query is unaccounted for.
+    """
+    q = _yml_query()
+    expected = (f"{sfd.REJECTION_MARKER_COLUMN}=is.null"
+                f"&or=({sfd.THIN_PREDICATE})")
+    assert q == expected, (
+        "the precheck filter and the worker's predicates have drifted:\n"
+        f"  yml      : {q}\n"
+        f"  expected : {expected}"
+    )
+
+
+def test_the_rejection_term_is_ANDed_not_folded_into_the_or_group():
+    """An exclusion inside an OR is not an exclusion. If the marker term ever
+    migrates inside the parentheses, a rejected row matches the FIRST clause
+    (description_synth.is.null) and is counted again."""
+    q = _yml_query()
+    or_group = re.search(r"or=\((?P<pred>.*)\)$", q).group("pred")
+    assert sfd.REJECTION_MARKER_COLUMN not in or_group, (
+        "the rejection marker is inside the or-group — it must be an AND term")
+    assert q.startswith(f"{sfd.REJECTION_MARKER_COLUMN}=is.null&")
 
 
 def test_thin_predicate_is_a_superset_of_the_python_inclusion_test():
@@ -118,7 +160,8 @@ class _FakeBuilder:
                                    # separate chain from the page reads, and an
                                    # earlier head=True must not blank them.
         self.state = state if state is not None else {
-            "or_": None, "ordered": None, "ranges": [], "cursors": [], "count": None
+            "or_": None, "ordered": None, "ranges": [], "cursors": [],
+            "count": None, "is_": [], "eq": []
         }
 
     def _child(self, rows=None, head=None):
@@ -137,7 +180,25 @@ class _FakeBuilder:
             self.state["count"] = kw["count"]
         return self._child(head=bool(kw.get("head")))
 
-    def eq(self, *a):
+    def eq(self, col, val):
+        # ⚠ THIS USED TO IGNORE ITS ARGUMENTS AND RETURN EVERY ROW. Harmless
+        # while nothing tested a `--finding-id` run; the moment relay 154 added
+        # a targeted path, a double that answers "all rows" to "this one row"
+        # would have made the rejection probe pass over the wrong record and the
+        # test green for the wrong reason. Same class as FakeRest having no
+        # .patch() — a double that cannot represent the case cannot test it.
+        self.state.setdefault("eq", []).append((col, val))
+        return self._child([r for r in self._rows if r.get(col) == val])
+
+    def is_(self, col, val):
+        """PostgREST `col=is.null`. Recorded AND applied — the recording is what
+        the pin reads, the applying is what makes the fires/doesn't-fire pair
+        mean something."""
+        self.state.setdefault("is_", []).append((col, val))
+        if val == "null":
+            return self._child([r for r in self._rows if not r.get(col)])
+        if val == "not.null":
+            return self._child([r for r in self._rows if r.get(col)])
         return self._child()
 
     def in_(self, col, vals):
@@ -179,7 +240,8 @@ class _FakeSB:
         self._a = assets or []
         self._h = history or []
         self.state = {
-            "or_": None, "ordered": None, "ranges": [], "cursors": [], "count": None
+            "or_": None, "ordered": None, "ranges": [], "cursors": [],
+            "count": None, "is_": [], "eq": []
         }
 
     def table(self, name):
@@ -201,8 +263,22 @@ def _thin_row(i: int) -> dict:
         "matched_url": None, "frameworks": [],
         "description_synth": None, "description_source": "scanner",
         "description_synth_input_hash": None,
+        # relay 154 — every fixture row carries the marker columns, unset.
+        "description_synth_reviewed_at": None,
+        "description_synth_reviewed_by": None,
         "impact": None, "remediation": None, "references": [],
     }
+
+
+def _rejected_row(i: int, who: str = "admin-uuid",
+                  when: str = "2026-09-19T12:00:00Z") -> dict:
+    """A row the portal's rejectDescription would leave behind: the three synth
+    columns NULLed, source flipped back to 'scanner', reviewed_at/by stamped.
+    ⚠ Thin in every way THIN_PREDICATE can see — that is the whole trap."""
+    r = _thin_row(i)
+    r["description_synth_reviewed_at"] = when
+    r["description_synth_reviewed_by"] = who
+    return r
 
 
 def test_worker_walks_past_the_1000_row_cap():
@@ -222,6 +298,130 @@ def test_worker_walks_past_the_1000_row_cap():
     assert sb.state["or_"] == sfd.THIN_PREDICATE, \
         "the thin filter must be applied SERVER-side, not after the fetch"
     assert len(sb.state["cursors"]) >= 2511 // sfd.PAGE_SIZE - 1, "did not paginate"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ⛔ REJECT IS STICKY — relay 154. Howie: "Reject means leave this one alone
+# until a human says otherwise."
+#
+# The pair below is what 4.7 mutates: drop the AND-clause in _apply_scope and
+# the FIRES half must go red. A rejected row is thin in every way the predicate
+# can see, so if the exclusion is not reached, nothing else stops it.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_a_rejected_row_is_excluded_from_the_paged_walk():
+    """FIRES. Nine ordinary thin rows and one rejected — nine come back."""
+    rows = [_thin_row(i) for i in range(9)] + [_rejected_row(99)]
+    sb = _FakeSB(rows)
+    out = sfd.fetch_findings(sb, severities=None, finding_id=None, force=False)
+    ids = {f.finding_id for f in out}
+    assert len(out) == 9, f"expected 9, got {len(out)} — the rejection leaked in"
+    assert _rejected_row(99)["finding_id"] not in ids
+    assert (sfd.REJECTION_MARKER_COLUMN, "null") in sb.state["is_"], \
+        "the exclusion must be SERVER-side, not a post-fetch filter"
+
+
+def test_an_unrejected_thin_row_is_still_picked_up():
+    """DOESN'T FIRE. The other half of the pair: an exclusion that excludes
+    everything is not an exclusion, it is an outage."""
+    sb = _FakeSB([_thin_row(i) for i in range(9)])
+    out = sfd.fetch_findings(sb, severities=None, finding_id=None, force=False)
+    assert len(out) == 9
+
+
+def test_force_does_NOT_override_a_rejection():
+    """⛔ 4.7's condition 1, relay 154. A human said no; --force re-runs the
+    MACHINE, it does not overrule the human. If force bypassed this, "sticky"
+    would be a lie — and force is exactly what an operator reaches for when a
+    row stubbornly has no text, which is what a rejected row looks like."""
+    rows = [_thin_row(0), _rejected_row(99)]
+    sb = _FakeSB(rows)
+    out = sfd.fetch_findings(sb, severities=None, finding_id=None, force=True)
+    ids = {f.finding_id for f in out}
+    assert _rejected_row(99)["finding_id"] not in ids, \
+        "--force re-synthesised a row a human rejected"
+    assert _thin_row(0)["finding_id"] in ids, "--force stopped working entirely"
+    # ⛔ AND THE QUERY ITSELF, NOT JUST THE OUTPUT. Two of my own mutants
+    # survived this test before this line existed: moving the clause below the
+    # `--finding-id` return, and moving it inside `if not force`. Both passed,
+    # because the Python gate caught the row either way — the exclusion was
+    # real, but ONE OF ITS TWO LAYERS WAS UNTESTED, its partner covering for it.
+    # Asserting the outcome cannot tell a two-layer defence from a one-layer
+    # one; asserting the query can. (It is also a live difference: without the
+    # server-side term a --force run drags every reviewed row across the wire
+    # to throw it away in Python.)
+    assert (sfd.REJECTION_MARKER_COLUMN, "null") in sb.state["is_"], \
+        "--force skipped the SERVER-side rejection filter"
+
+
+def test_a_targeted_finding_id_run_on_a_rejected_row_says_so_and_exits_zero(capsys):
+    """⛔ THE PATH THAT ROUTES AROUND EVERYTHING ELSE. `--finding-id` returns
+    from _apply_scope BEFORE the thin filter, so an exclusion written next to
+    the or_() would never execute here. It answers instead of going quiet:
+    silence is the wrong reply to an operator who ran a targeted job BECAUSE
+    the row has no text."""
+    sb = _FakeSB([_rejected_row(99, who="howie@example", when="2026-09-19T12:00:00Z")])
+    out = sfd.fetch_findings(
+        sb, severities=None, finding_id=_rejected_row(99)["finding_id"], force=False)
+    assert out == []
+    printed = capsys.readouterr().out
+    assert "rejected by howie@example" in printed
+    assert "2026-09-19T12:00:00Z" in printed
+    assert "clear the rejection in the portal" in printed
+
+
+def test_a_targeted_finding_id_run_on_an_ordinary_row_still_works(capsys):
+    """The doesn't-fire half of the targeted path."""
+    sb = _FakeSB([_thin_row(3)])
+    out = sfd.fetch_findings(
+        sb, severities=None, finding_id=_thin_row(3)["finding_id"], force=False)
+    assert len(out) == 1
+    assert "rejected by" not in capsys.readouterr().out
+    # Same reason as the --force test above: pin the QUERY, so the clause cannot
+    # drift below the early return while the probe quietly covers for it.
+    assert (sfd.REJECTION_MARKER_COLUMN, "null") in sb.state["is_"], \
+        "the targeted path skipped the SERVER-side rejection filter"
+
+
+def test_the_exclusion_is_applied_to_the_count_probe_AND_the_pages():
+    """The guard at the end of fetch_findings compares a server-side COUNT to
+    the number of rows walked. If the exclusion were applied to only one of
+    them, the count and the walk would disagree and the worker would refuse to
+    run on a queue that is not partial — a red build for a non-event, which is
+    the trade this file already refused once."""
+    rows = [_thin_row(i) for i in range(5)] + [_rejected_row(90 + i) for i in range(3)]
+    sb = _FakeSB(rows)
+    out = sfd.fetch_findings(sb, severities=None, finding_id=None, force=False)
+    assert len(out) == 5
+    # the marker filter was applied more than once: count probe + at least one page
+    applied = [p for p in sb.state["is_"] if p[0] == sfd.REJECTION_MARKER_COLUMN]
+    assert len(applied) >= 2, \
+        f"exclusion applied {len(applied)} time(s) — probe and pages must both carry it"
+
+
+def test_the_python_gate_holds_even_if_the_query_does_not():
+    """BOTH GATES OR NEITHER. Hand fetch_findings a double that ignores the
+    server-side filter entirely — the row must still not come back, because the
+    Python inclusion test checks the marker too. An exclusion that lives only in
+    the query is one a future code path walks past, which is how `--finding-id`
+    got here in the first place."""
+    class _BlindBuilder(_FakeBuilder):
+        def is_(self, col, val):          # records, refuses to filter
+            self.state.setdefault("is_", []).append((col, val))
+            return self._child()
+
+    class _BlindSB(_FakeSB):
+        def table(self, name):
+            rows = {"findings": self._f, "assets": self._a,
+                    "finding_history": self._h}[name]
+            return _BlindBuilder(rows, self.state)
+
+    sb = _BlindSB([_thin_row(0), _rejected_row(99)])
+    out = sfd.fetch_findings(sb, severities=None, finding_id=None, force=False)
+    ids = {f.finding_id for f in out}
+    assert _rejected_row(99)["finding_id"] not in ids, \
+        "the Python gate did not hold when the server-side filter was blind"
+    assert _thin_row(0)["finding_id"] in ids
 
 
 def test_a_short_page_ends_the_walk():

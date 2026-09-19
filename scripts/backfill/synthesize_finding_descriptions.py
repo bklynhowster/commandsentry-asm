@@ -148,6 +148,42 @@ THIN_PREDICATE = (
     "description_source.is.null"
 )
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ⛔ REJECT IS STICKY — Howie's ruling, relay 154.
+#     "Reject means leave this one alone until a human says otherwise."
+#
+# THE TRAP THIS CLOSES. `rejectDescription` in the portal NULLs description_synth
+# / impact / remediation and sets description_source='scanner'. That row then
+# matches FOUR of THIN_PREDICATE's five clauses, so the worker re-synthesised it
+# on the next chained run — same inputs, same hash, almost certainly the same
+# text the human had just thrown away. Until the drain ran on 2026-09-15 the
+# worker could not see its own queue, so this never fired; it is reachable now.
+#
+# THE MARKER — no new column, no new enum value. VERIFIED, not assumed
+# (2026-09-19, both instances, paginated):
+#     description_source='scanner' AND reviewed_at IS NOT NULL   Command 0 · Prodex 0
+#     description_source='scanner'                               Command 0 · Prodex 0
+#     reviewed_at IS NOT NULL                                    Command 2 · Prodex 2
+# The three portal writers set description_source to three DIFFERENT values —
+# approve 'ai_synthesized_reviewed', edit 'manual', reject 'scanner' — so the
+# conjunction is reachable from exactly one of them.
+#
+# ⚠ THE EXCLUSION IS DELIBERATELY BROADER THAN THE MARKER, and the two are not
+# the same claim. What is excluded here is "a human has reviewed this row at
+# all" (reviewed_at IS NOT NULL). What the portal renders as REJECTED is the
+# narrower conjunction. Approved and edited rows are excluded too — they carry
+# text, so they were already out of scope by thinness; this makes it explicit
+# rather than incidental. A broader exclusion errs toward leaving human decisions
+# alone, which is the direction this ruling points.
+#
+# ⚠ RESIDUE, STATED RATHER THAN EXPLAINED AWAY: Command's 2 reviewed rows are
+# description_source='ai_synthesized' with reviewed_at stamped 2026-05-22T23:18,
+# a combination NONE of the three current actions can produce, on the same day
+# as the phase-F migration. Nothing in either tree writes reviewed_at except
+# those three actions (grepped, both scanner repos + portal). They are residue
+# from that day, they are not rejections, and the marker does not claim them.
+REJECTION_MARKER_COLUMN = "description_synth_reviewed_at"
+
 # The column list, hoisted so the count probe and every page select exactly the
 # same shape. Two copies of a column list is two things that can drift.
 _SELECT_COLUMNS = (
@@ -155,6 +191,9 @@ _SELECT_COLUMNS = (
     "tags, cvss_score, affected_component, affected_component_version, "
     "matched_url, frameworks, "
     "description_synth, description_source, description_synth_input_hash, "
+    # relay 154 — the sticky-reject marker and who set it, so the Python gate can
+    # see it and a --finding-id run can NAME the person who said no.
+    "description_synth_reviewed_at, description_synth_reviewed_by, "
     'impact, remediation, "references"'
 )
 
@@ -386,9 +425,47 @@ def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, for
     auto-enrichment chain catch these gaps without intervention.
     """
     q = sb.table("findings").select(_SELECT_COLUMNS)
+
+    # ⛔ A TARGETED RUN ON A REJECTED ROW ANSWERS, IT DOES NOT JUST RETURN NOTHING.
+    # The scope below would drop it silently, and silence is the wrong reply to
+    # an operator who ran `--finding-id` precisely BECAUSE the row has no text.
+    # Say who rejected it, when, and how to undo it — then exit 0, because
+    # honouring a human decision is a success, not an error.
+    if finding_id:
+        probe = _execute_with_retry(
+            sb.table("findings")
+            .select(f"finding_id, {REJECTION_MARKER_COLUMN}, "
+                    "description_synth_reviewed_by")
+            .eq("finding_id", finding_id),
+            "rejection probe",
+        )
+        row = (probe.data or [None])[0]
+        if row and row.get(REJECTION_MARKER_COLUMN):
+            who = row.get("description_synth_reviewed_by") or "an admin"
+            when = row.get(REJECTION_MARKER_COLUMN)
+            print(f"  {finding_id}: rejected by {who} at {when}; clear the "
+                  f"rejection in the portal to re-synthesise")
+            return []
+
     def _apply_scope(builder):
         """Every predicate except paging — applied identically to the count
-        probe and to each page, so the guard below compares like with like."""
+        probe and to each page, so the guard below compares like with like.
+
+        ⛔ REJECT IS STICKY (relay 154). The rejection filter is applied FIRST,
+        above both early returns, because both of them are ways around it:
+
+          · `--finding-id` RETURNS IMMEDIATELY. A rejection clause written next
+            to the `or_()` below would be skipped entirely by every targeted
+            run — the exclusion would exist and never execute on the one path
+            an operator uses when they are annoyed that a row has no text.
+          · `--force` SKIPS the thin filter. A human said no; --force re-runs
+            the MACHINE, it does not overrule the human. If force could bypass
+            this, "sticky" would be a lie.
+
+        So it is not part of THIN_PREDICATE's OR group and not inside either
+        conditional. It is an AND, unconditionally, on every path.
+        """
+        builder = builder.is_(REJECTION_MARKER_COLUMN, "null")
         if finding_id:
             return builder.eq("finding_id", finding_id)
         if severities:
@@ -593,6 +670,13 @@ def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, for
         # with a complete description but no impact/remediation get picked up
         # by the auto-enrichment chain instead of requiring --force.
         missing_impact_or_remediation = not r.get("impact") or not r.get("remediation")
+        # ⛔ SECOND GATE, relay 154. The server-side scope already excludes
+        # reviewed rows, so on the paged path this is unreachable — but the
+        # `--finding-id` path fetches ONE row by id and this test is what decides
+        # whether it gets synthesised. An exclusion that lives only in the query
+        # is an exclusion one code path can walk past; both gates or neither.
+        if r.get(REJECTION_MARKER_COLUMN):
+            continue
         if force or finding.is_thin or missing_impact_or_remediation:
             out.append(finding)
 
