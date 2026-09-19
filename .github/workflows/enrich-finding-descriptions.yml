@@ -148,7 +148,14 @@ jobs:
           # population is 0 today and the clauses return the same rows, so the
           # count this step prints is unchanged — it just cannot silently
           # under-report later. Fail-OPEN, per the discipline stated above.
-          QUERY='or=(description_synth.is.null,impact.is.null,remediation.is.null,description_source.not.in.(ai_synthesized,ai_synthesized_reviewed,manual),description_source.is.null)'
+          # ⛔ REJECT IS STICKY (relay 154). The rejection term is an AND, so it
+          # sits OUTSIDE the or=(…) group — inside it, a rejected row would match
+          # the first clause and be counted, and the precheck would keep telling
+          # the worker there is work the worker now refuses to do.
+          # ⚠ The pin in test_synthesize_fetch_pagination.py compares the WHOLE
+          # filter, both terms — pinning only the or-group is how the two halves
+          # drifted the first time.
+          QUERY='description_synth_reviewed_at=is.null&or=(description_synth.is.null,impact.is.null,remediation.is.null,description_source.not.in.(ai_synthesized,ai_synthesized_reviewed,manual),description_source.is.null)'
           # HEAD with Prefer: count=exact returns total in Content-Range.
           # -sS = silent but show errors; -f bails on 4xx/5xx so we don't
           # silently treat a 500 as "zero findings."
