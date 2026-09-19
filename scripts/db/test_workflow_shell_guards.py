@@ -59,7 +59,7 @@ WORKFLOWS = os.path.join(REPO, ".github", "workflows")
 # other workflows predate the rule and carry their own history, and a pin that
 # turns red on twenty untouched files gets deleted rather than obeyed. Widening
 # this list is a relay turn, not a drive-by.
-COVERED = ("tests.yml", "premerge-gate.yml")
+COVERED = ("tests.yml", "premerge-gate.yml", "scanner.yml")
 
 # An assignment whose value is a command substitution: NAME=$( … )
 # ⚠ `$((` IS ARITHMETIC, NOT A COMMAND SUBSTITUTION. `n=$((n+1))` cannot fail and
@@ -69,6 +69,38 @@ COVERED = ("tests.yml", "premerge-gate.yml")
 _ASSIGN_CAPTURE = re.compile(
     r"""^\s*(?:local\s+|export\s+)?([A-Za-z_][A-Za-z0-9_]*)=\$\((?!\()""")
 _GUARD = re.compile(r"\|\|")
+
+# ⛔ QUOTED SPANS ARE NOT SHELL. Both halves of the line below need this, and the
+# sweep's first file (scanner.yml, relay 309) proved it in BOTH directions:
+#
+#   guarded, but the guard is on a LATER line, inside a multi-line $( ):
+#       STATUS=$(psql "$DSN" -t -A -c "
+#         select status from public.scan_run where scan_run_id='$ID';
+#       " 2>/dev/null || echo "unknown")
+#     The old gatherer only followed BACKSLASH continuations, so it read line 1
+#     alone, saw no `||`, and flagged a line that cannot fail. A false positive
+#     on live scanner code is how a pin gets deleted instead of obeyed.
+#
+#   NOT guarded, but a `||` appears anyway — inside a SQL string:
+#       EXISTING=$(psql "$DSN" -t -A -c "
+#         select queue_id || '|' || status from public.scan_queue ...
+#       ")
+#     Widening the window without stripping quotes would have read SQL string
+#     CONCATENATION as a shell guard and waved this one through. One change
+#     without the other is worse than neither.
+_QUOTED_SPAN = re.compile(r"""'[^']*'|"[^"]*\"""", re.DOTALL)
+
+
+def _shell_only(s: str) -> str:
+    """The parts of `s` the shell would act on: quoted spans blanked out."""
+    return _QUOTED_SPAN.sub(" ", s)
+
+
+def _substitution_is_closed(stmt: str) -> bool:
+    """Has every `$(` opened OUTSIDE quotes been closed? Counting, not parsing —
+    enough for `NAME=$( … )` spanning lines, and honest about being a heuristic."""
+    t = _shell_only(stmt)
+    return t.count("$(") <= t.count(")")
 
 
 def _run_blocks(path):
@@ -102,15 +134,20 @@ def _unguarded_captures(run: str):
             continue
         m = _ASSIGN_CAPTURE.match(code)
         if m:
-            # Gather continuations so a guard on the next physical line counts.
+            # Gather continuations so a guard on the next physical line counts:
+            # a backslash continuation, OR an unclosed `$(` — the substitution is
+            # one statement however many lines it occupies, and its guard is
+            # routinely on the closing line (`" 2>/dev/null || echo unknown)`).
             stmt = code
             j = i
-            while stmt.rstrip().endswith("\\") and j + 1 < len(lines):
+            while (stmt.rstrip().endswith("\\")
+                   or not _substitution_is_closed(stmt)) and j + 1 < len(lines):
                 j += 1
                 stmt += "\n" + lines[j]
             # `if NAME=$(…); then` — the condition position is exempt from -e
             in_if = code.lstrip().startswith("if ")
-            if not _GUARD.search(stmt) and not in_if:
+            # ⛔ The guard is looked for in SHELL, not in strings. See _QUOTED_SPAN.
+            if not _GUARD.search(_shell_only(stmt)) and not in_if:
                 bad.append((i + 1, code.strip()[:90]))
             i = j + 1
             continue
@@ -204,6 +241,83 @@ def test_the_checker_is_silent_on_guarded_and_on_prose(snippet):
     flagged the explanation would make the file unfixable — the prose-vs-checker
     trap, sixth instance this week, pre-empted here."""
     assert _unguarded_captures(snippet) == [], f"false positive: {snippet.strip()}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ⛔ THE TWO SHAPES THE SWEEP'S FIRST FILE PRODUCED (relay 309, scanner.yml)
+# Both are multi-line `NAME=$( … )`. One is guarded and the old checker called it
+# unguarded; the other is unguarded and a naive widening would have called it
+# guarded. They are pinned as a PAIR because fixing either alone is a regression.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Verbatim from scanner.yml's Summary step. The `||` is on the CLOSING line of the
+# substitution, not the opening one, and no backslash continues it.
+GUARD_ON_THE_CLOSING_LINE = (
+    '          STATUS=$(psql "$SUPABASE_DSN" -t -A -c "\n'
+    "            select status from public.scan_run where scan_run_id='$ID';\n"
+    '          " 2>/dev/null || echo "unknown")\n')
+
+# Verbatim shape from scanner.yml's ad-hoc queue step. The only `||` in it are SQL
+# string CONCATENATION inside a quoted span — not a shell guard, and this capture
+# really can abort the step.
+SQL_CONCAT_IS_NOT_A_GUARD = (
+    '          EXISTING=$(psql "$SUPABASE_DSN" -t -A -v ON_ERROR_STOP=1 -c "\n'
+    "            select queue_id || '|' || status\n"
+    '              from public.scan_queue where asset_id = \'$ASSET_ID\';\n'
+    '          ")\n')
+
+
+def test_a_guard_on_the_closing_line_of_a_multiline_substitution_counts():
+    """⛔ THE FALSE POSITIVE THE SWEEP FOUND FIRST. The old gatherer followed only
+    backslash continuations, so it read line 1 of this and saw no `||`. A pin that
+    flags live scanner code which CANNOT fail is a pin that gets deleted."""
+    assert _unguarded_captures(GUARD_ON_THE_CLOSING_LINE) == []
+
+
+def test_sql_string_concatenation_is_not_mistaken_for_a_shell_guard():
+    """⛔ THE OTHER HALF, and the reason the two ship together. Widening the window
+    without stripping quoted spans would read `queue_id || '|' || status` as a
+    guard and wave through a capture that genuinely aborts the step."""
+    assert _unguarded_captures(SQL_CONCAT_IS_NOT_A_GUARD), (
+        "SQL `||` inside a quoted string was read as a shell guard")
+
+
+def test_the_quote_stripper_leaves_shell_operators_alone():
+    """The stripper is the load-bearing half; it must remove strings and nothing
+    else. Tested directly, because a pure helper nobody drives is one nobody runs
+    (mutant L's family, and the reason this line exists)."""
+    assert "||" in _shell_only('out=$(cmd "a b") || rc=$?')
+    assert "||" not in _shell_only("out=$(psql -c \"select a || b\")")
+    assert "$(" in _shell_only('x=$(echo "hi")')
+
+
+def test_the_substitution_gatherer_knows_when_it_is_closed():
+    assert _substitution_is_closed('x=$(cmd)')
+    assert not _substitution_is_closed('x=$(psql -c "')
+    # a `)` inside a CLOSED quoted span does not close the substitution — this is
+    # the case the SQL in scanner.yml actually produces.
+    assert not _substitution_is_closed('x=$(psql -c "a ) b" ')
+
+
+def test_the_gatherer_says_what_it_cannot_do():
+    """⚠ WRITTEN BECAUSE MY OWN FIRST VERSION OF THE TEST ABOVE ASSERTED THIS AND
+    FAILED. While a quote is still OPEN mid-gather, a `)` inside it IS counted, so
+    this fragment reads as closed:
+
+        x=$(psql -c "a )        <- unterminated quote, stray ) visible
+
+    In a real run block that is harmless: the gatherer keeps appending lines, the
+    quote closes, the whole span blanks out, and the real `")` decides it. This
+    test pins the LIMIT so nobody later reads the heuristic as a shell parser —
+    and fails if someone makes it stricter without revisiting the gather loop."""
+    assert _substitution_is_closed('x=$(psql -c "a )')
+
+
+def test_scanner_yml_is_in_the_swept_set():
+    """The sweep is one file per commit; this commit is scanner.yml. If it silently
+    left COVERED the pin above would pass over the two files that were already
+    clean — the vacuous pass this file's floor test exists to prevent."""
+    assert "scanner.yml" in COVERED
 
 
 def test_run_blocks_come_from_the_yaml_parser_not_a_grep():

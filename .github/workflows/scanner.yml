@@ -256,10 +256,17 @@ jobs:
           INTENSITY="${{ github.event.inputs.intensity }}"
           AUTHENTICATED="${{ github.event.inputs.authenticated }}"
 
-          # Defensive shell-quote: psql -c with double-quoted SQL.
-          # ASSET_ID gets interpolated via printf %q escape since it's
-          # user-supplied and might contain shell metachars.
-          ASSET_ID_QUOTED=$(printf '%q' "$ASSET_ID")
+          # ⛔ THE ESCAPE THIS COMMENT USED TO CLAIM WAS NEVER APPLIED.
+          # It read "ASSET_ID gets interpolated via printf %q escape" and assigned
+          # ASSET_ID_QUOTED=$(printf '%q' "$ASSET_ID") — a variable that is then
+          # never read, in either repo (grepped, relay 309). The SQL below
+          # interpolates '$ASSET_ID' RAW. Deleted rather than wired up, because
+          # printf %q is SHELL quoting and was never the right tool for a SQL
+          # literal; making it "work" would have shipped a second wrong defence.
+          # ⚠ The input is workflow_dispatch, which needs repo write access, so
+          # this is a privileged path — but the comment asserted a protection that
+          # did not exist, which is worse than an honest raw interpolation.
+          # Parameterising it is a decision, filed for 4.7, NOT done here.
 
           # Check for an already-active queue row for this asset.
           EXISTING=$(psql "$SUPABASE_DSN" -t -A -v ON_ERROR_STOP=1 -c "
@@ -298,14 +305,26 @@ jobs:
         run: |
           python scripts/scanner/poll_queue.py > /tmp/scan_descriptor.json
           if [ -s /tmp/scan_descriptor.json ]; then
-            INTENSITY=$(python -c "import json; print(json.load(open('/tmp/scan_descriptor.json'))['intensity'])")
-            ASSET_ID=$(python -c "import json; print(json.load(open('/tmp/scan_descriptor.json'))['asset_id'])")
-            SCAN_RUN_ID=$(python -c "import json; print(json.load(open('/tmp/scan_descriptor.json'))['scan_run_id'])")
+            # ⛔ THESE FOUR RUN AFTER poll_queue.py HAS ALREADY CLAIMED THE ROW.
+            # Unguarded, a malformed descriptor aborts the step ON THE ASSIGNMENT
+            # with no output, leaving scan_run claimed and `has_work` never set —
+            # the scan looks like it never happened while the row says running.
+            # Still a hard failure (a descriptor we cannot read IS one), but now it
+            # says which key and reaches the cleanup step below.
+            rc=0
+            INTENSITY=$(python -c "import json; print(json.load(open('/tmp/scan_descriptor.json'))['intensity'])") || rc=$?
+            ASSET_ID=$(python -c "import json; print(json.load(open('/tmp/scan_descriptor.json'))['asset_id'])") || rc=$?
+            SCAN_RUN_ID=$(python -c "import json; print(json.load(open('/tmp/scan_descriptor.json'))['scan_run_id'])") || rc=$?
             # 2026-06-02: surface top_hosting_org so vpn_decision can
             # route Pressable Light scans through VPN. Empty string when
             # no asset_surface row exists yet (brand-new asset before
             # first ASM Discover sync).
-            HOSTING_ORG=$(python -c "import json; print((json.load(open('/tmp/scan_descriptor.json'))['asset'].get('top_hosting_org') or '').strip())")
+            HOSTING_ORG=$(python -c "import json; print((json.load(open('/tmp/scan_descriptor.json'))['asset'].get('top_hosting_org') or '').strip())") || rc=$?
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::claimed a scan but could not read /tmp/scan_descriptor.json (rc=$rc)"
+              sed -n '1,40p' /tmp/scan_descriptor.json || true
+              exit 1
+            fi
             echo "intensity=$INTENSITY"     >> "$GITHUB_OUTPUT"
             echo "asset_id=$ASSET_ID"       >> "$GITHUB_OUTPUT"
             echo "scan_run_id=$SCAN_RUN_ID" >> "$GITHUB_OUTPUT"
@@ -446,9 +465,17 @@ jobs:
           # Show a sample of the first conf found (pool went from 5 city-level
           # names to 205 per-server names — us-nyc.conf no longer exists; we
           # have us-nyc-wg-001.conf etc. Just grab whatever's first).
-          FIRST_CONF=$(sudo ls /etc/wireguard/ | grep '\.conf$' | head -1)
-          echo "Sample (${FIRST_CONF}, redacted):"
-          sudo sed -E 's/(PrivateKey|PublicKey|PresharedKey) = .*/\1 = <redacted>/' "/etc/wireguard/${FIRST_CONF}"
+          # ⚠ COSMETIC LINE, REAL ABORT. `grep` exits 1 when it matches nothing, so
+          # an empty /etc/wireguard killed this step — and therefore the scan — on a
+          # log-sample line. The extraction failing is worth a warning, never a dead
+          # run; the bring-up step that follows is what actually needs a config.
+          FIRST_CONF=$(sudo ls /etc/wireguard/ | grep '\.conf$' | head -1) || FIRST_CONF=""
+          if [ -n "$FIRST_CONF" ]; then
+            echo "Sample (${FIRST_CONF}, redacted):"
+            sudo sed -E 's/(PrivateKey|PublicKey|PresharedKey) = .*/\1 = <redacted>/' "/etc/wireguard/${FIRST_CONF}"
+          else
+            echo "::warning::no .conf in /etc/wireguard after extraction — sample skipped"
+          fi
           echo ""
           echo "Total configs available for rotation: $(sudo ls /etc/wireguard/ | grep -c '\.conf$')"
 
@@ -497,10 +524,15 @@ jobs:
           # it via ip-rule, doesn't delete it). awk-extract the gw + dev
           # from the FIRST `default` line; LIMIT 1 in case multiple
           # interfaces have defaults.
-          ORIG_GW=$(ip route show default table main | awk '/default/{print $3; exit}')
-          ORIG_DEV=$(ip route show default table main | awk '/default/{print $5; exit}')
+          # ⚠ THE "fail loud" CHECK BELOW WAS UNREACHABLE FOR ONE OF ITS CASES.
+          # `set -o pipefail` is on, so if `ip route` itself fails the pipeline is
+          # non-zero, the assignment aborts under -e, and the carve-out dies with no
+          # message at all — while the explicit `exit 1` two lines down exists to
+          # print one. Empty-on-failure hands every case to that check.
+          ORIG_GW=$(ip route show default table main | awk '/default/{print $3; exit}') || ORIG_GW=""
+          ORIG_DEV=$(ip route show default table main | awk '/default/{print $5; exit}') || ORIG_DEV=""
           echo "[db-carveout] original gw=$ORIG_GW dev=$ORIG_DEV"
-          DB_HOST=$(python3 -c 'import os,urllib.parse as u; print(u.urlparse(os.environ["SUPABASE_DSN"]).hostname or "")')
+          DB_HOST=$(python3 -c 'import os,urllib.parse as u; print(u.urlparse(os.environ["SUPABASE_DSN"]).hostname or "")') || DB_HOST=""
           echo "[db-carveout] resolving DB host: $DB_HOST"
           if [ -z "$DB_HOST" ] || [ -z "$ORIG_GW" ] || [ -z "$ORIG_DEV" ]; then
             echo "[db-carveout] missing host/gw/dev — aborting carve-out (fail loud)"
@@ -753,7 +785,8 @@ jobs:
           fi
           DEPTH=$(psql "$SUPABASE_DSN" -t -A -c \
             "select count(*) from public.scan_queue where status='queued';" 2>/dev/null || echo 0)
-          DEPTH=$(echo "$DEPTH" | tr -d '[:space:]'); DEPTH=${DEPTH:-0}
+          DEPTH=$(echo "$DEPTH" | tr -d '[:space:]') || DEPTH=""
+          DEPTH=${DEPTH:-0}
           echo "queued depth = $DEPTH"
           if [ "$DEPTH" -gt 0 ] 2>/dev/null; then
             echo "Re-dispatching scanner to drain remaining $DEPTH queued scan(s)."
