@@ -166,6 +166,28 @@ FOLLOWUP_PROBES = (
                     "severity describes what is actually exposed"),
         "authorised_by": "relay 152 action gate + Howie R30 ruling A (relay 303)",
     },
+    {
+        # ⛔ (354a) THE ONLY REQUEST THIS ESTATE SENDS THAT LOOKS LIKE AN ATTACK.
+        # One benign baseline + one syntactically-valid attack-signature GET on the
+        # same path — differential, to tell "WAF present" from "WAF enforcing".
+        # ⛔ DRY-RUN BY DEFAULT. Fires ONLY when the per-asset
+        # `enforcement_probe_authorized` flag AND the ENFORCEMENT_PROBE_LIVE env
+        # are both set — Howie's per-host opt-in, never cron. Declared here because
+        # "what do we send?" is one list, and this is the loudest thing on it.
+        "name": "enforcement_probe",
+        "tier": "light",
+        "trigger": "per-asset enforcement_probe_authorized + ENFORCEMENT_PROBE_LIVE",
+        "signatures": ("sqli", "xss"),
+        "method": "GET",
+        "requests_per_host_per_scan": 2,   # baseline + one attack, same path/egress
+        "retries": 0,
+        "escalates": False,
+        "dry_run_default": True,
+        "purpose": ("differential: benign passes + attack blocked = enforcing edge "
+                    "WAF (confirmed on a captured block); identical = present-but-"
+                    "not-enforcing. No verdict without a captured artifact (354b)."),
+        "authorised_by": "relay 354a plan (Howie per-asset opt-in; 4.7 sequenced)",
+    },
 )
 
 
