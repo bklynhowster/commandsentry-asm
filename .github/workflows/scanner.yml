@@ -251,28 +251,51 @@ jobs:
         env:
           PGCONNECT_TIMEOUT: 10
           SUPABASE_DSN:      ${{ secrets.SUPABASE_DSN }}
+          # ⛔ THE INPUTS ARRIVE AS ENV, NOT AS ${{ }} INSIDE THE SCRIPT (relay 311).
+          # They used to be spliced straight into the run block:
+          #     ASSET_ID="${{ github.event.inputs.asset_id }}"
+          # GitHub performs that substitution on the TEXT of the script BEFORE
+          # bash ever parses it, so an input containing a double quote does not
+          # become a funny-looking value — it ENDS THE ASSIGNMENT and everything
+          # after it is shell. That is command execution on the runner, which is
+          # a strictly worse problem than the SQL one this entry was raised for,
+          # and it was in the same six lines.
+          # Through `env:` the value is never part of the program text; bash
+          # reads it as data from the environment.
+          INPUT_ASSET_ID:      ${{ github.event.inputs.asset_id }}
+          INPUT_INTENSITY:     ${{ github.event.inputs.intensity }}
+          INPUT_AUTHENTICATED: ${{ github.event.inputs.authenticated }}
         run: |
-          ASSET_ID="${{ github.event.inputs.asset_id }}"
-          INTENSITY="${{ github.event.inputs.intensity }}"
-          AUTHENTICATED="${{ github.event.inputs.authenticated }}"
+          ASSET_ID="$INPUT_ASSET_ID"
+          INTENSITY="$INPUT_INTENSITY"
+          AUTHENTICATED="$INPUT_AUTHENTICATED"
 
-          # ⛔ THE ESCAPE THIS COMMENT USED TO CLAIM WAS NEVER APPLIED.
-          # It read "ASSET_ID gets interpolated via printf %q escape" and assigned
-          # ASSET_ID_QUOTED=$(printf '%q' "$ASSET_ID") — a variable that is then
-          # never read, in either repo (grepped, relay 309). The SQL below
-          # interpolates '$ASSET_ID' RAW. Deleted rather than wired up, because
-          # printf %q is SHELL quoting and was never the right tool for a SQL
-          # literal; making it "work" would have shipped a second wrong defence.
-          # ⚠ The input is workflow_dispatch, which needs repo write access, so
-          # this is a privileged path — but the comment asserted a protection that
-          # did not exist, which is worse than an honest raw interpolation.
-          # Parameterising it is a decision, filed for 4.7, NOT done here.
+          # ⛔ AND THE SQL IS PARAMETERISED — psql -v + :'name' (relay 310/311).
+          # Every value below used to be interpolated raw: '$ASSET_ID' twice,
+          # '$INTENSITY' once, and $AUTHENTICATED UNQUOTED. `psql -v name=value`
+          # puts the value in psql's own variable table and `:'name'` emits it as
+          # a correctly quoted SQL literal — libpq's quoting, doubling embedded
+          # single quotes. That is SQL quoting, which is what was needed; the
+          # deleted `printf %q` was SHELL quoting and was never the right tool.
+          #
+          # ⚠ NOT A THREAT-MODEL FIX, and 4.7 said so when ruling it: firing
+          # workflow_dispatch needs repo write, and anyone with that can edit
+          # this file. It is here for the two reasons that bite without an
+          # attacker: (1) an asset_id carrying an apostrophe breaks the WHERE and
+          # the INSERT on its own; (2) we write raw interpolation up as a finding
+          # in other people's estates, so our own code meets the bar we bill for.
+          #
+          # ⚠ :'authenticated'::boolean — the value goes in as a quoted literal
+          # like every other, then casts. The old form left it BARE in the values
+          # list, which is the one spot where a non-boolean input would have been
+          # parsed as SQL rather than as data.
 
           # Check for an already-active queue row for this asset.
-          EXISTING=$(psql "$SUPABASE_DSN" -t -A -v ON_ERROR_STOP=1 -c "
+          EXISTING=$(psql "$SUPABASE_DSN" -t -A -v ON_ERROR_STOP=1 \
+            -v asset_id="$ASSET_ID" -c "
             select queue_id || '|' || status
               from public.scan_queue
-             where asset_id = '$ASSET_ID'
+             where asset_id = :'asset_id'
                -- 4.7 ㊲ — age-bound 'running'; see enqueue-fleet.yml for why.
                -- Without this a dead runner's row blocks this asset forever.
                and (status = 'queued'
@@ -287,11 +310,15 @@ jobs:
             EXIST_STATUS="${EXISTING##*|}"
             echo "::warning::Asset $ASSET_ID already has an active queue row ($EXIST_STATUS, queue_id=$EXIST_QUEUE_ID). Skipping INSERT — the existing row will be claimed by poll_queue."
           else
-            psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 -c "
+            psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 \
+              -v asset_id="$ASSET_ID" \
+              -v intensity="$INTENSITY" \
+              -v authenticated="$AUTHENTICATED" -c "
               insert into public.scan_queue
                 (asset_id, intensity, authenticated, source, notes)
               values
-                ('$ASSET_ID', '$INTENSITY', $AUTHENTICATED, 'workflow_dispatch',
+                (:'asset_id', :'intensity', :'authenticated'::boolean,
+                 'workflow_dispatch',
                  'Ad-hoc fire via GH Actions UI (workflow_dispatch).');
             "
             echo "Queued $INTENSITY scan for $ASSET_ID (authenticated=$AUTHENTICATED)."
