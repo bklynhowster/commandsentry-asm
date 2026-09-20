@@ -313,6 +313,9 @@ from run_medium import (flush_progress, flush_planned_steps,  # noqa: E402
 # Declared-tier findings.source — single source of truth shared with the @phase
 # registry (spec 190 / 4.7 ruling 191 Q1). Decouples source from run intensity.
 from phase_source import source_for_tier, LIGHT  # noqa: E402
+from enforcement_probe import (  # noqa: E402  (354a — pure plan/gate/record)
+    build_probe_plan, probe_is_authorised, record_probe_pair,
+)
 from stack_passive import (  # noqa: E402
     LIGHT_PASSIVE_TOOL,
     normalise_header_keys,
@@ -983,6 +986,41 @@ def probe_refusal_signature(ctx: ScanContext) -> None:
         return
     if not record_refusal(ctx, "refusal_probe", REFUSAL_PROBE_PATH, code, body):
         log(f"  refusal probe: {code} — not a refusal status, nothing recorded")
+
+
+# ══ (354a) THE DIFFERENTIAL ENFORCEMENT PROBE — DRY-RUN BY DEFAULT ════════════
+# ⛔ Fires NOTHING unless BOTH the per-asset `enforcement_probe_authorized` flag
+#   and the ENFORCEMENT_PROBE_LIVE env are set. Default: it records the PLAN
+#   (fired=False) and sends not one packet. Live firing at one opted-in owned
+#   host is Howie's switch, on one host, off cron — 4.7's 354a ruling. The pure
+#   plan/gate/record logic is in enforcement_probe.py and fully tested; this
+#   wires it to the wire, and the wire stays quiet by default.
+# ⛔ NO VERDICT HERE. 354a captures; 354b reads the bytes and decides. A dry-run
+#   artifact is a plan, never evidence.
+def probe_enforcement(ctx: ScanContext) -> None:
+    plan = build_probe_plan(ctx.hostname, "/", signature="sqli")
+    authorised = probe_is_authorised(ctx.descriptor)
+    if not authorised:
+        # DRY-RUN: record what WOULD be sent, send nothing.
+        record_probe_pair(ctx.artifacts, plan, egress_ip=None,
+                          baseline=None, attack=None, fired=False)
+        log("  enforcement probe: DRY-RUN (not authorised) — plan recorded, "
+            "nothing sent")
+        return
+    # LIVE (Howie opted this asset in AND set the env). Both halves share this
+    # run's single egress by construction — the scan runs from one exit.
+    log("  enforcement probe: LIVE — one benign + one attack-signature GET")
+    b_code, b_body, b_ct = _probe_path_body(ctx, plan.path)
+    # the attack request is the same path plus the CRS query; _probe_path_body
+    # takes a path, and the signature is already URL-encoded in the plan.
+    a_path = plan.attack_url[len(f"https://{ctx.hostname}"):]
+    a_code, a_body, a_ct = _probe_path_body(ctx, a_path)
+    record_probe_pair(
+        ctx.artifacts, plan, egress_ip=None,
+        baseline={"status": b_code, "content_type": b_ct, "body": b_body},
+        attack={"status": a_code, "content_type": a_ct, "body": a_body},
+        fired=True,
+    )
 
 
 def _probe_path_body(ctx: ScanContext, path: str) -> tuple[int, str, str | None]:
@@ -3335,6 +3373,11 @@ def run(descriptor_path: str, dsn: str) -> int:
             # maps to: after the quiet checks, before the first enumeration.
             log("  → probe_refusal_signature (1 malformed GET)")
             probe_refusal_signature(ctx)
+            # (354a) the differential enforcement probe — DRY-RUN unless Howie
+            # opted this asset in AND set ENFORCEMENT_PROBE_LIVE. Records a plan
+            # and sends nothing by default.
+            log("  → probe_enforcement (dry-run unless authorised)")
+            probe_enforcement(ctx)
             log("  → check_common_paths")
             check_common_paths(ctx)
             log("  → check_httpx_tech")
