@@ -320,6 +320,126 @@ def test_scanner_yml_is_in_the_swept_set():
     assert "scanner.yml" in COVERED
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ⛔ THE AD-HOC DISPATCH STEP TAKES USER INPUT (relay 311)
+#
+# It is the only step in any workflow whose values come from a human typing
+# into the GitHub UI. Two layers had to be fixed and BOTH get a pin, because
+# fixing one and leaving the other is what made this entry necessary: the
+# deleted `printf %q` was shell quoting applied to a SQL problem.
+# ═══════════════════════════════════════════════════════════════════════════
+
+AD_HOC_STEP = "Queue ad-hoc scan from workflow_dispatch inputs"
+
+
+def _ad_hoc_step(fname="scanner.yml"):
+    """The step's run block AND its env map. Returns (run, env).
+
+    ⚠ Raises if the step is gone. A pin that silently stops finding its subject
+    passes forever — the vacuous-pass shape this file was built around.
+    """
+    doc = yaml.safe_load(open(os.path.join(WORKFLOWS, fname), encoding="utf-8"))
+    for job in (doc.get("jobs") or {}).values():
+        for step in (job.get("steps") or []):
+            if isinstance(step, dict) and step.get("name") == AD_HOC_STEP:
+                return step.get("run") or "", (step.get("env") or {})
+    raise AssertionError(f"step {AD_HOC_STEP!r} not found in {fname}")
+
+
+def _psql_invocations(code: str):
+    """Split a run block into its psql calls, with the variables each REFERENCES.
+
+    ⚠ Crude on purpose and honest about it: a psql call starts at the word
+    `psql` and ends where the next one begins (or at the end). That is enough
+    for this step's two calls and it cannot silently merge them, which is the
+    failure that matters — merging is exactly what made the old check pass.
+    """
+    starts = [m.start() for m in re.finditer(r"\bpsql\b", code)]
+    assert starts, "no psql invocation found in the ad-hoc step"
+    bounds = starts + [len(code)]
+    out = []
+    for i, s in enumerate(starts):
+        inv = code[s:bounds[i + 1]]
+        out.append((inv, set(re.findall(r":'([a-z_]+)'", inv))))
+    return out
+
+
+def test_the_ad_hoc_step_interpolates_no_input_into_the_script_text():
+    """⛔ THE WORSE OF THE TWO, AND IT WAS NOT THE ONE THIS ENTRY WAS FILED FOR.
+
+    `ASSET_ID="${{ github.event.inputs.asset_id }}"` is substituted by GitHub
+    into the TEXT of the script before bash parses it. An input containing a
+    double quote does not become a funny value — it ends the assignment, and
+    what follows is shell. That is command execution on the runner.
+
+    Through `env:` the value never enters the program text.
+    """
+    run, env = _ad_hoc_step()
+    leaked = [ln.strip() for ln in run.splitlines()
+              if "github.event.inputs" in ln and not ln.lstrip().startswith("#")]
+    assert not leaked, (
+        "workflow inputs are interpolated into the run block — pass them via "
+        "`env:` and read them as shell variables:\n  " + "\n  ".join(leaked))
+    # and they really are routed through env
+    routed = [k for k, v in env.items() if "github.event.inputs" in str(v)]
+    assert len(routed) >= 3, (
+        f"expected the three dispatch inputs in the step's env, found {routed}")
+
+
+def test_the_ad_hoc_step_puts_no_input_into_SQL_unparameterised():
+    """⛔ THE ONE 4.7 RULED (310/311). Every value in those two statements goes
+    through `psql -v name=value` + `:'name'` — SQL quoting, done by libpq.
+
+    Not a threat-model fix: workflow_dispatch needs repo write. It is here
+    because an asset_id carrying an apostrophe breaks the WHERE and the INSERT
+    with no attacker at all, and because raw interpolation into a WHERE clause
+    is a thing we write up as a finding in other people's estates.
+    """
+    run, _ = _ad_hoc_step()
+    code = "\n".join(ln for ln in run.splitlines()
+                     if not ln.lstrip().startswith("#"))
+
+    # a shell variable inside single quotes, i.e. '$FOO' — the raw literal form
+    raw = re.findall(r"'\$[A-Za-z_][A-Za-z0-9_]*'", code)
+    assert not raw, f"raw shell interpolation used as a SQL literal: {raw}"
+
+    # the bare one: `, $AUTHENTICATED,` in a values list — no quotes at all, so
+    # a non-boolean input would have been parsed as SQL rather than as data.
+    assert not re.search(r"values[\s\S]{0,200}?,\s*\$[A-Za-z_]", code), (
+        "a bare $VAR is still being substituted into a values list")
+
+    # ⛔ PER INVOCATION, NOT PER STEP (4.7, relay 339). The previous version
+    # asked whether `-v name=` and `:'name'` each appeared SOMEWHERE in the step.
+    # The step runs TWO psql calls and asset_id is supplied to BOTH — so dropping
+    # the -v from ONE of them left the other's copy satisfying the check, on both
+    # instances, while that statement's :'asset_id' resolved to nothing.
+    #
+    # Fifth appearance of presence-anywhere (306, 312, 319, 320, and this), in a
+    # pin I wrote two days after we fixed the same shape elsewhere. The question
+    # has to be asked of each call: does THIS invocation supply every variable
+    # THIS invocation references?
+    for n, (inv, refs) in enumerate(_psql_invocations(code), start=1):
+        supplied = set(re.findall(r"-v\s+([a-z_]+)=", inv))
+        missing = sorted(r for r in refs if r not in supplied)
+        assert not missing, (
+            f"psql invocation #{n} references {missing} but is not given "
+            f"{'it' if len(missing) == 1 else 'them'} with -v — the variable "
+            f"resolves to nothing in THIS statement:\n{inv.strip()[:300]}")
+
+    # and the step as a whole still covers all three, so a call cannot vanish
+    all_refs = set(re.findall(r":'([a-z_]+)'", code))
+    assert {"asset_id", "intensity", "authenticated"} <= all_refs, (
+        f"the step no longer parameterises all three inputs: {sorted(all_refs)}")
+
+
+def test_the_ad_hoc_pins_read_the_step_not_the_file():
+    """Both pins above must fail if the step disappears or is renamed, rather
+    than passing over a file they can no longer find."""
+    import pytest as _pytest
+    with _pytest.raises(AssertionError, match="not found"):
+        _ad_hoc_step("tests.yml")
+
+
 def test_run_blocks_come_from_the_yaml_parser_not_a_grep():
     """`run:` appears inside comments and quoted strings in these files. Parsing is
     what makes 'every run block' mean the run blocks."""
