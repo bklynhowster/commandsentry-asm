@@ -725,6 +725,41 @@ def group_by_asset(rows: list[tuple]) -> list[tuple]:
     return blocks
 
 
+def vendor_product_label(vendor: str | None, product: str | None) -> str:
+    """Vendor + product, without saying the vendor twice.
+
+    ⛔ THE DIGEST HAS PRINTED "Google Cloud Google Cloud Armor" SINCE D-031
+    (relay 346). The join was `f"{vendor + ' ' if vendor else ''}{product}"`,
+    which is right whenever the product name does not already begin with the
+    vendor name — and wrong whenever it does:
+
+        Google Cloud  + Google Cloud Armor  -> "Google Cloud Google Cloud Armor"
+        Cloudflare    + Cloudflare          -> "Cloudflare Cloudflare"
+        Fortinet      + FortiWeb            -> "Fortinet FortiWeb"          fine
+
+    ⚠ IT WAS PRODEX-ONLY, AND THAT IS WHY THREE WEEKS OF DIGESTS DID NOT SHOW
+    IT. Command's estate is Fortinet/FortiWeb, which reads correctly; Prodex is
+    Google Cloud Armor. The digest reads were Command-heavy, so the string was
+    wrong on an instance nobody was reading closely. Rule 9 step 3 on the
+    PORTAL — the same construction, inherited faithfully — is what surfaced it.
+
+    The rule: if the product already names the vendor, the vendor is noise.
+
+    ⛔ The portal carries the identical rule in JS (vendorProductLabel), and
+    both are pinned to the SAME fixtures — the real Prodex row among them — so
+    the digest string and the chip cannot drift apart silently.
+    """
+    v = (vendor or "").strip()
+    p = (product or "").strip()
+    if not p:
+        return v
+    if not v:
+        return p
+    # Case-insensitive: the registry is not consistent about capitalisation and
+    # a case difference is not a second vendor.
+    return p if p.lower().startswith(v.lower()) else f"{v} {p}"
+
+
 def asset_class_line(asset_id: str, classes: dict | None) -> str:
     """D-031 — the asset's device class, confidence and vendor PRODUCT.
 
@@ -743,7 +778,7 @@ def asset_class_line(asset_id: str, classes: dict | None) -> str:
     vendor = (row.get("vendor_product") or {}).get("vendor")
     bits = [f"{cls}/{conf}"]
     if product:
-        bits.append(f"{vendor + ' ' if vendor else ''}{product}")
+        bits.append(vendor_product_label(vendor, product))
     return "  ·  ".join(bits) + "  (dry-run classification)"
 
 
