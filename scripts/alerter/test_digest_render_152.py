@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+import pytest
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -197,3 +198,83 @@ def test_new_assets_heading_says_discovered_in_this_window():
     assert A.NEW_ASSETS_HEADING == "Assets discovered in this window"
     import inspect
     assert '"New assets discovered"' not in inspect.getsource(A.render_html)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ⛔ VENDOR + PRODUCT WITHOUT SAYING THE VENDOR TWICE (relay 346)
+#
+# The digest printed "Google Cloud Google Cloud Armor" on every Prodex digest
+# since D-031. Prodex-only — Command's Fortinet/FortiWeb reads correctly — and
+# the digest reads were Command-heavy, so three weeks of them never showed it.
+# Rule 9 step 3 on the PORTAL, which inherited the same construction, is what
+# surfaced it.
+#
+# ⛔ THE FIXTURES BELOW ARE SHARED WITH THE PORTAL, CASE FOR CASE. The portal's
+# tests/vendor-product-label-check.mjs carries the identical table against its
+# JS implementation. Two languages, one rule, one fixture set — if either side
+# is changed alone, one of the two suites goes red.
+# ═══════════════════════════════════════════════════════════════════════════
+
+VENDOR_PRODUCT_CASES = [
+    # (vendor, product, expected)  — REAL rows from the estates, 2026-09-20
+    ("Google Cloud", "Google Cloud Armor", "Google Cloud Armor"),   # ← the defect
+    ("Fortinet", "FortiWeb", "Fortinet FortiWeb"),                  # ← must NOT change
+    ("Cloudflare", "Cloudflare", "Cloudflare"),
+    ("Microsoft", "Azure Front Door", "Microsoft Azure Front Door"),
+    # capitalisation is not a second vendor
+    ("google cloud", "Google Cloud Armor", "Google Cloud Armor"),
+    # absences
+    (None, "FortiWeb", "FortiWeb"),
+    ("Fortinet", None, "Fortinet"),
+    ("", "FortiWeb", "FortiWeb"),
+    # a product that merely CONTAINS the vendor later on is not a repeat
+    ("Akamai", "Kona Akamai Shield", "Akamai Kona Akamai Shield"),
+]
+
+
+@pytest.mark.parametrize("vendor,product,expected", VENDOR_PRODUCT_CASES)
+def test_vendor_product_label(vendor, product, expected):
+    assert A.vendor_product_label(vendor, product) == expected
+
+
+def test_the_prodex_row_no_longer_repeats_its_vendor():
+    """The production row, end to end through the line the digest prints."""
+    classes = {
+        "www.prodexlabs.com": {
+            "device_class": "waf",
+            "confidence": "suspected",
+            "vendor_product": {
+                "vendor": "Google Cloud",
+                "product": "Google Cloud Armor",
+            },
+        }
+    }
+    line = A.asset_class_line("www.prodexlabs.com", classes)
+    assert "Google Cloud Armor" in line
+    assert "Google Cloud Google Cloud" not in line, f"vendor said twice: {line}"
+    assert "(dry-run classification)" in line
+
+
+def test_the_command_row_is_untouched():
+    """⚠ The half that already worked. A fix is not correct because it changed
+    the broken case; it is correct when it changed that and nothing else."""
+    classes = {
+        "api.commandcommcentral.com": {
+            "device_class": "waf",
+            "confidence": "suspected",
+            "vendor_product": {"vendor": "Fortinet", "product": "FortiWeb"},
+        }
+    }
+    line = A.asset_class_line("api.commandcommcentral.com", classes)
+    assert "Fortinet FortiWeb" in line
+
+
+def test_the_fixture_table_matches_the_portal_case_for_case():
+    """⛔ THE CROSS-LANGUAGE PIN. The portal's check carries this same table. If
+    a case is added or changed on one side only, the counts diverge and this
+    names it — the two implementations are not allowed to drift apart quietly,
+    which is exactly how the digest and the portal came to share one bug."""
+    assert len(VENDOR_PRODUCT_CASES) == 9, (
+        "the shared fixture table changed size — update "
+        "commandsentry-portal/tests/vendor-product-label-check.mjs to match, "
+        "and this count with it")
