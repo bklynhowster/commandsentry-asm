@@ -154,9 +154,12 @@ def fetch_candidates(conn) -> list[dict]:
 # SQL are present and tested; the wire stays blocked.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ⛔ The disarm story is unresolved (391). Flip to True ONLY in the same change
-# that wires disarm — never before.
-_DISARM_WIRED = False
+# ⛔ Disarm IS wired (relay 382-live-3, mechanism A-refined): run_light clears the
+# per-asset arm atomically after a per-scan-flag (enforcement_probe_live) fired
+# capture, so a sweep is fire-once and cannot leave the fleet standing-armed.
+# This flip is what makes --confirm actually fire; it lands in the SAME change as
+# the disarm wiring, never before.
+_DISARM_WIRED = True
 
 # The enqueued row's source. 'workflow_dispatch' = an operator-driven manual
 # fire (closest existing scan_source_t value). ⚠ Disarm option A would want a

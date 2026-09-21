@@ -191,9 +191,11 @@ def test_arm_enqueue_plan_covers_only_in_scope_hosts():
     assert [r["asset_id"] for r in plan["enqueue"]] == ["w"]
 
 
-def test_disarm_is_NOT_wired_in_the_shipped_module():
-    # ⛔ the shipped default: the live arm+enqueue is blocked until 391 rules disarm.
-    assert ES._DISARM_WIRED is False
+def test_disarm_IS_wired_now(relay_382_live_3=True):
+    # ⛔ 382-live-3 flipped this True together with the run_light fire-once wiring
+    # (mechanism A-refined). It is what unblocks --confirm. The disarm behaviour
+    # itself is pinned in test_enforcement_disarm.py.
+    assert ES._DISARM_WIRED is True
 
 
 def test_execute_sweep_refuses_and_writes_nothing_without_confirm():
