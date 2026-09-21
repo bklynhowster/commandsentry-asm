@@ -148,9 +148,139 @@ def test_the_module_carries_no_firing_code():
         "the planner references the live-fire env flag as code — it must not arm anything")
 
 
-def test_the_only_sql_is_a_read():
-    # No write belongs in a dry-run preview. Pin the actual SQL constant.
+def test_the_candidate_query_is_a_read():
+    # The candidate/preview query must be a SELECT (the writes live in the
+    # gated ARM/ENQUEUE constants, exercised separately below).
     sql = ES.FETCH_CANDIDATES_SQL.strip().lower()
     assert sql.startswith("select"), "the candidate query must be a SELECT"
     for w in ("insert", "update", "delete", "alter", "drop"):
-        assert w not in sql, f"the preview SQL contains a write keyword: {w!r}"
+        assert w not in sql, f"the candidate SQL contains a write keyword: {w!r}"
+
+
+# ── (relay 382-live-2) the ARM+ENQUEUE live path — hard-gated ────────────────
+
+class _FakeCur:
+    def __init__(self):
+        self.calls = []
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+
+
+class _FakeConn:
+    def __init__(self):
+        self.cur = _FakeCur()
+        self.committed = 0
+    def cursor(self):
+        return self.cur
+    def commit(self):
+        self.committed += 1
+
+
+def test_arm_enqueue_plan_covers_only_in_scope_hosts():
+    assets = [
+        _asset(asset_id="w", device_class="waf", ownership="owned"),
+        _asset(asset_id="c", device_class="waf", ownership="client"),        # client -> out
+        _asset(asset_id="o", device_class="origin_host", ownership="owned"),  # not protective -> out
+    ]
+    plan = ES.build_arm_enqueue_plan(assets)
+    assert plan["arm"] == ["w"]
+    assert [r["asset_id"] for r in plan["enqueue"]] == ["w"]
+
+
+def test_disarm_is_NOT_wired_in_the_shipped_module():
+    # ⛔ the shipped default: the live arm+enqueue is blocked until 391 rules disarm.
+    assert ES._DISARM_WIRED is False
+
+
+def test_execute_sweep_refuses_and_writes_nothing_without_confirm():
+    conn = _FakeConn()
+    r = ES.execute_sweep(conn, [_asset()], confirmed=False)
+    assert r["executed"] is False and r["armed"] == 0 and r["enqueued"] == 0
+    assert conn.cur.calls == [], "a non-confirmed sweep must write nothing"
+
+
+def test_confirm_gate_refuses_INDEPENDENTLY_of_the_disarm_gate():
+    # ⛔ relay 312 lesson — isolate each gate so neither masks the other. Even
+    # with disarm wired, no --confirm must still write nothing (the confirm gate
+    # standing alone). Without this, dropping the confirm check survives because
+    # the disarm gate happens to also refuse.
+    conn = _FakeConn()
+    r = ES.execute_sweep(conn, [_asset()], confirmed=False, disarm_wired=True)
+    assert r["executed"] is False and conn.cur.calls == [], (
+        "confirm gate must refuse on its own, not rely on the disarm gate")
+
+
+def test_execute_sweep_refuses_while_disarm_unwired_even_when_confirmed():
+    # ⛔ THE FIRE-ONCE GATE: --confirm but no disarm story -> zero writes, so a
+    # sweep can never leave the fleet standing-armed in the shipped state.
+    conn = _FakeConn()
+    r = ES.execute_sweep(conn, [_asset()], confirmed=True, disarm_wired=False)
+    assert r["executed"] is False
+    assert conn.cur.calls == [], "confirm without a wired disarm must write nothing"
+
+
+def test_execute_sweep_arms_and_enqueues_only_in_scope_when_fully_enabled():
+    # The enabled path's correctness — disarm_wired forced True in the TEST only
+    # (the shipped module keeps it False). One ARM + one ENQUEUE for the in-scope
+    # host; the client host is never touched.
+    conn = _FakeConn()
+    assets = [
+        _asset(asset_id="w", device_class="waf", ownership="owned"),
+        _asset(asset_id="c", device_class="waf", ownership="client"),
+    ]
+    r = ES.execute_sweep(conn, assets, confirmed=True, disarm_wired=True)
+    assert r["executed"] is True and r["armed"] == 1 and r["enqueued"] == 1
+    arms = [c for c in conn.cur.calls if "update public.assets" in c[0]]
+    enq = [c for c in conn.cur.calls if "insert into public.scan_queue" in c[0]]
+    assert len(arms) == 1 and arms[0][1] == {"asset_id": "w"}
+    assert len(enq) == 1
+    assert enq[0][1]["asset_id"] == "w"
+    assert enq[0][1]["source"] == ES.SWEEP_ENQUEUE_SOURCE
+    # ⛔ the client host id appears in NO write
+    assert not any("c" == (c[1] or {}).get("asset_id") for c in conn.cur.calls)
+
+
+def test_arm_sets_the_per_asset_flag_and_enqueue_sets_the_per_scan_flag():
+    assert "enforcement_probe_authorized = true" in ES.ARM_SQL
+    assert "enforcement_probe_live" in ES.ENQUEUE_SQL
+    assert "'light'" in ES.ENQUEUE_SQL  # a sweep row is always a light scan
+
+
+# ── (relay 381) the 2xx-vs-5xx signal in the fleet output ────────────────────
+
+def test_sweep_signal_distinguishes_passthrough_from_origin_error():
+    assert ES.sweep_attack_signal("not_enforcing", 200) == "not_enforcing_passthrough"
+    assert ES.sweep_attack_signal("not_enforcing", 302) == "not_enforcing_passthrough"
+    for s in (500, 502, 503, 599):
+        assert ES.sweep_attack_signal("not_enforcing", s) == "not_enforcing_origin_error", s
+
+
+def test_sweep_signal_leaves_enforcing_and_not_verified_alone():
+    assert ES.sweep_attack_signal("enforcing", 403) == "enforcing"
+    assert ES.sweep_attack_signal("not_verified", None) == "not_verified"
+
+
+# ── never cron: the sweep is a manual CLI, no workflow reaches the live path ──
+
+def test_no_workflow_invokes_the_sweep():
+    import pathlib
+    wf_dir = pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows"
+    for f in sorted(wf_dir.glob("*.yml")):
+        assert "enforcement_sweep" not in f.read_text(), (
+            f"{f.name} references the sweep — it must never be cron/workflow-driven")
+
+
+def test_the_only_write_path_is_execute_sweep_behind_confirm():
+    # The ARM/ENQUEUE SQL is reachable only through execute_sweep, which refuses
+    # unless confirmed. No other function in the module runs them.
+    import inspect
+    for name, fn in inspect.getmembers(ES, inspect.isfunction):
+        if name == "execute_sweep":
+            continue
+        src = inspect.getsource(fn)
+        assert "ARM_SQL" not in src and "ENQUEUE_SQL" not in src, (
+            f"{name} references the write SQL — writes must go through execute_sweep")
