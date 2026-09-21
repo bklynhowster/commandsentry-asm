@@ -145,6 +145,111 @@ def fetch_candidates(conn) -> list[dict]:
         return [dict(r) for r in cur.fetchall()]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# (relay 382-live-2) THE ARM+ENQUEUE LIVE PATH — one operator action, N hosts.
+# ⛔ SHIPPED BEHIND A HARD GATE. `_DISARM_WIRED` is False until 4.7 rules the
+# fire-once/disarm mechanism (relay 391 fork A/B/C) and it is wired. Until then
+# execute_sweep REFUSES to arm or enqueue even under --confirm, so a sweep can
+# NEVER leave the fleet standing-armed in a shipped state. The plan builder and
+# SQL are present and tested; the wire stays blocked.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ⛔ The disarm story is unresolved (391). Flip to True ONLY in the same change
+# that wires disarm — never before.
+_DISARM_WIRED = False
+
+# The enqueued row's source. 'workflow_dispatch' = an operator-driven manual
+# fire (closest existing scan_source_t value). ⚠ Disarm option A would want a
+# DISTINCT marker so only sweep-armed hosts self-disarm — that is an enum
+# migration and part of the 391 fork, not decided here.
+SWEEP_ENQUEUE_SOURCE = "workflow_dispatch"
+
+ARM_SQL = """
+update public.assets
+set enforcement_probe_authorized = true
+where asset_id = %(asset_id)s;
+"""
+
+ENQUEUE_SQL = """
+insert into public.scan_queue
+  (asset_id, intensity, authenticated, source, notes, enforcement_probe_live)
+values
+  (%(asset_id)s, 'light', false, %(source)s,
+   'relay 382 enforcement sweep', true);
+"""
+
+
+def build_arm_enqueue_plan(
+    assets: list[dict], *, ownership_scope: frozenset = DEFAULT_OWNERSHIP_SCOPE
+) -> dict:
+    """PURE. From the candidate list, the exact arm set + enqueue rows — for the
+    IN-SCOPE hosts only. A host that fails the ownership/class scope is never in
+    the plan; the plan is computed from the SAME in_scope() the preview uses, so
+    what you previewed is exactly what would fire.
+    """
+    scope = select_sweep_scope(assets, ownership_scope=ownership_scope)
+    return {
+        "arm": [a["asset_id"] for a in scope],
+        "enqueue": [
+            {"asset_id": a["asset_id"], "source": SWEEP_ENQUEUE_SOURCE}
+            for a in scope
+        ],
+    }
+
+
+def execute_sweep(
+    conn, assets: list[dict], *, confirmed: bool,
+    ownership_scope: frozenset = DEFAULT_OWNERSHIP_SCOPE,
+    disarm_wired: bool = _DISARM_WIRED,
+) -> dict:
+    """Arm + enqueue the in-scope hosts — the one-action N-host fire.
+
+    ⛔ TWO HARD REFUSALS before any write:
+      1. not `confirmed` → refuse. --confirm is the ONLY path that may write;
+         the default (preview) never reaches here.
+      2. not `disarm_wired` → refuse. Firing without a disarm story would leave
+         the fleet standing-armed, the exact risk 391 is resolving. Shipped as
+         False, so today this ALWAYS refuses even under --confirm.
+    Either refusal writes NOTHING and returns {armed: 0, enqueued: 0, ...}.
+    """
+    plan = build_arm_enqueue_plan(assets, ownership_scope=ownership_scope)
+    if not confirmed:
+        return {"executed": False, "reason": "not confirmed (preview only)",
+                "armed": 0, "enqueued": 0, "would_arm": len(plan["arm"])}
+    if not disarm_wired:
+        return {"executed": False,
+                "reason": "disarm mechanism not wired (relay 391 fork unresolved) "
+                          "— refusing to arm the fleet with no fire-once path",
+                "armed": 0, "enqueued": 0, "would_arm": len(plan["arm"])}
+    armed = enqueued = 0
+    with conn.cursor() as cur:
+        for asset_id in plan["arm"]:
+            cur.execute(ARM_SQL, {"asset_id": asset_id})
+            armed += 1
+        for row in plan["enqueue"]:
+            cur.execute(ENQUEUE_SQL, row)
+            enqueued += 1
+    return {"executed": True, "armed": armed, "enqueued": enqueued,
+            "reason": "armed + enqueued in-scope hosts"}
+
+
+# ── (relay 381) per-host attack-status signal: 2xx passthrough vs 5xx choke ──
+
+def sweep_attack_signal(verdict_state: str, attack_status: object) -> str:
+    """Fold the 381 refinement into the fleet output. A not_enforcing host that
+    passed the attack to a 2xx is a CLEAN passthrough; one that passed it to a
+    5xx is the origin visibly choking on the injection — higher signal, worth a
+    manual look (a lead, NOT proof of exploit). Enforcing/not_verified are
+    unchanged. Pure.
+    """
+    if verdict_state == "not_enforcing":
+        s = attack_status if isinstance(attack_status, int) else None
+        if s is not None and 500 <= s <= 599:
+            return "not_enforcing_origin_error"   # 5xx — origin reacted
+        return "not_enforcing_passthrough"        # 2xx/other — clean pass
+    return verdict_state
+
+
 def main(argv: list[str] | None = None) -> int:
     """DRY-RUN preview only. Prints the blast radius; sends nothing. Arming and
     firing the sweep is the routed follow-up (Howie's scope + fire)."""
@@ -159,6 +264,12 @@ def main(argv: list[str] | None = None) -> int:
                          "does not fire anything; it only widens what the preview "
                          "would list. Off by default.")
     ap.add_argument("--dsn", default=os.environ.get("SUPABASE_DSN", ""))
+    ap.add_argument("--confirm", action="store_true",
+                    help="ARM + ENQUEUE the in-scope hosts (the one-action N-host "
+                         "fire). Without this flag the run is a dry-run preview "
+                         "that writes nothing. ⛔ Even with it, execution is "
+                         "BLOCKED until the disarm mechanism (relay 391) is wired "
+                         "— the fleet must never be left standing-armed.")
     args = ap.parse_args(argv)
 
     if not args.dsn:
@@ -171,6 +282,30 @@ def main(argv: list[str] | None = None) -> int:
     from psycopg.rows import dict_row
     with psycopg.connect(args.dsn, row_factory=dict_row) as conn:
         candidates = fetch_candidates(conn)
+
+        if args.confirm:
+            # ⛔ The live arm+enqueue path. execute_sweep refuses (writes nothing)
+            # while _DISARM_WIRED is False — so today this echoes the plan and
+            # STOPS. --include-client is preview-only; --confirm never widens
+            # past the ROE allowlist without the operator also passing it.
+            scope_for_confirm = (None if args.include_client
+                                 else DEFAULT_OWNERSHIP_SCOPE)
+            eff_scope = (frozenset({a.get("ownership") for a in candidates})
+                         if scope_for_confirm is None else scope_for_confirm)
+            plan = build_arm_enqueue_plan(candidates, ownership_scope=eff_scope)
+            print(f"⛔ --confirm: {len(plan['arm'])} host(s) in scope WOULD be "
+                  f"armed + enqueued.", file=sys.stderr)
+            result = execute_sweep(conn, candidates, confirmed=True,
+                                   ownership_scope=eff_scope)
+            if result["executed"]:
+                conn.commit()
+            print(json.dumps(result, indent=2, default=str))
+            if not result["executed"]:
+                print(f"\n⛔ NOTHING WRITTEN — {result['reason']}.", file=sys.stderr)
+                return 3
+            print(f"\n✅ armed {result['armed']}, enqueued {result['enqueued']}.",
+                  file=sys.stderr)
+            return 0
 
     if ownership_scope is None:
         # --include-client: every ownership is in scope for the PREVIEW.
