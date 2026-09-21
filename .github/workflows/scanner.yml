@@ -129,6 +129,11 @@ on:
         required: false
         default: false
         type: boolean
+      enforcement_probe_live:
+        description: 'GO-LIVE for the 354a differential enforcement probe. true = a LIGHT scan on an asset ALREADY opted in via assets.enforcement_probe_authorized=true fires ONE benign baseline GET plus ONE URL-encoded attack-signature GET on the SAME path, to tell "WAF present" from "WAF enforcing". Default false = dry-run (records the plan, fires nothing). BOTH gates are required — this input AND the per-asset flag; either alone fires nothing. Unauthenticated, non-destructive, two requests, never retried, never escalated. Cron/workflow_run runs never set this -> always dry-run there.'
+        required: false
+        default: false
+        type: boolean
       crawl_first_mode:
         description: 'STEP 2 of the two-step diagnostic (use only if STEP 1 with stealth_ua=true bans). Runs katana FIRST to crawl the target, then nuclei against the discovered URL list ONLY — skips template-driven path enumeration entirely so the scanner never requests /wp-login, /admin, /.env, etc. unless the crawl found them. Mirrors what the Mac stringent scan actually does (Pass 1 against 529 crawled URLs). Composable with stealth_ua.'
         required: false
@@ -585,6 +590,18 @@ jobs:
         if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'light' && (steps.vpn_decision.outputs.use_vpn != 'true' || steps.vpn_slot.outputs.acquired == 'true' || github.event.inputs.skip_vpn == 'true') }}
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          # 354a go-live flag (relay 366). Default false -> probe_enforcement in
+          # run_light ships DRY-RUN: it records the plan and sends nothing. Only a
+          # manual dispatch with enforcement_probe_live=true arms it, and ONLY for
+          # assets opted in via assets.enforcement_probe_authorized=true — two
+          # AND-ed gates, either alone fires nothing. Cron/workflow_run triggers
+          # carry no input (empty -> 'false' -> dry-run), so scheduled light scans
+          # are unchanged.
+          # ⚠ THIS BELONGS ON THE LIGHT STEP, NOT HEAVY. probe_enforcement runs in
+          # run_light.py; ACTIVE_PROBE_LIVE (the fwbbot sibling this mirrors) sits
+          # on the heavy step because THAT probe runs in run_heavy.py. Moving this
+          # one there would leave the enforcement probe permanently dry-run.
+          ENFORCEMENT_PROBE_LIVE: ${{ github.event.inputs.enforcement_probe_live || 'false' }}
         run: |
           python scripts/scanner/run_light.py /tmp/scan_descriptor.json
 
