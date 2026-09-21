@@ -296,8 +296,16 @@ jobs:
           # parsed as SQL rather than as data.
 
           # Check for an already-active queue row for this asset.
+          # ⛔ SQL VIA STDIN, NOT -c (relay 371). psql interpolates :'var' on input
+          # read from a file/stdin, NOT on a -c string — on the runner's psql the
+          # -c form sent the literal `:'asset_id'` to the server and Scanner #1157
+          # died with "syntax error at or near ':'". `-f -` reads the heredoc from
+          # stdin, where interpolation happens. The heredoc is QUOTED (<<'SQL') so
+          # the shell expands nothing inside it; every value — asset_id AND
+          # stale_hours — arrives through -v, so no shell token reaches the SQL.
           EXISTING=$(psql "$SUPABASE_DSN" -t -A -v ON_ERROR_STOP=1 \
-            -v asset_id="$ASSET_ID" -c "
+            -v asset_id="$ASSET_ID" \
+            -v stale_hours="${STALE_RUN_HOURS:-8}" -f - <<'SQL'
             select queue_id || '|' || status
               from public.scan_queue
              where asset_id = :'asset_id'
@@ -305,27 +313,29 @@ jobs:
                -- Without this a dead runner's row blocks this asset forever.
                and (status = 'queued'
                     or (status = 'running'
-                        and started_at > now() - (interval '1 hour' * ${STALE_RUN_HOURS:-8})))
+                        and started_at > now() - (interval '1 hour' * :'stale_hours'::int)))
              order by triggered_at desc
              limit 1;
-          ")
+          SQL
+          )
 
           if [ -n "$EXISTING" ]; then
             EXIST_QUEUE_ID="${EXISTING%%|*}"
             EXIST_STATUS="${EXISTING##*|}"
             echo "::warning::Asset $ASSET_ID already has an active queue row ($EXIST_STATUS, queue_id=$EXIST_QUEUE_ID). Skipping INSERT — the existing row will be claimed by poll_queue."
           else
+            # ⛔ SQL VIA STDIN, NOT -c (relay 371) — same reason as the check above.
             psql "$SUPABASE_DSN" -v ON_ERROR_STOP=1 \
               -v asset_id="$ASSET_ID" \
               -v intensity="$INTENSITY" \
-              -v authenticated="$AUTHENTICATED" -c "
+              -v authenticated="$AUTHENTICATED" -f - <<'SQL'
               insert into public.scan_queue
                 (asset_id, intensity, authenticated, source, notes)
               values
                 (:'asset_id', :'intensity', :'authenticated'::boolean,
                  'workflow_dispatch',
                  'Ad-hoc fire via GH Actions UI (workflow_dispatch).');
-            "
+          SQL
             echo "Queued $INTENSITY scan for $ASSET_ID (authenticated=$AUTHENTICATED)."
           fi
 
