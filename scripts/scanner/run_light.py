@@ -315,6 +315,7 @@ from run_medium import (flush_progress, flush_planned_steps,  # noqa: E402
 from phase_source import source_for_tier, LIGHT  # noqa: E402
 from enforcement_probe import (  # noqa: E402  (354a — pure plan/gate/record)
     build_probe_plan, probe_is_authorised, record_probe_pair,
+    ENFORCEMENT_PROBE_ARTIFACT,
 )
 from stack_passive import (  # noqa: E402
     LIGHT_PASSIVE_TOOL,
@@ -3021,8 +3022,49 @@ WHERE queue_id       = %(queue_id)s;
 """
 
 
+# ── (relay 382-live-3) FIRE-ONCE disarm, mechanism A-refined (ruling 393) ────
+DISARM_ENFORCEMENT_SQL = """
+update public.assets
+set enforcement_probe_authorized = false
+where asset_id = %(asset_id)s;
+"""
+
+
+def _enforcement_probe_fired(ctx: ScanContext) -> bool:
+    """True iff THIS scan recorded a FIRED enforcement_probe capture (not a
+    dry-run plan). Read from the artifact the probe just recorded — one source
+    of truth."""
+    for tool_name, _fmt, content in ctx.artifacts:
+        if tool_name == ENFORCEMENT_PROBE_ARTIFACT:
+            try:
+                if json.loads(content).get("fired") is True:
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _sweep_fire_should_disarm(ctx: ScanContext) -> bool:
+    """FIRE-ONCE (382-live-3). After a probe that FIRED via the PER-SCAN flag
+    (scan_queue.enforcement_probe_live=true — a sweep row or a 376 portal fire),
+    clear the per-asset arm so the fleet returns to dry-run and a later stray
+    env-dispatch cannot re-fire it.
+
+    ⛔ Keyed off the per-scan flag ALREADY on the descriptor (382-live-1), NOT a
+    new enum — so no migration. An ENV-fired capture (354a-FIRE single dispatch,
+    enforcement_probe_live=false) is NOT auto-disarmed, preserving deliberate
+    manual single-host arms. Requires BOTH: the per-scan flag true AND the probe
+    actually fired (a dry-run plan disarms nothing)."""
+    return ((ctx.descriptor or {}).get("enforcement_probe_live") is True
+            and _enforcement_probe_fired(ctx))
+
+
 def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int]:
-    """Upsert findings + insert artifacts. Returns (inserted, updated)."""
+    """Upsert findings + insert artifacts. Returns (inserted, updated).
+
+    (382-live-3) When a sweep/portal-flag fire is detected, the per-asset disarm
+    runs in THIS SAME cursor/transaction (R1 atomic) — run() commits once after,
+    so a crash between capture and disarm cannot leave a fired host armed."""
     inserted = 0
     updated  = 0
     # ADR-001: stamp every emission with the runner's SHA + validation
@@ -3102,6 +3144,14 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 "size_bytes":    len(content_str.encode("utf-8")),
                 "content_jsonb": Json(content_obj),
             })
+
+        # (relay 382-live-3) FIRE-ONCE — atomic with the capture write above.
+        # Only a per-scan-flag fire (sweep / 376 portal) disarms; an env fire
+        # (354a-FIRE single dispatch) is left armed on purpose.
+        if _sweep_fire_should_disarm(ctx):
+            cur.execute(DISARM_ENFORCEMENT_SQL, {"asset_id": ctx.asset_id})
+            log(f"  enforcement fire-once: disarmed {ctx.asset_id} "
+                f"(per-scan flag fire; enforcement_probe_authorized -> false)")
 
     return inserted, updated
 
