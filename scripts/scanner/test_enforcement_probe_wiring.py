@@ -128,6 +128,55 @@ def test_the_existing_caller_safety_holds_through_the_real_descriptor(monkeypatc
 
 # ── the source is real: FETCH_ASSET_SQL actually selects the column ──────────
 
+def _queue_row_with(**kw):
+    q = _queue_row()
+    q.update(kw)
+    return q
+
+
+# ── the PER-SCAN live flag rides the descriptor (relay 382-live-1) ───────────
+
+def test_descriptor_carries_the_per_scan_live_flag_top_level():
+    d = PQ.build_descriptor(_queue_row_with(enforcement_probe_live=True),
+                            "run-1", _asset(True), None)
+    assert d["enforcement_probe_live"] is True
+    assert EP.AUTH_FLAG in d, "the per-asset flag must still be there too"
+
+
+def test_absent_per_scan_flag_becomes_false():
+    # an unflagged queue row (or before the column migration) -> False, not missing.
+    d = PQ.build_descriptor(_queue_row(), "run-1", _asset(True), None)
+    assert d["enforcement_probe_live"] is False
+
+
+def test_per_scan_flag_is_boolean_strict_in_the_descriptor():
+    d = PQ.build_descriptor(_queue_row_with(enforcement_probe_live="true"),
+                            "run-1", _asset(True), None)
+    assert d["enforcement_probe_live"] is False, "a truthy string must not arm"
+
+
+def test_the_per_scan_flag_and_the_per_asset_flag_are_SEPARATE():
+    # per-scan True but the ASSET not opted in — the descriptor carries both,
+    # distinctly, and the gate ANDs them.
+    d = PQ.build_descriptor(_queue_row_with(enforcement_probe_live=True),
+                            "run-1", _asset(False), None)
+    assert d["enforcement_probe_live"] is True
+    assert d[EP.AUTH_FLAG] is False
+
+
+def test_flagged_row_opens_the_real_gate_ONLY_with_per_asset_auth():
+    # producer -> consumer, no env: a flagged row on an opted-in asset fires;
+    # the same flag on a non-opted-in asset does not (the AND).
+    d_ok = PQ.build_descriptor(_queue_row_with(enforcement_probe_live=True),
+                               "run-1", _asset(True), None)
+    assert EP.probe_is_authorised(
+        d_ok, env={}, scan_live=d_ok["enforcement_probe_live"]) is True
+    d_no = PQ.build_descriptor(_queue_row_with(enforcement_probe_live=True),
+                               "run-1", _asset(False), None)
+    assert EP.probe_is_authorised(
+        d_no, env={}, scan_live=d_no["enforcement_probe_live"]) is False
+
+
 def test_fetch_asset_sql_selects_the_column():
     # Guards the other half: build_descriptor could read the key perfectly, but
     # if the SELECT never fetched it, asset.get() is always None and the flag is

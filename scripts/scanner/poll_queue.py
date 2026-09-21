@@ -300,6 +300,15 @@ def build_descriptor(
         # ENFORCEMENT_PROBE_LIVE in the env (two AND-ed gates).
         "enforcement_probe_authorized":
             asset.get("enforcement_probe_authorized") is True,
+        # (relay 382-live-1) The PER-SCAN enforcement-live signal — path A's
+        # second source of the probe's live half. Sourced from the scan_queue
+        # ROW (queue_row), NOT the asset: it says "fire on THIS scan", where
+        # enforcement_probe_authorized (above, from the asset) says "this host
+        # MAY be probed". run_light ANDs them, so both are still required. `is
+        # True` boolean-strict; default/absent (no migration yet, or an
+        # unflagged row) → False → the env is the only live source, unchanged.
+        "enforcement_probe_live":
+            queue_row.get("enforcement_probe_live") is True,
         "asset": {
             "asset_id":     asset["asset_id"],
             "name":         asset["name"],

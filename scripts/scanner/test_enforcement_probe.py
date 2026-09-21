@@ -60,6 +60,44 @@ def test_the_env_accepts_the_usual_truthy_words_only():
                                       env={EP.LIVE_ENV: off}) is False, off
 
 
+# ── the LIVE half's SECOND source: the per-scan flag (relay 382-live-1) ──────
+
+def test_the_per_scan_flag_is_a_second_live_source():
+    # per-scan scan_live True + per-asset auth True -> fires, even with env OFF.
+    assert EP.probe_is_authorised(
+        {EP.AUTH_FLAG: True}, env={}, scan_live=True) is True
+
+
+def test_the_per_scan_flag_STILL_requires_the_per_asset_auth():
+    # ⛔ THE INNER AND — the load-bearing line. A flagged scan on a host nobody
+    # opted in must NOT fire. This is the decisive mutant: flip AND->OR and this
+    # reds.
+    assert EP.probe_is_authorised({}, env={}, scan_live=True) is False
+    assert EP.probe_is_authorised(
+        {EP.AUTH_FLAG: False}, env={}, scan_live=True) is False
+
+
+def test_the_per_scan_flag_is_boolean_strict():
+    # A truthy string off a JSON descriptor must not arm anything.
+    for v in ("true", "1", 1, "yes", "false"):
+        assert EP.probe_is_authorised(
+            {EP.AUTH_FLAG: True}, env={}, scan_live=v) is False, v
+
+
+def test_neither_live_source_is_dry_run_even_when_authorised():
+    # auth True but no env and no per-scan flag -> the live half is unmet.
+    assert EP.probe_is_authorised({EP.AUTH_FLAG: True}, env={}) is False
+    assert EP.probe_is_authorised(
+        {EP.AUTH_FLAG: True}, env={}, scan_live=None) is False
+
+
+def test_the_env_source_still_works_with_no_scan_live_arg():
+    # ⛔ 354a-FIRE back-compat: the single-dispatch env path is unchanged when no
+    # per-scan flag is passed.
+    assert EP.probe_is_authorised({EP.AUTH_FLAG: True},
+                                  env={EP.LIVE_ENV: "1"}) is True
+
+
 # ── the plan ─────────────────────────────────────────────────────────────────
 
 def test_the_plan_puts_baseline_and_attack_on_the_SAME_path():
@@ -184,6 +222,34 @@ def test_the_caller_still_dry_runs_when_env_set_but_asset_not_opted_in(monkeypat
     ctx = _fake_ctx({})                    # env on, but no per-asset flag
     L.probe_enforcement(ctx)
     assert calls == [], "env alone fired a host that never opted in"
+
+
+def test_the_caller_fires_via_the_per_scan_flag_with_no_env(monkeypatch):
+    """Path A: a queue row flagged enforcement_probe_live fires WITHOUT the env,
+    as long as the asset is opted in."""
+    import run_light as L
+    calls = []
+    def fake(ctx, path):
+        calls.append(path)
+        return (403 if "?" in path else 200), "body", "text/html"
+    monkeypatch.setattr(L, "_probe_path_body", fake)
+    monkeypatch.delenv(EP.LIVE_ENV, raising=False)               # env OFF
+    ctx = _fake_ctx({EP.AUTH_FLAG: True, "enforcement_probe_live": True})
+    L.probe_enforcement(ctx)
+    assert len(calls) == 2, "the per-scan flag (with auth) should fire both halves"
+
+
+def test_the_caller_does_NOT_fire_via_the_flag_without_per_asset_auth(monkeypatch):
+    """⛔ THE INNER AND, at the caller: a flagged queue row on a host nobody
+    opted in sends nothing."""
+    import run_light as L
+    calls = []
+    monkeypatch.setattr(L, "_probe_path_body",
+                        lambda ctx, path: calls.append(path) or (200, "", None))
+    monkeypatch.delenv(EP.LIVE_ENV, raising=False)
+    ctx = _fake_ctx({"enforcement_probe_live": True})            # flag but NO auth
+    L.probe_enforcement(ctx)
+    assert calls == [], "flag without per-asset auth must not fire"
 
 
 # ── the ROE inventory declares it, and agrees with the module ────────────────

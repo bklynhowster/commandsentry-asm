@@ -999,7 +999,14 @@ def probe_refusal_signature(ctx: ScanContext) -> None:
 #   artifact is a plan, never evidence.
 def probe_enforcement(ctx: ScanContext) -> None:
     plan = build_probe_plan(ctx.hostname, "/", signature="sqli")
-    authorised = probe_is_authorised(ctx.descriptor)
+    # (relay 382-live-1) The live half now has two sources: the fleet env
+    # (354a-FIRE) OR the per-scan scan_queue.enforcement_probe_live flag carried
+    # on the descriptor (path A — one sweep/portal action fires N hosts). The
+    # per-asset auth half is unchanged and still ANDed inside probe_is_authorised.
+    authorised = probe_is_authorised(
+        ctx.descriptor,
+        scan_live=(ctx.descriptor or {}).get("enforcement_probe_live"),
+    )
     if not authorised:
         # DRY-RUN: record what WOULD be sent, send nothing.
         record_probe_pair(ctx.artifacts, plan, egress_ip=None,
