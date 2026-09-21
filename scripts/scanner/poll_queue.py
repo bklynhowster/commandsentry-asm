@@ -177,6 +177,7 @@ where queue_id = %(queue_id)s;
 FETCH_ASSET_SQL = """
 select a.asset_id, a.name, a.organization, a.type, a.kind, a.apex_domain,
        a.aliases, a.current_risk,
+       a.enforcement_probe_authorized,
        s.top_hosting_org
 from public.assets a
 left join public.asset_surface s on s.asset_id = a.asset_id
@@ -287,6 +288,18 @@ def build_descriptor(
         "asset_id":      queue_row["asset_id"],
         "intensity":     queue_row["intensity"],
         "authenticated": queue_row["authenticated"],
+        # (relay 360, 354a-live) The per-asset enforcement-probe opt-in, at the
+        # descriptor TOP LEVEL on purpose: run_light.probe_enforcement reads it
+        # via probe_is_authorised(ctx.descriptor) — the whole descriptor, NOT
+        # the nested "asset" block below. Put it under "asset" and the live
+        # opt-in would silently never reach the gate. `is True` keeps it
+        # boolean-strict end to end (DB boolean → JSON true/false →
+        # probe_is_authorised's `is True`); a NULL/absent value — no opt-in, or
+        # before the column migration lands — becomes False = dry-run. This flag
+        # ALONE never fires anything: the runner still also requires
+        # ENFORCEMENT_PROBE_LIVE in the env (two AND-ed gates).
+        "enforcement_probe_authorized":
+            asset.get("enforcement_probe_authorized") is True,
         "asset": {
             "asset_id":     asset["asset_id"],
             "name":         asset["name"],
