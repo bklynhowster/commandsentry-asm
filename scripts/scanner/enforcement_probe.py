@@ -84,17 +84,28 @@ class ProbePlan:
     signature: str            # which CRS tripwire ("sqli" / "xss")
 
 
-def probe_is_authorised(asset: dict | None, env: dict | None = None) -> bool:
-    """Fire live ONLY when BOTH the per-asset flag and the live env are set.
+def probe_is_authorised(
+    asset: dict | None, env: dict | None = None, *, scan_live: object = None
+) -> bool:
+    """Fire live ONLY when BOTH the live half and the per-asset auth half hold.
 
-    ⛔ TWO INDEPENDENT GATES, AND-ed. The env is the fleet-wide kill switch
-    (default off = dry-run everywhere); the flag is the per-asset opt-in Howie
-    sets on the ONE host he is probing. Either alone is not enough — the env on
-    without the flag must not fire a host nobody opted in, and the flag on
-    without the env must not fire on cron.
+    ⛔ TWO INDEPENDENT GATES, AND-ed — the AND is the load-bearing line. The
+    per-asset AUTH half (assets.enforcement_probe_authorized) says WHO may be
+    probed; the LIVE half says fire THIS run. Neither alone fires.
+
+    ⛔ THE LIVE HALF HAS TWO SOURCES (relay 382-live-1), OR-ed together:
+      • the fleet ENFORCEMENT_PROBE_LIVE env — single manual dispatch (354a-FIRE);
+      • `scan_live` — the per-scan scan_queue.enforcement_probe_live flag, which
+        lets ONE sweep/portal action fire N hosts (path A) without N dispatches.
+    Either source satisfies the live half; the AUTH half is still ALSO required,
+    so a flagged queue row on a host nobody opted in still does NOT fire, and a
+    cron run (no env, no flag) never fires. `scan_live` is boolean-strict — a
+    truthy string must not arm anything.
     """
     e = os.environ if env is None else env
-    if str(e.get(LIVE_ENV, "")).strip().lower() not in ("1", "true", "yes"):
+    env_live = str(e.get(LIVE_ENV, "")).strip().lower() in ("1", "true", "yes")
+    live_signal = env_live or (scan_live is True)
+    if not live_signal:
         return False
     a = asset or {}
     return a.get(AUTH_FLAG) is True
