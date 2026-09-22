@@ -111,6 +111,28 @@ def test_tiebreak_table_is_total_over_every_class_in_the_corpus():
     assert not missing, f"device_class values with no explicit tie-break rank: {missing}"
 
 
+def test_the_preexisting_four_keep_their_relative_order():
+    """⛔ (relay 414) Adding hosting_edge must not move any EXISTING pair.
+
+    The ranks were renumbered to slot hosting_edge between edge_firewall and
+    cdn; what must be invariant is the ORDER of the four that were already
+    there, because that order is the recorded status quo and moving it would
+    silently reclassify assets fleet-wide with no code change of intent.
+    """
+    import re
+    src = (HERE / "derive_device_class.py").read_text()
+    m = re.search(r"_CLASS_TIEBREAK = \{(.*?)\}", src, re.S)
+    assert m, "could not read _CLASS_TIEBREAK"
+    ranks = {k: int(v) for k, v in re.findall(r'"([a-z_]+)":\s*(\d+)', m.group(1))}
+    for cls in ("waf", "edge_firewall", "cdn", "origin_host"):
+        assert cls in ranks, f"{cls} lost its explicit rank"
+    assert ranks["waf"] < ranks["edge_firewall"] < ranks["cdn"] < ranks["origin_host"], (
+        f"the pre-existing precedence moved: {ranks}")
+    # and the new class sits where 414 documented it: below waf, above cdn.
+    assert ranks["edge_firewall"] < ranks["hosting_edge"] < ranks["cdn"], (
+        f"hosting_edge is not between edge_firewall and cdn: {ranks}")
+
+
 def test_ranking_is_documented_as_status_quo_not_precedence():
     """⭐ The comment is load-bearing. Without it a later reader inherits an
     accidental precedence model as though it had been ratified."""

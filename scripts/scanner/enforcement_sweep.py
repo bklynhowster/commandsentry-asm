@@ -18,9 +18,10 @@ authority the ROE gate uses — ROE_OWNERSHIP_ALLOWLIST = {owned, test_target}.
 A client-facing host is out of scope unless an operator explicitly widens the
 ownership scope, and that is Howie's call because the sweep is offensive traffic.
 
-⛔ SCOPE IS PROTECTIVE CLASSES ONLY. "Is it enforcing?" is only meaningful for a
-host with something in front — waf / edge_firewall / adc_lb. Same set the portal
-uses (src/lib/enforcement-status.mjs PROTECTIVE_CLASSES). An origin_host or a
+⛔ SCOPE IS DERIVED FROM THE ENFORCEMENT MECHANISM (relay 414 Axis 2), not from a
+hardcoded class list. "Is it enforcing?" is meaningful iff the edge has a
+mechanism that is not `none` — see scripts/scanner/enforcement_mechanism.py, and
+its mirror src/lib/enforcement-mechanism.mjs in the portal. An origin_host or a
 cloud_endpoint has nothing to probe for enforcement and is never in scope.
 
 Resolution mirrors the portal: the live device_class column unless it is unknown,
@@ -37,9 +38,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Bound to the SAME authority the ROE gate enforces at pull time — one list, not
 # a second copy that can drift. Widening it is a documented ROE decision there.
 from roe_gate import ROE_OWNERSHIP_ALLOWLIST  # noqa: E402
+from enforcement_mechanism import enforcement_applies  # noqa: E402
 
-# The "something is in front" classes — mirror of the portal's PROTECTIVE_CLASSES.
-PROTECTIVE_CLASSES = ("waf", "edge_firewall", "adc_lb")
+# ⛔ RETIRED AS THE MEMBERSHIP TEST (relay 414 Axis 2). This tuple used to BE the
+# population rule, hardcoded here and mirrored in the portal. It now records only
+# what the population was BEFORE the mechanism axis, so the blast-radius pin has
+# something to diff against. Membership is decided by enforcement_applies().
+#
+# Why it had to stop being the rule: a class list conflates "what is this box"
+# with "can enforcement be tested here", which forced every managed-hosting edge
+# to be either over-claimed as a WAF or silently dropped as a CDN.
+LEGACY_PROTECTIVE_CLASSES = ("waf", "edge_firewall", "adc_lb")
 
 # Default sweep ownership scope = the ROE allowlist. NEVER client by default.
 DEFAULT_OWNERSHIP_SCOPE = frozenset(ROE_OWNERSHIP_ALLOWLIST)
@@ -66,7 +75,7 @@ def in_scope(asset: dict, *, ownership_scope: frozenset = DEFAULT_OWNERSHIP_SCOP
     nothing to probe.
     """
     return (
-        resolved_device_class(asset) in PROTECTIVE_CLASSES
+        enforcement_applies(resolved_device_class(asset), _vendor_product(asset))
         and asset.get("ownership") in ownership_scope
     )
 
@@ -76,6 +85,19 @@ def select_sweep_scope(
 ) -> list[dict]:
     """Filter a candidate list to the in-scope hosts. Pure — no I/O."""
     return [a for a in assets if in_scope(a, ownership_scope=ownership_scope)]
+
+
+def _vendor_product(asset: dict) -> dict | None:
+    """The vendor_product DICT the mechanism rule reads (relay 414 Axis 2).
+
+    Distinct from _vendor() below, which flattens to one display string. The
+    mechanism needs vendor AND product because the rate-based test is a token
+    match over both ("Fortinet"/"FortiWeb" can arrive in either field).
+    Non-dict shapes (a bare string, null) resolve to None and fail closed to a
+    signature/none decision rather than raising.
+    """
+    vp = asset.get("vendor_product")
+    return vp if isinstance(vp, dict) else None
 
 
 def _vendor(asset: dict) -> str | None:
@@ -313,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     if ownership_scope is None:
         # --include-client: every ownership is in scope for the PREVIEW.
         scope = [a for a in candidates
-                 if resolved_device_class(a) in PROTECTIVE_CLASSES]
+                 if enforcement_applies(resolved_device_class(a), _vendor_product(a))]
         radius = {
             "dry_run": True, "fired": False, "ownership_scope": ["ALL (client included)"],
             "count": len(scope),

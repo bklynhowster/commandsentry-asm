@@ -122,8 +122,13 @@ def test_corpus_fwbbot_check_cited_with_independence_dependency():
 # ── Automattic x-ac edge-cache header (4.7 2026-07-22, Obsidian 153) ─────────
 def test_x_ac_header_fires_automattic_suspected():
     # Pressable/Automattic edge-cache header. One vendor_identifying high -> suspected.
+    # (relay 414 Axis 1) the class is now hosting_edge, not cdn: Automattic's edge
+    # ACTIVELY MEDIATES traffic to an origin Automattic also operates, and it
+    # abuse/rate-filters. `cdn` said "passive cache" and silently excluded it from
+    # enforcement verification; `waf` would have over-claimed a policy it does not
+    # have. The vendor attribution and the confidence bar are UNCHANGED.
     r = _classify({"http_headers": "x-ac: True\nserver: nginx"})
-    assert r["device_class"] == "cdn"
+    assert r["device_class"] == "hosting_edge"
     assert r["vendor_product"].get("vendor") == "Automattic"
     assert r["vendor_product_confidence"] == "suspected"
 
@@ -146,15 +151,17 @@ def test_x_ac_is_colon_anchored_not_x_accel():
     r = _classify({"http_headers": "x-accel-buffering: True\nserver: nginx"})
     assert r["vendor_product"] == {}, (
         f"x-accel-buffering false-matched a vendor: {r['vendor_product']}")
-    assert r["device_class"] != "cdn", (
-        "nginx's x-accel-* header was read as a CDN — the x-ac: colon anchor is gone")
+    assert r["device_class"] not in ("cdn", "hosting_edge"), (
+        "nginx's x-accel-* header was read as an Automattic edge — the x-ac: "
+        "colon anchor is gone")
 
     # The other half of the anchor, and the half that actually proves it is an
     # anchor rather than a deleted rule: the REAL token must still match.
     # Without this, dropping the x-ac rule entirely would pass the check above.
     real = _classify({"http_headers": "x-ac: MISS\nserver: nginx"})
-    assert real["device_class"] == "cdn", (
-        f"the real 'x-ac:' token no longer resolves to a CDN: {real['device_class']}")
+    assert real["device_class"] == "hosting_edge", (
+        f"the real 'x-ac:' token no longer resolves to the Automattic hosting "
+        f"edge: {real['device_class']}")
     assert real["vendor_product"] != {}, "x-ac: matched no vendor — rule may have been removed"
 
 

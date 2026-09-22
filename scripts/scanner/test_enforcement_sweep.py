@@ -42,8 +42,50 @@ def test_non_protective_classes_are_never_in_scope():
         assert ES.in_scope(_asset(device_class=c, dryrun_device_class=None)) is False, c
 
 
-def test_protective_set_matches_the_portal_set():
-    assert set(ES.PROTECTIVE_CLASSES) == {"waf", "edge_firewall", "adc_lb"}
+def test_the_legacy_set_is_kept_only_as_the_before_picture():
+    # (relay 414 Axis 2) This tuple STOPPED being the membership rule. It now
+    # records what the population was BEFORE the mechanism axis, so the
+    # blast-radius pin below has something honest to diff against.
+    assert set(ES.LEGACY_PROTECTIVE_CLASSES) == {"waf", "edge_firewall", "adc_lb"}
+
+
+def test_membership_is_DERIVED_from_the_mechanism_not_the_class_list():
+    # ⛔ THE 352-SHAPE MIRROR. The scanner and the portal must decide the
+    # population with ONE rule. in_scope no longer consults a class tuple; it
+    # asks enforcement_mechanism, whose twin is the portal's
+    # src/lib/enforcement-mechanism.mjs and whose fixture table is asserted on
+    # both sides. If this reds, the two halves have drifted apart.
+    from enforcement_mechanism import enforcement_applies
+    for c in ("waf", "edge_firewall", "adc_lb", "hosting_edge"):
+        assert enforcement_applies(c) is True, c
+        assert ES.in_scope(_asset(device_class=c)) is True, c
+    for c in ("cdn", "origin_host", "cloud_endpoint", "unknown", "unreadable"):
+        assert enforcement_applies(c) is False, c
+
+
+def test_hosting_edge_is_the_ONLY_new_entrant():
+    # ⛔ BLAST RADIUS. Relay 414 may add hosting_edge to the population and
+    # nothing else — and must drop nothing that was already in it.
+    every = ("waf", "edge_firewall", "adc_lb", "cdn", "origin_host",
+             "cloud_endpoint", "hosting_edge", "unknown", "unreadable")
+    entered = [c for c in every
+               if ES.in_scope(_asset(device_class=c))
+               and c not in ES.LEGACY_PROTECTIVE_CLASSES]
+    left = [c for c in ES.LEGACY_PROTECTIVE_CLASSES
+            if not ES.in_scope(_asset(device_class=c))]
+    assert entered == ["hosting_edge"], f"unexpected entrants: {entered}"
+    assert left == [], f"silently dropped: {left}"
+
+
+def test_a_rate_based_vendor_keeps_a_MISCLASSIFIED_host_in_scope():
+    # ⭐ THE LIVE DRIFT (414 O1): the www pair dry-runs to `waf` with vendor
+    # Automattic. It stays in scope either way, but the MECHANISM is what stops
+    # it being handed to a signature test it cannot answer.
+    from enforcement_mechanism import resolve_enforcement_mechanism
+    a = _asset(device_class="waf")
+    a["vendor_product"] = {"vendor": "Automattic"}
+    assert ES.in_scope(a) is True
+    assert resolve_enforcement_mechanism("waf", {"vendor": "Automattic"}) == "rate_behavioral"
 
 
 # ── scope: ownership — client is out by default ─────────────────────────────

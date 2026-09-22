@@ -56,6 +56,18 @@ DEFAULT_CLASS = "unknown"
 # 'unknown' default — a row must commit to a real role).
 ROW_DEVICE_CLASSES = {
     "edge_firewall", "waf", "adc_lb", "cdn", "cloud_endpoint", "origin_host",
+    # (relay 414 Axis 1) hosting_edge — a managed-hosting provider's OWN edge:
+    # it terminates TLS and actively mediates traffic to an origin the same
+    # provider operates. Not a passive cache (a CDN's job is caching, and
+    # "not enforcing" would misread it) and NOT a security appliance (its
+    # 403-filtering is abuse/rate protection, not a configured WAF policy, so it
+    # renders "Fronted by" and NEVER "Protected by").
+    #
+    # It exists because `cdn` silently excluded Automattic/Pressable from
+    # enforcement verification while `waf` would have over-claimed a policy that
+    # does not exist. Whether enforcement is TESTABLE here is a separate axis —
+    # scripts/scanner/enforcement_mechanism.py — not this class's job.
+    "hosting_edge",
 }
 # The two-bar test, made machine-checkable. Every row MUST declare which one it
 # clears, and the declaration MUST match its vendor_product (see validate_*).
@@ -410,7 +422,27 @@ def classify(observations: dict,
     # by a CDN, and forcing one field to hold two true things is the real defect.
     # Changing this order changes the decision math ⇒ soak reset (R2), and is
     # Howie's cost to accept. Do not "improve" it in passing.
-    _CLASS_TIEBREAK = {"waf": 0, "edge_firewall": 1, "cdn": 2, "origin_host": 3}
+    # (relay 414) hosting_edge inserted between edge_firewall and cdn. The
+    # RELATIVE ORDER OF THE PRE-EXISTING FOUR IS UNCHANGED — waf < edge_firewall
+    # < cdn < origin_host, exactly as before — so no existing pairwise
+    # comparison moves and no already-classified asset can flip. That invariant
+    # is pinned by test_the_preexisting_four_keep_their_relative_order.
+    #
+    # ⚠ THE PLACEMENT IS DELIBERATELY CONSERVATIVE, AND IT IS NOT THE WHOLE FIX.
+    # Ranked BELOW waf, a host carrying both the vendor-identifying Automattic
+    # tell (hosting_edge, 1 high) and a generic presence-only wafw00f tell
+    # (waf, 1 high) still resolves `waf` — the live state of
+    # www.commandcompanies.com and www.unimacgraphics.com. Arguably the
+    # vendor-identifying tell that NAMES the edge should outrank an anonymous
+    # "something filtered us", since on a Pressable host that something IS the
+    # hosting edge. But promoting hosting_edge above waf changes precedence for
+    # every future tie, and this table's own comment fences that as a ratified
+    # decision rather than a passing improvement — so it is routed to 4.7 as a
+    # fork, not taken here. The enforcement MECHANISM axis (Axis 2) already
+    # stops the harmful consequence: those hosts resolve rate_behavioral on the
+    # VENDOR, so a wrong class can no longer produce a wrong enforcement verdict.
+    _CLASS_TIEBREAK = {"waf": 0, "edge_firewall": 1, "hosting_edge": 2,
+                       "cdn": 3, "origin_host": 4}
     win_class, win = max(
         by_class.items(),
         key=lambda kv: (len(kv[1]["high"]), len(kv[1]["medium"]), len(kv[1]["low"]),
