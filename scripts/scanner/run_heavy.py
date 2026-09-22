@@ -1827,15 +1827,78 @@ def _write_active_probe_audit(ctx: HeavyScanContext, v: dict) -> None:
         log(f"  fwbbot_check probe: audit write failed ({e}) — non-fatal")
 
 
-def _classify_fwbbot_response(raw_headers: str) -> tuple[bool, bool, dict]:
+def passive_stack_answered(artifacts) -> bool:
+    """Did THIS host answer US earlier in THIS run, from THIS egress? PURE.
+
+    ⛔ THE CORROBORATOR FOR A NETWORK RESET (relay 430). A bare status-0 is
+    ambiguous on its own — it could be a ban, a dead host, or a flaky tunnel.
+    What disambiguates it is REACHABLE-THEN-UNREACHABLE *within one run*: if an
+    earlier phase already pulled a TLS cert or HTTP headers off this host over
+    the same egress, the host was demonstrably up and talking to us minutes ago,
+    so a later no-response is the edge cutting us off — not the host being down.
+
+    ⚠ THE EVIDENCE IS stack_id_passive, NOT waf_differential. The obvious
+    corroborator would have been the differential probe, and relay 430 reasoned
+    from it — but run_heavy calls run_fwbbot_check_probe_phase BEFORE
+    run_waf_differential_probe_phase, so at fwbbot time the differential has not
+    run and its artifact does not exist. Keying on it would have produced a
+    corroborator that is ALWAYS False: a silent no-op. stack_id_passive (plus
+    testssl/httpx) genuinely precede this phase.
+
+    A collected cert, response headers, or Set-Cookie names each require a real
+    answer from the host, so any one of them is sufficient.
+    """
+    for name, _kind, payload in (artifacts or []):
+        if name != "stack_id_passive":
+            continue
+        try:
+            sig = json.loads(payload) if isinstance(payload, str) else (payload or {})
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(sig, dict):
+            continue
+        if sig.get("cert") or sig.get("headers") or sig.get("set_cookie_names"):
+            return True
+    return False
+
+
+def _classify_fwbbot_response(raw_headers: str, *, reachable_earlier: bool = False,
+                              curl_rc: int | None = None) -> tuple[bool, bool, dict]:
     """Pure response classifier (4.7 Q4; unit-tested, no I/O). (observed, corroborated,
-    details). EVERY outcome other than a corroborated challenge leaves the signal dormant
-    — the empirical bar: assert NOTHING without corroboration. Four outcomes:
+    details). EVERY outcome other than a corroborated challenge leaves the FINGERPRINT
+    signal dormant — the empirical bar: assert NOTHING without corroboration. Outcomes:
       challenge_elicited          — 3xx whose Location IS /fwbbot_check → observed+corroborated (the SIGNAL)
+      network_reset               — NO HTTP response at all (relay 430) → enforcement evidence, see below
       banned                      — 403/429 WAF block               → not corroborated
       path_mentioned_not_redirect — /fwbbot_check in headers, not a redirect target → observed, NOT corroborated (4.7 Q7 honeypot guard)
       no_challenge                — normal response, no /fwbbot_check → neither
-    corroborated is TRUE only for the redirect-to-challenge shape; nothing else can set it."""
+    corroborated is TRUE only for the redirect-to-challenge shape; nothing else can set it.
+
+    ⭐ network_reset (relay 430). The live positive-control fire against
+    commandcommcentral.com returned status 0 — a network-level reset, which is
+    FortiWeb's HARDEST enforcement (the 2026-04-13 ban: TLS reset, exit 35, HTTP
+    000). The old classifier had no branch for it, so the single host we KNOW
+    enforces logged a false `no_challenge`/observed=False. Firing the 13
+    suspected hosts on that detector would have read every network ban as "no
+    signal".
+
+    ⛔ TWO DIFFERENT CLAIMS, TWO DIFFERENT FIELDS — this is the part that must not
+    be collapsed:
+      * `corroborated` means "the /fwbbot_check CHALLENGE ENDPOINT was observed".
+        It is FortiWeb-VENDOR-IDENTIFYING evidence and device_class_runner feeds
+        it to the fortiweb_challenge_endpoint_fwbbot_check fingerprint. A network
+        reset proves NOTHING about which vendor reset us — any edge can drop a
+        connection — so network_reset MUST NOT set it. Setting it would fire a
+        FortiWeb vendor fingerprint off evidence that names no vendor.
+      * `enforcement_corroborated` (NEW) means "this edge demonstrably ENFORCED
+        against us". Vendor-agnostic, and what the enforcement verdict reads.
+    A corroborated challenge sets both; a corroborated reset sets only the second.
+
+    ⚠ AND THE RESET IS ONLY CORROBORATED WHEN THE HOST ANSWERED EARLIER IN THIS
+    RUN (`reachable_earlier`). Uncorroborated it stays observed-but-unproven, the
+    same discipline 407 applied to `banned`: with no baseline we cannot tell
+    "blocked us" from "was never up".
+    """
     hdrs = raw_headers or ""
     status = 0
     loc = ""
@@ -1850,15 +1913,31 @@ def _classify_fwbbot_response(raw_headers: str) -> tuple[bool, bool, dict]:
     path_present = "fwbbot_check" in hdrs.lower()
     loc_is_challenge = "/fwbbot_check" in loc.lower()
     is_redirect = status in (301, 302, 303, 307, 308)
+    # No status line AND no header bytes at all = the request got no HTTP
+    # response. Gated on BOTH so a malformed-but-present response is not
+    # mistaken for a reset.
+    no_response = status == 0 and not hdrs.strip()
+    enforcement_corroborated = False
     if loc_is_challenge and is_redirect:
         result, observed, corroborated = "challenge_elicited", True, True
+        enforcement_corroborated = True      # a challenge IS the edge enforcing
+    elif no_response:
+        result, observed, corroborated = "network_reset", True, False
+        enforcement_corroborated = bool(reachable_earlier)
     elif status in (403, 429):
         result, observed, corroborated = "banned", path_present, False
     elif path_present:
         result, observed, corroborated = "path_mentioned_not_redirect", True, False
     else:
         result, observed, corroborated = "no_challenge", False, False
-    return observed, corroborated, {"result": result, "status": status, "location": loc[:200]}
+    details = {"result": result, "status": status, "location": loc[:200],
+               "enforcement_corroborated": enforcement_corroborated}
+    if result == "network_reset":
+        # Forensics: WHY there was no response. 35=TLS error, 7=connect refused,
+        # 28=timeout, 52=empty reply — all ban-shaped, recorded not interpreted.
+        details["curl_rc"] = curl_rc
+        details["reachable_earlier_this_run"] = bool(reachable_earlier)
+    return observed, corroborated, details
 
 
 def _probe_curl_args(hostname: str, egress_mode: str, interface: str) -> list[str]:
@@ -1879,10 +1958,20 @@ def _probe_curl_args(hostname: str, egress_mode: str, interface: str) -> list[st
 
 def _fire_fwbbot_check_probe(ctx: HeavyScanContext, egress: str) -> tuple[bool, bool, dict]:
     """ONE detect-only bot-shaped GET via the asset's egress, then the pure classifier.
-    Detect the /fwbbot_check challenge PRESENCE — never follow it, never solve it."""
+    Detect the /fwbbot_check challenge PRESENCE — never follow it, never solve it.
+
+    (relay 430) The curl exit code and the same-run reachability evidence are now
+    carried into the classifier so a NO-RESPONSE can be told apart from a dead
+    host. `rc` was previously discarded as `_rc`; a network ban is exactly the
+    case where it is the most informative thing we have.
+    """
     args = _probe_curl_args(ctx.hostname, egress, _PROBE_EGRESS_INTERFACE)
-    _rc, out, _ = run_cmd(args, timeout=25)
-    observed, corroborated, det = _classify_fwbbot_response(out or "")
+    rc, out, _ = run_cmd(args, timeout=25)
+    observed, corroborated, det = _classify_fwbbot_response(
+        out or "",
+        reachable_earlier=passive_stack_answered(ctx.artifacts),
+        curl_rc=rc,
+    )
     det["egress_mode"] = egress
     det["egress_interface"] = _PROBE_EGRESS_INTERFACE or None
     return observed, corroborated, det
@@ -1909,9 +1998,19 @@ def run_fwbbot_check_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     else:
         observed, corroborated, pd = _fire_fwbbot_check_probe(ctx, egress)
         details.update(pd)
-        log(f"  fwbbot_check probe: LIVE detect-only egress={egress} — result={details.get('result')} observed={observed} corroborated={corroborated}")
+        log(f"  fwbbot_check probe: LIVE detect-only egress={egress} — "
+            f"result={details.get('result')} observed={observed} "
+            f"corroborated={corroborated} "
+            f"enforcement_corroborated={details.get('enforcement_corroborated')}")
+    # (relay 430) enforcement_corroborated is lifted OUT of details onto the
+    # verdict top level, beside `corroborated`, because they are peers: one says
+    # "the FortiWeb challenge endpoint was observed" (vendor-identifying), the
+    # other says "this edge enforced against us" (vendor-agnostic). The portal
+    # reads the second; device_class_runner reads only the first. Burying one
+    # inside details while the other sits at top level is how they get conflated.
     verdict = {"schema": 1, "probe_class": "fwbbot_check_elicit", "authorized": authorized,
                "dry_run": not fire, "observed": observed, "corroborated": corroborated,
+               "enforcement_corroborated": bool(details.get("enforcement_corroborated")),
                "details": details}
     ctx.artifacts.append(("stack_id_fwbbot_check", "json", json.dumps(verdict)))
     _write_active_probe_audit(ctx, verdict)
