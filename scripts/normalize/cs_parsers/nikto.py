@@ -30,6 +30,7 @@ from typing import Optional
 
 from .common import (
     canonical_asset_id,
+    deterministic_finding_key,
     is_contentless_array_ref,
     parse_options_methods,
     is_fqdn_in_scope,
@@ -379,7 +380,13 @@ def parse_nikto_file(
                 host_ip=target_ip,
                 port=target_port or 443,
                 protocol="https" if (target_port or 443) == 443 else "http",
-                normalized_key=nkey,
+                # (relay 436 T2) never NULL. A class key wins when the header
+                # buckets produced one (139's consolidation); otherwise a
+                # deterministic per-finding key derived from the
+                # volatile-stripped text, so the row dedups run-to-run instead
+                # of leaning on an asset+title fallback.
+                normalized_key=deterministic_finding_key(
+                    "nikto", nkey, desc, f"id-{test_id}"),
             ))
             continue
 

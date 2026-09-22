@@ -4305,6 +4305,7 @@ NIKTO_FINDING_RE = re.compile(r"^\[(\d+)\]\s+(\S+?):\s+(.+)$")
 # problem must degrade identity hygiene, never crash a scan.
 try:
     from cs_parsers.common import (  # noqa: E402
+        deterministic_finding_key,
         is_contentless_array_ref,
         parse_options_methods,
         strip_volatile_tokens,
@@ -4319,6 +4320,11 @@ except Exception:  # pragma: no cover
 
     def parse_options_methods(_t):
         return None
+
+    def deterministic_finding_key(source, class_key, identity_text, fallback):
+        if class_key:
+            return class_key
+        return f"{source}:{slug_for_identity(identity_text, fallback)}"
 
 
 def slug_for_identity(text: str, fallback: str) -> str:
@@ -4446,7 +4452,9 @@ def parse_nikto_findings(
             ),
             tags=["nikto"],
             raw_excerpt=body[:1500],
-            normalized_key=norm_key,
+            # (relay 436 T2) never NULL — see cs_parsers.common.
+            normalized_key=deterministic_finding_key(
+                "nikto", norm_key, body, f"finding-{we_promoted}"),
         ))
 
     return findings, nikto_emitted, we_promoted

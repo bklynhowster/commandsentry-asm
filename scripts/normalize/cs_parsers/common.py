@@ -561,7 +561,22 @@ _ARRAY_REF_RE = re.compile(r"\barray\(0x[0-9a-f]+\)", re.I)
 # is the same unbounded-duplicate defect in a different costume.
 _VOLATILE_TOKEN_RES = (
     re.compile(r"0x[0-9a-f]{6,}", re.I),                                # heap/pointer addresses
-    re.compile(r"\b\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}(:\d{2})?\b", re.I),  # ISO timestamps
+    # ⛔ (relay 438 fast-follow) TIMESTAMPS, BOTH SHAPES — and the trailing \b is
+    # why the old one only half-worked. On "2026-09-15T02:10:07Z" there is NO
+    # word boundary between the final "7" and "Z", so `(:\d{2})?\b` could not
+    # match the seconds; the engine backtracked to "…T02:10" and left ":07Z"
+    # behind. Two findings a second apart then produced DIFFERENT identities —
+    # the same mint-every-scan defect, in the same costume, latent because
+    # nothing carries a T…Z key today. The space form worked only by accident:
+    # its seconds ARE followed by a boundary.
+    # Now: seconds, fractional seconds and the Z / ±HH:MM offset are all consumed,
+    # and the trailing \b is gone. now_iso() in this package emits exactly T…Z,
+    # so this is the shape most likely to appear next.
+    re.compile(
+        r"\b\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?"
+        r"(?:z|[+-]\d{2}:?\d{2})?",
+        re.I,
+    ),                                                                  # ISO timestamps
     re.compile(r"\b\d{10,13}\b"),                                      # epoch seconds / millis
     re.compile(r"\bnonce[=:]\s*[a-z0-9._-]+", re.I),                    # nonce=...
     re.compile(r"\bsessionid[=:]\s*[a-z0-9._-]+", re.I),                # sessionid=...
@@ -621,3 +636,35 @@ def parse_options_methods(text):
             seen.add(up)
             out.append(up)
     return out or None
+
+
+def deterministic_finding_key(source, class_key, identity_text, fallback):
+    """A non-null, run-STABLE normalized_key for every finding (relay 436 T2).
+
+    ⛔ WHY NULL WAS NEVER SAFE. 776 of ~1000 Command findings carry
+    normalized_key = NULL. A null key cannot dedup on its own; today an
+    asset+title fallback is quietly holding the line. That is a fragile base —
+    any fallback change, or two findings sharing a title, and the Prodex-style
+    duplication arrives fleet-wide. The fix is not to police nulls, it is to
+    stop producing them.
+
+    TWO KINDS OF KEY, and the distinction is the whole design:
+      * a CLASS key (e.g. "class:tech-header-disclosure") deliberately COLLAPSES
+        a family of findings into one row. When a producer has one, it wins —
+        never override it, or 139's ratified consolidation breaks.
+      * otherwise, a PER-FINDING key derived from the volatile-stripped identity
+        text. Stable run-to-run (that is what strip_volatile_tokens buys), and
+        distinct between genuinely different findings.
+
+    ⚠ `source` is part of the key so two tools reporting the same text stay two
+    findings — cross-source collapse is the curated map's job, not an accident
+    of slug equality.
+
+    ⚠ NEVER RETURNS NONE. The fallback is the caller's stable per-finding id, so
+    even an empty/garbage identity text yields a usable key rather than a null.
+    """
+    if class_key:
+        return class_key
+    slug = re.sub(r"[^a-z0-9]+", "-",
+                  strip_volatile_tokens(identity_text or "").lower())[:60].strip("-")
+    return f"{source}:{slug or fallback}"
