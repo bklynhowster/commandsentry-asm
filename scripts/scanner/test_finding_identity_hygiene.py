@@ -117,3 +117,87 @@ def test_the_parser_uses_the_shared_slug_builder_not_a_local_regex():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ── relay 436: ONE RULE, BOTH nikto PARSERS ─────────────────────────────────
+# ⛔ WHY THIS EXISTS. The ⑤/⑥ guard landed here (run_medium) on 2026-09-15 and
+# worked — but nikto has TWO parser paths and only this one was fixed.
+# cs_parsers/nikto.py::parse_nikto_file (run_normalize + the nikto backfill)
+# still emitted the raw ARRAY(0x…). One tool, two parsers, one fixed is the
+# shape that produced the shared vendor-digest bug in relay 346/352, so the rule
+# moved to cs_parsers/common.py and BOTH import it.
+
+def _ssot():
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "normalize"))
+    from cs_parsers import common
+    return common
+
+
+def test_run_medium_uses_the_SSOT_not_a_private_copy():
+    """⛔ THE POINT OF THE CONSOLIDATION. If run_medium ever re-grows its own
+    copy, the two parsers can drift apart again — which is exactly how this
+    defect survived a fix for a week on the path nobody re-read."""
+    ssot = _ssot()
+    assert rm.is_contentless_array_ref is ssot.is_contentless_array_ref, (
+        "run_medium is not using the shared is_contentless_array_ref")
+    assert rm.strip_volatile_tokens is ssot.strip_volatile_tokens, (
+        "run_medium is not using the shared strip_volatile_tokens")
+
+
+def test_the_OTHER_parser_drops_the_contentless_arrayref():
+    """cs_parsers/nikto.py — the path that was NEVER guarded."""
+    import inspect, sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "normalize"))
+    from cs_parsers import nikto
+    src = inspect.getsource(nikto)
+    assert "is_contentless_array_ref(desc)" in src, (
+        "cs_parsers/nikto.py does not drop the contentless ARRAYREF — the "
+        "duplicate-minting path is still open on run_normalize / the backfill")
+
+
+def test_an_ARRAYREF_yields_the_SAME_key_across_two_runs():
+    """4.7's fixture, exactly: two nikto processes, two heap addresses, ONE key.
+
+    This is the property that makes the row dedup instead of accumulating. It
+    must hold even though the record is ALSO dropped — the drop fixes this
+    tool, the stable key is what stops the next tool with a nonce or an address
+    from doing the same thing.
+    """
+    run1 = "OPTIONS: Allowed HTTP Methods: ARRAY(0x561de6ae2e40)"
+    run2 = "OPTIONS: Allowed HTTP Methods: ARRAY(0x559baf530058)"
+    run3 = "OPTIONS: Allowed HTTP Methods: ARRAY(0x55df6287a7d0)"   # the real 09-15 one
+    keys = {rm.slug_for_identity(b, "fb") for b in (run1, run2, run3)}
+    assert len(keys) == 1, f"three runs produced {len(keys)} identities: {keys}"
+
+
+def test_a_REAL_options_list_is_parsed_and_kept():
+    """A genuine method list has content, so it is NOT dropped — and its
+    identity is derived from the METHODS, which are the same every scan."""
+    ssot = _ssot()
+    assert ssot.parse_options_methods(
+        "OPTIONS: Allowed HTTP Methods: GET, HEAD, POST, OPTIONS") == \
+        ["GET", "HEAD", "POST", "OPTIONS"]
+    # whitespace / ordering noise must not change the answer
+    assert ssot.parse_options_methods("Allowed HTTP Methods: GET,  HEAD") == \
+           ssot.parse_options_methods("Allowed HTTP Methods: GET, HEAD")
+    # and the contentless case is distinguishable from an empty list
+    assert ssot.parse_options_methods(
+        "OPTIONS: Allowed HTTP Methods: ARRAY(0xdeadbeef)") is None
+
+
+def test_a_PARTIALLY_corrupt_options_line_is_contentless_not_partially_parsed():
+    """⛔ ISOLATE THE ARRAYREF GUARD (the 424 unfalsifiable-gate lesson).
+
+    A pure ARRAY(0x…) line returns None anyway, because nothing in it is
+    method-shaped — so it does NOT exercise the guard, and a mutation removing
+    the guard survived every other assertion here. The case that distinguishes
+    it is a MIXED line: nikto got part of the list out and then printed a
+    reference. That output is CORRUPT, not partial. Parsing 'GET' out of it
+    would publish a method list we never actually observed, and the heap address
+    is still sitting in the text.
+    """
+    ssot = _ssot()
+    assert ssot.parse_options_methods(
+        "OPTIONS: Allowed HTTP Methods: GET, ARRAY(0x561de6ae2e40)") is None, (
+        "a line containing an ARRAYREF was partially parsed — the guard is gone")

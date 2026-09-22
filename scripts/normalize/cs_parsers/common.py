@@ -535,3 +535,89 @@ def infer_category_from_tags(tags: list[str], template_id: str = "") -> str:
     if any(x in t for x in ("cve", "wordpress", "wp", "wp-plugin", "wp-theme", "package")):
         return "supply_chain"
     return "other"
+
+
+# ── FINDING-IDENTITY HYGIENE — SSOT (relay 436) ─────────────────────────────
+# ⛔ WHY THESE LIVE HERE AND NOT IN run_medium.py. The ⑤/⑥ fix (2026-09-15,
+# c3890ac9) killed the unbounded nikto duplicate — but only on ONE of the two
+# nikto parser paths. run_medium.py::parse_nikto_findings got the guard;
+# cs_parsers/nikto.py::parse_nikto_file (used by run_normalize.py and
+# backfill_nikto_header_dedup.py) never did, and still emits the raw
+# `ARRAY(0x…)` into its title. Two parsers for one tool, one of them fixed, is
+# exactly the shape that produced the shared vendor-digest bug in relay 346/352.
+# So the rule moves to the boundary BOTH paths already import from — the same
+# direction the nikto header classifier SSOT took in 4.7 I1.
+#
+# A Perl ARRAYREF that nikto printed instead of dereferencing: the method list
+# was never captured, so there is no content to report.
+_ARRAY_REF_RE = re.compile(r"\barray\(0x[0-9a-f]+\)", re.I)
+
+# Run-varying tokens that must never reach a finding IDENTITY. Each is here
+# because it appeared in a real finding_id or is the obvious neighbour of one.
+# ⚠ PORTED VERBATIM from run_medium.py's list (c3890ac9), order preserved.
+# ⛔ The ISO-timestamp row is load-bearing and was the one I first dropped —
+# test_timestamps_and_epochs_are_stripped caught it immediately. A "cert expires
+# <date> <time>" finding would otherwise mint a new identity every scan, which
+# is the same unbounded-duplicate defect in a different costume.
+_VOLATILE_TOKEN_RES = (
+    re.compile(r"0x[0-9a-f]{6,}", re.I),                                # heap/pointer addresses
+    re.compile(r"\b\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}(:\d{2})?\b", re.I),  # ISO timestamps
+    re.compile(r"\b\d{10,13}\b"),                                      # epoch seconds / millis
+    re.compile(r"\bnonce[=:]\s*[a-z0-9._-]+", re.I),                    # nonce=...
+    re.compile(r"\bsessionid[=:]\s*[a-z0-9._-]+", re.I),                # sessionid=...
+)
+
+
+def is_contentless_array_ref(text):
+    """nikto printed a Perl ARRAY reference instead of the list itself.
+
+    A finding whose own text says it captured nothing is not a finding — drop
+    it rather than minting a new row for it every scan.
+    """
+    return bool(_ARRAY_REF_RE.search(text or ""))
+
+
+def strip_volatile_tokens(text):
+    """Replace run-varying tokens with a STABLE placeholder before slugging.
+
+    ⚠ REPLACE, NOT DELETE. The placeholder is a word so two findings differing
+    ONLY in the volatile token collapse to one identity, while a finding that
+    genuinely has no such token is untouched. Deleting would merge
+    "foo-0xAB-bar" with "foo-bar", which are not the same finding.
+    """
+    out = text or ""
+    for rx in _VOLATILE_TOKEN_RES:
+        out = rx.sub("x", out)
+    return out
+
+
+# nikto test 999990 prints the allowed-method list. When the deref worked it is
+# a real comma/space separated list; when it did not, it is the ARRAYREF above.
+_OPTIONS_METHODS_RE = re.compile(
+    r"allowed\s+http\s+methods\s*:\s*(.+?)\s*$", re.I)
+_HTTP_METHOD_RE = re.compile(
+    r"\b(GET|HEAD|POST|PUT|DELETE|CONNECT|OPTIONS|TRACE|PATCH|PROPFIND|"
+    r"PROPPATCH|MKCOL|COPY|MOVE|LOCK|UNLOCK)\b", re.I)
+
+
+def parse_options_methods(text):
+    """The HTTP methods nikto's OPTIONS test actually reported, or None.
+
+    Returns an UPPERCASED, de-duplicated, ORDER-PRESERVED list so the same
+    server yields the same list every scan — order-invariance is what makes the
+    derived identity stable. Returns None when the list was never captured (the
+    ARRAYREF case) or when nothing method-shaped is present, so callers can tell
+    "no content" from "an empty list".
+    """
+    if not text or is_contentless_array_ref(text):
+        return None
+    m = _OPTIONS_METHODS_RE.search(text)
+    if not m:
+        return None
+    seen, out = set(), []
+    for tok in _HTTP_METHOD_RE.findall(m.group(1)):
+        up = tok.upper()
+        if up not in seen:
+            seen.add(up)
+            out.append(up)
+    return out or None
