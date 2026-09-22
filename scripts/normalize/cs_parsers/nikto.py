@@ -30,6 +30,8 @@ from typing import Optional
 
 from .common import (
     canonical_asset_id,
+    is_contentless_array_ref,
+    parse_options_methods,
     is_fqdn_in_scope,
     FindingEvent,
     infer_asset_id,
@@ -333,11 +335,28 @@ def parse_nikto_file(
             _hb = _classify_header_line(desc)
             if _hb:
                 severity, category, nkey, title = _hb
+            elif is_contentless_array_ref(desc):
+                # ⛔ (relay 436 T1) nikto printed a Perl ARRAYREF instead of
+                # dereferencing the method list, so there is NO content to
+                # report — and the heap address inside it is different every
+                # run, which is what made this mint a brand-new "finding" on
+                # every scan forever. run_medium's parser dropped this on
+                # 2026-09-15 (c3890ac9); THIS parser — used by run_normalize and
+                # the nikto backfill — never got the guard. Same rule, now
+                # shared from cs_parsers/common.py so there is one of it.
+                continue
             else:
                 severity = _severity_for_text(desc)
                 category = _category_for_text(desc)
                 nkey = None
-                title = f"nikto[{test_id}]: {desc[:120]}"
+                methods = parse_options_methods(desc)
+                if methods:
+                    # A REAL method list: name it, and derive the identity from
+                    # the METHODS rather than the raw line, so the same server
+                    # yields the same finding every scan.
+                    title = f"nikto[{test_id}]: HTTP methods allowed: {', '.join(methods)}"
+                else:
+                    title = f"nikto[{test_id}]: {desc[:120]}"
             fid = stable_finding_id(event_asset_id, "nikto", f"id-{test_id}", matched_at)
             if fid in seen_finding_ids:
                 continue

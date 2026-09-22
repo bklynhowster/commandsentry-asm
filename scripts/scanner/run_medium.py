@@ -4291,36 +4291,34 @@ NIKTO_FINDING_RE = re.compile(r"^\[(\d+)\]\s+(\S+?):\s+(.+)$")
 #   ⑥ GENERAL: strip volatile tokens from any slug before it becomes an identity. ⑤ fixes
 #     this host and this tool; ⑥ is what stops the next tool with a nonce, a heap address or
 #     an embedded timestamp from doing the same thing again.
-_ARRAY_REF_RE = re.compile(r"\barray\(0x[0-9a-f]+\)", re.I)
+# ── (relay 436) THE RULE MOVED TO THE SSOT, and this is why ─────────────────
+# ⑤/⑥ landed here on 2026-09-15 (c3890ac9) and worked: this parser drops the
+# contentless record and its slug is stable run-to-run. But nikto has TWO parser
+# paths, and only this one was fixed — cs_parsers/nikto.py::parse_nikto_file
+# (run_normalize.py + backfill_nikto_header_dedup.py) still emitted the raw
+# ARRAY(0x…). One tool, two parsers, one of them fixed is the shape that
+# produced the shared vendor-digest bug in relay 346/352.
+#
+# So the rule now lives at the boundary BOTH paths already import from —
+# cs_parsers/common.py — exactly as the nikto header classifier SSOT did (4.7
+# I1 above). Fail-open for the same reason that one is: a classifier import
+# problem must degrade identity hygiene, never crash a scan.
+try:
+    from cs_parsers.common import (  # noqa: E402
+        is_contentless_array_ref,
+        parse_options_methods,
+        strip_volatile_tokens,
+    )
+except Exception:  # pragma: no cover
+    def is_contentless_array_ref(text):
+        return bool(re.search(r"\barray\(0x[0-9a-f]+\)", text or "", re.I))
 
-# Ordered, and each pattern is here because it appeared in a real finding_id or is the
-# obvious neighbour of one. Applied BEFORE slugging so the replacement text slugs cleanly.
-_VOLATILE_TOKEN_RES = (
-    re.compile(r"0x[0-9a-f]{6,}", re.I),                              # heap/pointer addresses
-    re.compile(r"\b\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}(:\d{2})?\b", re.I),  # ISO timestamps
-    re.compile(r"\b\d{10,13}\b"),                                    # epoch seconds / millis
-    re.compile(r"\bnonce[=:]\s*[a-z0-9._-]+", re.I),                  # nonce=...
-    re.compile(r"\bsessionid[=:]\s*[a-z0-9._-]+", re.I),              # sessionid=...
-)
+    def strip_volatile_tokens(text):
+        return re.sub(r"\barray\(0x[0-9a-f]+\)|\b0x[0-9a-f]{6,}\b|\b\d{10,13}\b",
+                      "x", text or "", flags=re.I)
 
-
-def is_contentless_array_ref(text: str) -> bool:
-    """⑤ — nikto printed a Perl ARRAY reference instead of the list itself."""
-    return bool(_ARRAY_REF_RE.search(text or ""))
-
-
-def strip_volatile_tokens(text: str) -> str:
-    """⑥ — replace run-varying tokens with a stable placeholder BEFORE slugging.
-
-    The placeholder is a word (not empty) so two findings that differ ONLY in the volatile
-    token collapse to one identity, while a finding that genuinely has no such token is
-    untouched. Deleting instead of replacing would merge "foo-0xAB-bar" with "foo-bar",
-    which are not the same finding.
-    """
-    out = text or ""
-    for rx in _VOLATILE_TOKEN_RES:
-        out = rx.sub("x", out)
-    return out
+    def parse_options_methods(_t):
+        return None
 
 
 def slug_for_identity(text: str, fallback: str) -> str:
