@@ -331,7 +331,7 @@ fingerprints:
   - signal: cert_issuer_subject_pattern
     observation: cert_subject
     match_substrings: ["tls.automattic.com"]              # Automattic-owned shared-hosting cert CN
-    device_class: cdn
+    device_class: hosting_edge
     evidence_class: vendor_identifying
     vendor_product: {vendor: Automattic}
 
@@ -348,7 +348,7 @@ fingerprints:
   - signal: automattic_x_ac_edge_cache_header
     observation: http_headers
     match_substrings: ["x-ac:"]                            # X-AC — Automattic (Pressable/Atomic) edge cache
-    device_class: cdn
+    device_class: hosting_edge
     evidence_class: vendor_identifying
     vendor_product: {vendor: Automattic}                   # display: "Fronted by Automattic"
 
