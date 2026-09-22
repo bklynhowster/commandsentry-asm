@@ -88,23 +88,25 @@ comment on column public.assets.device_class is
 -- The dry-run table records what the classifier WOULD write. If its CHECK does
 -- not also accept hosting_edge, every dry-run pass over an Automattic asset
 -- fails to record its verdict — and the dry-run is precisely where this class
--- lives until Howie runs --write. Guarded: only rebuild if the constraint is
--- actually present, so this stays safe on an instance that never had it.
-do $$
-begin
-  if exists (
-    select 1 from pg_constraint
-     where conname = 'device_class_dryrun_device_class_check'
-  ) then
-    alter table public.device_class_dryrun
-      drop constraint device_class_dryrun_device_class_check;
-    alter table public.device_class_dryrun
-      add constraint device_class_dryrun_device_class_check
-      check (device_class in (
-        'origin_host','edge_firewall','waf','adc_lb','cdn','cloud_endpoint',
-        'hosting_edge','unknown','unreadable'
-      ));
-  end if;
-end $$;
+-- lives until Howie runs --write.
+--
+-- ⛔ NO dollar-quoted DO block. The migrate runner's _split()
+-- (scripts/db/apply_pending_migrations.py) is quote-aware for ' but NOT for
+-- dollar-quoting, so it slices a dollar-quoted body at its internal ';' and psql
+-- then sees an "unterminated dollar-quoted string" — this migration failed EXACTLY that way
+-- on its first apply (relay 421), the same trap fixed once before in 20260720c.
+-- Plain statements only. `drop constraint if exists` is itself idempotent and a
+-- no-op when the constraint is absent, and device_class_dryrun exists on BOTH
+-- instances (verified via REST before this rewrite), so the old existence guard
+-- bought nothing the plain form doesn't. Mirrors section 1 exactly.
+alter table public.device_class_dryrun
+  drop constraint if exists device_class_dryrun_device_class_check;
+
+alter table public.device_class_dryrun
+  add constraint device_class_dryrun_device_class_check
+  check (device_class in (
+    'origin_host','edge_firewall','waf','adc_lb','cdn','cloud_endpoint',
+    'hosting_edge','unknown','unreadable'
+  ));
 
 commit;
