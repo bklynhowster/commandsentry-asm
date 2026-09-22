@@ -52,9 +52,18 @@ def test_generic_302_not_to_challenge_is_not_corroborated():
 
 
 def test_empty_headers_safe():
+    # (relay 430) THIS TEST ENCODED THE BUG. Empty headers = NO HTTP RESPONSE,
+    # which is a network reset, not a quiet "no challenge" — and on the one host
+    # we know enforces, that misreading is what the live positive-control fire
+    # exposed. Uncorroborated it still claims NOTHING (the safety the old
+    # assertion was really protecting), which is what this now pins.
     observed, corroborated, d = h._classify_fwbbot_response("")
-    assert observed is False and corroborated is False
-    assert d == {"result": "no_challenge", "status": 0, "location": ""}
+    assert corroborated is False, "an empty response must never corroborate the vendor"
+    assert d["result"] == "network_reset"
+    assert d["status"] == 0 and d["location"] == ""
+    assert d["enforcement_corroborated"] is False, (
+        "with no same-run reachability, a no-response proves nothing")
+    assert observed is True, "we did observe the edge giving us nothing"
 
 
 # ── 4.7 Q2/Q3: the fixed bot-shaped request (L7 only; uTLS deferred) ─────────────
@@ -153,3 +162,113 @@ def test_audit_write_reaches_insert_via_import_deps(monkeypatch):
 def test_policy_read_no_dsn_is_false():
     authorized, egress, reason = h._read_active_probe_policy(types.SimpleNamespace(dsn=None, asset_id="x"))
     assert authorized is False and egress == "vpn"
+
+
+# ── relay 430: the NETWORK RESET outcome, and the two-claims separation ──────
+# The live positive-control fire (Scanner #3652, commandcommcentral.com,
+# 2026-09-22) returned status 0 / empty headers — FortiWeb rate-banned the
+# Mullvad exit mid-heavy-scan. The old classifier had no branch for it and
+# logged a FALSE no_challenge on the one host we KNOW enforces.
+
+def test_the_LIVE_positive_control_capture_reads_network_reset():
+    # The exact shape 4.7 measured: no response at all.
+    observed, corroborated, d = h._classify_fwbbot_response(
+        "", reachable_earlier=True, curl_rc=35)
+    assert d["result"] == "network_reset", d
+    assert observed is True, "a reset IS an observation — we watched the edge cut us off"
+    assert d["enforcement_corroborated"] is True
+    assert d["curl_rc"] == 35 and d["reachable_earlier_this_run"] is True
+
+
+def test_a_reset_is_NOT_corroboration_of_the_fortiweb_challenge_endpoint():
+    # ⛔ THE SEPARATION THAT MUST NOT COLLAPSE. `corroborated` is
+    # VENDOR-IDENTIFYING — device_class_runner feeds it to the
+    # fortiweb_challenge_endpoint_fwbbot_check fingerprint. Any edge can drop a
+    # connection, so a reset names NO vendor and must never set it. Enforcement
+    # evidence rides the separate field.
+    _o, corroborated, d = h._classify_fwbbot_response("", reachable_earlier=True)
+    assert corroborated is False, (
+        "a network reset set the FortiWeb VENDOR fingerprint — it proves a ban, "
+        "not that this edge is FortiWeb")
+    assert d["enforcement_corroborated"] is True
+
+
+def test_an_UNCORROBORATED_reset_claims_nothing():
+    # The 407 discipline applied to resets: with no proof the host was ever up
+    # from this egress, "no response" cannot be told from "never answered".
+    _o, corroborated, d = h._classify_fwbbot_response("", reachable_earlier=False)
+    assert d["result"] == "network_reset"
+    assert corroborated is False
+    assert d["enforcement_corroborated"] is False, (
+        "a bare status-0 with no same-run reachability was read as enforcement")
+
+
+def test_a_challenge_sets_BOTH_claims():
+    hdrs = "HTTP/1.1 302 Found\r\nLocation: https://host/fwbbot_check?t=1\r\n"
+    _o, corroborated, d = h._classify_fwbbot_response(hdrs)
+    assert corroborated is True and d["enforcement_corroborated"] is True
+
+
+def test_a_REAL_response_is_never_a_reset():
+    # ⛔ Gated on BOTH status==0 AND empty headers, so a malformed-but-present
+    # response cannot be mistaken for a ban.
+    for hdrs in ("HTTP/1.1 200 OK\r\n", "garbage but present\r\n", "   \r\n\r\nx"):
+        _o, _c, d = h._classify_fwbbot_response(hdrs, reachable_earlier=True)
+        assert d["result"] != "network_reset", (hdrs, d)
+    # and a plain 200 still reads no_challenge, unchanged
+    _o, _c, d = h._classify_fwbbot_response("HTTP/1.1 200 OK\r\n", reachable_earlier=True)
+    assert d["result"] == "no_challenge" and d["enforcement_corroborated"] is False
+
+
+# ── the corroborator itself ──────────────────────────────────────────────────
+
+def test_passive_stack_answered_reads_a_real_same_run_answer():
+    import json as _json
+    for sig in ({"cert": {"subject": "CN=x"}}, {"headers": "server: nginx"},
+                {"set_cookie_names": ["cookiesession1"]}):
+        arts = [("stack_id_passive", "json", _json.dumps(sig))]
+        assert h.passive_stack_answered(arts) is True, sig
+
+
+def test_passive_stack_answered_is_false_without_a_real_answer():
+    import json as _json
+    assert h.passive_stack_answered([]) is False
+    assert h.passive_stack_answered(None) is False
+    # the phase ran but collected nothing = the host did NOT answer
+    assert h.passive_stack_answered(
+        [("stack_id_passive", "json", _json.dumps({}))]) is False
+    # a different artifact must not be mistaken for reachability
+    assert h.passive_stack_answered(
+        [("stack_id_wafw00f", "json", _json.dumps({"headers": "x"}))]) is False
+    # unparseable payloads fail closed
+    assert h.passive_stack_answered([("stack_id_passive", "json", "{not json")]) is False
+
+
+def test_the_corroborator_does_NOT_key_on_waf_differential():
+    """⛔ THE SILENT-NO-OP GUARD (relay 430).
+
+    run_heavy calls run_fwbbot_check_probe_phase BEFORE
+    run_waf_differential_probe_phase, so at fwbbot time the differential
+    artifact does NOT exist. Keying the corroborator on it — the obvious choice,
+    and the one 430's write-up reasoned from — would make it ALWAYS False and
+    the whole network_reset branch dead on arrival. Pin the ordering so a later
+    refactor cannot quietly reintroduce that.
+    """
+    import inspect as _inspect
+    import json as _json
+    # ⛔ ASSERT THE PROPERTY, NOT THE PROSE. A source-text scan reds on this
+    # function's own docstring, which names waf_differential precisely in order
+    # to explain why it is NOT used — the prose-contains-the-token trap this
+    # codebase has now hit six times. So: feed it a differential artifact and
+    # require that it counts for nothing.
+    for name in ("stack_id_waf_differential", "waf_differential"):
+        assert h.passive_stack_answered(
+            [(name, "json", _json.dumps({"headers": "server: nginx"}))]) is False, (
+            f"{name} was accepted as same-run reachability, but it does not exist "
+            f"yet when the fwbbot phase runs — the corroborator would be a no-op")
+    run_src = _inspect.getsource(h)
+    i_fwbbot = run_src.index("run_fwbbot_check_probe_phase(ctx, work_dir)")
+    i_diff = run_src.index("run_waf_differential_probe_phase(ctx, work_dir)")
+    assert i_fwbbot < i_diff, (
+        "phase order changed — the differential now runs FIRST, so it could be a "
+        "valid corroborator and this constraint should be revisited deliberately")
