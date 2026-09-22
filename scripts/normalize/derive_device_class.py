@@ -428,19 +428,11 @@ def classify(observations: dict,
     # comparison moves and no already-classified asset can flip. That invariant
     # is pinned by test_the_preexisting_four_keep_their_relative_order.
     #
-    # ⚠ THE PLACEMENT IS DELIBERATELY CONSERVATIVE, AND IT IS NOT THE WHOLE FIX.
-    # Ranked BELOW waf, a host carrying both the vendor-identifying Automattic
-    # tell (hosting_edge, 1 high) and a generic presence-only wafw00f tell
-    # (waf, 1 high) still resolves `waf` — the live state of
-    # www.commandcompanies.com and www.unimacgraphics.com. Arguably the
-    # vendor-identifying tell that NAMES the edge should outrank an anonymous
-    # "something filtered us", since on a Pressable host that something IS the
-    # hosting edge. But promoting hosting_edge above waf changes precedence for
-    # every future tie, and this table's own comment fences that as a ratified
-    # decision rather than a passing improvement — so it is routed to 4.7 as a
-    # fork, not taken here. The enforcement MECHANISM axis (Axis 2) already
-    # stops the harmful consequence: those hosts resolve rate_behavioral on the
-    # VENDOR, so a wrong class can no longer produce a wrong enforcement verdict.
+    # ⚠ THE PLACEMENT IS DELIBERATELY CONSERVATIVE. hosting_edge stays BELOW waf
+    # in this table, and the 414 four-way order is untouched. The one case where
+    # a hosting_edge SHOULD win is handled AFTER the tiebreak, by an explicit,
+    # narrowly-scoped reconciliation (see below) rather than by a blunt
+    # precedence flip — 4.7's 416 ruling and 424 ratification.
     _CLASS_TIEBREAK = {"waf": 0, "edge_firewall": 1, "hosting_edge": 2,
                        "cdn": 3, "origin_host": 4}
     win_class, win = max(
@@ -452,6 +444,44 @@ def classify(observations: dict,
                         # to the YAML cannot reintroduce order-dependence.
                         -_CLASS_TIEBREAK.get(kv[0], 99)),
     )
+
+    # ── ①b SIGNAL RECONCILIATION: a presence-only waf on a NAMED hosting edge ──
+    # (relay 424, 4.7 ruling "PROMOTE — scoped.")
+    #
+    # ⛔ THE THING BEING FIXED. wafw00f's generic `waf_present` tell is
+    # evidence_class=presence_only with NO vendor: it says "something filtered
+    # us", not "a WAF appliance is here". On a host whose edge we have NAMED via
+    # a vendor-identifying tell (Automattic x-ac), that something IS the hosting
+    # edge — Pressable 403-filters for abuse. The two signals are therefore NOT
+    # competing claims about two devices; the anonymous one is a SYMPTOM of the
+    # named one. Letting it win produced the live mislabel measured in 424:
+    # www.commandcompanies.com and www.unimacgraphics.com read `waf` while the
+    # apex domains read `hosting_edge`, from the same infrastructure.
+    #
+    # ⛔ SCOPE — THIS IS NOT "hosting_edge OUTRANKS waf". A VENDOR-IDENTIFIED waf
+    # (Cloudflare, Fortinet — a real, named, configured policy) still wins, and
+    # that asymmetry is the whole point: masking a genuine security control is a
+    # worse error than over-showing one. The reconciliation fires ONLY when the
+    # waf bucket carries no vendor-identifying evidence at all.
+    #
+    # ⚠ NO COUNT CONDITION, DELIBERATELY. Several presence-only waf tells on a
+    # named hosting edge are still symptoms of that ONE edge, not evidence of N
+    # devices, so the rule does not require the tallies to tie. Both the
+    # equal-count and the waf-has-more cases are fixtured so this is tested
+    # rather than argued.
+    #
+    # ⚠ _CLASS_TIEBREAK IS UNTOUCHED by this, on purpose: the generic precedence
+    # table stays the recorded status quo, and this narrow, named exception is
+    # reviewable on its own terms instead of being buried in a rank change that
+    # would silently move every future tie.
+    def _vendor_identified(slot: dict) -> bool:
+        return bool(slot.get("vi_high") or slot.get("vi_medium"))
+
+    if win_class == "waf" and not _vendor_identified(win):
+        he = by_class.get("hosting_edge")
+        if he is not None and _vendor_identified(he):
+            win_class, win = "hosting_edge", he
+
     conf = _confidence(len(win["high"]), len(win["medium"]))
 
     # ── ② VENDOR ATTRIBUTION — per vendor, across ALL classes, never update()
