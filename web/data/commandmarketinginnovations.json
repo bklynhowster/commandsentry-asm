@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-09-22T06:52:48Z_6875dc2b",
-    "started_at": "2026-09-22T06:52:48Z",
-    "completed_at": "2026-09-22T06:56:32Z",
-    "duration_seconds": 224,
+    "id": "scan_2026-09-22T12:51:05Z_cd238a82",
+    "started_at": "2026-09-22T12:51:05Z",
+    "completed_at": "2026-09-22T12:55:04Z",
+    "duration_seconds": 239,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -45,8 +45,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-09-22T06:56:32Z",
-      "last_seen": "2026-09-22T06:56:32Z",
+      "first_discovered": "2026-09-22T12:55:04Z",
+      "last_seen": "2026-09-22T12:55:04Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -357,8 +357,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-09-22T06:56:32Z",
-      "last_seen": "2026-09-22T06:56:32Z",
+      "first_discovered": "2026-09-22T12:55:04Z",
+      "last_seen": "2026-09-22T12:55:04Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -667,7 +667,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-09-22T01:10:55Z_c28ef783",
+    "since_scan": "scan_2026-09-22T06:52:48Z_6875dc2b",
     "added": {
       "subdomains": [],
       "services": [],
@@ -685,50 +685,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-08-21T07:18:32Z_62b91975",
-      "started_at": "2026-08-21T07:18:32Z",
-      "completed_at": "2026-08-21T07:22:34Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 2,
-      "service_count": 8,
-      "subdomain_names": [
-        "commandmarketinginnovations.com",
-        "www.commandmarketinginnovations.com"
-      ],
-      "ports_by_sub": {
-        "commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        },
-        "www.commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.0",
-        "Mailcheck": "1.1.2",
-        "Slider Revolution": "6.7.58",
-        "WPMU DEV Smush": "4.3.0",
-        "Yoast SEO": "28.3",
-        "jQuery Migrate": "3.4.1",
-        "punycode": "1.0.0"
-      }
-    },
     {
       "scan_id": "scan_2026-08-21T13:22:55Z_a34416e8",
       "started_at": "2026-08-21T13:22:55Z",
@@ -5925,6 +5881,50 @@
       "scan_id": "scan_2026-09-22T06:52:48Z_6875dc2b",
       "started_at": "2026-09-22T06:52:48Z",
       "completed_at": "2026-09-22T06:56:32Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.7.58",
+        "WPMU DEV Smush": "4.3.3",
+        "Yoast SEO": "28.5",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-09-22T12:51:05Z_cd238a82",
+      "started_at": "2026-09-22T12:51:05Z",
+      "completed_at": "2026-09-22T12:55:04Z",
       "subdomain_count": 2,
       "live_subdomain_count": 2,
       "host_count": 2,
