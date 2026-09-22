@@ -41,12 +41,14 @@
 -- quietly move a soak clock. Belt-and-suspenders regardless, since --write
 -- stays Howie's.
 --
--- notes: Taxonomy only. Widens assets_device_class_check to accept
--- 'hosting_edge' (relay 414 Axis 1 — managed-hosting edge, distinct from cdn
--- which excluded it from enforcement verification and from waf which would have
--- over-claimed a policy). No code, no data change, no routing change, no row
--- rewritten. Constraint name matches 20260806a. Splitter-safe, idempotent,
--- byte-identical both repos.
+-- MIGRATION-META:
+-- idempotent: true
+-- transactional: true
+-- safe_auto_apply: true
+-- requires_backup: false
+-- estimated_duration_ms: 150
+-- notes: Taxonomy only. Widens assets_device_class_check AND the device_class_dryrun twin to accept 'hosting_edge' (relay 414 Axis 1 — managed-hosting edge, distinct from cdn which excluded it from enforcement verification and from waf which would have over-claimed a policy). No code, no data change, no routing change, no row rewritten. Constraint name matches 20260806a. Splitter-safe, idempotent, byte-identical both repos.
+-- END-META
 -- ============================================================================
 
 begin;
