@@ -80,6 +80,22 @@ _RATE_BASED_VENDOR_TOKENS = ("forti", "automattic")
 
 
 def _vendor_haystack(vendor_product) -> str:
+    """Flatten a vendor_product into one lowercase haystack.
+
+    ⛔ SHAPE-TOLERANT ON PURPOSE (relay 424, 4.7 finding). This used to accept a
+    dict and return "" for everything else — so ('waf', {'vendor':'Automattic'})
+    resolved rate_behavioral (safe) while ('waf', 'Automattic'), the bare STRING,
+    fell through to `signature` and would have routed a Pressable host into a
+    signature probe it cannot answer. The DB stores the dict today, so this was
+    latent rather than live, but "safe only for one of the two shapes the
+    codebase passes around" is not a property worth relying on — asset_surface,
+    the ASM import and hand-built callers all carry vendor as a bare string in
+    places. A string is now treated as the vendor name itself.
+
+    Both shapes are in the fixture table, asserted in both languages.
+    """
+    if isinstance(vendor_product, str):
+        return vendor_product.strip().lower()
     if not isinstance(vendor_product, dict):
         return ""
     vendor = vendor_product.get("vendor") or ""
@@ -176,4 +192,40 @@ MECHANISM_FIXTURES = [
      "evidence collection FAILED — no-information, never a verdict"),
     (None, None, None, MECHANISM_NONE,
      "absent class fails closed"),
+
+    # ── (relay 424) VENDOR SHAPE: a bare STRING must resolve like the dict ──
+    # 4.7's finding. ('waf', 'Automattic') used to fall through to `signature`
+    # while ('waf', {'vendor': 'Automattic'}) resolved rate_behavioral — a
+    # Pressable host reached by the string path would have been signature-probed.
+    # These four cases pin BOTH shapes against EACH other, so the two can never
+    # drift apart again.
+    ("waf", "__STR__Automattic", None, MECHANISM_RATE,
+     "⛔ bare-string vendor must match the dict shape (424 4.7 finding)"),
+    ("waf", "__STR__Fortinet", None, MECHANISM_RATE,
+     "same, Fortinet family"),
+    ("waf", "__STR__Cloudflare", None, MECHANISM_SIGNATURE,
+     "a string that is NOT rate-based stays signature — the fix must not over-match"),
+    ("hosting_edge", "__STR__Automattic", None, MECHANISM_RATE,
+     "string shape on the hosting edge (was already safe; pinned so it stays)"),
 ]
+
+# ⚠ FIXTURE ENCODING. A "__STR__" prefix on the vendor field means "pass the
+# REST of this value as a BARE STRING vendor_product", not as {"vendor": ...}.
+# Encoded rather than given its own column so the table stays one flat shape in
+# both languages and the counts keep matching.
+STR_SHAPE_PREFIX = "__STR__"
+
+
+def fixture_vendor_product(vendor, product):
+    """Build the vendor_product argument for one fixture row, honouring the
+    __STR__ bare-string encoding. Mirrored in the portal's fixtureVendorProduct."""
+    if isinstance(vendor, str) and vendor.startswith(STR_SHAPE_PREFIX):
+        return vendor[len(STR_SHAPE_PREFIX):]
+    if vendor is None and product is None:
+        return None
+    vp = {}
+    if vendor:
+        vp["vendor"] = vendor
+    if product:
+        vp["product"] = product
+    return vp

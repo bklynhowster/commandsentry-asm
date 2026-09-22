@@ -133,6 +133,87 @@ def test_the_preexisting_four_keep_their_relative_order():
         f"hosting_edge is not between edge_firewall and cdn: {ranks}")
 
 
+# ── (relay 424) THE SCOPED PROMOTION: presence-only waf vs a NAMED hosting edge ──
+# 4.7's ruling: a hosting_edge identified by a VENDOR tell outranks a waf backed
+# ONLY by presence-only evidence — but a VENDOR-IDENTIFIED waf still wins. The
+# asymmetry is the point: masking a real, configured security control is a worse
+# error than over-showing one.
+
+def test_presence_only_waf_loses_to_a_NAMED_hosting_edge():
+    """⭐ (a) x-ac + presence-only wafw00f -> hosting_edge.
+
+    The live mislabel from relay 424: www.commandcompanies.com and
+    www.unimacgraphics.com read `waf` off an anonymous "something filtered us"
+    while their own apex domains read `hosting_edge` from the same
+    infrastructure. On a named Pressable edge that something IS the edge.
+    """
+    r = d.classify({"http_headers": "x-ac: 3.dca _dfw\nserver: nginx",
+                   "waf_present": True}, FPS, TH)
+    assert r["device_class"] == "hosting_edge", (
+        f"presence-only waf still outranks a named hosting edge: {r['device_class']}")
+    assert (r["vendor_product"] or {}).get("vendor") == "Automattic"
+
+
+def test_a_VENDOR_IDENTIFIED_waf_still_outranks_a_hosting_edge():
+    """⛔ (b) x-ac + a NAMED waf -> waf. The scope limit, and the one that
+    matters for safety: a real configured policy must never be hidden behind a
+    hosting-edge label. wafw00f naming Cloudflare is vendor_identifying, so the
+    reconciliation must NOT fire."""
+    r = d.classify({"http_headers": "x-ac: 3.dca _dfw\nserver: nginx",
+                   "waf_vendor": "Cloudflare"}, FPS, TH)
+    assert r["device_class"] == "waf", (
+        f"a vendor-identified WAF was masked by the hosting edge: {r['device_class']}")
+
+
+def test_the_promotion_does_not_need_the_tallies_to_tie():
+    """⚠ Several presence-only waf tells on a NAMED edge are still symptoms of
+    that ONE edge, not evidence of N devices — so the rule deliberately carries
+    no count condition. Pinned so the choice is tested rather than argued."""
+    r = d.classify({"http_headers": "x-ac: 3.dca _dfw\nserver: nginx",
+                   "waf_present": True, "waf_present_differential": True}, FPS, TH)
+    assert r["device_class"] == "hosting_edge", (
+        f"the promotion wrongly requires an equal tally: {r['device_class']}")
+
+
+def test_a_PRESENCE_ONLY_hosting_edge_does_NOT_win_either():
+    """⛔ ISOLATE THE SECOND GATE (relay 312 lesson: each gate tested alone).
+
+    The promotion's whole justification is "the edge we have NAMED" — on a
+    named Pressable edge the anonymous waf tell is a SYMPTOM of it. A
+    hosting_edge asserted only by PRESENCE-ONLY evidence has named nothing, so
+    it has no standing to displace the waf and the reconciliation must not fire.
+
+    No such registry row exists today (both Automattic rows are
+    vendor_identifying), so this is pinned against a SYNTHETIC fingerprint set —
+    otherwise the guard is unfalsifiable and a future presence-only hosting_edge
+    row would silently start winning. A mutation dropping the vendor-identified
+    check on the hosting_edge side survives every other test in this file.
+    """
+    fps = [
+        {"signal": "synthetic_presence_only_hosting_edge",
+         "observation": "http_headers", "match_substrings": ["x-synthetic-edge:"],
+         "device_class": "hosting_edge", "evidence_class": "presence_only",
+         "vendor_product": {}},
+        {"signal": "waf_present_wafw00f",
+         "observation": "waf_present", "match_bool": True,
+         "device_class": "waf", "evidence_class": "presence_only",
+         "vendor_product": {}},
+    ]
+    th = json.loads(json.dumps(TH))
+    th["weight"]["synthetic_presence_only_hosting_edge"] = "high"
+    r = d.classify({"http_headers": "x-synthetic-edge: 1", "waf_present": True}, fps, th)
+    assert r["device_class"] == "waf", (
+        "a hosting_edge with NO vendor-identifying evidence displaced the waf — "
+        f"the 'named edge' condition is gone: {r['device_class']}")
+
+
+def test_a_presence_only_waf_ALONE_is_still_a_waf():
+    """⛔ The reconciliation must not invent a hosting edge that no tell named.
+    With no Automattic evidence there is nothing to reconcile to."""
+    r = d.classify({"waf_present": True}, FPS, TH)
+    assert r["device_class"] == "waf"
+
+
 def test_ranking_is_documented_as_status_quo_not_precedence():
     """⭐ The comment is load-bearing. Without it a later reader inherits an
     accidental precedence model as though it had been ratified."""

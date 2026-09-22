@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from enforcement_mechanism import (  # noqa: E402
     MECHANISM_FIXTURES,
+    fixture_vendor_product,
     MECHANISM_NONE,
     MECHANISM_RATE,
     MECHANISM_SIGNATURE,
@@ -26,15 +27,8 @@ from enforcement_mechanism import (  # noqa: E402
 
 MIRROR = "commandsentry-portal/src/lib/enforcement-mechanism.mjs"
 
-def _vp(vendor, product):
-    if vendor is None and product is None:
-        return None
-    vp = {}
-    if vendor:
-        vp["vendor"] = vendor
-    if product:
-        vp["product"] = product
-    return vp
+# the SHARED builder — honours the __STR__ bare-string encoding (relay 424)
+_vp = fixture_vendor_product
 
 
 # ── the fixture table itself ────────────────────────────────────────────────
@@ -53,9 +47,26 @@ def test_fixture_count_is_pinned_for_the_mirror():
     # ⛔ THE COUNT IS THE MIRROR PIN. If you add or remove a case here you MUST
     # make the identical edit in the portal, whose suite asserts this same
     # number. That is what keeps one rule from becoming two.
-    assert len(MECHANISM_FIXTURES) == 17, (
-        f"fixture count is {len(MECHANISM_FIXTURES)}, pinned at 17 — if that was "
+    # 17 -> 21 in relay 424: four vendor-SHAPE cases (bare string vs dict).
+    assert len(MECHANISM_FIXTURES) == 21, (
+        f"fixture count is {len(MECHANISM_FIXTURES)}, pinned at 21 — if that was "
         f"deliberate, make the SAME edit in {MIRROR} and update both counts")
+
+
+def test_bare_string_vendor_resolves_like_the_dict():
+    # ⭐ (relay 424) 4.7's finding. The string path used to fall through to
+    # `signature`, which would have routed a Pressable host into a probe it
+    # cannot answer. Both shapes are now asserted AGAINST EACH OTHER.
+    for name in ("Automattic", "Fortinet", "fortinet", "FortiWeb"):
+        assert resolve_enforcement_mechanism("waf", name) == MECHANISM_RATE, name
+        assert resolve_enforcement_mechanism("waf", {"vendor": name}) == MECHANISM_RATE, name
+        assert is_rate_based_vendor(name) is True, name
+    # …and the fix must NOT over-match: a non-rate vendor stays signature.
+    assert resolve_enforcement_mechanism("waf", "Cloudflare") == MECHANISM_SIGNATURE
+    assert is_rate_based_vendor("Cloudflare") is False
+    # non-str non-dict still fails closed to "no vendor".
+    for junk in (123, True, [], None, ""):
+        assert is_rate_based_vendor(junk) is False, junk
 
 
 
@@ -112,8 +123,10 @@ def test_is_rate_based_vendor_is_substring_and_case_insensitive():
     for vp in ({"vendor": "Fortinet"}, {"product": "FortiWeb"}, {"vendor": "fortinet"},
                {"vendor": "Automattic"}, {"vendor": "automattic"}):
         assert is_rate_based_vendor(vp) is True, vp
+    # (424) "Fortinet" as a BARE STRING is now True — see the shape test above.
+    assert is_rate_based_vendor("Fortinet") is True
     for vp in ({"vendor": "Google Cloud", "product": "Google Cloud Armor"},
-               {"vendor": "Cloudflare"}, {}, None, "Fortinet"):
+               {"vendor": "Cloudflare"}, {}, None):
         assert is_rate_based_vendor(vp) is False, vp
 
 
