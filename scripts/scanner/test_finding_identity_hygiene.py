@@ -201,3 +201,113 @@ def test_a_PARTIALLY_corrupt_options_line_is_contentless_not_partially_parsed():
     assert ssot.parse_options_methods(
         "OPTIONS: Allowed HTTP Methods: GET, ARRAY(0x561de6ae2e40)") is None, (
         "a line containing an ARRAYREF was partially parsed — the guard is gone")
+
+
+# ── relay 438 fast-follow: the ISO T…Z tail ─────────────────────────────────
+
+def test_ISO_T_Z_timestamps_strip_INCLUDING_the_seconds():
+    """⛔ THE EXISTING TEST PASSED WHILE THE BUG WAS LIVE.
+
+    test_timestamps_and_epochs_are_stripped varies date + HH:MM only, so the
+    seconds never differed and the defect was invisible. On "…T02:10:07Z" there
+    is no word boundary between the final "7" and "Z", so the old
+    `(:\\d{2})?\\b` could not match the seconds: the engine backtracked to
+    "…T02:10" and left ":07Z" in the key. Two findings a second apart therefore
+    produced DIFFERENT identities — mint-every-scan again, in a new costume.
+    now_iso() in this package emits exactly T…Z, so this is the shape most
+    likely to show up next.
+
+    THIS test varies the SECONDS, which is what makes the gate falsifiable.
+    """
+    ssot = _ssot()
+    s = ssot.strip_volatile_tokens
+    # the decisive pair: same minute, different SECOND
+    assert s("cert expires 2026-09-15T02:10:07Z") == \
+           s("cert expires 2026-09-15T02:10:59Z"), \
+        "the T…Z seconds survived the strip — the key still drifts"
+    # fractional seconds and offsets are the same class of tail
+    assert s("x 2026-09-15T02:10:07.123Z") == s("x 2026-09-16T04:30:59.987Z")
+    assert s("x 2026-09-15T02:10:07+02:00") == s("x 2026-09-16T04:30:59-05:00")
+    # the space form (which always worked) must not regress
+    assert s("c 2026-09-15 02:10:07") == s("c 2026-09-16 04:30:59")
+    # and a timestamp-free string is still untouched
+    assert s("missing header x-frame-options") == "missing header x-frame-options"
+
+
+def test_a_timestamped_finding_yields_ONE_identity_across_scans():
+    """The property the regex exists for, asserted end-to-end on the slug."""
+    a = rm.slug_for_identity("cert expires 2026-09-15T02:10:07Z", "fb")
+    b = rm.slug_for_identity("cert expires 2026-09-16T04:30:59Z", "fb")
+    assert a == b, f"a timestamped finding minted two identities: {a} vs {b}"
+
+
+# ── relay 436 T2 / 438 ruling: deterministic non-null keys ──────────────────
+# ⛔ THE GATE IS TEST-ONLY, DELIBERATELY. 4.7 ratified the inverted order:
+# (1) make the key deterministic + non-null at every producer, (2) MEASURE the
+# live null count trending to zero, (3) ONLY THEN flip a runtime gate. With
+# 776/1000 Command keys currently NULL, a runtime "null key = fail" would turn
+# every Command scan red on day one — the 370 halt. So this asserts that NEW
+# findings get a key; it never kills a scan.
+
+def test_deterministic_key_is_never_null():
+    ssot = _ssot()
+    k = ssot.deterministic_finding_key
+    for identity, fb in [("", "id-42"), ("!!!???", "id-42"), (None, "id-7"),
+                         ("missing header x-frame-options", "id-1")]:
+        got = k("nikto", None, identity, fb)
+        assert got, f"null/empty key for identity={identity!r}"
+        assert got.startswith("nikto:"), got
+        # ⛔ "non-null" IS NOT THE PROPERTY. "nikto:" is truthy and starts with
+        # the prefix, yet carries NO discriminator — every such finding would
+        # collapse onto one key, which is worse than a null. A mutation that
+        # dropped the `or fallback` survived both assertions above. The property
+        # is that something DISTINGUISHING follows the source prefix.
+        discriminator = got.split(":", 1)[1]
+        assert discriminator, (
+            f"key {got!r} is a bare source prefix — every finding with an "
+            f"unsluggable identity would collapse onto it")
+    # and two unsluggable findings with DIFFERENT fallbacks stay distinct
+    assert k("nikto", None, "!!!", "id-1") != k("nikto", None, "???", "id-2")
+
+
+def test_a_CLASS_key_always_wins():
+    """⛔ 139's consolidation must not be overridden. When a producer has a
+    class key, that key collapses the family into one row — deriving a
+    per-finding key instead would refragment exactly what Howie asked to
+    consolidate (relay 439)."""
+    ssot = _ssot()
+    assert ssot.deterministic_finding_key(
+        "nikto", "class:tech-header-disclosure", "anything at all", "fb") == \
+        "class:tech-header-disclosure"
+
+
+def test_the_derived_key_is_STABLE_across_runs_and_DISTINCT_across_findings():
+    ssot = _ssot()
+    k = ssot.deterministic_finding_key
+    # volatile tokens stripped -> two runs, one key
+    assert k("nikto", None, "OPTIONS: methods ARRAY(0x561de6ae2e40)", "f") == \
+           k("nikto", None, "OPTIONS: methods ARRAY(0x559baf530058)", "f")
+    assert k("nikto", None, "cert expires 2026-09-15T02:10:07Z", "f") == \
+           k("nikto", None, "cert expires 2026-09-16T04:30:59Z", "f")
+    # genuinely different findings stay different
+    assert k("nikto", None, "missing x-frame-options", "f1") != \
+           k("nikto", None, "missing content-security-policy", "f2")
+    # and the SOURCE scopes it — cross-source collapse is the curated map's job
+    assert k("nikto", None, "same text", "f") != k("nuclei", None, "same text", "f")
+
+
+def test_BOTH_producers_emit_a_non_null_key():
+    """⛔ THE GATE, as a test. Both nikto parsers must now pass their key
+    through deterministic_finding_key — a producer that still writes a bare
+    None is the defect this turn exists to close."""
+    import inspect, sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "normalize"))
+    from cs_parsers import nikto
+    assert "deterministic_finding_key(" in inspect.getsource(nikto), (
+        "cs_parsers/nikto.py still emits a raw normalized_key")
+    med = pathlib.Path(__file__).resolve().parent / "run_medium.py"
+    assert "deterministic_finding_key(" in med.read_text(), (
+        "run_medium.py still emits a raw normalized_key")
+    # and neither may pass the bare sentinel through any more
+    assert "normalized_key=nkey," not in inspect.getsource(nikto)
+    assert "normalized_key=norm_key," not in med.read_text()
