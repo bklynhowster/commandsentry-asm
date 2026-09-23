@@ -3512,8 +3512,73 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
     else:
         cmd += ["-exclude-tags", "dos"]
 
-    rc, stdout, stderr = run_cmd(cmd, timeout=NUCLEI_CHUNK_WALL_S)
     chunk_label = f"nuclei[{severity_filter}{':'+tag_filter if tag_filter else ''}]"
+
+    # ── relay 459: COVERAGE CURSOR — hand nuclei only the next unscanned slice,
+    # so consecutive runs sweep the whole corpus instead of re-running the same
+    # ~27% every time (relay 450 finding / 454 ruling). The slice is sized under
+    # the wall so it COMPLETES, which is what turns "cut mid-run" into "slice
+    # done, sweep advancing". FAIL-SAFE: any problem here (no cursor table on this
+    # instance, DB blip, empty list, or -list crawl mode) falls through to the
+    # full-corpus run exactly as before. Template-mode only — never slice a crawl.
+    _slice_plan = None
+    _slice_file = None
+    try:
+        _cov_dsn = ctx.dsn or os.environ.get("SUPABASE_DSN")
+        if _cov_dsn and not url_list_file:
+            import coverage_wire as _cw
+            _tl_cmd = ["nuclei", "-tl", "-silent", "-severity", severity_filter]
+            if tag_filter:
+                _tl_cmd += ["-tags", tag_filter]
+            _tl_cmd += (["-exclude-tags", "intrusive,dos,fuzz"] if ctx.waf_detected
+                        else ["-exclude-tags", "dos"])
+            _tlrc, _tlout, _tlerr = run_cmd(_tl_cmd, timeout=NUCLEI_CORPUS_WALL_S)
+            _filtered = [ln.strip() for ln in _tlout.splitlines() if ln.strip()]
+            if _tlrc == 0 and _filtered:
+                _slice_file, _slice_plan = _cw.plan_and_write_slice(
+                    _cov_dsn, ctx.asset_id, chunk_label, _filtered)
+                cmd += ["-t", _slice_file]
+                log(f"  {chunk_label}: coverage cursor -> slice "
+                    f"[{_slice_plan['start']}:{_slice_plan['end']}] of "
+                    f"{len(_filtered)}"
+                    f"{' (pass wrapped)' if _slice_plan.get('wrapped') else ''}")
+    except Exception as _cov_e:  # pragma: no cover - defensive, degrade to full run
+        log(f"  {chunk_label}: coverage cursor unavailable ({_cov_e!r}) — "
+            f"full corpus this run")
+        _slice_plan = None
+
+    rc, stdout, stderr = run_cmd(cmd, timeout=NUCLEI_CHUNK_WALL_S)
+
+    # ── relay 459: advance the cursor ONLY on a clean completion (rc == 0). A
+    # wall-cut (rc == 124) or any non-zero is partial -> do NOT advance, so the
+    # next run re-dispatches the same slice rather than marking it covered.
+    # Best-effort; a failed write never fails the scan (worst case: no advance).
+    if _slice_plan is not None:
+        try:
+            import coverage_wire as _cw2
+            _completed = (rc == 0)
+            _cw2.record_completion(
+                (ctx.dsn or os.environ.get("SUPABASE_DSN")),
+                ctx.asset_id, chunk_label,
+                plan=_slice_plan, completed=_completed,
+                corpus_id=_cw2.corpus_id_from_meta(ctx.corpus_prewarm_meta),
+                corpus_size=_slice_plan.get("corpus_size"))
+            if not _completed:
+                # relay 464 F2 — a non-zero rc means the cursor did NOT advance;
+                # surface it so "coverage silently never accrues" can't hide as a
+                # healthy-looking run indistinguishable from today's 27%.
+                log(f"  {chunk_label}: coverage cursor HELD (nuclei rc={rc}, "
+                    f"not 0) — same slice re-dispatches next run")
+        except Exception as _cov_w:  # pragma: no cover
+            log(f"  {chunk_label}: coverage cursor write failed ({_cov_w!r}) — "
+                f"not fatal")
+    # relay 464 F5 — cleanup gated on the FILE, not the plan: a slice file written
+    # before a later raise (which nulls _slice_plan) must still be removed.
+    if _slice_file:
+        try:
+            os.remove(_slice_file)
+        except Exception:
+            pass
     ctx.artifacts.append((chunk_label, "jsonl", stdout))
     if NUCLEI_STATS_ENABLED and stderr.strip():
         # Increment 2a observation capture. mark_tool_partial already persists
