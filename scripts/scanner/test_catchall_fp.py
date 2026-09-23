@@ -655,3 +655,349 @@ def test_calibration_still_returns_the_constant_for_the_june_shape():
         mp.undo()
     assert out == (_FTP_CONST, None, None, True, None), out
 
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# relay 449 — the BODY-INDEPENDENT catch-all, and the existence marker
+#
+# Live defect: uat.prodexlabs.com, scan_run 9add84ef, finding
+# `uat.prodexlabs.com:light:exposed-path-wp-admin-installphp` — MODERATE
+# "Exposed path: /wp-admin/install.php (HTTP 200) — confirms WP install" on a
+# Next.js SPA with no WordPress anywhere on it. The host 200s every path, but
+# its shell carries a per-request CSP nonce so the two control bodies hashed
+# DIFFERENTLY, _is_catchall said False, the baseline was null, and the non-HIGH
+# branch (which relies solely on that flag) emitted unconditionally.
+# ═══════════════════════════════════════════════════════════════════════
+
+_SPA_A = "<!doctype html><html><head><meta nonce='aaaa1111'>PRODEX</head></html>"
+_SPA_B = "<!doctype html><html><head><meta nonce='bbbb2222'>PRODEX</head></html>"
+
+
+def _fake_two_probes(r1, r2):
+    """(code, body, ctype) for control probe 1 then 2, then anything after."""
+    calls = {"n": 0}
+
+    def probe(_ctx, _path):
+        calls["n"] += 1
+        return r1 if calls["n"] == 1 else r2
+    return probe
+
+
+# ── _is_catchall_by_status — the new primitive ─────────────────────────
+
+def test_449_status_catchall_is_true_when_bodies_DIFFER():
+    """⭐ THE WHOLE FIX. Byte-equality was a PROXY for 'catch-all', not the
+    definition, and every per-request-varying SPA defeats the proxy."""
+    assert L._is_catchall_by_status((200, 200)) is True
+
+
+def test_449_status_catchall_accepts_the_2xx_variants():
+    assert L._is_catchall_by_status((204, 206)) is True
+
+
+def test_449_status_catchall_is_FALSE_on_a_normal_host():
+    """⛔ NO FALSE NEGATIVES. Detection is POSITIVE-ONLY: a host whose nonsense
+    paths 404 is not a catch-all, nothing is suppressed, real exposed paths
+    still emit exactly as before."""
+    assert L._is_catchall_by_status((404, 404)) is False
+    assert L._is_catchall_by_status((200, 404)) is False
+    assert L._is_catchall_by_status((301, 301)) is False
+
+
+def test_449_a_single_flaked_control_probe_disables_status_detection():
+    """Documents WHY the existence marker exists as a SECOND guard: one
+    transient non-2xx and this guard is gone."""
+    assert L._is_catchall_by_status((200, 429)) is False
+
+
+# ── the baseline primitive is deliberately NOT changed ─────────────────
+
+def test_449_hash_based_is_catchall_still_requires_equal_hashes():
+    """_is_catchall governs BASELINE ESTABLISHMENT, which genuinely needs a
+    stable hash to compare per-path bodies against. 449 did not touch it."""
+    assert L._is_catchall((200, 200), ("hA", "hB")) is False
+    assert L._is_catchall((200, 200), ("hA", "hA")) is True
+
+
+def test_449_detect_returns_both_answers_separately():
+    """⛔ Before 449 one None did two jobs: 'bodies vary' was indistinguishable
+    from 'not a catch-all'. The SPA case then took the wrong branch."""
+    mp = pytest.MonkeyPatch()
+    try:
+        mp.setattr(L, "_probe_path_body",
+                   _fake_two_probes((200, _SPA_A, "text/html"),
+                                    (200, _SPA_B, "text/html")))
+        baseline, is_catchall = L.detect_light_catchall(
+            types.SimpleNamespace(hostname="uat.prodexlabs.com"))
+    finally:
+        mp.undo()
+    assert baseline is None, "bodies differ, so there is no stable baseline"
+    assert is_catchall is True, "but the host IS a catch-all — this is the fix"
+
+
+def test_449_detect_on_a_normal_host_is_neither():
+    mp = pytest.MonkeyPatch()
+    try:
+        mp.setattr(L, "_probe_path_body",
+                   _fake_two_probes((404, "nope", "text/html"),
+                                    (404, "nope", "text/html")))
+        baseline, is_catchall = L.detect_light_catchall(
+            types.SimpleNamespace(hostname="normal.example"))
+    finally:
+        mp.undo()
+    assert baseline is None and is_catchall is False
+
+
+# ── 4.7 fixture 1 — the reported defect, at the decision boundary ──────
+
+def test_449_FIXTURE1_spa_catchall_suppresses_the_wp_install_path():
+    """The exact uat.prodexlabs.com shape: catch-all by status, no baseline
+    (bodies vary), non-HIGH path. MUST suppress."""
+    assert L.resolve_path_disposition(
+        "MODERATE", L.VERIFY_NO_MATCH, matches_baseline=False,
+        host_is_catchall=True) == "SUPPRESS"
+
+
+# ── 4.7 fixture 2 — no new false negatives ────────────────────────────
+
+def test_449_FIXTURE2_normal_host_still_emits_a_real_exposed_path():
+    assert L.resolve_path_disposition(
+        "MODERATE", L.VERIFY_NO_MATCH, matches_baseline=False,
+        host_is_catchall=False) == "EMIT"
+
+
+# ── 4.7 fixture 3 — the 59ad6a13 invariant survives ───────────────────
+
+def test_449_FIXTURE3_a_real_secret_still_wins_on_a_status_catchall():
+    """⛔ LOAD-BEARING. A confirmed secret outranks every suppression path,
+    including the new one."""
+    assert L.resolve_path_disposition(
+        "HIGH", L.VERIFY_SECRET, matches_baseline=True,
+        host_is_catchall=True) == "HIGH"
+
+
+def test_449_high_branch_is_byte_identical_under_the_new_flags():
+    """⛔ THE REGRESSION I REFUSED TO SHIP. Folding host_is_catchall into the
+    HIGH branch reads as a tidy simplification and would silently convert
+    'INFO — checked, no secret found' into 'SUPPRESS' on exactly the paths that
+    matter most. Every HIGH verdict must be INDIFFERENT to the new flags."""
+    for verdict, expected in ((L.VERIFY_SECRET, "HIGH"),
+                              (L.VERIFY_APP_HTML, "INFO_APP_HTML"),
+                              (L.VERIFY_NO_MATCH, "INFO")):
+        for catchall in (False, True):
+            for unconfirmed in (False, True):
+                assert L.resolve_path_disposition(
+                    "HIGH", verdict, matches_baseline=False,
+                    host_is_catchall=catchall,
+                    marker_unconfirmed=unconfirmed) == expected, (
+                        verdict, catchall, unconfirmed)
+
+
+# ── the second, independent guard ─────────────────────────────────────
+
+def test_449_existence_marker_is_opt_in_per_path():
+    """A path with no declared marker can never be downgraded by this guard."""
+    assert L.existence_unconfirmed("/robots.txt", "anything at all") is False
+    assert L.existence_unconfirmed("/admin", "") is False
+
+
+def test_449_wp_install_without_a_wordpress_marker_is_unconfirmed():
+    assert L.existence_unconfirmed("/wp-admin/install.php", _SPA_A) is True
+
+
+def test_449_a_REAL_wordpress_install_page_still_confirms():
+    """⛔ NO FALSE NEGATIVE. WordPress's own install.php renders the string in
+    its title and setup copy, so a genuine reachable install still EMITS."""
+    body = "<html><title>WordPress &rsaquo; Installation</title></html>"
+    assert L.existence_unconfirmed("/wp-admin/install.php", body) is False
+    assert L.resolve_path_disposition(
+        "MODERATE", L.VERIFY_NO_MATCH, matches_baseline=False,
+        host_is_catchall=False,
+        marker_unconfirmed=L.existence_unconfirmed(
+            "/wp-admin/install.php", body)) == "EMIT"
+
+
+def test_449_unconfirmed_marker_downgrades_rather_than_suppressing():
+    """⚠ DOWNGRADE, NOT DELETE. A 2xx on a probed path while nonsense paths
+    404 is a real observation; only the CLAIM is unsupported."""
+    assert L.resolve_path_disposition(
+        "MODERATE", L.VERIFY_NO_MATCH, matches_baseline=False,
+        host_is_catchall=False, marker_unconfirmed=True) == "INFO_NO_MARKER"
+
+
+def test_449_catchall_beats_the_marker_guard():
+    """Order matters: on a catch-all the 2xx carries ZERO information, so there
+    is nothing to report at all — suppression wins over downgrade."""
+    assert L.resolve_path_disposition(
+        "MODERATE", L.VERIFY_NO_MATCH, matches_baseline=False,
+        host_is_catchall=True, marker_unconfirmed=True) == "SUPPRESS"
+
+
+def test_449_the_two_guards_fail_INDEPENDENTLY():
+    """⭐ WHY THERE ARE TWO. Either alone closes the reported defect; together
+    they cover the case where one control probe flakes and status detection
+    silently reverts to False."""
+    # guard 1 gone (a probe flaked) — guard 2 still downgrades the claim
+    assert L._is_catchall_by_status((200, 429)) is False
+    assert L.resolve_path_disposition(
+        "MODERATE", L.VERIFY_NO_MATCH, matches_baseline=False,
+        host_is_catchall=False, marker_unconfirmed=True) == "INFO_NO_MARKER"
+    # guard 2 gone (path declares no marker) — guard 1 still suppresses
+    assert L.existence_unconfirmed("/admin", _SPA_A) is False
+    assert L.resolve_path_disposition(
+        "INFO", L.VERIFY_NO_MATCH, matches_baseline=False,
+        host_is_catchall=True, marker_unconfirmed=False) == "SUPPRESS"
+
+
+def test_449_defaults_preserve_the_pre_449_contract():
+    """Both new params default False, so every pre-449 call site and test
+    exercises exactly the old behaviour."""
+    assert L.resolve_path_disposition(
+        "MODERATE", L.VERIFY_NO_MATCH, False) == "EMIT"
+    assert L.resolve_path_disposition(
+        "MODERATE", L.VERIFY_NO_MATCH, True) == "SUPPRESS"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# relay 449 — END-TO-END through check_common_paths.
+#
+# ⛔ WHY THIS SECTION EXISTS, and it is the most important thing in the file.
+# Every pure-function test above passed against a build where the call site
+# read `host_is_catchall=False` — the primitives were all correct and the fix
+# was WIRED TO NOTHING. A mutation proved it: 18/18 green, defect fully live.
+# Testing the decision is not testing the scanner. These drive the real
+# check_common_paths and assert on the FINDINGS IT EMITS.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _ctx():
+    return L.ScanContext(descriptor={}, hostname="uat.prodexlabs.com",
+                         asset_id="uat.prodexlabs.com", scan_run_id="r",
+                         queue_id="q", intensity="light")
+
+
+def _run_common_paths(monkeypatch, responder):
+    """Drive the REAL check_common_paths against a fake HTTP layer."""
+    ctx = _ctx()
+    monkeypatch.setattr(L, "_probe_path_body", responder)
+    monkeypatch.setattr(L.time, "sleep", lambda *a, **k: None)
+    L.check_common_paths(ctx)
+    return ctx
+
+
+def _spa_responder():
+    """The uat.prodexlabs.com shape: 200 + a NONCE-VARYING shell for EVERY
+    path, control probes included."""
+    n = {"i": 0}
+
+    def probe(_ctx, _path):
+        n["i"] += 1
+        return (200,
+                f"<!doctype html><html><meta nonce='n{n['i']}'>PRODEX</html>",
+                "text/html")
+    return probe
+
+
+def _normal_responder(exposed: dict):
+    """404 for anything not in `exposed` — i.e. NOT a catch-all."""
+    def probe(_ctx, path):
+        if path in exposed:
+            return exposed[path]
+        return (404, "not found", "text/html")
+    return probe
+
+
+def test_449_E2E_spa_catchall_emits_NO_wp_install_finding(monkeypatch):
+    """⭐ THE REPORTED DEFECT, reproduced end-to-end and closed. Pre-449 this
+    emitted MODERATE 'Exposed path: /wp-admin/install.php (HTTP 200)'."""
+    ctx = _run_common_paths(monkeypatch, _spa_responder())
+    wp = [f for f in ctx.findings if "install.php" in f.title]
+    assert wp == [], f"the false positive is back: {[f.title for f in wp]}"
+
+
+def test_449_E2E_spa_catchall_emits_the_collapsed_summary_instead(monkeypatch):
+    """Suppressed probes are ACCOUNTED FOR, not silently dropped."""
+    ctx = _run_common_paths(monkeypatch, _spa_responder())
+    summary = [f for f in ctx.findings
+               if f.check_name == "catchall-suppressed-paths"]
+    assert len(summary) == 1, [f.check_name for f in ctx.findings]
+    assert "suppressed" in summary[0].title
+
+
+def test_449_E2E_no_MODERATE_or_higher_survives_on_a_pure_catchall(monkeypatch):
+    """A host that 200s literally everything must not produce a single
+    actionable path finding — that is the whole claim."""
+    ctx = _run_common_paths(monkeypatch, _spa_responder())
+    loud = [f for f in ctx.findings
+            if f.severity in ("MODERATE", "HIGH", "CRITICAL")]
+    assert loud == [], [(f.severity, f.title) for f in loud]
+
+
+def test_449_E2E_the_artifact_records_WHY_it_suppressed(monkeypatch):
+    """⚠ catchall_baseline=null is how 4.7 diagnosed this from scan_run
+    9add84ef. A null baseline alone could not tell 'not a catch-all' from
+    'a catch-all whose body varies' — now the artifact says which."""
+    import json as _json
+    ctx = _run_common_paths(monkeypatch, _spa_responder())
+    art = [a for a in ctx.artifacts if a[0] == "common_paths"]
+    assert art, ctx.artifacts
+    blob = _json.loads(art[0][2])
+    assert blob["catchall_baseline"] is None, "bodies vary — no stable hash"
+    assert blob["catchall_by_status"] is True, "but it IS a catch-all"
+    assert blob["suppressed"] > 0
+
+
+def test_449_E2E_normal_host_STILL_EMITS_a_real_exposed_path(monkeypatch):
+    """⛔ NO NEW FALSE NEGATIVES — the guard that makes the fix safe. A real
+    WordPress install page on a non-catch-all host still fires MODERATE."""
+    ctx = _run_common_paths(monkeypatch, _normal_responder({
+        "/wp-admin/install.php": (
+            200, "<html><title>WordPress &rsaquo; Installation</title></html>",
+            "text/html")}))
+    wp = [f for f in ctx.findings if "install.php" in f.title]
+    assert len(wp) == 1, [f.title for f in ctx.findings]
+    assert wp[0].severity == "MODERATE", wp[0].severity
+    assert wp[0].title.startswith("Exposed path:")
+
+
+def test_449_E2E_normal_host_no_marker_is_DOWNGRADED_not_deleted(monkeypatch):
+    """Second guard, end to end: reachable but unsupported claim -> INFO, and
+    the title must not assert an install."""
+    ctx = _run_common_paths(monkeypatch, _normal_responder({
+        "/wp-admin/install.php": (200, "<html>some other app</html>",
+                                  "text/html")}))
+    wp = [f for f in ctx.findings if "/wp-admin/install.php" in f.title]
+    assert len(wp) == 1, [f.title for f in ctx.findings]
+    assert wp[0].severity == "INFO", wp[0].severity
+    assert "no application marker" in wp[0].title
+
+
+def test_449_E2E_a_REAL_SECRET_still_wins_on_a_catchall(monkeypatch):
+    """⛔ THE 59ad6a13 INVARIANT, end to end and under the NEW suppressor. A
+    genuine /.env served as octet-stream on a host that 200s everything must
+    still surface HIGH."""
+    n = {"i": 0}
+
+    def probe(_ctx, path):
+        n["i"] += 1
+        if path == "/.env":
+            return (200, "DB_PASSWORD=hunter2\nAPI_KEY=abcdef123456\n",
+                    "application/octet-stream")
+        return (200, f"<!doctype html><html><meta nonce='n{n['i']}'>X</html>",
+                "text/html")
+
+    ctx = _run_common_paths(monkeypatch, probe)
+    env = [f for f in ctx.findings if "/.env" in f.title]
+    assert len(env) == 1, [f.title for f in ctx.findings]
+    assert env[0].severity == "HIGH", (env[0].severity, env[0].title)
+
+
+def test_449_E2E_high_path_with_no_secret_is_still_INFO_not_suppressed(monkeypatch):
+    """⛔ THE REGRESSION THE HIGH BRANCH GUARDS. On a VARYING catch-all a HIGH
+    path with no marker must stay an auditable INFO row. If a refactor routes
+    the HIGH branch through host_is_catchall it becomes SUPPRESS and the audit
+    trail disappears on exactly the paths that matter most."""
+    ctx = _run_common_paths(monkeypatch, _spa_responder())
+    high_paths = [f for f in ctx.findings if "/.git/HEAD" in f.title]
+    assert len(high_paths) == 1, [f.title for f in ctx.findings]
+    assert high_paths[0].severity == "INFO"
+    assert "no secret found" in high_paths[0].title
