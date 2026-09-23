@@ -80,17 +80,25 @@ def test_the_union_of_consecutive_runs_covers_the_WHOLE_corpus():
     assert runs == 10, runs
 
 
-def test_the_real_numbers_reach_a_full_pass_in_four_runs():
-    """8,716 critical/high templates at the measured ~2,427 executed per run."""
-    corpus = [f"t{i:05d}" for i in range(8716)]
+def test_the_real_numbers_reach_a_full_pass_in_three_runs():
+    """⚠ CORRECTED FROM PRODUCTION (relay 470). This test used to say "8,716
+    templates ... full pass in four runs". That was WRONG about production and
+    the docstring taught the wrong number to anyone re-deriving from it: 8,716
+    is nuclei's internal COUNTER-UNIT total, not a template count. The live
+    cursor on uat.prodexlabs.com records the real figure — corpus_size 4318 for
+    critical,high — so at DEFAULT_SLICE_SIZE 2000 a full pass is THREE runs
+    (2000, 2000, 318), not four.
+
+    The mechanism was never wrong; only the premise was. Measured, not guessed."""
+    corpus = [f"t{i:05d}" for i in range(4318)]
     cur, runs = NEW_CURSOR, 0
     while runs < 10:
-        p = plan_slice(corpus, cur, size=2427)
+        p = plan_slice(corpus, cur, size=DEFAULT_SLICE_SIZE)
         if p["wrapped"]:
             break
         cur = fold_dispatch(cur, p, completed=True)
         runs += 1
-    assert runs == 4, runs
+    assert runs == 3, runs
 
 
 # ── wrap: coverage is a cycle ──────────────────────────────────────────────
