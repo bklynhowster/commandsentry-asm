@@ -1107,25 +1107,110 @@ _CATCHALL_2XX = (200, 204, 206)
 
 
 def _is_catchall(codes: tuple[int, int], hashes: tuple[str, str]) -> bool:
-    """Pure catch-all decision (hole 2). True iff BOTH control probes returned
-    2xx AND their body hashes are identical — the host serves one page for any
-    path. Tested in test_catchall_fp.py."""
+    """Pure BASELINE-ESTABLISHMENT decision (hole 2). True iff BOTH control
+    probes returned 2xx AND their body hashes are identical.
+
+    ⚠ DELIBERATELY UNCHANGED by relay 449, and the hash-match is NOT a bug
+    HERE. This governs whether a per-path `matches_baseline` comparison is
+    possible at all, and that comparison needs a real hash to compare against.
+    What relay 449 fixed is that this was ALSO the only gate on suppression —
+    see _is_catchall_by_status. Tested in test_catchall_fp.py."""
     return (codes[0] in _CATCHALL_2XX and codes[1] in _CATCHALL_2XX
             and hashes[0] == hashes[1])
 
 
-def detect_light_catchall(ctx: ScanContext) -> str | None:
+def _is_catchall_by_status(codes: tuple[int, int]) -> bool:
+    """⭐ relay 449 — the BODY-INDEPENDENT catch-all decision. True iff BOTH
+    random nonsense probes returned 2xx, whatever their bodies contained.
+
+    ⛔ THE DEFECT THIS CLOSES (uat.prodexlabs.com, scan_run 9add84ef, finding
+    `uat.prodexlabs.com:light:exposed-path-wp-admin-installphp`). The host is a
+    Next.js/PRODEX SPA that answers 200 with the app shell for EVERY path — a
+    textbook catch-all. But the shell embeds a per-request CSP nonce and
+    __NEXT_DATA__, so the two control bodies hash DIFFERENTLY, _is_catchall
+    returned False, the baseline was null, and `matches_baseline` was therefore
+    False for every probed path. The non-HIGH branch of resolve_path_disposition
+    relies SOLELY on that flag, so it emitted MODERATE "Exposed path:
+    /wp-admin/install.php — confirms WP install" against a host with no
+    WordPress anywhere on it.
+
+    ⭐ THE INSIGHT: a host that answers 2xx to two independent random nonsense
+    paths IS a catch-all, and that conclusion does not need the bodies to be
+    byte-identical. Byte-equality was never the definition of the property — it
+    was a convenient PROXY that any per-request-varying page defeats, and
+    per-request variance is the norm for every modern SPA. Decide on STATUS.
+
+    ⚠ POSITIVE DETECTION ONLY, which is what keeps this from creating false
+    negatives: suppression fires only when a catch-all is affirmatively
+    observed. If the nonsense probes 404 (a normal host), this is False and
+    every real exposed path still emits exactly as before."""
+    return codes[0] in _CATCHALL_2XX and codes[1] in _CATCHALL_2XX
+
+
+# ── Existence markers — the SECOND, INDEPENDENT guard (relay 449) ──────────
+# ⛔ WHY TWO GUARDS AND NOT ONE. The catch-all guard above depends on the two
+# control probes both landing 2xx. If ONE of them flakes (timeout, transient
+# 5xx, a rate-limiter answering 429), catch-all detection silently reverts to
+# False and the false positive returns. This guard fails independently: it asks
+# whether the RESPONSE BODY contains any positive evidence of the thing the
+# finding claims to have found, and needs no control probe at all.
+#
+# ⚠ THIS IS A DOWNGRADE, NEVER A SUPPRESSION. A 200 on a probed path while
+# nonsense paths 404 is a real observation worth keeping — what is unsupported
+# is the CLAIM attached to it ("confirms WP install"). So a missing marker
+# reports the observation honestly at INFO rather than deleting it. Suppression
+# is reserved for the catch-all case, where the 2xx carries literally zero
+# existence information.
+#
+# ⚠ NO FALSE NEGATIVE ON A REAL INSTALL: WordPress's own install.php renders
+# the string "WordPress" in its <title> and its setup copy, so a genuine
+# reachable install still satisfies the marker and still EMITS at MODERATE.
+_EXISTENCE_MARKERS = {
+    "/wp-admin/install.php": lambda b: "wordpress" in b.lower(),
+    "/wp-admin/upgrade.php": lambda b: "wordpress" in b.lower(),
+}
+
+
+def existence_unconfirmed(path: str, body: str) -> bool:
+    """True iff `path` declares an existence marker and `body` does NOT carry it.
+
+    Pure. Returns False for every path with no declared marker, so this guard is
+    strictly opt-in per path and cannot change the disposition of any path it
+    was not written for."""
+    m = _EXISTENCE_MARKERS.get(path)
+    if m is None:
+        return False
+    return not (body and m(body))
+
+
+def detect_light_catchall(ctx: ScanContext) -> tuple[str | None, bool]:
     """TWO random nonsense probes (hole 2 — a single control probe has the same
-    fragility as the Bug it guards). Catch-all baseline = the shared body hash
-    iff _is_catchall (both 2xx AND hash-match). None otherwise."""
+    fragility as the Bug it guards).
+
+    Returns (baseline, host_is_catchall) — relay 449 split these apart because
+    they answer DIFFERENT questions and have different failure modes:
+
+      baseline         — the shared body hash, iff the bodies are byte-identical
+                         (_is_catchall). Enables the per-path `matches_baseline`
+                         comparison. None when the page varies per request.
+      host_is_catchall — whether the host answers 2xx to anything at all
+                         (_is_catchall_by_status). Body-independent, so an SPA
+                         with a per-request nonce still reads True.
+
+    ⛔ Before 449 this returned the hash alone, so "the bodies vary" was
+    indistinguishable from "this host is not a catch-all" — one None doing two
+    jobs, and the SPA case silently took the wrong branch."""
     c1, b1, _ = _probe_path_body(ctx, "/cs-ctl-" + uuid.uuid4().hex[:16])
     c2, b2, _ = _probe_path_body(ctx, "/" + uuid.uuid4().hex[:20] + "-notreal")
     h1, h2 = _body_sha(b1), _body_sha(b2)
-    return h1 if _is_catchall((c1, c2), (h1, h2)) else None
+    baseline = h1 if _is_catchall((c1, c2), (h1, h2)) else None
+    return baseline, _is_catchall_by_status((c1, c2))
 
 
 def resolve_path_disposition(severity: str, verify_verdict: str,
-                             matches_baseline: bool) -> str:
+                             matches_baseline: bool,
+                             host_is_catchall: bool = False,
+                             marker_unconfirmed: bool = False) -> str:
     """Pure VERIFY-THEN-SUPPRESS decision (4.7 ruling 4; anchor commit
     59ad6a13). Returns 'HIGH' | 'INFO_APP_HTML' | 'INFO' | 'SUPPRESS' | 'EMIT'.
 
@@ -1140,7 +1225,21 @@ def resolve_path_disposition(severity: str, verify_verdict: str,
         'INFO_APP_HTML' (ruling 5 — auditable downgrade, never silent);
       - no marker: catch-all baseline suppresses ('SUPPRESS'); else a
         2xx-but-not-secret body is 'INFO' (manual review).
-    Non-HIGH: baseline match -> 'SUPPRESS'; else 'EMIT' at declared severity.
+    Non-HIGH (relay 449 — two INDEPENDENT guards, in this order):
+      - the host is a catch-all (body-identical baseline match OR the
+        body-independent status verdict) -> 'SUPPRESS'. A 2xx from a host that
+        2xx's everything carries zero existence information.
+      - the path declares an existence marker the body does not carry ->
+        'INFO_NO_MARKER'. The observation is real, the CLAIM is unsupported.
+      - otherwise -> 'EMIT' at declared severity.
+
+    ⛔ THE HIGH BRANCH IS DELIBERATELY UNTOUCHED BY 449. `host_is_catchall` is
+    read ONLY on the non-HIGH path. Folding it into the HIGH branch would look
+    like a tidy simplification and would be a REGRESSION: on a varying catch-all
+    a HIGH path with no marker currently resolves 'INFO' ("checked, no secret
+    found"), and routing it through the new flag would turn that into 'SUPPRESS'
+    — silently deleting the audit trail on exactly the paths that matter most.
+    Pinned by test_449_high_branch_is_byte_identical_under_the_new_flags.
 
     Inverting verify/suppress reintroduces the 59ad6a13 regression class —
     pinned by test_resolve_disposition_high_marker_wins_over_catchall."""
@@ -1152,13 +1251,16 @@ def resolve_path_disposition(severity: str, verify_verdict: str,
         if matches_baseline:
             return "SUPPRESS"
         return "INFO"
-    if matches_baseline:
+    if matches_baseline or host_is_catchall:
         return "SUPPRESS"
+    if marker_unconfirmed:
+        return "INFO_NO_MARKER"
     return "EMIT"
 
 
 def _emit_exposed_path(ctx: ScanContext, path: str, severity: str, why: str,
-                       code: int, content_type: str | None = None) -> None:
+                       code: int, content_type: str | None = None,
+                       title_override: str | None = None) -> None:
     slug = path.lstrip("/").replace("/", "-").replace(".", "")
     ct = content_type or "none"
     # PLAIN-ENGLISH TITLE (2026-07-25, Howie reviewing littleleaffarms). An INFO
@@ -1169,7 +1271,12 @@ def _emit_exposed_path(ctx: ScanContext, path: str, severity: str, why: str,
     # INFO rather than suppressed, so a real secret is never silently eaten. Only
     # the wording was wrong. INFO now says what actually happened (checked, no
     # secret found); EMIT-severity rows keep the assertive "Exposed path".
-    title = (
+    # ⚠ relay 449: the INFO title below is specific to the SECRET-verification
+    # path ("checked, no secret found"). The existence-marker downgrade is a
+    # different INFO with a different meaning, so it passes its own title rather
+    # than inheriting wording about secrets on a host that may not be a
+    # catch-all. Pinned by test_449_no_marker_title_does_not_claim_secret_check.
+    title = title_override or (
         f"Checked {path} — no secret found (catch-all host returned HTTP {code})"
         if severity == "INFO"
         else f"Exposed path: {path} (HTTP {code})"
@@ -1196,7 +1303,7 @@ def check_common_paths(ctx: ScanContext) -> None:
     ctx.tools_run.append("common_paths")
     results = []
     successful_probes = 0
-    baseline = detect_light_catchall(ctx)   # 2-probe control (hole 2)
+    baseline, host_is_catchall = detect_light_catchall(ctx)  # 2-probe control (hole 2)
     suppressed = 0
     for path, severity, why in COMMON_PATHS:
         code, body, ctype = _probe_path_body(ctx, path)
@@ -1216,7 +1323,10 @@ def check_common_paths(ctx: ScanContext) -> None:
         verdict = (verify_secret_content(path, body, ctype)
                    if severity == "HIGH" else VERIFY_NO_MATCH)
         matches_baseline = bool(baseline and _body_sha(body) == baseline)
-        disp = resolve_path_disposition(severity, verdict, matches_baseline)
+        disp = resolve_path_disposition(
+            severity, verdict, matches_baseline,
+            host_is_catchall=host_is_catchall,
+            marker_unconfirmed=existence_unconfirmed(path, body))
         if disp == "HIGH":                                              # real secret
             note = why
             if not _is_known_secret_ctype(ctype):
@@ -1233,6 +1343,18 @@ def check_common_paths(ctx: ScanContext) -> None:
             _emit_exposed_path(ctx, path, "INFO",
                 "returned 2xx but the body is not the expected secret "
                 "content — manual review", code, ctype)
+        elif disp == "INFO_NO_MARKER":                                  # relay 449
+            # The 2xx is real (nonsense paths did NOT 2xx), so this is kept —
+            # but the body carries no evidence of the thing the MODERATE claim
+            # asserts, so it is reported as what it is rather than as a
+            # confirmed install. Downgrade, never silent.
+            _emit_exposed_path(ctx, path, "INFO",
+                f"returned HTTP {code} but the body contains no marker for the "
+                f"expected application — the path is reachable, but this is NOT "
+                f"evidence the application is installed (downgrade reason: "
+                f"existence_marker_absent)", code, ctype,
+                title_override=(f"Reachable path {path} (HTTP {code}) — no "
+                                f"application marker in the body"))
         elif disp == "EMIT":
             _emit_exposed_path(ctx, path, severity, why, code, ctype)
         else:  # SUPPRESS
@@ -1245,19 +1367,35 @@ def check_common_paths(ctx: ScanContext) -> None:
                    f"{suppressed} sensitive-path probe(s) suppressed"),
             severity="INFO",
             category="info_disclosure",
-            description=(f"{ctx.hostname} returns the same 2xx body to random "
-                         f"nonexistent paths, so path-existence probing is not "
-                         f"meaningful. {suppressed} probe(s) matching the catch-all "
-                         f"baseline were collapsed here instead of emitted per-path. "
-                         f"HIGH secret paths were content-verified regardless, so a "
-                         f"real leak still surfaces."),
+            description=(f"{ctx.hostname} returns 2xx to random nonexistent "
+                         f"paths, so path-existence probing is not meaningful. "
+                         f"{suppressed} probe(s) were collapsed here instead of "
+                         f"emitted per-path. HIGH secret paths were "
+                         f"content-verified regardless, so a real leak still "
+                         f"surfaces."),
             tags=["paths", "catch-all", "suppressed"],
             cwe=[],
-            raw_excerpt=f"catch-all baseline body sha256={baseline}",
+            # ⚠ relay 449: the baseline hash is now OPTIONAL evidence, not the
+            # basis of the verdict. An SPA that varies per request suppresses on
+            # the status verdict with baseline=None, and the old wording ("the
+            # same 2xx body" + "sha256=None") would have described that host
+            # inaccurately in the one finding meant to explain the suppression.
+            raw_excerpt=(f"catch-all baseline body sha256={baseline}"
+                         if baseline else
+                         "catch-all detected by status (both control probes 2xx; "
+                         "bodies vary per request, so no stable baseline hash)"),
         ))
 
+    # ⚠ relay 449: `catchall_by_status` is persisted BECAUSE catchall_baseline
+    # being null is exactly how this defect was diagnosed from the artifact
+    # (scan_run 9add84ef). A null baseline alone could not distinguish "not a
+    # catch-all" from "a catch-all whose body varies" — the next investigation
+    # should not have to infer that difference from source.
     ctx.artifacts.append(("common_paths", "json",
-                          json.dumps({"probes": results, "catchall_baseline": baseline})))
+                          json.dumps({"probes": results,
+                                      "catchall_baseline": baseline,
+                                      "catchall_by_status": host_is_catchall,
+                                      "suppressed": suppressed})))
 
     # If every single probe failed (rc != 0 for all paths), the target is
     # unreachable — mark degraded. If at least one succeeded, the check did its
