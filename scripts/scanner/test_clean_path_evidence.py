@@ -146,8 +146,8 @@ def test_only_one_stats_parse_remains():
 
 def test_clean_path_uses_the_evidenced_primitive():
     assert re.search(
-        r"mark_tool_ok_evidenced\(ctx, chunk_name, evidence\)", CODE
-    ), "nuclei clean path must credit WITH evidence"
+        r"mark_tool_ok_evidenced\(ctx, chunk_name, evidence,\s*elapsed_s=chunk_elapsed_s\)", CODE
+    ), "nuclei clean path must credit WITH evidence (and #39 elapsed_s)"
 
 
 def _nuclei_chunked_body() -> str:
@@ -168,7 +168,10 @@ def test_nuclei_clean_path_no_longer_calls_the_bare_primitive():
     assert not re.search(r"mark_tool_ok\(ctx, chunk_name\)", body), (
         "nuclei clean path reverted to the unevidenced primitive"
     )
-    assert "mark_tool_ok_evidenced(ctx, chunk_name, evidence)" in body
+    assert re.search(
+        r"mark_tool_ok_evidenced\(ctx, chunk_name, evidence,\s*elapsed_s=chunk_elapsed_s\)",
+        body,
+    ), "clean path must credit WITH evidence (and #39 elapsed_s)"
 
 
 # ─── Migration progress — 4.7 (84) phase-3 gate ──────────────────────────
