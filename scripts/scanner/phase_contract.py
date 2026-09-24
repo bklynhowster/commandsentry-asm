@@ -149,6 +149,13 @@ class UnitResult:
     total: int | None = None
     percent: int | None = None
     rps: int | None = None
+    # ── #39b: measured wall clock from the COMPLETION path ──────────────
+    # mark_tool_ok_evidenced writes elapsed_s FLAT on the per-chunk entry.
+    # Without a field here it dies at exactly the boundary described above.
+    # PROVEN LIVE 2026-09-24 (uat.prodexlabs.com heavy, 1951s): the two OK
+    # chunks carried reason="completed" but elapsed_s was gone — and a
+    # completed chunk has no rps either, so its rate was underivable.
+    elapsed_s: float | None = None
 
     def as_dict(self) -> dict:
         d = {"name": self.name, "outcome": self.outcome}
@@ -158,7 +165,7 @@ class UnitResult:
             d["coverage"] = self.coverage
         if self.matches:
             d["matches"] = self.matches
-        for k in ("requests", "total", "percent", "rps"):
+        for k in ("requests", "total", "percent", "rps", "elapsed_s"):
             v = getattr(self, k)
             if v is not None:
                 d[k] = v
@@ -964,6 +971,8 @@ def _units_from_recorder(tool_status: dict) -> list:
             # 457), so Evidence refuses to carry it. Reading it out of
             # `evidence` would resurrect a number we already struck.
             rps=v.get("rps"),
+            # #39b — flat-only, like rps: the completion path writes it flat.
+            elapsed_s=v.get("elapsed_s"),
         ))
     return units
 
