@@ -8,6 +8,7 @@ window, the cursor advances ONLY on a completed run, and a missing table raises
 """
 import os
 import pathlib
+import re
 import sys
 
 import pytest
@@ -19,6 +20,22 @@ import coverage_wire as cw  # noqa: E402
 
 
 # ── in-memory fake of public.asset_template_cursor ──────────────────────────
+# ⛔ STRICT ON PURPOSE (262 ruling B, 2026-09-24). The first version of this
+# fake returned the WHOLE stored row for any SELECT and overwrote the WHOLE row
+# on any INSERT. That made it more forgiving than Postgres in exactly the two
+# ways the consecutive_holds writer can fail:
+#   - a column missing from read_cursor's SELECT list still came back, and
+#   - a column missing from the ON CONFLICT DO UPDATE SET clause still updated.
+# A test double more permissive than the thing it stands in for cannot catch
+# the bug it exists for (rule 14). So now: SELECT returns ONLY the columns it
+# names, and an upsert on an existing row changes ONLY the columns its UPDATE
+# clause lists. Columns absent from an insert take the table's defaults.
+_TABLE_DEFAULTS = {
+    "last_dispatched": None, "pass_count": 0, "corpus_identity": None,
+    "corpus_size": None, "consecutive_holds": 0,
+}
+
+
 class _Store:
     def __init__(self, missing_table=False):
         self.missing_table = missing_table
@@ -41,13 +58,26 @@ class _Cur:
             raise RuntimeError('relation "public.asset_template_cursor" does not exist')
         s = " ".join(sql.split()).lower()
         if s.startswith("select"):
-            self._result = self.store.rows.get((params[0], params[1]))
+            cols = [c.strip() for c in re.match(r"select (.*?) from", s).group(1).split(",")]
+            row = self.store.rows.get((params[0], params[1]))
+            # a column the table lacks raises, as Postgres would
+            self._result = None if row is None else {c: row[c] for c in cols}
         elif s.startswith("insert"):
-            asset, chunk, last, pc, cid, csize = params
-            self.store.rows[(asset, chunk)] = {
-                "last_dispatched": last, "pass_count": pc,
-                "corpus_identity": cid, "corpus_size": csize,
-            }
+            cols = [c.strip() for c in re.search(r"\((.*?)\) values", s).group(1).split(",")]
+            vals = [v.strip() for v in re.search(r"values \((.*?)\)", s).group(1).split(",")]
+            assert len(cols) == len(vals), "insert column/value count mismatch"
+            it = iter(params)
+            rec = {c: (next(it) if v == "%s" else None) for c, v in zip(cols, vals)}
+            assert next(it, "<end>") == "<end>", "more params than placeholders"
+            key = (rec.pop("asset_id"), rec.pop("chunk_label"))
+            rec.pop("updated_at", None)
+            if key in self.store.rows:
+                for col, src in re.findall(r"(\w+) = excluded\.(\w+)", s):
+                    self.store.rows[key][col] = rec[src]
+            else:
+                row = dict(_TABLE_DEFAULTS)
+                row.update(rec)
+                self.store.rows[key] = row
 
     def fetchone(self):
         return self._result
@@ -147,3 +177,59 @@ def test_missing_table_raises_so_caller_degrades(monkeypatch):
 def test_empty_corpus_raises(store):
     with pytest.raises(cw.cc.CoveragePlanError):
         cw.plan_and_write_slice("dsn", "a", CHUNK, [], size=4)
+
+
+# ── 262 ruling B: consecutive_holds, end to end through the (strict) store ───
+def test_the_fake_is_as_strict_as_postgres(store):
+    """Guard the double itself: if it ever goes back to returning whole rows,
+    the tests below stop being able to fail."""
+    store.rows[("a", CHUNK)] = dict(_TABLE_DEFAULTS, pass_count=7)
+    with cw._connect("dsn") as conn, conn.cursor() as cur:
+        cur.execute("select pass_count from t where asset_id = %s and chunk_label = %s",
+                    ("a", CHUNK))
+        assert cur.fetchone() == {"pass_count": 7}
+
+
+def _cut_run(size=4):
+    p, plan = cw.plan_and_write_slice("dsn", "a", CHUNK, CORPUS, size=size)
+    os.remove(p)
+    cw.record_completion("dsn", "a", CHUNK, plan=plan, completed=False,
+                         corpus_id="v1", corpus_size=10)
+
+
+def test_holds_ACCUMULATE_across_runs_in_the_db(store):
+    """⛔ The defect this pins: drop consecutive_holds from the SELECT, from
+    _cursor_state, or from the UPDATE clause, and the stored value sticks at 1
+    forever — each run reads 0, adds 1, writes 1. Every write looks right."""
+    p, plan = cw.plan_and_write_slice("dsn", "a", CHUNK, CORPUS, size=4)
+    os.remove(p)
+    cw.record_completion("dsn", "a", CHUNK, plan=plan, completed=True,
+                         corpus_id="v1", corpus_size=10)
+    assert store.rows[("a", CHUNK)]["consecutive_holds"] == 0
+    for expected in (1, 2, 3):
+        _cut_run()
+        assert store.rows[("a", CHUNK)]["consecutive_holds"] == expected
+    # and the position really did hold the whole time
+    assert store.rows[("a", CHUNK)]["last_dispatched"] == "t003.yaml"
+
+
+def test_a_completed_advance_resets_holds_in_the_db(store):
+    _cut_run()
+    _cut_run()
+    assert store.rows[("a", CHUNK)]["consecutive_holds"] == 2
+    p, plan = cw.plan_and_write_slice("dsn", "a", CHUNK, CORPUS, size=4)
+    os.remove(p)
+    cw.record_completion("dsn", "a", CHUNK, plan=plan, completed=True,
+                         corpus_id="v1", corpus_size=10)
+    row = store.rows[("a", CHUNK)]
+    assert row["consecutive_holds"] == 0
+    assert row["last_dispatched"] == "t003.yaml"
+
+
+def test_a_first_ever_run_that_is_cut_records_one_hold(store):
+    """A chunk cut on its very first run (medium:cve's life story) must still
+    be counted — no prior row, no position, one hold."""
+    _cut_run()
+    row = store.rows[("a", CHUNK)]
+    assert row["consecutive_holds"] == 1
+    assert row["last_dispatched"] is None
