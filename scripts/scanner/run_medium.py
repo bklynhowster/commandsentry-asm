@@ -1344,7 +1344,8 @@ def mark_tool_ok(ctx: ScanContext, tool_name: str) -> None:
 
 
 def mark_tool_ok_evidenced(
-    ctx: ScanContext, tool_name: str, evidence: Evidence
+    ctx: ScanContext, tool_name: str, evidence: Evidence,
+    *, elapsed_s: float | None = None, reason: str = "completed",
 ) -> None:
     """Record tool success WITH the evidence for it. 4.7 rulings 83-87.
 
@@ -1363,6 +1364,11 @@ def mark_tool_ok_evidenced(
     """
     entry: dict = {"ok": True}
     entry.update(evidence.to_status())
+    # #39: elapsed + reason on the COMPLETION path so observed_rate is
+    # derivable from chunks that FINISHED, not only ones that were cut.
+    if elapsed_s is not None:
+        entry["elapsed_s"] = elapsed_s
+        entry["reason"] = reason
     ctx.tool_status[tool_name] = entry
     # Live scan progress (note 103): best-effort flush so the portal's
     # ScanProgress poller sees this step complete. No-op if ctx.dsn unset.
@@ -4071,11 +4077,13 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # by induction (we just passed ensure_healthy_egress above).
         ctx.tools_run.append(chunk_name)
         pre_healthy = True
+        _chunk_t0 = time.time()  # #39
         rc, matches, _, chunk_stdout, chunk_stderr = run_nuclei_chunk(
             ctx, base_url, sev, tag,
             rate_override=rate_for_chunk if (THRESHOLD_PROBE_MODE or patient_effective or STEALTH_UA or needs_softened_rate(ctx)) else None,
             url_list_file=url_list_file,
         )
+        chunk_elapsed_s = round(time.time() - _chunk_t0, 1)  # #39
         log(f"  chunk {i+1} done: {matches} match(es), rc={rc}")
 
         # Per-chunk B1 detector (batch 2, advisor approved 2026-06-13).
@@ -4211,7 +4219,8 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
             # No floor yet (4.7 (85) cannot be calibrated until these counts
             # exist) — the verdict is still `ok` however poor the ratio looks.
             evidence = Evidence.from_nuclei_stats(stats)
-            mark_tool_ok_evidenced(ctx, chunk_name, evidence)
+            mark_tool_ok_evidenced(ctx, chunk_name, evidence,
+                                   elapsed_s=chunk_elapsed_s)
             if evidence.is_measured:
                 log(f"  chunk {i+1} complete: {evidence.requests}/{evidence.total} "
                     f"requests ({evidence.percent}%) — {matches} finding(s)")
