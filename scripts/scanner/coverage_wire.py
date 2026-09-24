@@ -42,7 +42,14 @@ def read_cursor(dsn, asset_id, chunk_label):
     """
     with _connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
-            "select last_dispatched, pass_count, corpus_identity, corpus_size "
+            # ⛔ consecutive_holds MUST be named here. Omit it and every read
+            # comes back without it, the fold starts from 0, and the counter can
+            # never pass 1 — while every individual write looks correct. That is
+            # #39b's defect (a field dropped at a translation boundary) in the
+            # other direction. test_coverage_wire pins it with a fake that
+            # returns ONLY the columns this SELECT names, as a real DB does.
+            "select last_dispatched, pass_count, corpus_identity, corpus_size, "
+            "consecutive_holds "
             f"from {_TABLE} where asset_id = %s and chunk_label = %s",
             (asset_id, chunk_label),
         )
@@ -56,6 +63,9 @@ def _cursor_state(row):
     return {
         "last_dispatched": row.get("last_dispatched"),
         "pass_count": int(row.get("pass_count") or 0),
+        # ⛔ the field-by-field translation IS the boundary where #39b's value
+        # died. Every field fold_dispatch reads must be carried across here.
+        "consecutive_holds": int(row.get("consecutive_holds") or 0),
     }
 
 
@@ -117,15 +127,20 @@ def record_completion(dsn, asset_id, chunk_label, *, plan, completed,
         cur.execute(
             f"insert into {_TABLE} "
             "(asset_id, chunk_label, last_dispatched, pass_count, "
-            " corpus_identity, corpus_size, updated_at) "
-            "values (%s, %s, %s, %s, %s, %s, now()) "
+            " corpus_identity, corpus_size, consecutive_holds, updated_at) "
+            "values (%s, %s, %s, %s, %s, %s, %s, now()) "
             "on conflict (asset_id, chunk_label) do update set "
-            "  last_dispatched = excluded.last_dispatched, "
-            "  pass_count      = excluded.pass_count, "
-            "  corpus_identity = excluded.corpus_identity, "
-            "  corpus_size     = excluded.corpus_size, "
-            "  updated_at      = now()",
+            "  last_dispatched   = excluded.last_dispatched, "
+            "  pass_count        = excluded.pass_count, "
+            "  corpus_identity   = excluded.corpus_identity, "
+            "  corpus_size       = excluded.corpus_size, "
+            # ⛔ the UPDATE clause, not just the insert column list. Miss this
+            # line and the first write is right and every later one is silently
+            # ignored — the version of the bug whose first observation passes.
+            "  consecutive_holds = excluded.consecutive_holds, "
+            "  updated_at        = now()",
             (asset_id, chunk_label, new.get("last_dispatched"),
-             int(new.get("pass_count") or 0), corpus_id, csize),
+             int(new.get("pass_count") or 0), corpus_id, csize,
+             int(new.get("consecutive_holds") or 0)),
         )
         conn.commit()

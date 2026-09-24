@@ -278,3 +278,83 @@ def test_the_preview_window_never_exceeds_the_corpus():
     prev = build_coverage_preview(
         CORPUS, {"last_dispatched": CORPUS[89]}, size=50)
     assert prev["window"][1] <= prev["corpus_size"], prev["window"]
+
+
+# ── 262 ruling B: consecutive_holds (migration 20260924a) ───────────────────
+
+def test_a_new_cursor_starts_with_zero_holds():
+    assert NEW_CURSOR["consecutive_holds"] == 0
+
+
+def test_a_CUT_run_counts_one_hold_and_does_not_move():
+    p = plan_slice(CORPUS, None, size=10)
+    cur = fold_dispatch(NEW_CURSOR, p, completed=False)
+    assert cur["consecutive_holds"] == 1
+    assert cur["last_dispatched"] is None
+
+
+def test_holds_ACCUMULATE_run_over_run():
+    """⛔ The whole point: 'stuck for N runs'. A counter that can only ever
+    read 1 is indistinguishable from no counter."""
+    cur = NEW_CURSOR
+    for expected in (1, 2, 3, 4):
+        cur = fold_dispatch(cur, plan_slice(CORPUS, cur, size=10), completed=False)
+        assert cur["consecutive_holds"] == expected
+
+
+def test_a_chunk_that_ADVANCED_then_FROZE_is_visible():
+    """The case `last_dispatched IS NULL` cannot see: a real position, then no
+    movement. This is why 4.7 approved the column."""
+    cur = fold_dispatch(NEW_CURSOR, plan_slice(CORPUS, None, size=10), completed=True)
+    assert cur["last_dispatched"] is not None and cur["consecutive_holds"] == 0
+    for _ in range(3):
+        cur = fold_dispatch(cur, plan_slice(CORPUS, cur, size=10), completed=False)
+    assert cur["last_dispatched"] == CORPUS[9]        # position held
+    assert cur["consecutive_holds"] == 3              # and now we can SAY so
+
+
+def test_a_completed_ADVANCE_resets_holds_to_zero():
+    cur = dict(NEW_CURSOR, consecutive_holds=5)
+    cur = fold_dispatch(cur, plan_slice(CORPUS, cur, size=10), completed=True)
+    assert cur["consecutive_holds"] == 0
+    assert cur["last_dispatched"] == CORPUS[9]
+
+
+def test_a_WRAP_that_lands_on_the_same_last_path_still_counts_as_moving():
+    """⚠ medium:tech is 2 templates against a 2,000 slice: every run dispatches
+    the whole corpus and ends on the SAME path, yet every run completes a pass.
+    'Moved' means the fold advanced — not that the stored string changed.
+    Comparing values would call our healthiest chunk permanently stuck."""
+    small = ["tech/a.yaml", "tech/b.yaml"]
+    cur = fold_dispatch(NEW_CURSOR, plan_slice(small, None, size=2000), completed=True)
+    cur = dict(cur, consecutive_holds=2)          # pretend two earlier cuts
+    p = plan_slice(small, cur, size=2000)
+    assert p["wrapped"] and p["last"] == cur["last_dispatched"]   # same string
+    cur = fold_dispatch(cur, p, completed=True)
+    assert cur["consecutive_holds"] == 0
+    assert cur["pass_count"] == 1
+
+
+def test_a_completed_run_that_dispatched_NOTHING_leaves_holds_untouched():
+    """Howie's ruling 2026-09-24: reset only when the cursor actually moves. A
+    completed-but-empty fold is neither a hold nor an advance, so it must not
+    wipe the stall signal."""
+    cur = dict(NEW_CURSOR, last_dispatched=CORPUS[4], consecutive_holds=3)
+    empty = plan_slice([], cur, size=10)
+    assert empty["exhausted"] and empty["last"] is None
+    after = fold_dispatch(cur, empty, completed=True)
+    assert after["consecutive_holds"] == 3
+    assert after["last_dispatched"] == CORPUS[4]
+
+
+def test_a_cursor_from_before_the_migration_reads_as_zero_holds():
+    """Rows and dicts written before 20260924a have no key at all."""
+    legacy = {"last_dispatched": CORPUS[9], "pass_count": 0}
+    cur = fold_dispatch(legacy, plan_slice(CORPUS, legacy, size=10), completed=False)
+    assert cur["consecutive_holds"] == 1
+
+
+def test_holding_does_not_mutate_the_cursor_it_was_given():
+    start = dict(NEW_CURSOR, consecutive_holds=2)
+    fold_dispatch(start, plan_slice(CORPUS, start, size=10), completed=False)
+    assert start["consecutive_holds"] == 2

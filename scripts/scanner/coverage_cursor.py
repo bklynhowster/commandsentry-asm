@@ -48,6 +48,9 @@ NEW_CURSOR: dict = {
     "last_dispatched": None,
     "pass_count": 0,
     "corpus_identity": None,
+    # 262 ruling B (migration 20260924a). Runs in a row this chunk did NOT move.
+    # See fold_dispatch for exactly what counts as moving — it is not "completed".
+    "consecutive_holds": 0,
 }
 
 
@@ -183,12 +186,39 @@ def fold_dispatch(cursor, plan, *, completed, corpus_id=None) -> dict:
     state = dict(cursor or NEW_CURSOR)
     if corpus_id is not None:
         state["corpus_identity"] = corpus_id
+    holds = int(state.get("consecutive_holds") or 0)
     if not completed:
+        # ── 262 ruling B: a HOLD. The cursor stays put; count it. ─────────────
+        # ⛔ This is the signal `last_dispatched IS NULL` cannot give: a chunk
+        # that advanced once and then froze has a non-null position forever, and
+        # asset_template_cursor.updated_at moves on every run, held or not. Only
+        # a counter that survives across runs can say "stuck for N".
+        state["consecutive_holds"] = holds + 1
         return state
-    if plan and plan.get("last"):
+    moved = bool(plan and plan.get("last"))
+    if moved:
         state["last_dispatched"] = plan["last"]
     if plan and plan.get("wrapped"):
         state["pass_count"] = int(state.get("pass_count") or 0) + 1
+    # ── RESET only when the cursor actually MOVED (Howie, 2026-09-24). ────────
+    # 262 says "reset on a completed ADVANCE"; `completed` alone is not that. A
+    # completed run whose plan dispatched nothing would otherwise wipe the stall
+    # signal at the exact moment it mattered. Today the only caller never passes
+    # such a plan (plan_and_write_slice raises first) — this keeps it true later.
+    #
+    # ⚠ "Moved" means THE FOLD ADVANCED (a non-empty window completed), NOT
+    # "last_dispatched changed value". A corpus no larger than the slice
+    # (medium:tech is 2 templates) re-dispatches the whole corpus every run and
+    # lands on the SAME last path each time — yet every such run completes a
+    # full pass (pass_count climbs). Comparing values would score the healthiest
+    # chunk we have as permanently stuck.
+    #
+    # A completed-but-empty fold is neither a hold nor an advance: the counter
+    # is left exactly as it was.
+    if moved:
+        state["consecutive_holds"] = 0
+    else:
+        state["consecutive_holds"] = holds
     return state
 
 
