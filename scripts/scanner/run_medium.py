@@ -1324,6 +1324,44 @@ def build_planned_steps(ctx: "ScanContext") -> list[str]:
     return steps
 
 
+# ── phase timing (270 step 1) ───────────────────────────────────────────────
+# ⛔ WHY THIS LIVES IN THE MARKERS AND NOT IN run_phase. run_phase already
+# measures a true `elapsed` for every phase it runs — but 14 of the 20 phases in
+# a heavy run never go through it. They self-bookkeep, calling these markers
+# directly, and the legacy adapter warns that routing them through run_phase
+# would credit them TWICE. So nuclei was the only timed phase in the whole run,
+# and ~half of a ~2000s scan was unattributed: you cannot size a work budget,
+# justify a wall-clock ceiling, or decide how long a VPN slot must be held when
+# you cannot see where the time goes. Every phase funnels through exactly one of
+# these five markers, so stamping here covers all of them at once.
+#
+# ⚠ `phase_window_s` IS DERIVED, AND IS DELIBERATELY NOT CALLED `elapsed_s`.
+# It is the wall interval between this phase's completion and the previous
+# one's, so it includes inter-phase overhead and is an UPPER bound on the
+# phase's own work. `elapsed_s` already means a true measured duration on the
+# nuclei chunks (#39b); giving that name a second, weaker meaning is exactly the
+# translation-boundary conflation that has already cost this workstream four
+# separate data losses — see _merge_phase_diagnostics, which names three.
+# Read them as different things, because they are.
+#
+# The FIRST phase of a run has no predecessor, so it carries `completed_at_s`
+# but no `phase_window_s`. That gap is honest and is left visible rather than
+# back-filled from a run-start guess.
+def _stamp_phase_window(ctx, tool_name: str) -> None:
+    """Record when this phase finished, and how long since the last one did."""
+    now = time.time()
+    entry = (getattr(ctx, "tool_status", None) or {}).get(tool_name)
+    if isinstance(entry, dict):
+        entry["completed_at_s"] = round(now, 1)
+        prev = getattr(ctx, "_phase_window_mark", None)
+        if isinstance(prev, (int, float)):
+            entry["phase_window_s"] = round(now - prev, 1)
+    try:
+        ctx._phase_window_mark = now
+    except Exception:          # frozen ctx — timing is never load-bearing
+        pass
+
+
 def mark_tool_ok(ctx: ScanContext, tool_name: str) -> None:
     """DEPRECATED (4.7 ruling 84, spec 220) — credits success with NO evidence.
 
@@ -1338,6 +1376,7 @@ def mark_tool_ok(ctx: ScanContext, tool_name: str) -> None:
     structurally required, not aspirational.
     """
     ctx.tool_status[tool_name] = {"ok": True}
+    _stamp_phase_window(ctx, tool_name)
     # Live scan progress (note 103): best-effort flush so the portal's
     # ScanProgress poller sees this step complete. No-op if ctx.dsn unset.
     flush_progress(ctx)
@@ -1370,6 +1409,7 @@ def mark_tool_ok_evidenced(
         entry["elapsed_s"] = elapsed_s
         entry["reason"] = reason
     ctx.tool_status[tool_name] = entry
+    _stamp_phase_window(ctx, tool_name)
     # Live scan progress (note 103): best-effort flush so the portal's
     # ScanProgress poller sees this step complete. No-op if ctx.dsn unset.
     flush_progress(ctx)
@@ -1420,6 +1460,7 @@ def mark_tool_skipped(ctx: ScanContext, tool_name: str, reason: str) -> None:
     execute, there's no stderr to capture.
     """
     ctx.tool_status[tool_name] = {"skipped": reason}
+    _stamp_phase_window(ctx, tool_name)
     # Live scan progress (note 103): best-effort flush.
     flush_progress(ctx)
 
@@ -1505,6 +1546,7 @@ def mark_tool_partial(
             if stats.get(k) is not None:
                 entry[k] = stats[k]
     ctx.tool_status[tool_name] = entry
+    _stamp_phase_window(ctx, tool_name)
     flush_progress(ctx)
     if stderr:
         # Capture stderr on the partial path too. Beyond forensics this is the
@@ -1556,6 +1598,7 @@ def mark_tool_degraded(
     this capture path.
     """
     ctx.tool_status[tool_name] = {"degraded": reason}
+    _stamp_phase_window(ctx, tool_name)
     # Live scan progress (note 103): best-effort flush. Done BEFORE
     # the stderr capture below so the portal sees the degraded status
     # ASAP even if stderr serialization is slow.
