@@ -11,6 +11,9 @@ import pytest  # noqa: E402
 
 from coverage_cursor import (  # noqa: E402
     DEFAULT_SLICE_SIZE,
+    MIN_SLICE_SIZE,
+    SLICE_CORPUS_CAP,
+    effective_slice_size,
     NEW_CURSOR,
     CoveragePlanError,
     build_coverage_preview,
@@ -358,3 +361,92 @@ def test_holding_does_not_mutate_the_cursor_it_was_given():
     start = dict(NEW_CURSOR, consecutive_holds=2)
     fold_dispatch(start, plan_slice(CORPUS, start, size=10), completed=False)
     assert start["consecutive_holds"] == 2
+
+
+# ── 270 Change 1 — the slice may never BE the corpus ───────────────────────
+# Regression cover for 269: medium:cve's 1,576-template corpus is SMALLER than
+# DEFAULT_SLICE_SIZE, so plan_slice returned the whole corpus, deferral turned
+# itself off, and six consecutive uat runs were cut at an identical 94% and
+# banked nothing. These tests fail if that can happen again.
+
+MEDIUM_CVE_CORPUS = 1576      # measured, uat/link/tour, 2026-09-25
+CRITICAL_HIGH_CORPUS = 4318   # the control: bigger than the slice, always worked
+
+
+def test_a_slice_is_never_the_whole_corpus():
+    """⛔ THE 269 DEADLOCK. If the window can be the entire corpus there is
+    nothing smaller to defer to, and a cut is unrecoverable forever."""
+    for corpus in (MEDIUM_CVE_CORPUS, 335, 1999, DEFAULT_SLICE_SIZE + 1):
+        eff = effective_slice_size(DEFAULT_SLICE_SIZE, corpus)
+        assert eff < corpus, (
+            f"corpus {corpus}: slice {eff} is the whole corpus — this is exactly "
+            "the all-or-nothing state that deadlocked medium:cve")
+
+
+def test_a_corpus_larger_than_the_slice_is_left_alone():
+    """The control. critical,high always worked; the fix must not touch it."""
+    assert effective_slice_size(DEFAULT_SLICE_SIZE, CRITICAL_HIGH_CORPUS) \
+        == DEFAULT_SLICE_SIZE
+
+
+def test_consecutive_holds_shrink_the_next_window():
+    """262 ruling B's counter earning its keep: a chunk that cannot report how
+    much it covered can still report how many times it failed."""
+    sizes = [effective_slice_size(DEFAULT_SLICE_SIZE, MEDIUM_CVE_CORPUS, holds=h)
+             for h in range(4)]
+    assert sizes == sorted(sizes, reverse=True), sizes
+    assert len(set(sizes)) == len(sizes), f"backoff did not move: {sizes}"
+
+
+def test_the_backoff_has_a_floor():
+    assert effective_slice_size(DEFAULT_SLICE_SIZE, MEDIUM_CVE_CORPUS,
+                                holds=99) >= MIN_SLICE_SIZE
+
+
+def test_a_tiny_corpus_is_still_covered_whole():
+    """medium:tech is 2 templates and completes in ~3s. The cap must not
+    subdivide something that trivially fits."""
+    for corpus in (1, 2, 10):
+        assert effective_slice_size(DEFAULT_SLICE_SIZE, corpus) == corpus
+
+
+def test_plan_slice_applies_the_cap_and_reports_it():
+    corpus = [f"t{i:05d}.yaml" for i in range(MEDIUM_CVE_CORPUS)]
+    plan = plan_slice(corpus, cursor=dict(NEW_CURSOR))
+    assert len(plan["templates"]) < len(corpus)
+    assert plan["slice_size"] == len(plan["templates"])
+    assert plan["requested_size"] == DEFAULT_SLICE_SIZE
+
+
+def test_the_full_corpus_is_covered_and_the_wrap_does_not_re_deadlock():
+    """⛔ THE ONE THAT MATTERS. Walks real runs against the real constraint:
+    the wall completes a window only at or below ~94% of this corpus. Before the
+    fix this covered ZERO templates on every run, forever."""
+    corpus = [f"t{i:05d}.yaml" for i in range(MEDIUM_CVE_CORPUS)]
+    fits = 1470                      # observed 94% cut point
+    cursor, covered = dict(NEW_CURSOR), set()
+    for _ in range(6):
+        plan = plan_slice(corpus, cursor=cursor)
+        completed = len(plan["templates"]) <= fits
+        if completed:
+            covered.update(plan["templates"])
+        cursor = fold_dispatch(cursor, plan, completed=completed)
+        assert cursor["consecutive_holds"] == 0, "a window was still cut"
+    assert covered == set(corpus), f"only {len(covered)}/{len(corpus)} covered"
+    assert cursor["pass_count"] >= 2, "the corpus never wrapped"
+
+
+def test_the_preview_reports_the_window_it_will_ACTUALLY_use():
+    """⛔ A dry-run that overstates its own reach is the same defect as a scan
+    reporting `complete` on a corpus it never dispatched (269). Before 270 this
+    previewed slice_size 2000 / runs_to_full_pass 1 for a 1,576 corpus whose
+    real window was 1,340 and whose real answer was 2."""
+    corpus = [f"t{i:05d}.yaml" for i in range(MEDIUM_CVE_CORPUS)]
+    p = build_coverage_preview(corpus)
+    assert p["slice_size"] == p["window"][1] - p["window"][0]
+    assert p["slice_size"] < p["requested_slice_size"]
+    assert p["runs_to_full_pass"] == 2, p["runs_to_full_pass"]
+
+
+def test_the_preview_never_divides_by_a_zero_window():
+    assert build_coverage_preview([])["runs_to_full_pass"] is None
