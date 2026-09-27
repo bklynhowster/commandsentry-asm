@@ -600,18 +600,29 @@ jobs:
         if: ${{ steps.poll.outputs.has_work == 'true' && steps.poll.outputs.intensity == 'light' && (steps.vpn_decision.outputs.use_vpn != 'true' || steps.vpn_slot.outputs.acquired == 'true' || github.event.inputs.skip_vpn == 'true') }}
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
-          # 354a go-live flag (relay 366). Default false -> probe_enforcement in
-          # run_light ships DRY-RUN: it records the plan and sends nothing. Only a
-          # manual dispatch with enforcement_probe_live=true arms it, and ONLY for
-          # assets opted in via assets.enforcement_probe_authorized=true — two
-          # AND-ed gates, either alone fires nothing. Cron/workflow_run triggers
-          # carry no input (empty -> 'false' -> dry-run), so scheduled light scans
-          # are unchanged.
+          # 354a go-live flag (relay 366; ARMED 2026-09-27 on Howie's explicit
+          # fleet-wide authorization). Default is now 'true': a scheduled scan
+          # arms the live half, so the probe fires on the normal weekly cadence
+          # instead of only on a hand-dispatch. It was default-'false' from
+          # 2026-08 until now, which meant cron could NEVER fire it — the
+          # per-asset flag was armed on 0 assets and would have fired nothing
+          # even when armed. Same defect shape as DEEP_SWEEP_TIER: a switch
+          # positioned so the automatic path can never reach it.
+          #
+          # ⭐ THE REAL GATE IS STILL PER-ASSET. assets.enforcement_probe_authorized
+          # must be true for the host, and it is false on everything not owned +
+          # confirmed_live. Arming the fleet half does not widen the target set;
+          # it only stops the scheduler from muting an authorization that exists.
+          #
+          # KILL SWITCH, no code change: set the repo variable
+          # ENFORCEMENT_PROBE_LIVE=false (Settings -> Secrets and variables ->
+          # Actions -> Variables). Precedence: dispatch input, then repo var,
+          # then armed.
           # ⚠ THIS BELONGS ON THE LIGHT STEP, NOT HEAVY. probe_enforcement runs in
           # run_light.py; ACTIVE_PROBE_LIVE (the fwbbot sibling this mirrors) sits
           # on the heavy step because THAT probe runs in run_heavy.py. Moving this
           # one there would leave the enforcement probe permanently dry-run.
-          ENFORCEMENT_PROBE_LIVE: ${{ github.event.inputs.enforcement_probe_live || 'false' }}
+          ENFORCEMENT_PROBE_LIVE: ${{ github.event.inputs.enforcement_probe_live || vars.ENFORCEMENT_PROBE_LIVE || 'true' }}
         run: |
           python scripts/scanner/run_light.py /tmp/scan_descriptor.json
 
@@ -697,7 +708,7 @@ jobs:
           # active_probe_live=true arms the probe, and ONLY for assets opted in via
           # assets.active_probe_authorized. Cron/workflow_run triggers carry no input
           # (empty -> 'false' -> dry-run), so scheduled scans are unchanged.
-          ACTIVE_PROBE_LIVE: ${{ github.event.inputs.active_probe_live || 'false' }}
+          ACTIVE_PROBE_LIVE: ${{ github.event.inputs.active_probe_live || vars.ACTIVE_PROBE_LIVE || 'true' }}
           # Cumulative heavy (step 4 inc 3c). Same shape as ACTIVE_PROBE_LIVE:
           # only a manual dispatch can arm it; cron/workflow_run carry no input
           # so scheduled heavy scans keep today's behaviour exactly.
