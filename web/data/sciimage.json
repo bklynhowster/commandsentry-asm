@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-10-03T14:11:52Z_74c0c019",
-    "started_at": "2026-10-03T14:11:52Z",
-    "completed_at": "2026-10-03T14:14:43Z",
-    "duration_seconds": 171,
+    "id": "scan_2026-10-03T19:12:27Z_fa50f343",
+    "started_at": "2026-10-03T19:12:27Z",
+    "completed_at": "2026-10-03T19:17:08Z",
+    "duration_seconds": 281,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -28,11 +28,11 @@
   },
   "registration": {},
   "summary": {
-    "subdomain_count": 5,
-    "live_subdomain_count": 5,
-    "host_count": 5,
+    "subdomain_count": 6,
+    "live_subdomain_count": 6,
+    "host_count": 6,
     "service_count": 6,
-    "newest_cert_expiry_days": 123,
+    "newest_cert_expiry_days": 122,
     "top_hosting_org": "Cablevision Systems Corp.",
     "platforms": []
   },
@@ -42,8 +42,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-03T14:14:44Z",
-      "last_seen": "2026-10-03T14:14:44Z",
+      "first_discovered": "2026-10-03T19:17:08Z",
+      "last_seen": "2026-10-03T19:17:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -99,7 +99,7 @@
             "not_before": "2026-01-02T18:09:45Z",
             "not_after": "2027-02-03T18:09:45Z",
             "self_signed": false,
-            "days_to_expiry": 123
+            "days_to_expiry": 122
           }
         }
       ],
@@ -137,8 +137,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-03T14:14:44Z",
-      "last_seen": "2026-10-03T14:14:44Z",
+      "first_discovered": "2026-10-03T19:17:08Z",
+      "last_seen": "2026-10-03T19:17:08Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -194,7 +194,7 @@
             "not_before": "2026-01-02T18:09:45Z",
             "not_after": "2027-02-03T18:09:45Z",
             "self_signed": false,
-            "days_to_expiry": 123
+            "days_to_expiry": 122
           }
         }
       ],
@@ -277,8 +277,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-03T14:14:44Z",
-      "last_seen": "2026-10-03T14:14:44Z",
+      "first_discovered": "2026-10-03T19:17:08Z",
+      "last_seen": "2026-10-03T19:17:08Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -333,12 +333,70 @@
       }
     },
     {
+      "name": "ns02.sciimage.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-10-03T19:17:08Z",
+      "last_seen": "2026-10-03T19:17:08Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "probe_status": {
+        "naabu": {
+          "ok": true
+        },
+        "httpx_tech": {
+          "ok": true
+        },
+        "fingerprintx": {
+          "ok": true
+        }
+      },
+      "hosts": [
+        {
+          "ip": "76.223.76.45",
+          "asn": "AS16509",
+          "asn_org": "Amazon.com, Inc.",
+          "country": "US",
+          "region": "Washington",
+          "city": "Seattle",
+          "reverse_dns": "afb6e734f9662ea14.awsglobalaccelerator.com",
+          "is_private": false
+        }
+      ],
+      "services": [],
+      "dns": {
+        "a": [],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
       "name": "vpn.sciimage.com",
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-03T14:14:44Z",
-      "last_seen": "2026-10-03T14:14:44Z",
+      "first_discovered": "2026-10-03T19:17:09Z",
+      "last_seen": "2026-10-03T19:17:09Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -386,7 +444,7 @@
             "not_before": "2026-01-02T18:09:45Z",
             "not_after": "2027-02-03T18:09:45Z",
             "self_signed": false,
-            "days_to_expiry": 123
+            "days_to_expiry": 122
           }
         }
       ],
@@ -424,8 +482,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-03T14:14:44Z",
-      "last_seen": "2026-10-03T14:14:44Z",
+      "first_discovered": "2026-10-03T19:17:09Z",
+      "last_seen": "2026-10-03T19:17:09Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -473,7 +531,7 @@
             "not_before": "2026-01-02T18:09:45Z",
             "not_after": "2027-02-03T18:09:45Z",
             "self_signed": false,
-            "days_to_expiry": 123
+            "days_to_expiry": 122
           }
         }
       ],
@@ -509,13 +567,8 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-10-03T06:57:41Z_b0dcd97b",
+    "since_scan": "scan_2026-10-03T14:11:52Z_74c0c019",
     "added": {
-      "subdomains": [],
-      "services": [],
-      "hosts": []
-    },
-    "removed": {
       "subdomains": [
         "ns02.sciimage.com"
       ],
@@ -527,6 +580,11 @@
         }
       ]
     },
+    "removed": {
+      "subdomains": [],
+      "services": [],
+      "hosts": []
+    },
     "changed": {
       "fingerprint": [],
       "cert": [],
@@ -534,51 +592,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-09-03T04:28:59Z_6a96e2aa",
-      "started_at": "2026-09-03T04:28:59Z",
-      "completed_at": "2026-09-03T04:33:11Z",
-      "subdomain_count": 6,
-      "live_subdomain_count": 6,
-      "host_count": 6,
-      "service_count": 7,
-      "subdomain_names": [
-        "ftp.sciimage.com",
-        "insite.sciimage.com",
-        "ns01.sciimage.com",
-        "ns02.sciimage.com",
-        "vpn.sciimage.com",
-        "vpn2.sciimage.com"
-      ],
-      "ports_by_sub": {
-        "ftp.sciimage.com": {
-          "24.157.51.76": [
-            22,
-            80,
-            443
-          ]
-        },
-        "insite.sciimage.com": {
-          "24.157.51.70": [
-            80,
-            443
-          ]
-        },
-        "ns01.sciimage.com": {},
-        "ns02.sciimage.com": {},
-        "vpn.sciimage.com": {
-          "24.157.51.66": [
-            443
-          ]
-        },
-        "vpn2.sciimage.com": {
-          "52.119.65.2": [
-            443
-          ]
-        }
-      },
-      "tech_versions": {}
-    },
     {
       "scan_id": "scan_2026-09-03T11:27:12Z_799117b3",
       "started_at": "2026-09-03T11:27:12Z",
@@ -5786,6 +5799,50 @@
           ]
         },
         "ns01.sciimage.com": {},
+        "vpn.sciimage.com": {
+          "24.157.51.66": [
+            443
+          ]
+        },
+        "vpn2.sciimage.com": {
+          "52.119.65.2": [
+            443
+          ]
+        }
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-10-03T19:12:27Z_fa50f343",
+      "started_at": "2026-10-03T19:12:27Z",
+      "completed_at": "2026-10-03T19:17:08Z",
+      "subdomain_count": 6,
+      "live_subdomain_count": 6,
+      "host_count": 6,
+      "service_count": 6,
+      "subdomain_names": [
+        "ftp.sciimage.com",
+        "insite.sciimage.com",
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "ports_by_sub": {
+        "ftp.sciimage.com": {
+          "24.157.51.76": [
+            80,
+            443
+          ]
+        },
+        "insite.sciimage.com": {
+          "24.157.51.70": [
+            80,
+            443
+          ]
+        },
+        "ns01.sciimage.com": {},
+        "ns02.sciimage.com": {},
         "vpn.sciimage.com": {
           "24.157.51.66": [
             443
