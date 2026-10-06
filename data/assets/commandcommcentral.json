@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-10-06T12:40:31Z_239ef541",
-    "started_at": "2026-10-06T12:40:31Z",
-    "completed_at": "2026-10-06T12:47:42Z",
-    "duration_seconds": 431,
+    "id": "scan_2026-10-06T18:36:41Z_9ca78de0",
+    "started_at": "2026-10-06T18:36:41Z",
+    "completed_at": "2026-10-06T18:44:20Z",
+    "duration_seconds": 459,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -31,9 +31,9 @@
   "summary": {
     "subdomain_count": 10,
     "live_subdomain_count": 10,
-    "host_count": 9,
+    "host_count": 8,
     "service_count": 16,
-    "newest_cert_expiry_days": 120,
+    "newest_cert_expiry_days": 119,
     "top_hosting_org": "Cablevision Systems Corp.",
     "platforms": [
       "Microsoft .NET / IIS"
@@ -45,13 +45,13 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-10-06T12:47:42Z",
-      "last_seen": "2026-10-06T12:47:42Z",
+      "first_discovered": "2026-10-06T18:44:20Z",
+      "last_seen": "2026-10-06T18:44:20Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 403,
-        "title": "403 - Forbidden: Access is denied."
+        "http_status": 200,
+        "title": "CommandCommCentral"
       },
       "probe_status": {
         "naabu": {
@@ -102,7 +102,7 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 120
+            "days_to_expiry": 119
           }
         }
       ],
@@ -121,13 +121,13 @@
         "dnssec": false
       },
       "fingerprint": {
-        "server": "Microsoft-IIS/10.0",
+        "server": null,
         "platform_label": "Microsoft .NET / IIS",
         "tech": [
           {
-            "name": "IIS",
-            "version": "10.0",
-            "category": "webserver"
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
           },
           {
             "name": "Microsoft ASP.NET",
@@ -135,7 +135,22 @@
             "category": "framework"
           },
           {
-            "name": "Windows Server",
+            "name": "Microsoft Power BI",
+            "version": null,
+            "category": "tracking"
+          },
+          {
+            "name": "Modernizr",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery UI",
             "version": null,
             "category": null
           }
@@ -152,8 +167,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-06T12:47:42Z",
-      "last_seen": "2026-10-06T12:47:42Z",
+      "first_discovered": "2026-10-06T18:44:20Z",
+      "last_seen": "2026-10-06T18:44:20Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -209,7 +224,7 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 120
+            "days_to_expiry": 119
           }
         }
       ],
@@ -262,13 +277,13 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-06T12:47:42Z",
-      "last_seen": "2026-10-06T12:47:42Z",
+      "first_discovered": "2026-10-06T18:44:20Z",
+      "last_seen": "2026-10-06T18:44:20Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 403,
-        "title": "403 - Forbidden: Access is denied."
+        "http_status": 200,
+        "title": "CommandCommCentral"
       },
       "probe_status": {
         "naabu": {
@@ -319,7 +334,7 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 120
+            "days_to_expiry": 119
           }
         }
       ],
@@ -336,13 +351,13 @@
         "dnssec": false
       },
       "fingerprint": {
-        "server": "Microsoft-IIS/10.0",
+        "server": null,
         "platform_label": "Microsoft .NET / IIS",
         "tech": [
           {
-            "name": "IIS",
-            "version": "10.0",
-            "category": "webserver"
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
           },
           {
             "name": "Microsoft ASP.NET",
@@ -350,7 +365,22 @@
             "category": "framework"
           },
           {
-            "name": "Windows Server",
+            "name": "Microsoft Power BI",
+            "version": null,
+            "category": "tracking"
+          },
+          {
+            "name": "Modernizr",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery UI",
             "version": null,
             "category": null
           }
@@ -367,8 +397,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-06T12:47:42Z",
-      "last_seen": "2026-10-06T12:47:42Z",
+      "first_discovered": "2026-10-06T18:44:20Z",
+      "last_seen": "2026-10-06T18:44:20Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -467,8 +497,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-06T12:47:43Z",
-      "last_seen": "2026-10-06T12:47:43Z",
+      "first_discovered": "2026-10-06T18:44:20Z",
+      "last_seen": "2026-10-06T18:44:20Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -524,7 +554,7 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 120
+            "days_to_expiry": 119
           }
         }
       ],
@@ -577,8 +607,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-06T12:47:43Z",
-      "last_seen": "2026-10-06T12:47:43Z",
+      "first_discovered": "2026-10-06T18:44:20Z",
+      "last_seen": "2026-10-06T18:44:20Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -637,8 +667,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-06T12:47:43Z",
-      "last_seen": "2026-10-06T12:47:43Z",
+      "first_discovered": "2026-10-06T18:44:20Z",
+      "last_seen": "2026-10-06T18:44:20Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -695,13 +725,13 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-06T12:47:43Z",
-      "last_seen": "2026-10-06T12:47:43Z",
+      "first_discovered": "2026-10-06T18:44:20Z",
+      "last_seen": "2026-10-06T18:44:20Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 404,
-        "title": "Not Found"
+        "http_status": 200,
+        "title": "CommandCommCentral"
       },
       "probe_status": {
         "naabu": {
@@ -716,19 +746,19 @@
       },
       "hosts": [
         {
-          "ip": "52.119.65.6",
-          "asn": "AS18616",
-          "asn_org": "Natural Wireless, LLC",
+          "ip": "24.38.70.8",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
           "country": "US",
-          "region": "New York",
-          "city": "New York City",
-          "reverse_dns": "6.65.119.52.naturalwireless.com",
+          "region": "New Jersey",
+          "city": "Franklin Park",
+          "reverse_dns": "18264608.cst.lightpath.net",
           "is_private": false
         }
       ],
       "services": [
         {
-          "ip": "52.119.65.6",
+          "ip": "24.38.70.8",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -736,7 +766,7 @@
           "tls": false
         },
         {
-          "ip": "52.119.65.6",
+          "ip": "24.38.70.8",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
@@ -752,13 +782,13 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 120
+            "days_to_expiry": 119
           }
         }
       ],
       "dns": {
         "a": [
-          "52.119.65.6"
+          "24.38.70.8"
         ],
         "aaaa": [],
         "cname": null,
@@ -769,12 +799,37 @@
         "dnssec": false
       },
       "fingerprint": {
-        "server": "Microsoft-HTTPAPI/2.0",
-        "platform_label": null,
+        "server": null,
+        "platform_label": "Microsoft .NET / IIS",
         "tech": [
           {
-            "name": "Microsoft HTTPAPI",
-            "version": "2.0",
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          },
+          {
+            "name": "Microsoft ASP.NET",
+            "version": null,
+            "category": "framework"
+          },
+          {
+            "name": "Microsoft Power BI",
+            "version": null,
+            "category": "tracking"
+          },
+          {
+            "name": "Modernizr",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery UI",
+            "version": null,
             "category": null
           }
         ]
@@ -790,8 +845,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-06T12:47:43Z",
-      "last_seen": "2026-10-06T12:47:43Z",
+      "first_discovered": "2026-10-06T18:44:20Z",
+      "last_seen": "2026-10-06T18:44:20Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -847,7 +902,7 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 120
+            "days_to_expiry": 119
           }
         }
       ],
@@ -900,8 +955,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-06T12:47:43Z",
-      "last_seen": "2026-10-06T12:47:43Z",
+      "first_discovered": "2026-10-06T18:44:21Z",
+      "last_seen": "2026-10-06T18:44:21Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -921,19 +976,19 @@
       },
       "hosts": [
         {
-          "ip": "52.119.65.5",
-          "asn": "AS18616",
-          "asn_org": "Natural Wireless, LLC",
+          "ip": "24.38.70.5",
+          "asn": "AS6128",
+          "asn_org": "Cablevision Systems Corp.",
           "country": "US",
-          "region": "New York",
-          "city": "New York City",
-          "reverse_dns": "5.65.119.52.naturalwireless.com",
+          "region": "New Jersey",
+          "city": "Franklin Park",
+          "reverse_dns": "18264605.cst.lightpath.net",
           "is_private": false
         }
       ],
       "services": [
         {
-          "ip": "52.119.65.5",
+          "ip": "24.38.70.5",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -941,7 +996,7 @@
           "tls": false
         },
         {
-          "ip": "52.119.65.5",
+          "ip": "24.38.70.5",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
@@ -957,13 +1012,13 @@
             "not_before": "2026-01-02T18:09:44Z",
             "not_after": "2027-02-03T18:09:44Z",
             "self_signed": false,
-            "days_to_expiry": 120
+            "days_to_expiry": 119
           }
         }
       ],
       "dns": {
         "a": [
-          "52.119.65.5"
+          "24.38.70.5"
         ],
         "aaaa": [],
         "cname": null,
@@ -1018,53 +1073,8 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-10-06T06:45:25Z_5cd99d13",
+    "since_scan": "scan_2026-10-06T12:40:31Z_239ef541",
     "added": {
-      "subdomains": [
-        "ns02.commandcommcentral.com"
-      ],
-      "services": [
-        {
-          "subdomain": "test.commandcommcentral.com",
-          "ip": "52.119.65.6",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "test.commandcommcentral.com",
-          "ip": "52.119.65.6",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcommcentral.com",
-          "ip": "52.119.65.5",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "www.commandcommcentral.com",
-          "ip": "52.119.65.5",
-          "port": 443,
-          "protocol": "tcp"
-        }
-      ],
-      "hosts": [
-        {
-          "subdomain": "ns02.commandcommcentral.com",
-          "ip": "76.223.76.45"
-        },
-        {
-          "subdomain": "test.commandcommcentral.com",
-          "ip": "52.119.65.6"
-        },
-        {
-          "subdomain": "www.commandcommcentral.com",
-          "ip": "52.119.65.5"
-        }
-      ]
-    },
-    "removed": {
       "subdomains": [],
       "services": [
         {
@@ -1103,6 +1113,45 @@
         }
       ]
     },
+    "removed": {
+      "subdomains": [],
+      "services": [
+        {
+          "subdomain": "test.commandcommcentral.com",
+          "ip": "52.119.65.6",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "test.commandcommcentral.com",
+          "ip": "52.119.65.6",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "www.commandcommcentral.com",
+          "ip": "52.119.65.5",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "www.commandcommcentral.com",
+          "ip": "52.119.65.5",
+          "port": 443,
+          "protocol": "tcp"
+        }
+      ],
+      "hosts": [
+        {
+          "subdomain": "test.commandcommcentral.com",
+          "ip": "52.119.65.6"
+        },
+        {
+          "subdomain": "www.commandcommcentral.com",
+          "ip": "52.119.65.5"
+        }
+      ]
+    },
     "changed": {
       "fingerprint": [],
       "cert": [],
@@ -1110,75 +1159,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-09-06T04:26:09Z_f6e1e676",
-      "started_at": "2026-09-06T04:26:09Z",
-      "completed_at": "2026-09-06T04:34:26Z",
-      "subdomain_count": 9,
-      "live_subdomain_count": 9,
-      "host_count": 8,
-      "service_count": 14,
-      "subdomain_names": [
-        "api.commandcommcentral.com",
-        "commandcommcentral.com",
-        "edelivery.commandcommcentral.com",
-        "geisinger.commandcommcentral.com",
-        "ns01.commandcommcentral.com",
-        "ns02.commandcommcentral.com",
-        "test.commandcommcentral.com",
-        "testapi.commandcommcentral.com",
-        "www.commandcommcentral.com"
-      ],
-      "ports_by_sub": {
-        "commandcommcentral.com": {
-          "24.38.70.5": [
-            80,
-            443
-          ]
-        },
-        "api.commandcommcentral.com": {
-          "24.157.51.85": [
-            80,
-            443
-          ]
-        },
-        "edelivery.commandcommcentral.com": {
-          "24.157.51.88": [
-            80,
-            443
-          ]
-        },
-        "geisinger.commandcommcentral.com": {
-          "24.157.51.82": [
-            80,
-            443
-          ]
-        },
-        "ns01.commandcommcentral.com": {},
-        "ns02.commandcommcentral.com": {},
-        "test.commandcommcentral.com": {
-          "24.38.70.8": [
-            80,
-            443
-          ]
-        },
-        "testapi.commandcommcentral.com": {
-          "24.38.70.14": [
-            80,
-            443
-          ]
-        },
-        "www.commandcommcentral.com": {
-          "24.38.70.5": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "IIS": "10.0"
-      }
-    },
     {
       "scan_id": "scan_2026-09-06T10:56:35Z_498b7582",
       "started_at": "2026-09-06T10:56:35Z",
@@ -9964,6 +9944,82 @@
       "tech_versions": {
         "IIS": "10.0",
         "Microsoft HTTPAPI": "2.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-10-06T18:36:41Z_9ca78de0",
+      "started_at": "2026-10-06T18:36:41Z",
+      "completed_at": "2026-10-06T18:44:20Z",
+      "subdomain_count": 10,
+      "live_subdomain_count": 10,
+      "host_count": 8,
+      "service_count": 16,
+      "subdomain_names": [
+        "api.commandcommcentral.com",
+        "bcbsma.commandcommcentral.com",
+        "commandcommcentral.com",
+        "edelivery.commandcommcentral.com",
+        "geisinger.commandcommcentral.com",
+        "ns01.commandcommcentral.com",
+        "ns02.commandcommcentral.com",
+        "test.commandcommcentral.com",
+        "testapi.commandcommcentral.com",
+        "www.commandcommcentral.com"
+      ],
+      "ports_by_sub": {
+        "commandcommcentral.com": {
+          "24.38.70.5": [
+            80,
+            443
+          ]
+        },
+        "api.commandcommcentral.com": {
+          "24.157.51.85": [
+            80,
+            443
+          ]
+        },
+        "bcbsma.commandcommcentral.com": {
+          "24.38.70.5": [
+            80,
+            443
+          ]
+        },
+        "edelivery.commandcommcentral.com": {
+          "24.157.51.88": [
+            80,
+            443
+          ]
+        },
+        "geisinger.commandcommcentral.com": {
+          "24.157.51.82": [
+            80,
+            443
+          ]
+        },
+        "ns01.commandcommcentral.com": {},
+        "ns02.commandcommcentral.com": {},
+        "test.commandcommcentral.com": {
+          "24.38.70.8": [
+            80,
+            443
+          ]
+        },
+        "testapi.commandcommcentral.com": {
+          "24.38.70.14": [
+            80,
+            443
+          ]
+        },
+        "www.commandcommcentral.com": {
+          "24.38.70.5": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "IIS": "10.0"
       }
     }
   ]
