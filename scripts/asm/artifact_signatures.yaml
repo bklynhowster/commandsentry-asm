@@ -150,3 +150,39 @@ artifact_signatures:
       quote: "self.matchCookie(r'^FORTIWAFSID=')"
       cited_at: 2026-07-20
       note: "wafw00f is the source establishing FORTIWAFSID → FortiWeb; upgrade to a Fortinet primary-doc citation when located."
+
+  # ── FortiWeb: the BLOCK PAGE itself, served at HTTP 500 (relay 528) ─────────
+  # ⛔ The reason this entry exists: a block is not always a terse status. On
+  # commandcommcentral FortiWeb refuses with a FULL block page carried on HTTP 500,
+  # and 500 is not in the classifier's edge-status set. Those blocks were being
+  # discarded, and an asset FortiWeb refuses on every vector scored waf_present=False
+  # — which publishes a customer-facing HIGH saying "no enforcing WAF" about a fully
+  # protected host. Status alone cannot identify a block.
+  #
+  # ⚠ TWO markers required, never one: the headline plus a per-request incident id.
+  # "blocked" alone is ordinary application copy. The per-request ids also explain the
+  # body-size variance (39,116 / 39,120 / 39,121 / 39,131) that two sessions first
+  # misread as the application reflecting input.
+  #
+  # ⚠ PRESENCE-ONLY at the verdict layer (Q3/Q8): this signature names FortiWeb HERE,
+  # in the registry, as a vendor artifact. It does NOT license the differential probe
+  # to assert a vendor — that verdict stays "a WAF is blocking", unnamed.
+  - name: fortiweb_block_page
+    artifact_type: response_body_marker
+    vendor: Fortinet
+    product: FortiWeb
+    vendor_unique: true
+    wired: true
+    markers_all_required:
+      headline: "Web Page Blocked!"
+      incident_id_any_of: ["Attack ID:", "Message ID:"]
+    citation:
+      source_type: first_party_measurement
+      observed_on: commandcommcentral.com
+      observed_at: 2026-09-29
+      method: "browser GET /?q=../../../../etc/passwd — statusCode 500, body carried 'Web Page Blocked!', 'Client IP: ...', 'Attack ID: 20000008', 'Message ID: 000180461326'"
+      quote: "Web Page Blocked!"
+      corroboration:
+        - https://github.com/EnableSecurity/wafw00f/blob/master/wafw00f/plugins/fortiweb.py
+      note: "wafw00f's FortiWeb plugin independently matches a FortiWeb block page, so the marker is not unique to our observation. ⚠ Upgrade source_type to vendor_primary_documentation when a Fortinet doc for the block-page text is located; recorded honestly as a first-party measurement until then."
+      quote_provenance: "measured directly by session 4.7 on 2026-09-29 and recorded in relay 528; canonical and %2f-encoded traversal both returned the same page with the same Attack ID, which also disproved an encoding-bypass hypothesis raised in relay 526."
