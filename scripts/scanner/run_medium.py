@@ -172,6 +172,45 @@ def pick_ua() -> str:
 NUCLEI_RATE_LIMIT = 30
 NUCLEI_CONCURRENCY = 5
 NUCLEI_TIMEOUT_S = 15
+# ⛔ D-056 (2026-09-29, Howie, ABSOLUTE — "I do not want to try any kind of
+# authentication-type attacks"): no default-credential logins, no password
+# guessing, no auth-bypass probes, no token spraying, no template that logs in
+# first — on any asset, at any tier. FOUND VIOLATED 2026-10-07 in Prodex's own
+# load-balancer and Cloud IDS logs for the 17:47 prod heavy: nuclei's library
+# sent default-login POSTs (Jellyfin /Users/authenticatebyname, JBoss jbpm
+# j_security_check, Lutron "login=lutron&password=lutron", MagnusBilling, ...)
+# and an auth-bypass check the IDS named. D-056's 09-29 audit read OUR probe
+# code and never read this library — so every heavy scan on both instances had
+# been doing it.
+#
+# Tags measured against nuclei-templates (2026-10-07): this list removes all
+# 307 templates under http/default-logins/ plus the auth-bypass, credential-
+# stuffing, token-spray and log-in-first ("authenticated") families. The three
+# ids are login attacks the library does NOT tag as such (an XML-RPC password
+# bruteforcer tagged only "fuzz", a "Default Login" CVE, a weak-password-
+# recovery takeover).
+#
+# ⚠ KNOWN LIMIT, STATED NOT HIDDEN: a tag denylist over an externally-maintained
+# library FAILS OPEN — a future login template that is mistagged runs until
+# someone adds it here (spec 221 ruling ③ made the same point about FortiGate).
+# The fail-closed fix is a content check of the listed templates before the run.
+NUCLEI_AUTH_EXCLUDE_TAGS = (
+    "default-login,default-logins,"
+    "auth-bypass,authbypass,auth-bupass,login-bypass,authorization-bypass,authz-bypass,"
+    "creds-stuffing,token-spray,authenticated,login-check,hardcoded-credentials,"
+    "default-jwt,default-secret,broken-auth")
+NUCLEI_AUTH_EXCLUDE_IDS = "wordpress-xmlrpc-brute-force,CVE-2025-26793,CVE-2025-47646"
+
+
+def nuclei_exclusion_args(waf_detected: bool) -> list:
+    """The ONE place nuclei exclusions are built. The scan command and the
+    coverage-cursor listing both call this, so the corpus the cursor slices is
+    exactly the corpus the run is allowed to fire. D-056 applies in BOTH
+    branches — a WAF verdict must never re-admit a login attack."""
+    base = "intrusive,dos,fuzz" if waf_detected else "dos"
+    return ["-exclude-tags", base + "," + NUCLEI_AUTH_EXCLUDE_TAGS,
+            "-exclude-id", NUCLEI_AUTH_EXCLUDE_IDS]
+
 # 4.7 ruling ⑮ (2026-08-31), shipped 2026-09-01 UNGATED per ruling ㉑.
 #
 # 180 → 400. Measured on runs #2637/#2640/#2645/#2649, per chunk:
@@ -3513,10 +3552,7 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
         cmd += ["-stats", "-stats-interval", str(NUCLEI_STATS_INTERVAL_S)]
     if tag_filter:
         cmd += ["-tags", tag_filter]
-    if ctx.waf_detected:
-        cmd += ["-exclude-tags", "intrusive,dos,fuzz"]
-    else:
-        cmd += ["-exclude-tags", "dos"]
+    cmd += nuclei_exclusion_args(ctx.waf_detected)   # D-056 — see the constant
 
     chunk_label = f"nuclei[{severity_filter}{':'+tag_filter if tag_filter else ''}]"
 
@@ -3536,8 +3572,7 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
             _tl_cmd = ["nuclei", "-tl", "-silent", "-severity", severity_filter]
             if tag_filter:
                 _tl_cmd += ["-tags", tag_filter]
-            _tl_cmd += (["-exclude-tags", "intrusive,dos,fuzz"] if ctx.waf_detected
-                        else ["-exclude-tags", "dos"])
+            _tl_cmd += nuclei_exclusion_args(ctx.waf_detected)   # same corpus as the run
             _tlrc, _tlout, _tlerr = run_cmd(_tl_cmd, timeout=NUCLEI_CORPUS_WALL_S)
             _filtered = [ln.strip() for ln in _tlout.splitlines() if ln.strip()]
             if _tlrc == 0 and _filtered:
