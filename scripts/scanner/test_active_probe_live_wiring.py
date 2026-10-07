@@ -27,6 +27,21 @@ pure predicate probe_is_authorised. The active probe has no such function — it
 per-asset flag arrives from a DB read inside the phase — so the AND is asserted
 against SOURCE TEXT here. That is the weak assertion in this file, and extracting
 the active probe's authorization into a pure predicate is what would fix it.
+
+⛔⛔ 2026-10-07 — THIS FILE PINNED THE DEFECT IT WAS WRITTEN TO PREVENT. It
+asserted the chain ENDS in 'true' and that the input DEFAULTS to boolean false,
+and never asked whether a run could get from one to the other. A
+workflow_dispatch that omits an input receives the declared default, so every
+dispatched run (portal button, portal heartbeat, and this workflow's own
+self-chain, which POSTs only {"ref":"main"}) carried the string 'false', which
+is truthy to `||`: the chain stopped at the input, and the repo variable and the
+'true' fallback were unreachable on nearly every real scan. Measured: with
+ACTIVE_PROBE_LIVE deleted from prodexsentry-asm at 14:31, the uat (14:33) and
+prod (14:40) heavy scans both wrote dry_run=true. Two green pins, each true on
+its own, jointly guaranteeing the opposite of what both were for: doctrine 278,
+the check that cannot fail. The input now defaults to BLANK, and the tests below
+RESOLVE the chain the way GitHub does, per trigger path, instead of reading its
+pieces separately.
 """
 from __future__ import annotations
 
@@ -68,14 +83,19 @@ def _step_running(fragment):
     return hits[0]
 
 
-# ── the dispatch input exists and is default-off ─────────────────────────────
+# ── the dispatch input exists and defaults BLANK, so the variable decides ──
 
-def test_the_dispatch_input_exists_and_defaults_false():
+def test_the_dispatch_input_exists_and_defaults_BLANK():
+    """⛔ NOT boolean/false (2026-10-07). A boolean input can never be blank: an
+    omitted dispatch receives 'false' and that string beats the repo variable.
+    A string input defaulting to '' falls through exactly as cron does."""
     inputs = _on_block(_wf())["workflow_dispatch"]["inputs"]
     assert INPUT_NAME in inputs, f"no {INPUT_NAME} workflow_dispatch input"
     spec = inputs[INPUT_NAME]
-    assert spec["type"] == "boolean"
-    assert spec["default"] is False, "the go-live input must default to false"
+    assert spec["type"] == "string", (
+        "the go-live input must be a string: a boolean has no blank state, so an "
+        "omitted dispatch would carry 'false' and the repo variable would never be read")
+    assert spec["default"] == "", "the go-live input must default to BLANK"
     assert spec.get("required") is False
 
 
@@ -129,6 +149,92 @@ def test_the_env_derives_from_input_then_repo_var_then_armed():
         "the fleet half must END armed. github.event.inputs is EMPTY on cron and on "
         "workflow_run, so a 'false' fallback is the 0797947a defect restored: a "
         "switch positioned where the automatic path cannot reach it")
+
+
+# ── RESOLVE the chain per trigger path, the way GitHub does (2026-10-07) ────
+
+_CHAIN = re.compile(
+    r"^\$\{\{\s*github\.event\.inputs\." + INPUT_NAME
+    + r"\s*\|\|\s*vars\." + ENV_KEY + r"\s*\|\|\s*'true'\s*\}\}$")
+
+
+def _input_spec():
+    return _on_block(_wf())["workflow_dispatch"]["inputs"][INPUT_NAME]
+
+
+def _heavy_expr():
+    return _step_running("run_heavy.py")["env"][ENV_KEY]
+
+
+def _input_as_delivered(spec, path, typed=None):
+    """What github.event.inputs.<name> holds on each trigger path.
+    schedule / workflow_run: the event carries no inputs, so ''.
+    workflow_dispatch that omits the input (portal button, heartbeat, the
+    self-chain's {"ref":"main"}): GitHub fills the DECLARED default, rendered as
+    a string, so a boolean False arrives as 'false'.
+    workflow_dispatch with a value typed by an operator: that value."""
+    if path in ("schedule", "workflow_run"):
+        return ""
+    if typed is not None:
+        return typed
+    d = spec.get("default", "")
+    if isinstance(d, bool):
+        return "true" if d else "false"
+    return "" if d is None else str(d)
+
+
+def _resolve(expr, input_value, repo_var):
+    """GitHub `a || b || c`: the first truthy operand, and EVERY non-empty
+    string is truthy, 'false' included. That last clause is the whole defect."""
+    assert _CHAIN.match(expr.strip()), f"the chain's shape changed: {expr!r}"
+    for term in (input_value, repo_var or "", "true"):
+        if term:
+            return term
+    raise AssertionError("unreachable: the chain ends in a literal")
+
+
+def test_an_omitted_input_dispatch_resolves_exactly_like_cron():
+    """⭐ THE PIN THAT WOULD HAVE CAUGHT IT. The portal, the heartbeat and the
+    self-chain all dispatch without this input; they must arm or disarm exactly
+    as a cron run would, for every state of the repo variable."""
+    spec, expr = _input_spec(), _heavy_expr()
+    for var in (None, "false", "true"):
+        cron = _resolve(expr, _input_as_delivered(spec, "schedule"), var)
+        dispatched = _resolve(expr, _input_as_delivered(spec, "workflow_dispatch"), var)
+        assert dispatched == cron, (
+            f"with repo variable {var!r}, cron resolves {cron!r} but an omitted-input "
+            f"dispatch resolves {dispatched!r}: the input's default is not blank, so "
+            "portal and chained scans never read the variable")
+
+
+def test_the_repo_variable_decides_every_automatic_path():
+    """The kill switch must work wherever a scan can start, and its absence must
+    arm wherever a scan can start. Driven through the runner's real parse."""
+    spec, expr = _input_spec(), _heavy_expr()
+    for path in ("schedule", "workflow_run", "workflow_dispatch"):
+        delivered = _input_as_delivered(spec, path)
+        assert h._env_flag_armed(_resolve(expr, delivered, "false")) is False, (
+            f"{path}: ACTIVE_PROBE_LIVE=false did not disarm it")
+        assert h._env_flag_armed(_resolve(expr, delivered, None)) is True, (
+            f"{path}: with no repo variable it should be armed and is not")
+
+
+def test_an_operator_typed_value_still_wins_both_ways():
+    spec, expr = _input_spec(), _heavy_expr()
+    for var in (None, "false", "true"):
+        assert h._env_flag_armed(_resolve(
+            expr, _input_as_delivered(spec, "workflow_dispatch", "true"), var)) is True
+        assert h._env_flag_armed(_resolve(
+            expr, _input_as_delivered(spec, "workflow_dispatch", "false"), var)) is False
+
+
+def test_the_self_chain_dispatch_does_not_send_this_input():
+    """The self-chain is an OMITTED-input dispatch on purpose. If it ever starts
+    sending this input, it must not send a value that overrides the variable."""
+    step = _step_running("scanner.yml/dispatches")
+    assert INPUT_NAME not in (step.get("run") or ""), (
+        "the self-chain now sends the go-live input; a hard-coded value there "
+        "would override the repo variable on every chained scan")
 
 
 # ── the runner's parse, driven with the exact strings the workflow delivers ──

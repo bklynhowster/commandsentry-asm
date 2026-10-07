@@ -125,10 +125,10 @@ on:
         default: false
         type: boolean
       active_probe_live:
-        description: 'GO-LIVE for the fwbbot_check active probe (Phase D). true = a heavy scan on an OPTED-IN asset (assets.active_probe_authorized=true) fires ONE detect-only bot-shaped GET to elicit FortiWeb /fwbbot_check. Default false = dry-run (fires nothing). Egress is per-asset (assets.active_probe_egress, default vpn). Unauthenticated, non-destructive, single request. Cron/workflow_run runs set NO input, so the fleet half falls through to repo variable ACTIVE_PROBE_LIVE and, absent that, to ARMED (0797947a, 2026-09-27) - a scheduled heavy scan on an opted-in asset IS live unless that variable says false. The per-asset flag remains the gate on which hosts are legal.'
+        description: 'Override for BOTH heavy-tier active probes (fwbbot_check and waf_differential). Leave BLANK, the default, to follow the repo variable ACTIVE_PROBE_LIVE and, absent that, ARMED (0797947a, 2026-09-27). Type true to force live, or false to force dry-run, for this one dispatch only. Blank matters: until 2026-10-07 this was a boolean defaulting to false, and a dispatch that omits an input receives its declared default, so every dispatched run (including this workflow self-chain, which POSTs only {"ref":"main"}) carried the string false, which beat the repo variable: those heavy scans ran dry-run whatever the variable said. Only hosts opted in via assets.active_probe_authorized=true are ever probed; this input alone fires nothing. Egress is per-asset (assets.active_probe_egress, default vpn). Unauthenticated, non-destructive.'
         required: false
-        default: false
-        type: boolean
+        default: ''
+        type: string
       enforcement_probe_live:
         description: 'GO-LIVE for the 354a differential enforcement probe. true = a LIGHT scan on an asset ALREADY opted in via assets.enforcement_probe_authorized=true fires ONE benign baseline GET plus ONE URL-encoded attack-signature GET on the SAME path, to tell "WAF present" from "WAF enforcing". Default false = dry-run (records the plan, fires nothing). BOTH gates are required — this input AND the per-asset flag; either alone fires nothing. Unauthenticated, non-destructive, two requests, never retried, never escalated. Cron/workflow_run runs set NO input, so the fleet half falls through to repo variable ENFORCEMENT_PROBE_LIVE and, absent that, to ARMED (0797947a, 2026-09-27) - scheduled light scans on opted-in assets ARE live. The per-asset flag remains the gate on which hosts are legal.'
         required: false
@@ -622,6 +622,15 @@ jobs:
           # run_light.py; ACTIVE_PROBE_LIVE (the fwbbot sibling this mirrors) sits
           # on the heavy step because THAT probe runs in run_heavy.py. Moving this
           # one there would leave the enforcement probe permanently dry-run.
+          # ⚠ 2026-10-07: THE SAME DEFECT AS ACTIVE_PROBE_LIVE, DELIBERATELY NOT
+          # FIXED HERE. Input enforcement_probe_live is `boolean, default: false`,
+          # so every DISPATCHED run (portal, heartbeat, self-chain) carries the
+          # string 'false' and stops before the variable or 'true'; only
+          # cron/workflow_run claims, or a scan_queue.enforcement_probe_live row,
+          # can arm this probe. Left alone because NEITHER repo sets
+          # vars.ENFORCEMENT_PROBE_LIVE, so blanking this default would arm
+          # Command's light scans with no kill switch in place. Set the variable
+          # on Command first, then mirror the ACTIVE_PROBE_LIVE fix. Howie's call.
           ENFORCEMENT_PROBE_LIVE: ${{ github.event.inputs.enforcement_probe_live || vars.ENFORCEMENT_PROBE_LIVE || 'true' }}
         run: |
           python scripts/scanner/run_light.py /tmp/scan_descriptor.json
@@ -732,11 +741,26 @@ jobs:
           # unflagged asset is denied even with the fleet half armed.
           #
           # KILL SWITCH, no code change: repo variable ACTIVE_PROBE_LIVE=false
-          # (Settings -> Secrets and variables -> Actions -> Variables). Howie
-          # set exactly that at 07:25 on 2026-09-30, and it — not this fallback
-          # — is why scheduled runs are dry-run today. ⚠ That variable is the
-          # ONLY thing making them dry-run: remove it and cron is armed again,
-          # which is the designed behaviour and not a bug to be patched here.
+          # (Settings -> Secrets and variables -> Actions -> Variables). Set on
+          # BOTH repos 2026-09-30 07:25; deleted from prodexsentry-asm by Howie
+          # 2026-10-07 14:31 ET (D-058). commandsentry-asm still carries it.
+          #
+          # ⛔ CORRECTED 2026-10-07. This block used to say the variable was the
+          # ONLY thing keeping scheduled runs dry-run. On most runs it was never
+          # even read. The dispatch input was `type: boolean, default: false`,
+          # and a workflow_dispatch that omits an input receives the declared
+          # default, so every DISPATCHED run (the portal, the heartbeat, and the
+          # self-chain at the end of this job, which POSTs only {"ref":"main"})
+          # arrived carrying the STRING 'false'. A non-empty string is truthy to
+          # `||`, so the chain below stopped at the input and never reached the
+          # variable or the 'true' fallback; only cron/workflow_run claims (empty
+          # inputs) could arm. Measured on Prodex: with the variable deleted at
+          # 14:31, the uat (14:33) and prod (14:40) heavy scans still wrote
+          # dry_run=true, live_flag=false for both probes. The input now defaults
+          # to BLANK, which falls through exactly as cron does. Same defect class
+          # as the NUCLEI_STATS `|| 'false'` note below. The wiring test resolves
+          # this chain for every trigger path and fails if an omitted-input
+          # dispatch and a cron run ever resolve differently.
           ACTIVE_PROBE_LIVE: ${{ github.event.inputs.active_probe_live || vars.ACTIVE_PROBE_LIVE || 'true' }}
           # (relay 533 item 2 — a stale block describing a "cumulative heavy"
           # arming flag was removed here on 2026-09-30. No such flag exists in
