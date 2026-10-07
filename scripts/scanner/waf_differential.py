@@ -18,7 +18,21 @@ not the app's own input validation, and not an edge quirk. Hence the two guards:
        403 page for an edge WAF block.
 """
 
-INDEPENDENT_CLASSES = ("sqli", "xss", "lfi")   # Q1: genuinely different attack vectors
+# Q1: genuinely different attack vectors. The bar stays ">=2 of these blocked" — a single
+# class alone is an app-native input validator, not a WAF.
+#
+# ⛔ EXPANDED 2026-09-29 (relay 525). The old tuple was ("sqli","xss","lfi") — and on
+# commandcommcentral those are EXACTLY the three FortiWeb does not block, while the two it
+# DOES block (log4shell-param, ssrf-metadata, both 403/15B in Howie's run) were not counted
+# at all. Measured on his real numbers with correct labels, the old set returned
+# waf_present=False on a host with a demonstrably blocking WAF. A tally that excludes the
+# vectors a device actually refuses cannot see that device.
+#
+# ⚠ THE COUNTED SET AND THE FIRED SET MUST MOVE TOGETHER. Firing a class nobody counts is
+# the bug above; counting a class nobody fires is merely inert. _WAF_PAYLOADS in run_heavy
+# is the fired set — keep them aligned, and see relay 526 on encoding, which is the second
+# half of why the fired set currently measures nothing.
+INDEPENDENT_CLASSES = ("sqli", "xss", "lfi", "log4shell-param", "ssrf-metadata")
 _EDGE_STATUS = {403, 406, 429, 503}            # generic edge-deny codes
 _SMALL_BODY = 512                              # a generic edge error is small (Q2 gate 3)
 
@@ -37,9 +51,36 @@ def _payload_blocked(baseline: dict, resp: dict) -> bool:
     if r_status == b_status and r_size == b_size:
         return False
 
-    # gate 3 — the deny is a GENERIC EDGE ERROR: a distinct edge-deny status, OR a
-    # small/structurally-different body (not the full app page).
-    generic_edge = (r_status in _EDGE_STATUS) or (r_status != b_status) or (r_size <= _SMALL_BODY)
+    # ⭐ GATE 2b — A SELF-IDENTIFYING BLOCK PAGE IS DISPOSITIVE (relay 528).
+    # A block is not always a terse status. FortiWeb serves a FULL block page at HTTP 500
+    # — measured on commandcommcentral 2026-09-29, body "Web Page Blocked! / Attack ID:
+    # 20000008". 500 is not in _EDGE_STATUS and 39,121 B is not a small body, so gate 3
+    # rejected it and the asset scored waf_present=False — which publishes a customer-facing
+    # HIGH claiming "no enforcing WAF" about a fully protected host. That is the most
+    # damaging direction this classifier can fail in.
+    #
+    # ⛔ Placed AFTER gate 2 deliberately: a response byte-identical to the benign baseline
+    # is not a block whatever it contains. Placed BEFORE gates 3-5 because a page that names
+    # itself a block, with the vendor's own per-request incident id, IS the edge refusing —
+    # there is nothing for a size heuristic or a token intersection to add, and letting them
+    # veto it is how this defect happened.
+    if resp.get("block_tell"):
+        return True
+
+    # gate 3 — the deny is a GENERIC EDGE ERROR: a generic edge-deny status, OR a small
+    # body (not the full app page).
+    #
+    # ⛔ `or (r_status != b_status)` REMOVED 2026-09-29 (relay 523). A block changes the
+    # status by definition, so that clause was true in essentially every case the gate is
+    # asked about — which made BOTH its neighbours decorative: _EDGE_STATUS and
+    # _SMALL_BODY could never reject anything the middle clause had already accepted.
+    #
+    # ⭐ Howie's live FortiWeb run is the fixture. Real blocks: 403 / 15 B. Ten fakes:
+    # 500 / 39,121 B, byte-identical — that is his APP choking, not an edge refusing, and
+    # the old gate scored all ten as blocks, fabricating waf_present=True with three
+    # classes "blocked". A 39KB 500 is an application stack trace; an edge deny is small
+    # and carries a generic refusal code. Either surviving test separates them alone.
+    generic_edge = (r_status in _EDGE_STATUS) or (r_size <= _SMALL_BODY)
     if not generic_edge:
         return False
 

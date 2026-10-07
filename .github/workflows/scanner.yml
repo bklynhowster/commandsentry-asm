@@ -125,12 +125,12 @@ on:
         default: false
         type: boolean
       active_probe_live:
-        description: 'GO-LIVE for the fwbbot_check active probe (Phase D). true = a heavy scan on an OPTED-IN asset (assets.active_probe_authorized=true) fires ONE detect-only bot-shaped GET to elicit FortiWeb /fwbbot_check. Default false = dry-run (fires nothing). Egress is per-asset (assets.active_probe_egress, default vpn). Unauthenticated, non-destructive, single request. Cron/workflow_run runs never set this -> always dry-run there.'
+        description: 'GO-LIVE for the fwbbot_check active probe (Phase D). true = a heavy scan on an OPTED-IN asset (assets.active_probe_authorized=true) fires ONE detect-only bot-shaped GET to elicit FortiWeb /fwbbot_check. Default false = dry-run (fires nothing). Egress is per-asset (assets.active_probe_egress, default vpn). Unauthenticated, non-destructive, single request. Cron/workflow_run runs set NO input, so the fleet half falls through to repo variable ACTIVE_PROBE_LIVE and, absent that, to ARMED (0797947a, 2026-09-27) - a scheduled heavy scan on an opted-in asset IS live unless that variable says false. The per-asset flag remains the gate on which hosts are legal.'
         required: false
         default: false
         type: boolean
       enforcement_probe_live:
-        description: 'GO-LIVE for the 354a differential enforcement probe. true = a LIGHT scan on an asset ALREADY opted in via assets.enforcement_probe_authorized=true fires ONE benign baseline GET plus ONE URL-encoded attack-signature GET on the SAME path, to tell "WAF present" from "WAF enforcing". Default false = dry-run (records the plan, fires nothing). BOTH gates are required — this input AND the per-asset flag; either alone fires nothing. Unauthenticated, non-destructive, two requests, never retried, never escalated. Cron/workflow_run runs never set this -> always dry-run there.'
+        description: 'GO-LIVE for the 354a differential enforcement probe. true = a LIGHT scan on an asset ALREADY opted in via assets.enforcement_probe_authorized=true fires ONE benign baseline GET plus ONE URL-encoded attack-signature GET on the SAME path, to tell "WAF present" from "WAF enforcing". Default false = dry-run (records the plan, fires nothing). BOTH gates are required — this input AND the per-asset flag; either alone fires nothing. Unauthenticated, non-destructive, two requests, never retried, never escalated. Cron/workflow_run runs set NO input, so the fleet half falls through to repo variable ENFORCEMENT_PROBE_LIVE and, absent that, to ARMED (0797947a, 2026-09-27) - scheduled light scans on opted-in assets ARE live. The per-asset flag remains the gate on which hosts are legal.'
         required: false
         default: false
         type: boolean
@@ -703,15 +703,47 @@ jobs:
           # assets still finish in 6-9 min. Well under the 120-min job timeout.
           # Tune alongside the portal concurrency guard (PORTAL_HEAVY_PROMOTION_SPEC.md Q2).
           TESTSSL_WALL_S: "1800"
-          # Phase D go-live flag (4.7 Q1-Q8). Default false -> run_heavy ships DRY-RUN
-          # (the fwbbot_check probe fires nothing). Only a manual dispatch with
-          # active_probe_live=true arms the probe, and ONLY for assets opted in via
-          # assets.active_probe_authorized. Cron/workflow_run triggers carry no input
-          # (empty -> 'false' -> dry-run), so scheduled scans are unchanged.
+          # ⛔ PHASE D GO-LIVE FLAG (4.7 Q1-Q8) — ARMED ON THE SCHEDULED PATH,
+          # ON PURPOSE. Do not "fix" the fallback on the line below.
+          #
+          # CORRECTED 2026-09-30 (relay 533 item 2). This block used to say
+          # "Default false -> run_heavy ships DRY-RUN" and "Cron/workflow_run
+          # triggers carry no input (empty -> 'false' -> dry-run), so scheduled
+          # scans are unchanged". Both were false, and false in the dangerous
+          # direction: the chain ends in the literal 'true', so an absent input
+          # AND an absent repo variable resolve to ARMED.
+          #
+          # ⭐ WHY ARMED: Howie armed it deliberately in 0797947a ("scanner: arm
+          # the live half on the scheduled path", 2026-09-27) — for exactly the
+          # reason the old wording created. github.event.inputs is empty on cron
+          # and on workflow_run, so a 'false' fallback put the fleet half where
+          # the automatic path could never reach it: the probe could only ever
+          # fire from a hand-dispatch, and never did. Its sibling
+          # ENFORCEMENT_PROBE_LIVE was inverted in that same commit and
+          # test_enforcement_probe_live_wiring.py pins that shape. This one had
+          # no such pin, which is precisely why its comment could rot unnoticed
+          # for three days; test_active_probe_live_wiring.py now pins it.
+          #
+          # PRECEDENCE: dispatch input, then repo variable, then ARMED.
+          #
+          # ⭐ ARMING THE FLEET HALF DOES NOT WIDEN THE TARGET SET. The per-asset
+          # flag assets.active_probe_authorized is untouched and remains the gate
+          # deciding which hosts are legal to probe; the wiring test asserts an
+          # unflagged asset is denied even with the fleet half armed.
+          #
+          # KILL SWITCH, no code change: repo variable ACTIVE_PROBE_LIVE=false
+          # (Settings -> Secrets and variables -> Actions -> Variables). Howie
+          # set exactly that at 07:25 on 2026-09-30, and it — not this fallback
+          # — is why scheduled runs are dry-run today. ⚠ That variable is the
+          # ONLY thing making them dry-run: remove it and cron is armed again,
+          # which is the designed behaviour and not a bug to be patched here.
           ACTIVE_PROBE_LIVE: ${{ github.event.inputs.active_probe_live || vars.ACTIVE_PROBE_LIVE || 'true' }}
-          # Cumulative heavy (step 4 inc 3c). Same shape as ACTIVE_PROBE_LIVE:
-          # only a manual dispatch can arm it; cron/workflow_run carry no input
-          # so scheduled heavy scans keep today's behaviour exactly.
+          # (relay 533 item 2 — a stale block describing a "cumulative heavy"
+          # arming flag was removed here on 2026-09-30. No such flag exists in
+          # this workflow: the only CUMULATIVE_* key is the wall clock below. It
+          # also repeated the same false "only a manual dispatch can arm it"
+          # claim, and Prodex never carried it, so removing it closes an
+          # instance-parity difference as well.)
           # Wall-clock ceiling for the cumulative run (seconds). 30 min default —
           # Command holds a single VPN slot, so a longer run starves other scans.
           CUMULATIVE_WALL_CLOCK_S: ${{ vars.CUMULATIVE_WALL_CLOCK_S || '1800' }}

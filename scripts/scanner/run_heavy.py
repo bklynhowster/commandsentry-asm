@@ -1741,7 +1741,16 @@ def run_stack_id_passive_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
 #     shape (redirect TO it) — never path-alone
 # Persist-only, self-registers NO tool (like the passive phase). gather_observations
 # does NOT read the artifact yet — that wiring + the gen-4 reset are Phase D.
-_ACTIVE_PROBE_LIVE = os.environ.get("ACTIVE_PROBE_LIVE", "").strip().lower() in ("1", "true", "yes")
+def _env_flag_armed(raw) -> bool:
+    """ACTIVE_PROBE_LIVE's parse, in ONE place so a test can drive it with the exact
+    string the scheduled path delivers. Behaviour is unchanged — this is the same
+    expression it always was, lifted out of the module-level assignment because a
+    constant computed at import time cannot be exercised without reload gymnastics,
+    and an unexercised parse is how 'true' and 'false' stop meaning what you think."""
+    return (raw or "").strip().lower() in ("1", "true", "yes")
+
+
+_ACTIVE_PROBE_LIVE = _env_flag_armed(os.environ.get("ACTIVE_PROBE_LIVE"))
 # Egress vantage (4.7 Q1) is PER-ASSET (assets.active_probe_egress), DB-authoritative:
 # VPN Mullvad — which ccc is KNOWN to ban — vs a direct datacenter IP. Default vpn; an
 # asset escalates to 'direct' ONLY when a VPN ban is DOCUMENTED (active_probe_egress_
@@ -2049,6 +2058,33 @@ _WAF_PAYLOADS = (
 )
 _WAF_LFI_PREENCODED = {"lfi"}                                  # already %-encoded per Q4 — don't double-encode
 
+# ⛔ NAMES FOR THE CLASSES WE ACTUALLY FIRE (relay 533 item 1).
+#
+# The customer-facing finding below used to read
+#     f"all {len(INDEPENDENT_CLASSES)} independent attack-payload classes (SQLi, XSS, LFI)"
+# and that is two defects in one sentence. INDEPENDENT_CLASSES is the COUNTED set
+# and 525 grew it to five; _WAF_PAYLOADS is the FIRED set and it is still three.
+# So the sentence told a customer that FIVE attack classes reached their origin
+# when we only ever sent THREE — an overstatement of our own evidence in a HIGH
+# finding — while the hand-written parenthetical beside it still named three.
+# The len moved with the constant; the words did not, and nothing pinned either.
+#
+# Keyed off _WAF_PAYLOADS so the sentence can only ever name classes we sent. A
+# class added to the payload set without a label here renders as its uppercase
+# key, which is visibly unfinished rather than silently wrong.
+_WAF_CLASS_LABEL = {
+    "sqli": "SQLi",
+    "xss": "XSS",
+    "lfi": "LFI",
+    "log4shell-param": "Log4Shell parameter",
+    "ssrf-metadata": "SSRF cloud-metadata",
+}
+
+
+def _waf_classes_tested_label() -> str:
+    """Comma-joined display names of the classes the collector actually fires."""
+    return ", ".join(_WAF_CLASS_LABEL.get(c, c.upper()) for c, _ in _WAF_PAYLOADS)
+
 
 def _read_text_safe(p: Path) -> str:
     """Read a probe body file, tolerant of binary / missing (never fatal)."""
@@ -2093,17 +2129,120 @@ def _waf_body_tokens(body: str) -> set:
     return toks
 
 
-def _parse_waf_probe(stdout: str, body: str) -> dict:
+# ⛔ BLOCK-PAGE TELLS (relay 528). A block is not always a terse status. FortiWeb serves a
+# FULL block page at HTTP 500 — measured on commandcommcentral 2026-09-29: canonical and
+# %2f-encoded traversal both returned 500 with body "Web Page Blocked! / Client IP: ... /
+# Attack ID: 20000008". _EDGE_STATUS does not contain 500, so those blocks were discarded
+# and the asset scored waf_present=False — which ships a customer-facing HIGH saying "no
+# enforcing WAF" about a fully protected host. Status alone cannot identify a block.
+#
+# ⚠ TWO markers are required, never one. "blocked" alone appears on ordinary application
+# error pages; "Web Page Blocked!" together with a per-request incident id is the vendor's
+# page and nothing else. Citation lives in scripts/asm/artifact_signatures.yaml.
+#
+# ⭐ And the per-request ids explain the size variance (39,116 / 39,120 / 39,121 / 39,131)
+# that both sessions first read as the app reflecting input. It is the block page's own
+# Attack ID / Message ID differing per request.
+_WAF_BLOCK_PAGE_TELLS = (
+    ("FortiWeb", ("web page blocked", ("attack id", "message id"))),
+)
+
+
+_B64_RUN = re.compile(r"base64,[A-Za-z0-9+/=\s]{500,}")
+
+
+def _waf_strip_inline_blobs(body: str) -> str:
+    """Drop long inline base64 runs (images, fonts). Measured on the live FortiWeb block
+    page: 39,638 bytes total, of which a ~38 KB inline logo begins at offset 579 and pushes
+    the vendor's own text to offsets 39,338 / 39,553 — the last 300 bytes. Stripping the
+    blob is what makes any window over this body meaningful."""
+    return _B64_RUN.sub("base64,<stripped>", body or "")
+
+
+def _waf_block_page_tell(body: str) -> str:
+    """Return the vendor whose block page this body IS, or "" — a POSITIVE block signal
+    that does not depend on the status code. Requires the vendor's headline marker AND one
+    per-request incident marker, so an app error page that merely says "blocked" cannot
+    trip it.
+
+    ⛔ SEARCHES THE WHOLE BODY (relay 531). This previously searched body[:20000] and was
+    therefore INERT on the only host it was written for: FortiWeb's markers sit at 39,338
+    and 39,553, behind that inline logo. 44 tests passed while the live defect stood, because
+    every fixture put the markers at offset ~10.
+    ⚠ The cap was not raised to 40,000 — a cap chosen against one measurement is the same
+    mistake with a bigger number. The body is already in memory; scanning tens of KB costs
+    nothing worth having."""
+    b = _waf_strip_inline_blobs(body or "").lower()
+    for vendor, (headline, ids) in _WAF_BLOCK_PAGE_TELLS:
+        if headline in b and any(i in b for i in ids):
+            return vendor
+    return ""
+
+
+# Capture caps (relay 516). A deny page is generic by construction, so these are small
+# on purpose: enough for a vendor self-naming tell and an incident id, not a page mirror.
+_WAF_CAPTURE_HEADERS_MAX = 8192
+_WAF_CAPTURE_BODY_MAX = 2048
+
+
+def _redact_set_cookie(raw: str) -> str:
+    """Set-Cookie NAMES are all gate 5 ever reads; a cookie VALUE is a session. Keep the
+    name, drop everything after the first '='. Applied BEFORE anything is stored, so a
+    value cannot reach an artifact even if a later caller forgets."""
+    out = []
+    for ln in (raw or "").splitlines():
+        if ln[:11].lower() == "set-cookie:":
+            head, _sep, rest = ln.partition(":")
+            name = rest.strip().split("=", 1)[0].strip()
+            out.append(head + ": " + name + "=<redacted>")
+        else:
+            out.append(ln)
+    return "\n".join(out)
+
+
+def _parse_waf_probe(stdout: str, body: str, capture: bool = False) -> dict:
     """One probe response -> the classifier's shape {status, size, tokens, headers}. status
     and size come from curl's OWN -w sentinel (CS_STATUS/CS_SIZE) — ground truth, not a header
-    re-parse. headers = app Set-Cookie names; tokens = app-context body fingerprints."""
+    re-parse. headers = app Set-Cookie names; tokens = app-context body fingerprints.
+
+    `capture` (relay 516) adds `raw_headers` + `body_head` for the VENDOR LADDER — the
+    self-naming tells (Server / cf-ray / x-azure-ref / x-amz-cf-id / x-iinfo) that curl
+    already dumps and this function used to throw away. ⛔ DENIES ONLY: the baseline is the
+    customer's real page (high sensitivity, ~zero intelligence); a deny is a generic edge
+    page (low sensitivity, all the intelligence). Timing is captured for BOTH — it is not
+    sensitive and it is only meaningful as deny-vs-baseline.
+
+    ⚠ ADDITIVE. The four classifier keys are untouched, and neither _payload_blocked nor
+    classify_waf_differential iterates keys, so extra fields cannot move a verdict. That is
+    asserted here and PROVEN in test_waf_probe_collector.py (old shape vs new shape)."""
     status, size = 0, len(body or "")
     m = re.search(r"CS_STATUS:(\d+)\s+CS_SIZE:(\d+)", stdout or "")
     if m:
         status, size = int(m.group(1)), int(m.group(2))
-    return {"status": status, "size": size,
-            "tokens": _waf_body_tokens(body or ""),
-            "headers": _waf_cookie_names(stdout or "")}
+    t_total = t_connect = None
+    mt = re.search(r"CS_TIME:([0-9.]+)\s+CS_CONNECT:([0-9.]+)", stdout or "")
+    if mt:
+        t_total, t_connect = float(mt.group(1)), float(mt.group(2))
+    out = {"status": status, "size": size,
+           "tokens": _waf_body_tokens(body or ""),
+           "headers": _waf_cookie_names(stdout or ""),
+           "time_total": t_total, "time_connect": t_connect,
+           # relay 528 — a positive block signal independent of the status code.
+           "block_tell": _waf_block_page_tell(body or "")}
+    if capture:
+        hdrs = "\n".join(ln for ln in (stdout or "").splitlines()
+                         if not ln.startswith("CS_STATUS:"))
+        out["raw_headers"] = _redact_set_cookie(hdrs)[:_WAF_CAPTURE_HEADERS_MAX]
+        # ⛔ HEAD *AND* TAIL, over the blob-stripped body (relay 531). body[:2048] on the
+        # real FortiWeb page captured bytes 579-2048 of a base64 logo — no headline, no
+        # Attack ID, nothing an auditor could read. The capture exists to EVIDENCE the
+        # verdict; a fragment of a PNG evidences nothing. The vendor appends its boilerplate
+        # at the END, so the tail is the half that matters.
+        stripped = _waf_strip_inline_blobs(body or "")
+        half = _WAF_CAPTURE_BODY_MAX // 2
+        out["body_head"] = (stripped if len(stripped) <= _WAF_CAPTURE_BODY_MAX
+                            else stripped[:half] + "\n…<elided>…\n" + stripped[-half:])
+    return out
 
 
 def _waf_probe_curl_args(hostname: str, param: str, value: str, preencoded: bool,
@@ -2116,7 +2255,8 @@ def _waf_probe_curl_args(hostname: str, param: str, value: str, preencoded: bool
     to `interface` to bypass the VPN tunnel."""
     qv = value if preencoded else quote(value, safe="")
     args = ["curl", "-sSk", "-o", body_sink, "-D", "-",
-            "-w", "\nCS_STATUS:%{http_code} CS_SIZE:%{size_download}",
+            "-w", "\nCS_STATUS:%{http_code} CS_SIZE:%{size_download}"
+                  " CS_TIME:%{time_total} CS_CONNECT:%{time_connect}",
             "--max-time", "15", "-A", _PROBE_BOT_UA,
             "-H", "Accept:", "-H", "Accept-Language:", "-H", "Accept-Encoding:",
             "-H", _WAF_PROBE_HEADER]
@@ -2136,8 +2276,12 @@ def _fire_waf_differential_probe(ctx: HeavyScanContext, work_dir: Path,
     _rc, out, _ = run_cmd(
         _waf_probe_curl_args(ctx.hostname, param, _WAF_BENIGN_VALUE, False,
                              str(base_sink), egress, _PROBE_EGRESS_INTERFACE), timeout=25)
+    # ⛔ baseline: capture=False. It is the customer's real page — tokens/headers already
+    # extract everything it contributes, and its body is the sensitive one (relay 516).
     baseline = _parse_waf_probe(out, _read_text_safe(base_sink))
-    fired = [{"cls": "benign", "status": baseline["status"], "size": baseline["size"]}]
+    fired = [{"cls": "benign", "status": baseline["status"], "size": baseline["size"],
+              "time_total": baseline.get("time_total"),
+              "time_connect": baseline.get("time_connect")}]
     payloads = []
     for cls, val in _WAF_PAYLOADS:
         time.sleep(_WAF_PROBE_PACING_S)            # Q4 pacing between requests
@@ -2145,10 +2289,15 @@ def _fire_waf_differential_probe(ctx: HeavyScanContext, work_dir: Path,
         _rc, pout, _ = run_cmd(
             _waf_probe_curl_args(ctx.hostname, param, val, cls in _WAF_LFI_PREENCODED,
                                  str(sink), egress, _PROBE_EGRESS_INTERFACE), timeout=25)
-        resp = _parse_waf_probe(pout, _read_text_safe(sink))
+        # denies: capture=True — generic edge page, where the vendor tells live.
+        resp = _parse_waf_probe(pout, _read_text_safe(sink), capture=True)
         resp["cls"] = cls
         payloads.append(resp)
-        fired.append({"cls": cls, "status": resp["status"], "size": resp["size"]})
+        fired.append({"cls": cls, "status": resp["status"], "size": resp["size"],
+                      "time_total": resp.get("time_total"),
+                      "time_connect": resp.get("time_connect"),
+                      "raw_headers": resp.get("raw_headers"),
+                      "body_head": resp.get("body_head")})
     details = {"param": param, "egress_mode": egress,
                "egress_interface": _PROBE_EGRESS_INTERFACE or None,
                "pacing_s": _WAF_PROBE_PACING_S, "fired": fired}
@@ -2183,7 +2332,8 @@ def _maybe_emit_no_waf_finding(ctx: HeavyScanContext, baseline: dict, verdict: d
         severity="HIGH", category="config", observed_at=now_iso, matched_at=ctx.hostname,
         description=(
             f"Differential probe: a benign baseline returned HTTP {baseline.get('status')} and "
-            f"all {len(INDEPENDENT_CLASSES)} independent attack-payload classes (SQLi, XSS, LFI) "
+            f"all {len(_WAF_PAYLOADS)} independent attack-payload classes tested "
+            f"({_waf_classes_tested_label()}) "
             "passed through to the origin unblocked — no payload-inspecting WAF is enforcing in "
             "front of this live application. A WAF is a required compensating control (PCI DSS "
             "6.4.2) and boundary protection (NIST SP 800-53 SC-7); its absence leaves the origin "
