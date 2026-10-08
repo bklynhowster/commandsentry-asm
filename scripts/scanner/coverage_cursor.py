@@ -76,6 +76,28 @@ SLICE_HOLD_BACKOFF = 0.85
 # is misbehaving and should be investigated, not subdivided into invisibility.
 MIN_SLICE_SIZE = 25
 
+# ── 270 Change 2: size the NEXT slice from how far the LAST one got ────────
+# ⛔ THE WASTE THIS CLOSES (measured 2026-10-07, both Prodex and uat). The
+# blind backoff above shrinks 15% per hold. nuclei[critical,high] on
+# uat.prodexlabs.com sat at consecutive_holds=3 (slice 2000 → 1700 → 1445 →
+# 1228) and on prod at holds=1, pass_count 0 on both: at the ~7 req/s these
+# sites answer, a 2000-template slice needs ~590s against the 400s wall, and
+# the 0.85 step burns 4-5 heavy scans converging on a size the FIRST cut had
+# already told us. The cut stats carry `percent` (requests/total). A chunk cut
+# at 67% says: the next window should be ~67% of this one. So: next =
+# floor(eff * cut_fraction * SAFETY). One hold, one correction.
+#
+# SAFETY leaves headroom for a slower run (rps varies 4-7 run to run). It is
+# applied to the MEASURED fraction, not to a guess, so it is not "a constant
+# chosen against one measurement with a bigger number" (relay 531).
+#
+# The fraction is only used WITH a hold; it is cleared on an advance (a
+# completed window says nothing about how much a bigger one would fit). Absent
+# or unusable (None, <=0, >=1) → the blind 0.85**holds backoff exactly as before,
+# so a DB without the column (migration 20261007a not yet applied) behaves
+# identically to today. Pinned by test_coverage_cut_fraction.
+SLICE_CUT_SAFETY = 0.85
+
 # Cursor state keys. `last_dispatched` is a TEMPLATE PATH, never an integer
 # offset — see resume_index for the reason, which is the correctness trap 4.7
 # flagged in the 454 ruling.
@@ -86,6 +108,10 @@ NEW_CURSOR: dict = {
     # 262 ruling B (migration 20260924a). Runs in a row this chunk did NOT move.
     # See fold_dispatch for exactly what counts as moving — it is not "completed".
     "consecutive_holds": 0,
+    # 270 Change 2 (migration 20261007a). requests/total at the LAST hold,
+    # 0 < f < 1, or None. Set on a hold, cleared on an advance. Sizes the next
+    # window — see effective_slice_size.
+    "last_cut_fraction": None,
 }
 
 
@@ -162,7 +188,20 @@ def resume_index(ordered, last_dispatched) -> int:
     return bisect.bisect_right(ordered, last_dispatched)
 
 
-def effective_slice_size(size, corpus_len, holds=0) -> int:
+def usable_cut_fraction(f):
+    """0 < f < 1 → float, else None. PURE. A fraction of 0 means the chunk sent
+    nothing (that is the yield floor's problem, not sizing's); 1.0 means it was
+    not cut. Neither can size a window."""
+    try:
+        f = float(f)
+    except (TypeError, ValueError):
+        return None
+    if not (0.0 < f < 1.0) or f != f:  # f != f: NaN
+        return None
+    return f
+
+
+def effective_slice_size(size, corpus_len, holds=0, last_cut_fraction=None) -> int:
     """The window size actually used. PURE.
 
     ⛔ Two independent guards, both from 270:
@@ -170,6 +209,10 @@ def effective_slice_size(size, corpus_len, holds=0) -> int:
          never swallow a corpus whole and disable deferral (269).
       2. BACKOFF — shrink further per consecutive hold, so a chunk that still
          does not fit converges instead of repeating.
+      2b. MEASURED (270 Change 2) — when the last hold recorded how far it got
+         (requests/total), size from THAT: eff * fraction * SLICE_CUT_SAFETY.
+         Replaces the blind 0.85**holds for that hold; falls back to it when
+         the fraction is absent or unusable. Measured beats guessed.
 
     Both floor at MIN_SLICE_SIZE and are clamped to the corpus, so this can
     never return more than there is nor less than is useful.
@@ -186,7 +229,16 @@ def effective_slice_size(size, corpus_len, holds=0) -> int:
         # turned a backoff into a 2.5x expansion. A guard that can grow the
         # thing it is meant to shrink is worse than no guard.
         floor = min(MIN_SLICE_SIZE, eff)
-        eff = max(floor, math.floor(eff * (SLICE_HOLD_BACKOFF ** holds)))
+        frac = usable_cut_fraction(last_cut_fraction)
+        if frac is not None:
+            # 270 Change 2: one measured correction instead of N blind ones.
+            # Never larger than the blind backoff would have given — a fraction
+            # near 1.0 (cut at 99%) must not out-size the 15% step.
+            shrunk = min(math.floor(eff * frac * SLICE_CUT_SAFETY),
+                         math.floor(eff * SLICE_HOLD_BACKOFF))
+        else:
+            shrunk = math.floor(eff * (SLICE_HOLD_BACKOFF ** holds))
+        eff = max(floor, shrunk)
     return max(1, min(eff, corpus_len))
 
 
@@ -227,7 +279,8 @@ def plan_slice(ordered, cursor=None, size=DEFAULT_SLICE_SIZE) -> dict:
     # 270 Change 1. Sized from the CORPUS and the chunk's own hold history, not
     # from `size` alone — see effective_slice_size.
     eff = effective_slice_size(size, len(ordered),
-                               holds=state.get("consecutive_holds"))
+                               holds=state.get("consecutive_holds"),
+                               last_cut_fraction=state.get("last_cut_fraction"))
     end = min(start + eff, len(ordered))
     window = ordered[start:end]
     return {"templates": window, "start": start, "end": end,
@@ -235,7 +288,8 @@ def plan_slice(ordered, cursor=None, size=DEFAULT_SLICE_SIZE) -> dict:
             "exhausted": False, "slice_size": eff, "requested_size": int(size)}
 
 
-def fold_dispatch(cursor, plan, *, completed, corpus_id=None) -> dict:
+def fold_dispatch(cursor, plan, *, completed, corpus_id=None,
+                  cut_fraction=None) -> dict:
     """Advance the cursor after a run. PURE. Returns a NEW state dict.
 
     ⛔ ADVANCE ONLY ON COMPLETION — the refuse-rather-than-degrade direction.
@@ -261,6 +315,12 @@ def fold_dispatch(cursor, plan, *, completed, corpus_id=None) -> dict:
         # asset_template_cursor.updated_at moves on every run, held or not. Only
         # a counter that survives across runs can say "stuck for N".
         state["consecutive_holds"] = holds + 1
+        # 270 Change 2: remember how far the cut got, so the next plan can size
+        # from it. Unusable → leave whatever was there (a stale fraction from
+        # an earlier hold is still a better guide than nothing).
+        frac = usable_cut_fraction(cut_fraction)
+        if frac is not None:
+            state["last_cut_fraction"] = frac
         return state
     moved = bool(plan and plan.get("last"))
     if moved:
@@ -284,6 +344,10 @@ def fold_dispatch(cursor, plan, *, completed, corpus_id=None) -> dict:
     # is left exactly as it was.
     if moved:
         state["consecutive_holds"] = 0
+        # 270 Change 2: a completed advance says nothing about how much a
+        # BIGGER window would fit, so the measurement is spent. Clear it; the
+        # next hold (if any) records a fresh one.
+        state["last_cut_fraction"] = None
     else:
         state["consecutive_holds"] = holds
     return state

@@ -3598,12 +3598,22 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
         try:
             import coverage_wire as _cw2
             _completed = (rc == 0)
+            # 270 Change 2: on a cut, hand the cursor how far this window got
+            # (requests/total from -stats) so the NEXT window is sized from the
+            # measurement instead of the blind 0.85 step. None on a completion,
+            # or when -stats gave nothing to measure (the fold ignores None).
+            _cut_fraction = None
+            if not _completed:
+                _st = parse_nuclei_stats(stderr)
+                if _st and _st.get("total"):
+                    _cut_fraction = _st.get("requests", 0) / _st["total"]
             _cw2.record_completion(
                 (ctx.dsn or os.environ.get("SUPABASE_DSN")),
                 ctx.asset_id, chunk_label,
                 plan=_slice_plan, completed=_completed,
                 corpus_id=_cw2.corpus_id_from_meta(ctx.corpus_prewarm_meta),
-                corpus_size=_slice_plan.get("corpus_size"))
+                corpus_size=_slice_plan.get("corpus_size"),
+                cut_fraction=_cut_fraction)
             if not _completed:
                 # relay 464 F2 — a non-zero rc means the cursor did NOT advance;
                 # surface it so "coverage silently never accrues" can't hide as a
