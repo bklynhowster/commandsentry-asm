@@ -1,0 +1,9 @@
+# PyYAML for the D-056 nuclei guard (nuclei_auth_guard.py), Command only.
+# The guard reads every nuclei template with PyYAML and refuses the chunk when
+# it cannot. Prodex's scanner image installs PyYAML; Command's image
+# (commandsentry-scanner:20260907-14c639a) does not, so every Command nuclei
+# chunk was refused (run 37976031281, 2026-10-09). scanner.yml installs this at
+# run time until the image carries it. One exact version (the one Prodex's
+# image carries), wheel only, hash-locked: the cp312 manylinux x86_64 wheel
+# published on PyPI (Ubuntu 24.04 = Python 3.12).
+pyyaml==6.0.3 --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc

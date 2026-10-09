@@ -232,6 +232,27 @@ jobs:
           done
           echo "All baked-in tools present."
 
+      # ─── PyYAML for the D-056 guard (2026-10-09) ───────────────────
+      # nuclei_auth_guard.py reads every nuclei template with PyYAML and
+      # refuses the chunk when it cannot (fail-closed). Prodex's image has
+      # PyYAML; this Command image (20260907-14c639a) does not, so every
+      # Command nuclei chunk was refused (run 37976031281). Installed here,
+      # BEFORE the VPN comes up, from one hash-locked wheel. A failed install
+      # is a warning, not a failed job: the guard then refuses nuclei on its
+      # own, and the light tier and the other tools still run. Remove this
+      # step once the image installs PyYAML (next image bump).
+      - name: Ensure PyYAML for the D-056 guard
+        run: |
+          if python3 -c 'import yaml' 2>/dev/null; then
+            echo "PyYAML already present: $(python3 -c 'import yaml; print(yaml.__version__)')"
+          else
+            pip3 install --break-system-packages --no-cache-dir --only-binary=:all: \
+              --require-hashes -r scripts/scanner/requirements-guard.txt \
+              || echo "::warning::PyYAML install failed: the D-056 guard will refuse every nuclei chunk this run (nothing is sent)."
+          fi
+          python3 -c 'import yaml; print("PyYAML", yaml.__version__, "- the D-056 guard can read templates")' \
+            || echo "::warning::PyYAML is not importable: the D-056 guard will refuse every nuclei chunk this run (nothing is sent)."
+
       # ─── Migration-ledger gate (read-only) ─────────────────────────
       # Refuses the run BEFORE claiming work if any scripts/db/migrations/*.sql
       # is unapplied on this DB, or a ledger content_sha256 no longer matches the
