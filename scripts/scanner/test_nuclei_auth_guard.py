@@ -452,6 +452,29 @@ def test_a_wrong_corpus_directory_means_nuclei_is_not_run(corpus, monkeypatch, t
     assert argv is None and result[0] == m.NUCLEI_GUARD_REFUSED_RC
 
 
+BANNER = "Listing available v10.5.0 nuclei templates for /github/home/nuclei-templates"
+
+
+def test_the_listing_banner_is_not_a_template():
+    """Measured in production 2026-10-09: `nuclei -tl -silent` prints this line on stdout."""
+    templates, other = g.template_lines([BANNER, GOOD_REL, "", "  " + BAD_REL + "  "])
+    assert templates == [GOOD_REL, BAD_REL] and other == [BANNER]
+
+
+def test_a_two_template_chunk_with_the_banner_still_runs(corpus, monkeypatch):
+    """The 2026-10-09 production failure: banner + 1 template made medium:tech look
+    50% unreadable, and the guard refused the chunk. The banner must be ignored,
+    and must never reach nuclei's -t list."""
+    argv, tfile, result, _ = _drive(monkeypatch, listing=(BANNER, GOOD_REL))
+    assert argv is not None, f"refused: {result}"
+    assert tfile == [str(corpus / GOOD_REL)]
+
+
+def test_a_listing_with_only_the_banner_is_refused(corpus, monkeypatch):
+    argv, _, result, _ = _drive(monkeypatch, listing=(BANNER,))
+    assert argv is None and result[0] == m.NUCLEI_GUARD_REFUSED_RC
+
+
 def test_a_partly_unreadable_corpus_means_nuclei_is_not_run_even_if_some_pass(corpus, monkeypatch):
     """3 of 4 listed templates missing: the guard is not looking where nuclei looks.
     Running the one it could read would hide that. Refuse the chunk instead."""
