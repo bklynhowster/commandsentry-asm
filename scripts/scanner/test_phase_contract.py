@@ -642,6 +642,31 @@ def test_legacy_phase_that_credits_nothing_is_gate_skipped():
     assert ctx.tool_status["wpvulnerability"] == {"skipped": "legacy_not_applicable"}
 
 
+def test_a_phase_whose_every_chunk_was_skipped_is_skipped_not_ok():
+    """D-056 detection-only (2026-10-09): a heavy nuclei phase whose chunks all
+    had nothing to run must not read as ok at phase level — `ok` is what the
+    autocloser and the portal treat as coverage. Same for the corpus-floor skip."""
+    def legacy_all_skipped(ctx):
+        for c in ("nuclei[critical,high]", "nuclei[medium:cve]"):
+            ctx.tools_run.append(c)
+            ctx.tool_status[c] = {"skipped": "d056_detection_only"}
+
+    res, ctx = _run(pc.legacy_adapter(legacy_all_skipped, HEAVY), name="nuclei")
+    assert res.outcome == Outcome.GATE_SKIPPED
+    assert res.reason == "d056_detection_only"
+    assert ctx.tool_status["nuclei"].get("ok") is not True
+
+
+def test_a_phase_with_some_chunks_skipped_and_the_rest_ok_is_ok():
+    def legacy_mixed(ctx):
+        ctx.tools_run += ["nuclei[critical,high]", "nuclei[medium:cve]"]
+        ctx.tool_status["nuclei[critical,high]"] = {"ok": True}
+        ctx.tool_status["nuclei[medium:cve]"] = {"skipped": "d056_detection_only"}
+
+    res, _ctx = _run(pc.legacy_adapter(legacy_mixed, HEAVY), name="nuclei")
+    assert res.outcome == Outcome.OK
+
+
 def test_adapter_passes_extra_args_through():
     """check_ssh(ctx, port) and friends take more than ctx."""
     got = {}

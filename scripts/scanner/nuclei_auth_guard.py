@@ -103,6 +103,87 @@ TEXT_RULES = (
         r"dictionary attack|(?:credential|user(?:name)?|account|login)\s+enumeration)", re.I)),
 )
 
+# Read from the TITLE only (fix 299). Descriptions are not read for this,
+# because XSS write-ups routinely say "could lead to privilege escalation".
+NAME_RULES = (
+    ("privilege escalation", re.compile(r"\bprivilege\s+escalation\b|\bescalat\w*\s+(?:of\s+)?privileges?\b", re.I)),
+)
+
+# ── rule 7 (fix 299): the 2026-10-09 review. After #49 merged, Prodex's load-
+# balancer log still showed login-type checks reaching demo.prodexlabs.com.
+# Every allowed template that any of 25 independent nets flagged (527 of 4,494
+# in the production chunks, nuclei-templates v10.5.0) was read in full by
+# separate reviewers against D-056. These 95 were judged BLOCK (76) or UNSURE
+# (19, refused until Howie rules); a second review of the detection folders'
+# non-GET checks added 13 more (108). Pinned by template id, which survives a
+# corpus update that moves or renames the file.
+REVIEWED_REFUSE_IDS = frozenset("""
+CNVD-2020-63964 CVE-2015-3224 CVE-2017-15944 CVE-2018-0296 CVE-2018-11759 CVE-2019-11886
+CVE-2019-12583 CVE-2019-9880 CVE-2020-14750 CVE-2020-14882 CVE-2020-14883 CVE-2020-36723
+CVE-2020-5902 CVE-2020-6287 CVE-2021-22017 CVE-2021-24219 CVE-2021-24915 CVE-2021-28480
+CVE-2021-28481 CVE-2021-35464 CVE-2021-45967 CVE-2021-45968 CVE-2022-0952 CVE-2022-33891
+CVE-2022-47966 CVE-2023-20073 CVE-2023-20198 CVE-2023-20887 CVE-2023-41265 CVE-2023-4966
+CVE-2024-0235 CVE-2024-13985 CVE-2024-20767 CVE-2024-2771 CVE-2024-30269 CVE-2024-31848
+CVE-2024-31849 CVE-2024-32238 CVE-2024-4885 CVE-2024-53991 CVE-2024-8698 CVE-2025-12480
+CVE-2025-12841 CVE-2025-13342 CVE-2025-15403 CVE-2025-54249 CVE-2025-54251 CVE-2025-5701
+CVE-2025-8943 CVE-2026-27542 CVE-2026-34910 CVE-2026-40217 CVE-2026-4631 CVE-2026-54917
+CVE-2026-63077 slack-bot-token hikvision-cam-info-exposure aem-anonymous-write aem-secrets
+hikvision-env intercom-identity-misconfiguration java-melody-exposed cisco-implant-detect
+hikvision-js-files-upload livebos-file-read rconfig-file-upload zhiyuan-file-upload
+smartbi-deserialization springblade-info-leak unifi-create-user yonyou-u8-crm-lfi
+yonyou-ufida-cloud-sqli CVE-2025-12101 perforce-remote-depot-unauth unauth-vnc-server-detect
+CVE-2022-24706
+CVE-2020-11514 CVE-2020-20627 CVE-2021-25899 CVE-2021-33544 CVE-2023-22478 CVE-2023-3139
+CVE-2023-31446 CVE-2024-34257 CVE-2025-24813 CVE-2025-36604 CVE-2026-17532 CVE-2026-27174
+CVE-2026-34413 CVE-2026-34486 CVE-2026-46339 CVE-2026-50160 CVE-2026-5032
+jellyfin-public-users-exposure piwik-unauthenticated-access
+seeyon-unauth symfony-rce zenscrape-api-key zenserp-api-key telegram-bot-token
+gitlab-personal-token stripe-secret-key npm-access-token stackhawk-api slack-user-token
+rubygems-api-key mapbox-token-disclosure square-access
+""".split())
+
+# ── DETECTION ONLY (Howie, 2026-10-09). nuclei runs only checks that LOOK:
+# exposed files, misconfiguration, technology and panel detection, TLS, DNS.
+# Everything else in the library (cves/, vulnerabilities/, default-logins/,
+# network/, javascript/, ...) is an exploit or login check and is never handed
+# to nuclei. This is a folder ALLOW-list: a new folder the library adds is
+# excluded until someone decides otherwise. The content rules above still run
+# on what is kept.
+DETECTION_DIRS = ("http/exposures/", "http/misconfiguration/", "http/technologies/",
+                  "http/exposed-panels/", "ssl/", "dns/")
+
+
+def outside_corpus(lines, templates_dir: str) -> list:
+    """Absolute lines that are not inside templates_dir. nuclei listing them
+    means the guard is not reading where nuclei reads: a refusal, not a skip."""
+    root = os.path.normpath(templates_dir) if templates_dir else ""
+    out = []
+    for line in lines or []:
+        p = str(line).strip().replace(os.sep, "/")
+        if os.path.isabs(p) and not (root and (p == root or p.startswith(root.rstrip("/") + "/"))):
+            out.append(line)
+    return out
+
+
+def detection_only(lines, templates_dir: str):
+    """Split template lines into (kept, dropped) by folder. PURE.
+    A line outside the corpus, or one that climbs out of a folder with '..',
+    is dropped (fail-closed)."""
+    kept, dropped = [], []
+    root = os.path.normpath(templates_dir) if templates_dir else ""
+    for line in lines or []:
+        p = str(line).strip().replace(os.sep, "/")
+        if os.path.isabs(p):
+            if not root or not (p == root or p.startswith(root.rstrip("/") + "/")):
+                dropped.append(line)
+                continue
+            p = p[len(root.rstrip("/")) + 1:]
+        parts = p.split("/")
+        ok = ".." not in parts and p.startswith(DETECTION_DIRS)
+        (kept if ok else dropped).append(line)
+    return kept, dropped
+
+
 # A credential the template says it DISCLOSES ("may expose hardcoded
 # credentials", "leaks the default password") is what an exposure check finds,
 # not what an attack sends. Only the credential rule honours this; a bypass is
@@ -144,7 +225,11 @@ _NOT_PW = frozenset({"bypass", "compass", "passive", "passport", "passthrough", 
 _FIELD_RES = (
     re.compile(r"(?:^|[?&\s;,{(])([A-Za-z0-9_.\-\[\]]{1,48})\s*="),        # form / query
     re.compile(r"[\"']([A-Za-z0-9_.\-\[\]]{1,48})[\"']\s*:"),             # JSON / dict
-    re.compile(r"<\s*([A-Za-z0-9_.\-]{1,48})\s*>"),                        # XML element
+    # XML element, with or without a namespace prefix, open or self-closing.
+    # Fix 299: a namespaced password element went out on 2026-10-09 unseen.
+    re.compile(r"<\s*(?:[A-Za-z0-9_.\-]{1,32}:)?([A-Za-z0-9_.\-]{1,48})(?:\s[^<>]*)?/?>"),
+    # multipart form field: Content-Disposition: form-data; name="..."
+    re.compile(r"\bname\s*=\s*[\"']([A-Za-z0-9_.\-\[\]]{1,48})[\"']", re.I),
 )
 
 
@@ -154,6 +239,53 @@ def _has_password_field(text: str) -> bool:
             for part in re.split(r"[\[\]]+", m.group(1).lower()):
                 if part and part not in _NOT_PW and _PW_NAME_RE.match(part):
                     return True
+    return False
+
+
+# A field whose NAME says it holds a key or token is a credential, including an
+# empty one. A value that is just a {{variable}} is a token an earlier request
+# was GIVEN (the same exception the cookie rule makes), so it stays allowed.
+_SECRET_NAME_RE = re.compile(
+    r"^(?:x[_-])?(?:api[_-]?key|apikey|api[_-]?token|private[_-]?token|access[_-]?token|auth[_-]?token|token[_-]?auth|"
+    r"client[_-]?secret|secret[_-]?key|private[_-]?key|app[_-]?secret|session[_-]?token|"
+    r"refresh[_-]?token|id[_-]?token)$", re.I)
+_SECRET_VALUE_RES = (
+    re.compile(r"(?:^|[?&\s;,{(])([A-Za-z0-9_.\-]{1,48})\s*=\s*([^&;\s\"']*)"),           # form / query / cookie
+    re.compile(r"[\"']([A-Za-z0-9_.\-]{1,48})[\"']\s*:\s*[\"']?(\{\{[^{}]*\}\}(?=[\"',}\s]|$)|[^\"',}\s]*)"),  # JSON / dict
+    re.compile(r"<\s*(?:[A-Za-z0-9_.\-]{1,32}:)?([A-Za-z0-9_.\-]{1,48})(?:\s[^<>]*)?/?>()"),  # XML
+    re.compile(r"\bname\s*=\s*[\"']([A-Za-z0-9_.\-]{1,48})[\"']()", re.I),                # multipart
+)
+_VAR_ONLY_RE = re.compile(r"^\{\{\s*[A-Za-z_][\w.]*\s*\}\}$")
+# The bare names templates most often use for a credential they define
+# themselves (variables: token: "...", payloads: key: [...]). A variables value
+# that is itself a {{function}} (a random id, a timestamp) is not a credential.
+_BARE_SECRET_NAME_RE = re.compile(r"^(?:token|jwt|key|secret|bearer|apikey|auth|sessionid|session|cookie)s?$", re.I)
+
+
+# A header whose NAME says it carries a key or token (Authorization of any
+# scheme, Private-Token, X-API-Token, ...). The value, after an optional scheme
+# word, must be just a {{variable}} handed back by an earlier request; anything
+# else is a credential this template brings.
+_HEADER_LINE_RE = re.compile(r"(?m)^\s*([A-Za-z0-9_-]{1,64})\s*:[ \t]*(.*)$")
+_SCHEME_RE = re.compile(r"^(?:bearer|basic|token|digest|apikey|api-key|key|jwt)\s+", re.I)
+
+
+def _has_token_header(text: str) -> bool:
+    for m in _HEADER_LINE_RE.finditer(text):
+        name = m.group(1).lower().replace("-", "_")
+        if name != "authorization" and not _SECRET_NAME_RE.match(name):
+            continue
+        value = _SCHEME_RE.sub("", m.group(2).strip())
+        if not _VAR_ONLY_RE.match(value):
+            return True
+    return False
+
+
+def _has_secret_field(text: str) -> bool:
+    for rx in _SECRET_VALUE_RES:
+        for m in rx.finditer(text):
+            if _SECRET_NAME_RE.match(m.group(1)) and not _VAR_ONLY_RE.match(m.group(2) or ""):
+                return True
     return False
 
 
@@ -249,26 +381,83 @@ def _flat(x) -> str:
 
 
 _LOGINISH_PATH_RE = re.compile(r"log-?[io]n|logon|sign-?in|session|auth|passw|pwd", re.I)
-_RAW_POST_LINE_RE = re.compile(r"^\s*POST\s+(\S+)", re.I)
+_RAW_POST_LINE_RE = re.compile(r"^\s*(?:POST|PUT|PATCH)\s+(\S+)", re.I)
+
+
+def _strip_annotations(raw: str) -> str:
+    """A nuclei raw request may open with @timeout/@Host/... lines before the
+    request line. Fix 299: one of these hid a login POST on 2026-10-09."""
+    lines = raw.lstrip().splitlines(True)
+    while lines and lines[0].lstrip().startswith("@"):
+        lines.pop(0)
+    return "".join(lines)
 
 
 def _posts_to_a_login_path(blk: dict) -> bool:
-    """A POST WITH A BODY to a path that names a login, sign-in, session, auth or
-    password resource is a login submission, whatever its fields are called."""
+    """A POST (or PUT/PATCH) WITH A BODY to a path that names a login, sign-in,
+    session, auth or password resource is a login submission, whatever its
+    fields are called."""
     for raw in _as_list(blk.get("raw")):
-        head, _, body = str(raw).lstrip().partition("\n\n") if "\r\n\r\n" not in str(raw) \
-            else str(raw).lstrip().partition("\r\n\r\n")
+        r = _strip_annotations(str(raw))
+        head, _, body = r.partition("\n\n") if "\r\n\r\n" not in r else r.partition("\r\n\r\n")
         m = _RAW_POST_LINE_RE.match(head)
         if m and body.strip() and _LOGINISH_PATH_RE.search(m.group(1)):
             return True
-    if str(blk.get("method", "")).upper() == "POST" and str(blk.get("body") or "").strip():
+    if str(blk.get("method", "")).upper() in ("POST", "PUT", "PATCH") and str(blk.get("body") or "").strip():
         return any(_LOGINISH_PATH_RE.search(str(p)) for p in _as_list(blk.get("path")))
+    return False
+
+
+# A request addressed to a literal outside host is not a scan of the target.
+# Fix 299: 12 "found a key" checks then logged in to the key's own service
+# (Stripe, GitLab, Slack, ...) with it. A {{variable}} host (the target, or an
+# out-of-band callback) is not matched.
+_OFF_TARGET_HOST_RE = re.compile(r"(?im)^\s*@?host\s*:\s*(?!\{\{)\S")                 # Host / @Host
+_OFF_TARGET_LINE_RE = re.compile(r"(?im)^\s*[A-Z]+\s+(?:https?|wss?)://(?!\{\{)\S")     # absolute-form line
+_OFF_TARGET_PATH_RE = re.compile(r"(?i)^\s*(?:https?|wss?)://(?!\{\{)\S")
+_BARE_HOST_RE = re.compile(r"^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?::\d+)?$|^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$")
+
+
+def _outside_vars(doc) -> set:
+    """Names of top-level variables whose literal value is an outside URL or host."""
+    out = set()
+    variables = doc.get("variables") if isinstance(doc, dict) else None
+    if isinstance(variables, dict):
+        for k, v in variables.items():
+            v = str(v).strip() if isinstance(v, (str, int, float)) else ""
+            if v and not v.startswith("{{") and (_OFF_TARGET_PATH_RE.match(v) or _BARE_HOST_RE.match(v)):
+                out.add(str(k))
+    return out
+
+
+def _goes_off_target(blk: dict, outside_vars=frozenset()) -> bool:
+    raws = [str(r) for r in _as_list(blk.get("raw"))]
+    if any(_OFF_TARGET_HOST_RE.search(r) or _OFF_TARGET_LINE_RE.search(r) for r in raws):
+        return True
+    hdrs = blk.get("headers")
+    if isinstance(hdrs, dict) and any(str(k).strip().lower() == "host" and
+                                      _OFF_TARGET_HOST_RE.search(f"host: {v}") for k, v in hdrs.items()):
+        return True
+    paths = [str(p) for p in _as_list(blk.get("path"))]
+    if any(_OFF_TARGET_PATH_RE.match(p) for p in paths):
+        return True
+    for name in outside_vars:
+        var = r"(?:(?:https?|wss?)://)?\{\{\s*" + re.escape(name) + r"\s*\}\}"
+        lead = re.compile(r"(?i)^\s*" + var)
+        if any(lead.match(p) for p in paths):
+            return True
+        if any(re.search(r"(?im)^\s*(?:@?host\s*:\s*|[A-Z]+\s+)" + var, r) for r in raws):
+            return True
     return False
 
 
 def _check_request(req: str, reasons: list) -> None:
     if _has_password_field(req):
         reasons.append("request carries a password field")
+    if _has_secret_field(req):
+        reasons.append("request carries an API key or token field")
+    if _has_token_header(req):
+        reasons.append("request carries a key or token header")
     if _has_identity_cookie(req):
         reasons.append("request carries an identity cookie")
     for label, rx in REQUEST_RULES:
@@ -302,6 +491,14 @@ def classify_doc(doc, relpath: str = "") -> list[str]:
     if not isinstance(doc, dict) or not isinstance(doc.get("info"), dict):
         return ["unparseable (no info block)"]
     info = doc["info"]
+
+    if str(doc.get("id") or "").strip() in REVIEWED_REFUSE_IDS:
+        reasons.append("refused by the 2026-10-09 review")
+
+    name = str(info.get("name") or "")
+    for label, rx in NAME_RULES:
+        if rx.search(name):
+            reasons.append(f"titled as a {label}")
 
     tags = info.get("tags") or ""
     tagset = {t.strip().lower() for t in (tags.split(",") if isinstance(tags, str) else _as_list(tags))
@@ -344,11 +541,14 @@ def classify_doc(doc, relpath: str = "") -> list[str]:
                 continue
             payloads = blk.get("payloads")
             if isinstance(payloads, dict) and any(
-                    isinstance(k, str) and CRED_PAYLOAD_KEY.match(k) for k in payloads):
+                    isinstance(k, str) and (CRED_PAYLOAD_KEY.match(k) or _SECRET_NAME_RE.match(k) or
+                                            _BARE_SECRET_NAME_RE.match(k)) for k in payloads):
                 reasons.append("credential payload list")
             _check_request(_flat({f: blk.get(f) for f in REQUEST_FIELDS if blk.get(f) is not None}), reasons)
             if _posts_to_a_login_path(blk):
                 reasons.append("request posts to a login path")
+            if _goes_off_target(blk, _outside_vars(doc)):
+                reasons.append("request goes to a host other than the target")
     for key in SOCKET_KEYS:
         for blk in _as_list(doc.get(key)):
             if not isinstance(blk, dict):
@@ -373,7 +573,9 @@ def classify_doc(doc, relpath: str = "") -> list[str]:
     # variables: blocks that define a username/password a request then uses
     variables = doc.get("variables")
     if isinstance(variables, dict) and any(
-            isinstance(k, str) and CRED_PAYLOAD_KEY.match(k) for k in variables):
+            isinstance(k, str) and (CRED_PAYLOAD_KEY.match(k) or _SECRET_NAME_RE.match(k) or
+                                    (_BARE_SECRET_NAME_RE.match(k) and not str(v).lstrip().startswith("{{")))
+            for k, v in variables.items()):
         reasons.append("defines credential variables")
 
     seen, out = set(), []

@@ -271,13 +271,14 @@ def _drive_chunk(monkeypatch, rc, stderr):
     import tempfile
     import run_medium as m
     captured = {}
-    tl_list = "\n".join(f"http/x/t{i}.yaml" for i in range(50)) + "\n"
+    tl_list = "\n".join(f"http/exposures/t{i}.yaml" for i in range(50)) + "\n"
     # Since the D-056 fail-closed guard (2026-10-08) every listed template is
-    # READ before nuclei runs, so the listing must name real, benign files.
+    # READ before nuclei runs, so the listing must name real, benign files —
+    # and since detection-only (2026-10-09) they must sit in a detection folder.
     root = tempfile.mkdtemp()
-    os.makedirs(os.path.join(root, "http", "x"))
+    os.makedirs(os.path.join(root, "http", "exposures"))
     for i in range(50):
-        with open(os.path.join(root, "http", "x", f"t{i}.yaml"), "w") as fh:
+        with open(os.path.join(root, "http", "exposures", f"t{i}.yaml"), "w") as fh:
             fh.write(f"id: t{i}\ninfo:\n  name: Acme t{i} - Detect\n  severity: high\n")
     monkeypatch.setattr(m, "nuclei_templates_dir", lambda: root)
 

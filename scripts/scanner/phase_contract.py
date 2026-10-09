@@ -1129,6 +1129,15 @@ def legacy_adapter(fn, tier, *args, _phase_name=None, **kwargs):
                         per_unit_state=units, **result_kw)
         if not rec.tools_run:
             return PhaseResult.skipped("legacy_not_applicable", **result_kw)
+        # D-056 detection-only (2026-10-09): every sub-unit SKIPPED (nothing left
+        # to run by policy, or the corpus floor) is not a clean phase. Calling it
+        # ok would assert coverage nothing earned — the portal and the autocloser
+        # both read `ok`. Some ok + some skipped stays ok; the skipped units ride
+        # in per_unit_state as GATE_SKIPPED.
+        _statuses = [v for v in rec.tool_status.values() if isinstance(v, dict)]
+        _skipped = [v.get("skipped") for v in _statuses if "skipped" in v]
+        if _statuses and len(_skipped) == len(_statuses):
+            return PhaseResult.skipped(_skipped[0] or "legacy_skipped", **result_kw)
         # spec 220 — carry the units on the CLEAN path too. PhaseResult is the
         # only carrier between the recorder and run_phase (the ⑪ lesson: the
         # recorder's rich tool_status does NOT reach the DB), so a clean phase

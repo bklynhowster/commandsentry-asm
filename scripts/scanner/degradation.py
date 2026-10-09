@@ -656,6 +656,7 @@ _CUT_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
     ("nonzero_rc_no_reach_evidence", CUT_TRANSPORT),
     ("egress",                      CUT_TRANSPORT),
     ("auth_gated",                  CUT_POLICY),
+    ("d056_detection_only",         CUT_POLICY),   # D-056 2026-10-09: chosen not to send
     ("v1_p4_pending",               CUT_POLICY),
     ("routed_safe_only",            CUT_POLICY),
     ("empty_output",                CUT_TOOL),
