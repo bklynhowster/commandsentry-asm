@@ -296,11 +296,15 @@ def test_the_guard_tags_cover_every_tag_the_run_excludes():
 
 
 # ── 5. through the REAL run_nuclei_chunk
-GOOD = "id: CVE-2099-0001\ninfo:\n  name: Acme - Remote Code Execution\n  severity: critical\nhttp:\n  - method: GET\n    path:\n      - '{{BaseURL}}/x'\n"
+GOOD = "id: acme-config-exposure\ninfo:\n  name: Acme config.json - Exposure\n  severity: high\nhttp:\n  - method: GET\n    path:\n      - '{{BaseURL}}/x'\n"
+# An exploit check that is otherwise clean: detection-only (Howie, 2026-10-09)
+# keeps it away from nuclei by policy, not by the guard's content rules.
+EXPLOIT = "id: CVE-2099-0003\ninfo:\n  name: Acme - Remote Code Execution\n  severity: critical\nhttp:\n  - method: GET\n    path:\n      - '{{BaseURL}}/z'\n"
 BAD = ("id: CVE-2099-0002\ninfo:\n  name: Acme - Authentication Bypass\n  severity: critical\n"
        "http:\n  - method: GET\n    path:\n      - '{{BaseURL}}/y'\n")
-GOOD_REL = "http/cves/2099/CVE-2099-0001.yaml"
-BAD_REL = "http/cves/2099/CVE-2099-0002.yaml"
+GOOD_REL = "http/exposures/configs/acme-config-exposure.yaml"
+BAD_REL = "http/misconfiguration/acme-bypass.yaml"
+EXPLOIT_REL = "http/cves/2099/CVE-2099-0003.yaml"
 
 
 class _Stop(Exception):
@@ -310,9 +314,9 @@ class _Stop(Exception):
 @pytest.fixture
 def corpus(tmp_path, monkeypatch):
     root = tmp_path / "nuclei-templates"
-    (root / "http/cves/2099").mkdir(parents=True)
-    (root / GOOD_REL).write_text(GOOD)
-    (root / BAD_REL).write_text(BAD)
+    for rel, text in ((GOOD_REL, GOOD), (BAD_REL, BAD), (EXPLOIT_REL, EXPLOIT)):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
     monkeypatch.setattr(m, "nuclei_templates_dir", lambda: str(root))
     monkeypatch.delenv("SUPABASE_DSN", raising=False)
     return root
@@ -478,7 +482,7 @@ def test_a_listing_with_only_the_banner_is_refused(corpus, monkeypatch):
 def test_a_partly_unreadable_corpus_means_nuclei_is_not_run_even_if_some_pass(corpus, monkeypatch):
     """3 of 4 listed templates missing: the guard is not looking where nuclei looks.
     Running the one it could read would hide that. Refuse the chunk instead."""
-    listing = (GOOD_REL, "http/cves/2099/gone-1.yaml", "http/cves/2099/gone-2.yaml", "http/cves/2099/gone-3.yaml")
+    listing = (GOOD_REL, "http/exposures/gone-1.yaml", "http/exposures/gone-2.yaml", "http/exposures/gone-3.yaml")
     argv, _, result, _ = _drive(monkeypatch, listing=listing)
     assert argv is None and result[0] == m.NUCLEI_GUARD_REFUSED_RC
 
@@ -492,6 +496,229 @@ def test_the_allowed_list_file_is_removed_after_the_run(corpus, monkeypatch):
     argv, _, result, _ = _drive(monkeypatch, scan_rc=0)
     assert result[0] == 0
     assert not os.path.exists(argv[argv.index("-t") + 1])
+
+
+# ── 5b. DETECTION ONLY (Howie, 2026-10-09, after the 10-09 load-balancer log
+# showed exploit checks still reaching demo.prodexlabs.com): nuclei runs only
+# checks that LOOK — exposed files, misconfiguration, technology and panel
+# detection, TLS and DNS. Exploit checks (cves/, vulnerabilities/, ...) are
+# never handed to nuclei, whatever the guard's content rules say about them.
+def test_detection_only_is_on():
+    assert m.NUCLEI_DETECTION_ONLY is True, "turning exploit checks back on is Howie's call, not a default"
+
+
+DETECTION_LINES = ["http/exposures/configs/a.yaml", "http/misconfiguration/b.yaml",
+                   "http/technologies/c.yaml", "http/exposed-panels/d.yaml", "ssl/e.yaml", "dns/f.yaml"]
+EXPLOIT_LINES = ["http/cves/2023/x.yaml", "http/vulnerabilities/y.yaml", "http/default-logins/z.yaml",
+                 "http/cnvd/2020/w.yaml", "http/iot/v.yaml", "http/osint/u.yaml", "http/token-spray/t.yaml",
+                 "http/fuzzing/s.yaml", "http/takeovers/r.yaml", "network/cves/q.yaml", "javascript/cves/p.yaml",
+                 "javascript/enumeration/o.yaml", "code/n.yaml", "headless/m.yaml", "dast/l.yaml", "file/k.yaml"]
+
+
+def test_detection_only_keeps_detection_folders_and_drops_everything_else(tmp_path):
+    kept, dropped = g.detection_only(DETECTION_LINES + EXPLOIT_LINES, str(tmp_path))
+    assert kept == DETECTION_LINES
+    assert dropped == EXPLOIT_LINES
+
+
+def test_detection_only_reads_absolute_lines_against_the_corpus_and_fails_closed(tmp_path):
+    root = str(tmp_path / "nuclei-templates")
+    lines = [root + "/http/exposures/a.yaml", root + "/http/cves/2023/b.yaml",
+             "/elsewhere/http/exposures/c.yaml", "http/exposures/../cves/2023/d.yaml",
+             root + "Xhttp/exposures/e.yaml"]   # a sibling path that merely starts with the corpus name
+    kept, dropped = g.detection_only(lines, root)
+    assert kept == [root + "/http/exposures/a.yaml"]
+    assert dropped == lines[1:], "outside the corpus or climbing out of a folder must not count as detection"
+
+
+def test_detection_only_never_hands_an_exploit_check_to_nuclei(corpus, monkeypatch):
+    argv, tfile, _, _ = _drive(monkeypatch, listing=(GOOD_REL, EXPLOIT_REL, BAD_REL))
+    assert argv is not None
+    assert tfile == [str(corpus / GOOD_REL)], f"only detection checks may reach nuclei, got {tfile}"
+
+
+def test_a_chunk_with_only_exploit_checks_is_skipped_and_sends_nothing(corpus, monkeypatch):
+    argv, _, result, _ = _drive(monkeypatch, listing=(EXPLOIT_REL,))
+    assert argv is None, "nuclei must not run when policy leaves nothing to run"
+    assert result[0] == m.NUCLEI_POLICY_SKIP_RC
+    assert result[4].startswith(m.NUCLEI_POLICY_SKIP_REASON)
+
+
+def test_the_caller_records_a_policy_skip_as_skipped_not_degraded():
+    body = _caller_src()
+    gate = body.index("if rc == NUCLEI_POLICY_SKIP_RC:")
+    assert gate < body.index("is_tool_output_degraded("), "the skip must be handled before the outcome logic"
+    block = body[gate:body.index("continue", gate) + len("continue")]
+    assert "mark_tool_skipped(ctx, chunk_name, NUCLEI_POLICY_SKIP_REASON)" in block
+    assert "mark_tool_degraded" not in block and "mark_tool_ok" not in block
+
+
+def test_detection_only_never_closes_a_finding_it_no_longer_looks_for():
+    """A clean scan delta-closes open findings it did not re-observe. With exploit
+    checks off, every exploit-check finding would be 'not re-observed' and get
+    falsely marked remediated. The close must not run while detection-only is on."""
+    src = open(m.__file__, encoding="utf-8").read()
+    i = src.index('"SELECT delta_close_for_scan_run(%s, %s) AS n_closed"')
+    guard_line = src.rfind("\n", 0, src.rfind("cur.execute(", 0, i))
+    window = src[src.rfind("if ", 0, guard_line):i]
+    assert "not NUCLEI_DETECTION_ONLY" in window, "delta-close must be gated on detection-only"
+
+
+def test_a_policy_skip_does_not_stop_the_steps_that_only_touch_re_observed_findings():
+    """settle-regressed, regress-on-observed and finding-history act only on
+    findings this scan DID see. A chunk skipped by detection-only must not turn
+    them off; any other skip or a degradation still does."""
+    ok = {"ok": True}
+    assert m.close_out_eligible({"wafw00f": ok, "nuclei[medium:cve]": {"skipped": m.NUCLEI_POLICY_SKIP_REASON}})
+    # close_out decorates entries (cut_class, plan meta) BEFORE it asks; those keys must not matter
+    assert m.close_out_eligible({"wafw00f": ok, "nuclei[medium:cve]": {
+        "skipped": m.NUCLEI_POLICY_SKIP_REASON, "cut_class": "policy", "planned_chunks": 4, "actual_chunks": 4}})
+    assert not m.close_out_eligible({"wafw00f": ok, "nikto": {"skipped": "auth_gated"}})
+    assert not m.close_out_eligible({"wafw00f": ok, "nikto": {"degraded": "x"}})
+    assert not m.close_out_eligible({})
+    src = open(m.__file__, encoding="utf-8").read()
+    assert "eligible = close_out_eligible(ctx.tool_status)" in src
+
+
+def test_a_detection_only_skip_is_classed_as_policy():
+    import degradation as d
+    assert d.classify_cut_reason(m.NUCLEI_POLICY_SKIP_REASON) == d.CUT_POLICY
+
+
+# ── 5c. credential shapes the 10-09 log and review showed the reader missed
+CRED_SHAPES_20261009 = {
+    # CVE-2023-20198 (on the wire 2026-10-09): a credential inside a namespaced XML element
+    "namespaced XML password": _http(raw=["POST /x HTTP/1.1\n\n<wsse:Username>a</wsse:Username><wsse:Password>b</wsse:Password>\n"]),
+    "empty self-closing password element": _http(raw=["POST /x HTTP/1.1\n\n<a:User>a</a:User><b:Password/>\n"]),
+    "multipart password field": _http(raw=[
+        "POST /x HTTP/1.1\nContent-Type: multipart/form-data; boundary=b\n\n"
+        "--b\nContent-Disposition: form-data; name=\"password\"\n\nx\n--b--\n"]),
+    # CVE-2021-25899 (on the wire 2026-10-09): an @timeout line hid the POST line
+    "login POST behind an annotation": _http(raw=["@timeout: 15s\nPOST /app/svc-login.php HTTP/1.1\n\na=1&b=2\n"]),
+    "api key field": _http(method="POST", path=["{{BaseURL}}/x"], body="action=y&api_key=&v=1"),
+    "token field in json": _http(raw=['POST /x HTTP/1.1\n\n{"access_token":"abc","v":1}\n']),
+    "privilege escalation in the title": {"id": "t", "info": {"name": "Plugin 1.0 - Privilege Escalation", "severity": "high"},
+                                          "http": [{"method": "GET", "path": ["{{BaseURL}}/"]}]},
+    # isolates the account-creation text rule (the older shape's title now also
+    # trips the title rule, so it no longer proves this one on its own)
+    "admin account creation, neutral title": {"id": "t", "info": {
+        "name": "Plugin 2.0 - Info", "severity": "high",
+        "description": "Unauthenticated attackers can create an administrator account."},
+        "http": [{"method": "GET", "path": ["{{BaseURL}}/"]}]},
+    "a login PUT with neutral fields": _http(raw=['PUT /api/v1/session HTTP/1.1\n\n{"a":1}\n']),
+    # the independent review's misses (fix 299):
+    "a token defined in variables, sent as a variable": {"id": "t", "info": {"name": "Acme - Info", "severity": "high"},
+                                                         "variables": {"api_token": "abc123"},
+                                                         "http": [{"raw": ["GET /x HTTP/1.1\nX-Thing: {{api_token}}\n"]}]},
+    "a key list in payloads": _http(method="GET", path=["{{BaseURL}}/x?k={{api_key}}"], payloads={"api_key": ["a", "b"]}),
+    "Authorization with another scheme": _http(raw=["GET / HTTP/1.1\nAuthorization: Token abc123\n"]),
+    "a token header by name (raw)": _http(raw=["GET / HTTP/1.1\nPrivate-Token: abc123\n"]),
+    "a token header by name (headers)": _http(method="GET", path=["{{BaseURL}}/"], headers={"X-API-Token": "abc123"}),
+    "a variable named just token, holding a literal": {"id": "t", "info": {"name": "Acme - Info", "severity": "high"},
+                                                       "variables": {"token": "abc123"},
+                                                       "http": [{"raw": ["GET /x HTTP/1.1\nAuthorization: Bearer {{token}}\n"]}]},
+    "a payload list named just key": _http(method="GET", path=["{{BaseURL}}/x?k={{key}}"], payloads={"key": ["a", "b"]}),
+    "a json key value that starts with a variable": _http(raw=['POST /x HTTP/1.1\n\n{"api_key":"{{p}}abcd1234"}\n']),
+}
+
+
+@pytest.mark.parametrize("label", sorted(CRED_SHAPES_20261009))
+def test_the_10_09_credential_shapes_are_refused(label):
+    assert g.classify_doc(CRED_SHAPES_20261009[label]), f"D-056: a template shaped like '{label}' would run"
+
+
+# A check that finds a key on the target and then LOGS IN to the key's service
+# with it (Stripe, GitLab, Slack, ...) sends a credential, and sends it to a
+# host that is not the target at all. Any request addressed to a literal outside
+# host is refused (fix 299; 12 such checks sat in the detection folders).
+OFF_TARGET = {
+    "a literal outside Host header": _http(raw=["GET /v1/x HTTP/1.1\nHost: api.example-service.com\nAuthorization: Bearer {{token}}\n"]),
+    "an absolute outside URL in path": _http(method="GET", path=["https://api.example-service.com/v1/files?key={{k}}"]),
+    # the independent review's misses (fix 299):
+    "an @Host annotation to an outside host": _http(raw=["@Host: https://api.example-service.com\nGET /v1/x HTTP/1.1\nHost: {{Hostname}}\n"]),
+    "an absolute outside URL on the request line": _http(raw=["GET https://api.example-service.com/v1 HTTP/1.1\nHost: {{Hostname}}\n"]),
+    "an outside Host with a port": _http(raw=["GET / HTTP/1.1\nHost: api.example-service.com:8443\n"]),
+    "an upper-case scheme in path": _http(method="GET", path=["HTTPS://api.example-service.com/x"]),
+    "an IP-literal outside host": _http(raw=["GET / HTTP/1.1\nHost: 203.0.113.7\n"]),
+    "an outside host defined in variables": {"id": "t", "info": {"name": "Acme - Info", "severity": "high"},
+                                             "variables": {"svc": "https://api.example-service.com"},
+                                             "http": [{"method": "GET", "path": ["{{svc}}/v1/x"]}]},
+    "a scheme then an outside host variable": {"id": "t", "info": {"name": "Acme - Info", "severity": "high"},
+                                               "variables": {"h": "api.example-service.com"},
+                                               "http": [{"method": "GET", "path": ["https://{{h}}/v1/x"]},
+                                                        {"raw": ["GET https://{{h}}/v1 HTTP/1.1\nHost: {{Hostname}}\n"]}]},
+}
+
+
+@pytest.mark.parametrize("label", sorted(OFF_TARGET))
+def test_a_request_to_a_host_other_than_the_target_is_refused(label):
+    assert g.classify_doc(OFF_TARGET[label]), f"'{label}' sends traffic somewhere other than the target"
+
+
+def test_requests_addressed_to_the_target_or_a_callback_are_not_off_target():
+    for doc in (_http(raw=["GET / HTTP/1.1\nHost: {{Hostname}}\n"]),
+                _http(raw=["GET / HTTP/1.1\nHost: {{Hostname}}:{{Port}}\n"]),
+                _http(raw=["@Host: {{RootURL}}\nGET / HTTP/1.1\nHost: {{Hostname}}\n"]),
+                _http(raw=["GET / HTTP/1.1\nHost: {{interactsh-url}}\n"]),
+                _http(method="GET", path=["{{BaseURL}}/x", "{{RootURL}}/y", "http://{{interactsh-url}}"])):
+        assert g.classify_doc(doc) == [], doc
+
+
+def test_a_token_handed_back_by_an_earlier_request_is_not_a_credential():
+    for doc in (_http(raw=["GET /api?access_token={{token}} HTTP/1.1\nCookie: AuthToken={{tok}}\n"]),
+                _http(raw=['POST /api HTTP/1.1\n\n{"access_token":"{{tok}}","v":1}\n']),
+                _http(raw=["GET /api HTTP/1.1\nAuthorization: Token {{token}}\nPrivate-Token: {{t}}\n"])):
+        assert g.classify_doc(doc) == [], doc
+
+
+def test_a_listing_outside_the_corpus_is_refused_not_skipped(corpus, monkeypatch):
+    """If nuclei lists templates somewhere the guard does not read, that is the
+    guard looking in the wrong place: a refusal (degraded), never a quiet skip."""
+    argv, _, result, _ = _drive(monkeypatch, listing=("/elsewhere/http/exposures/x.yaml",))
+    assert argv is None and result[0] == m.NUCLEI_GUARD_REFUSED_RC
+
+
+# The 2026-10-09 review: every allowed template that one of 25 independent nets
+# flagged (527 of 4,494 in the production chunks, nuclei-templates v10.5.0) was
+# read in full by separate reviewers against D-056. 76 BLOCK + 19 UNSURE;
+# UNSURE stays refused until Howie rules. Pinned by id.
+THE_108 = """
+CNVD-2020-63964 CVE-2015-3224 CVE-2017-15944 CVE-2018-0296 CVE-2018-11759 CVE-2019-11886
+CVE-2019-12583 CVE-2019-9880 CVE-2020-14750 CVE-2020-14882 CVE-2020-14883 CVE-2020-36723
+CVE-2020-5902 CVE-2020-6287 CVE-2021-22017 CVE-2021-24219 CVE-2021-24915 CVE-2021-28480
+CVE-2021-28481 CVE-2021-35464 CVE-2021-45967 CVE-2021-45968 CVE-2022-0952 CVE-2022-33891
+CVE-2022-47966 CVE-2023-20073 CVE-2023-20198 CVE-2023-20887 CVE-2023-41265 CVE-2023-4966
+CVE-2024-0235 CVE-2024-13985 CVE-2024-20767 CVE-2024-2771 CVE-2024-30269 CVE-2024-31848
+CVE-2024-31849 CVE-2024-32238 CVE-2024-4885 CVE-2024-53991 CVE-2024-8698 CVE-2025-12480
+CVE-2025-12841 CVE-2025-13342 CVE-2025-15403 CVE-2025-54249 CVE-2025-54251 CVE-2025-5701
+CVE-2025-8943 CVE-2026-27542 CVE-2026-34910 CVE-2026-40217 CVE-2026-4631 CVE-2026-54917
+CVE-2026-63077 slack-bot-token hikvision-cam-info-exposure aem-anonymous-write aem-secrets
+hikvision-env intercom-identity-misconfiguration java-melody-exposed cisco-implant-detect
+hikvision-js-files-upload livebos-file-read rconfig-file-upload zhiyuan-file-upload
+smartbi-deserialization springblade-info-leak unifi-create-user yonyou-u8-crm-lfi
+yonyou-ufida-cloud-sqli CVE-2025-12101 perforce-remote-depot-unauth unauth-vnc-server-detect
+CVE-2022-24706
+CVE-2020-11514 CVE-2020-20627 CVE-2021-25899 CVE-2021-33544 CVE-2023-22478 CVE-2023-3139
+CVE-2023-31446 CVE-2024-34257 CVE-2025-24813 CVE-2025-36604 CVE-2026-17532 CVE-2026-27174
+CVE-2026-34413 CVE-2026-34486 CVE-2026-46339 CVE-2026-50160 CVE-2026-5032
+jellyfin-public-users-exposure piwik-unauthenticated-access
+seeyon-unauth symfony-rce zenscrape-api-key zenserp-api-key telegram-bot-token
+gitlab-personal-token stripe-secret-key npm-access-token stackhawk-api slack-user-token
+rubygems-api-key mapbox-token-disclosure square-access
+""".split()
+
+
+def test_the_review_list_is_complete():
+    """95 from the first review + 13 from the review of the detection folders'
+    non-GET checks (the checks detection-only keeps)."""
+    assert len(THE_108) == 108 and len(set(THE_108)) == 108
+
+
+@pytest.mark.parametrize("tid", THE_108)
+def test_every_template_the_10_09_review_refused_is_refused(tid):
+    doc = {"id": tid, "info": {"name": "Acme - Info", "severity": "high"},
+           "http": [{"method": "GET", "path": ["{{BaseURL}}/"]}]}
+    assert g.classify_doc(doc), f"D-056: {tid} was refused by the 10-09 review but would run"
 
 
 def _caller_src():

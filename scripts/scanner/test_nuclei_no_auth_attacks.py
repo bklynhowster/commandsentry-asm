@@ -47,7 +47,8 @@ class _Stop(Exception):
     pass
 
 
-_ONE = "id: ok\ninfo:\n  name: Acme - Remote Code Execution\n  severity: critical\n"
+# A detection check: D-056 detection-only (2026-10-09) never hands nuclei anything else.
+_ONE = "id: ok\ninfo:\n  name: Acme config - Exposure\n  severity: critical\n"
 
 
 def _captured_argv(waf_detected: bool, tag_filter=None, severity="critical,high", tl_seen=None):
@@ -56,14 +57,14 @@ def _captured_argv(waf_detected: bool, tag_filter=None, severity="critical,high"
     import tempfile
     seen = []
     root = tempfile.mkdtemp()
-    os.makedirs(os.path.join(root, "http"))
-    with open(os.path.join(root, "http", "ok.yaml"), "w") as fh:
+    os.makedirs(os.path.join(root, "http", "exposures"))
+    with open(os.path.join(root, "http", "exposures", "ok.yaml"), "w") as fh:
         fh.write(_ONE)
 
     def fake_run_cmd(cmd, timeout=None, **kw):
         seen.append(list(cmd))
         if cmd and cmd[0] == "nuclei" and "-tl" in cmd:
-            return 0, "http/ok.yaml\n", ""
+            return 0, "http/exposures/ok.yaml\n", ""
         raise _Stop()
 
     ctx = types.SimpleNamespace(

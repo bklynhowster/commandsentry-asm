@@ -225,18 +225,46 @@ def nuclei_exclusion_args(waf_detected: bool) -> list:
 NUCLEI_GUARD_REFUSED_RC = 97          # sentinel: nuclei was NOT run
 NUCLEI_GUARD_REFUSED_REASON = "d056_guard_refused"
 
+# ⛔ D-056, DETECTION ONLY (Howie, 2026-10-09). After #49, Prodex's load-balancer
+# log still showed exploit checks with login tricks reaching demo.prodexlabs.com:
+# a content check over a ~4,500-check library kept missing some. Howie's ruling:
+# nuclei runs only checks that LOOK (exposed files, misconfiguration, technology
+# and panel detection, TLS, DNS) and never sends exploit checks. See
+# nuclei_auth_guard.DETECTION_DIRS. A CODE constant on purpose, not an env var:
+# turning exploit checks back on is a reviewed change, not a setting.
+NUCLEI_DETECTION_ONLY = True
+NUCLEI_POLICY_SKIP_RC = 96            # sentinel: nothing left to run by policy
+NUCLEI_POLICY_SKIP_REASON = "d056_detection_only"
+
+
+def close_out_eligible(tool_status: dict) -> bool:
+    """delta_close_eligible, except that a chunk skipped by D-056 detection-only
+    does not count against the scan. Used for the close_out steps that act only
+    on findings this scan DID re-observe (settle-regressed, regress-on-observed,
+    finding-history). The open -> remediated close itself is separately OFF
+    while NUCLEI_DETECTION_ONLY is on. Any other skip or a degradation still
+    makes the scan ineligible."""
+    # Match on the skip REASON, not the whole entry: close_out decorates entries
+    # (cut_class, planned/actual chunk counts) before it asks.
+    return delta_close_eligible({k: v for k, v in (tool_status or {}).items()
+                                 if not (isinstance(v, dict) and v.get("skipped") == NUCLEI_POLICY_SKIP_REASON)})
+
 
 def d056_screen_templates(severity_filter: str, tag_filter, waf_detected: bool):
-    """(allowed_lines, refused, refusal). refusal is None when nuclei may run.
+    """(allowed_lines, refused, refusal, policy_skip).
+
+    refusal is None when nuclei may run. policy_skip is set (and refusal None)
+    when detection-only leaves this chunk nothing to run: that is a decision,
+    not a failure, so the chunk is recorded skipped rather than degraded.
 
     Lists the chunk's corpus with the SAME flags as the run (so the denylist
-    still applies first), then reads every listed template. Any failure here
-    is a refusal, never a pass.
+    still applies first), keeps only detection checks, then reads every one.
+    Any failure here is a refusal, never a pass.
     """
     try:
         import nuclei_auth_guard as _guard
     except Exception as e:  # noqa: BLE001 — a missing guard must refuse, not crash
-        return [], [], f"the D-056 guard could not be loaded ({e!r})"
+        return [], [], f"the D-056 guard could not be loaded ({e!r})", None
     _tl = ["nuclei", "-tl", "-silent", "-severity", severity_filter]
     if tag_filter:
         _tl += ["-tags", tag_filter]
@@ -244,20 +272,32 @@ def d056_screen_templates(severity_filter: str, tag_filter, waf_detected: bool):
     try:
         _rc, _out, _err = run_cmd(_tl, timeout=NUCLEI_CORPUS_WALL_S)
     except Exception as e:  # noqa: BLE001
-        return [], [], f"nuclei -tl could not run ({e!r})"
+        return [], [], f"nuclei -tl could not run ({e!r})", None
     if _rc != 0:
-        return [], [], f"nuclei -tl failed (rc={_rc})"
+        return [], [], f"nuclei -tl failed (rc={_rc})", None
     # Only lines naming a template FILE are templates. nuclei also prints an
     # informational "Listing available ... templates for <dir>" line on stdout
     # (measured in production 2026-10-09); counted as a template it made a
     # 2-template chunk look 50% unreadable and refused it.
     _listed, _not_templates = _guard.template_lines((_out or "").splitlines())
     try:
+        _outside = _guard.outside_corpus(_listed, nuclei_templates_dir())
+        if _outside:
+            return [], [], (f"{len(_outside)} listed template(s) are outside the corpus "
+                            f"the guard reads — the guard is not looking where nuclei looks"), None
+        if NUCLEI_DETECTION_ONLY:
+            _listed, _exploit = _guard.detection_only(_listed, nuclei_templates_dir())
+            if _exploit:
+                log(f"  D-056 detection-only: {len(_exploit)} exploit check(s) not run; "
+                    f"{len(_listed)} detection check(s) go to the guard")
+            if not _listed and _exploit:
+                return [], [], None, (f"detection-only: all {len(_exploit)} listed "
+                                      f"template(s) are exploit checks")
         _allowed, _refused = _guard.screen(_listed, nuclei_templates_dir())
         _why = _guard.refusal_reason(len(_listed), _allowed, _refused)
     except Exception as e:  # noqa: BLE001
-        return [], [], f"the D-056 guard raised ({e!r})"
-    return _allowed, _refused, _why
+        return [], [], f"the D-056 guard raised ({e!r})", None
+    return _allowed, _refused, _why, None
 
 # 4.7 ruling ⑮ (2026-08-31), shipped 2026-09-01 UNGATED per ruling ㉑.
 #
@@ -3606,8 +3646,12 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
 
     # ⛔ D-056 FAIL-CLOSED — see NUCLEI_GUARD_REFUSED_RC. Read every template
     # this chunk would run, BEFORE anything is sent.
-    _allowed, _refused, _refusal = d056_screen_templates(
+    _allowed, _refused, _refusal, _policy_skip = d056_screen_templates(
         severity_filter, tag_filter, ctx.waf_detected)
+    if _policy_skip:
+        log(f"  {chunk_label}: skipped — {_policy_skip}. nuclei NOT run; nothing sent.")
+        return (NUCLEI_POLICY_SKIP_RC, 0, [], "",
+                f"{NUCLEI_POLICY_SKIP_REASON}: {_policy_skip}")
     if _refused:
         try:
             import nuclei_auth_guard as _guard
@@ -4248,6 +4292,13 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
             mark_tool_degraded(ctx, chunk_name, NUCLEI_GUARD_REFUSED_REASON,
                                stderr=chunk_stderr)
             log(f"  chunk {i+1} REFUSED by the D-056 guard — {chunk_stderr}")
+            _emit_chunk_progress(ctx, _chunks_total)
+            continue
+        if rc == NUCLEI_POLICY_SKIP_RC:
+            # D-056 detection-only left this chunk nothing to run. A decision,
+            # not a failure: skipped (not degraded, not ok). Nothing was sent.
+            mark_tool_skipped(ctx, chunk_name, NUCLEI_POLICY_SKIP_REASON)
+            log(f"  chunk {i+1} skipped — {chunk_stderr}")
             _emit_chunk_progress(ctx, _chunks_total)
             continue
         log(f"  chunk {i+1} done: {matches} match(es), rc={rc}")
@@ -5743,24 +5794,34 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
         # so one ineligible tool blocks the whole scan's closing — the safe
         # side. Runs AFTER CLOSE_SCAN_RUN_SQL (scan_run.completed_at now set =
         # remediated_at) and in the SAME txn — committed together by run().
-        eligible = delta_close_eligible(ctx.tool_status)
+        eligible = close_out_eligible(ctx.tool_status)
         if eligible:
-            # Pass the EXACT source the writes used (f"commandsentry_{intensity}")
-            # so the close scopes to write-source by construction — not re-derived
-            # from scan_run.intensity (avoids any standard/medium normalization gap).
-            cur.execute(
-                "SELECT delta_close_for_scan_run(%s, %s) AS n_closed",
-                (ctx.scan_run_id, source_for_tier(MEDIUM)),
-            )
-            # conn is dict_row — read the aliased column by NAME, not [0]
-            # (indexing a dict-row with 0 raises KeyError(0)).
-            _dc_row = cur.fetchone()
-            n_closed = (_dc_row["n_closed"] if _dc_row else 0) or 0
-            if n_closed:
-                log(f"delta-close: {n_closed} finding(s) marked remediated "
-                    f"(open, not re-observed this clean scan)")
+            # ⛔ D-056 detection-only (2026-10-09): exploit checks no longer run,
+            # so every open finding they produced is "not re-observed" on every
+            # scan. Delta-close would mark all of them remediated — false. The
+            # close (open → remediated) is OFF while detection-only is on. The
+            # steps below it act only on findings this scan DID re-observe, so
+            # they stay on.
+            if not NUCLEI_DETECTION_ONLY:
+                # Pass the EXACT source the writes used (f"commandsentry_{intensity}")
+                # so the close scopes to write-source by construction — not re-derived
+                # from scan_run.intensity (avoids any standard/medium normalization gap).
+                cur.execute(
+                    "SELECT delta_close_for_scan_run(%s, %s) AS n_closed",
+                    (ctx.scan_run_id, source_for_tier(MEDIUM)),
+                )
+                # conn is dict_row — read the aliased column by NAME, not [0]
+                # (indexing a dict-row with 0 raises KeyError(0)).
+                _dc_row = cur.fetchone()
+                n_closed = (_dc_row["n_closed"] if _dc_row else 0) or 0
+                if n_closed:
+                    log(f"delta-close: {n_closed} finding(s) marked remediated "
+                        f"(open, not re-observed this clean scan)")
+                else:
+                    log("delta-close: 0 closed (nothing went stale this scan)")
             else:
-                log("delta-close: 0 closed (nothing went stale this scan)")
+                log("delta-close: OFF — D-056 detection-only; exploit-check findings "
+                    "are no longer re-checked, so none may be closed as remediated")
 
             # Alerter regressed-semantics fix (spec 2026-07-11, 4.7 Q3): settle
             # BEFORE regress_observed. A finding regressed on a PRIOR scan that is
