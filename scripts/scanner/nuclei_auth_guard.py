@@ -408,6 +408,24 @@ def _resolve(line: str, templates_dir: str) -> tuple[str, str]:
     return os.path.join(templates_dir or "", p), p
 
 
+def template_lines(lines):
+    """Split raw `nuclei -tl` output into (template lines, other lines).
+
+    Measured in production 2026-10-09: nuclei v3 prints an informational line
+    ("Listing available v10.5.0 nuclei templates for /github/home/...") on
+    STDOUT even with -silent. Only a line that names a template FILE is a
+    template. Anything else cannot be run, so it is set aside here and never
+    handed to the guard or to nuclei. That is strictly narrower, never wider.
+    """
+    templates, other = [], []
+    for raw in lines or []:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        line = raw.strip()
+        (templates if line.lower().endswith((".yaml", ".yml")) else other).append(line)
+    return templates, other
+
+
 def screen(lines, templates_dir: str):
     """Split `nuclei -tl` lines into (allowed, refused).
 

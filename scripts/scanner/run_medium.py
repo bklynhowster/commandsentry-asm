@@ -247,7 +247,11 @@ def d056_screen_templates(severity_filter: str, tag_filter, waf_detected: bool):
         return [], [], f"nuclei -tl could not run ({e!r})"
     if _rc != 0:
         return [], [], f"nuclei -tl failed (rc={_rc})"
-    _listed = [ln.strip() for ln in (_out or "").splitlines() if ln.strip()]
+    # Only lines naming a template FILE are templates. nuclei also prints an
+    # informational "Listing available ... templates for <dir>" line on stdout
+    # (measured in production 2026-10-09); counted as a template it made a
+    # 2-template chunk look 50% unreadable and refused it.
+    _listed, _not_templates = _guard.template_lines((_out or "").splitlines())
     try:
         _allowed, _refused = _guard.screen(_listed, nuclei_templates_dir())
         _why = _guard.refusal_reason(len(_listed), _allowed, _refused)
