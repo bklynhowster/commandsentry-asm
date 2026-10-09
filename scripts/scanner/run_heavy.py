@@ -3030,6 +3030,12 @@ def write_event_findings_and_artifacts(
             else:
                 updated += 1
 
+        # 302 step 1 — keep the software versions httpx saw (own savepoint).
+        # Runs on the degraded path too (write_artifacts=False): the versions
+        # seen are true whether or not a later tool was cut.
+        import software_inventory
+        software_inventory.record_from_artifacts(cur, ctx, Json, log=log)
+
         if write_artifacts:
             for tool_name, output_format, content_str in ctx.artifacts:
                 try:

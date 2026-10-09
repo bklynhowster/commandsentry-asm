@@ -117,6 +117,9 @@ NAME_RULES = (
 # (19, refused until Howie rules); a second review of the detection folders'
 # non-GET checks added 13 more (108). Pinned by template id, which survives a
 # corpus update that moves or renames the file.
+# D-065 (Howie, 2026-10-09): jellyfin-public-users-exposure ALLOWED (two plain
+# GETs of a page the server publishes to everyone); it goes back through the
+# content rules like any other check. piwik-unauthenticated-access stays (107).
 REVIEWED_REFUSE_IDS = frozenset("""
 CNVD-2020-63964 CVE-2015-3224 CVE-2017-15944 CVE-2018-0296 CVE-2018-11759 CVE-2019-11886
 CVE-2019-12583 CVE-2019-9880 CVE-2020-14750 CVE-2020-14882 CVE-2020-14883 CVE-2020-36723
@@ -136,7 +139,7 @@ CVE-2022-24706
 CVE-2020-11514 CVE-2020-20627 CVE-2021-25899 CVE-2021-33544 CVE-2023-22478 CVE-2023-3139
 CVE-2023-31446 CVE-2024-34257 CVE-2025-24813 CVE-2025-36604 CVE-2026-17532 CVE-2026-27174
 CVE-2026-34413 CVE-2026-34486 CVE-2026-46339 CVE-2026-50160 CVE-2026-5032
-jellyfin-public-users-exposure piwik-unauthenticated-access
+piwik-unauthenticated-access
 seeyon-unauth symfony-rce zenscrape-api-key zenserp-api-key telegram-bot-token
 gitlab-personal-token stripe-secret-key npm-access-token stackhawk-api slack-user-token
 rubygems-api-key mapbox-token-disclosure square-access
