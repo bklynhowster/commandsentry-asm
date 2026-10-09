@@ -211,6 +211,50 @@ def nuclei_exclusion_args(waf_detected: bool) -> list:
     return ["-exclude-tags", base + "," + NUCLEI_AUTH_EXCLUDE_TAGS,
             "-exclude-id", NUCLEI_AUTH_EXCLUDE_IDS]
 
+
+# ⛔ D-056, FAIL-CLOSED (2026-10-08, Howie: "make sure that there are no
+# credentials in any scans" — and no bypass tricks or guessing either). The tag
+# list above fails OPEN: 51 templates TITLED "Authentication Bypass" /
+# "Hardcoded Credentials" carried none of its tags and ran in every heavy. So
+# before nuclei is pointed at a target, every template it would run is READ by
+# nuclei_auth_guard.py, and nuclei runs ONLY with `-t <the allowed list>` —
+# never a bare -severity/-tags filter over the whole library. If the list cannot
+# be produced, the chunk is REFUSED (recorded degraded, nothing sent). There is
+# no fall-back to the full corpus: that fall-back is exactly how the denylist
+# was the only thing standing between the library and the target.
+NUCLEI_GUARD_REFUSED_RC = 97          # sentinel: nuclei was NOT run
+NUCLEI_GUARD_REFUSED_REASON = "d056_guard_refused"
+
+
+def d056_screen_templates(severity_filter: str, tag_filter, waf_detected: bool):
+    """(allowed_lines, refused, refusal). refusal is None when nuclei may run.
+
+    Lists the chunk's corpus with the SAME flags as the run (so the denylist
+    still applies first), then reads every listed template. Any failure here
+    is a refusal, never a pass.
+    """
+    try:
+        import nuclei_auth_guard as _guard
+    except Exception as e:  # noqa: BLE001 — a missing guard must refuse, not crash
+        return [], [], f"the D-056 guard could not be loaded ({e!r})"
+    _tl = ["nuclei", "-tl", "-silent", "-severity", severity_filter]
+    if tag_filter:
+        _tl += ["-tags", tag_filter]
+    _tl += nuclei_exclusion_args(waf_detected)   # same corpus as the run
+    try:
+        _rc, _out, _err = run_cmd(_tl, timeout=NUCLEI_CORPUS_WALL_S)
+    except Exception as e:  # noqa: BLE001
+        return [], [], f"nuclei -tl could not run ({e!r})"
+    if _rc != 0:
+        return [], [], f"nuclei -tl failed (rc={_rc})"
+    _listed = [ln.strip() for ln in (_out or "").splitlines() if ln.strip()]
+    try:
+        _allowed, _refused = _guard.screen(_listed, nuclei_templates_dir())
+        _why = _guard.refusal_reason(len(_listed), _allowed, _refused)
+    except Exception as e:  # noqa: BLE001
+        return [], [], f"the D-056 guard raised ({e!r})"
+    return _allowed, _refused, _why
+
 # 4.7 ruling ⑮ (2026-08-31), shipped 2026-09-01 UNGATED per ruling ㉑.
 #
 # 180 → 400. Measured on runs #2637/#2640/#2645/#2649, per chunk:
@@ -3556,6 +3600,25 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
 
     chunk_label = f"nuclei[{severity_filter}{':'+tag_filter if tag_filter else ''}]"
 
+    # ⛔ D-056 FAIL-CLOSED — see NUCLEI_GUARD_REFUSED_RC. Read every template
+    # this chunk would run, BEFORE anything is sent.
+    _allowed, _refused, _refusal = d056_screen_templates(
+        severity_filter, tag_filter, ctx.waf_detected)
+    if _refused:
+        try:
+            import nuclei_auth_guard as _guard
+            ctx.artifacts.append((f"{chunk_label}_d056_refused", "text",
+                                  _guard.refused_report(_refused)))
+        except Exception:  # pragma: no cover - the report is evidence, not control
+            pass
+        log(f"  {chunk_label}: D-056 guard refused {len(_refused)} login-type "
+            f"template(s); {len(_allowed)} may run")
+    if _refusal:
+        log(f"  {chunk_label}: ⛔ REFUSED by the D-056 guard — {_refusal}. "
+            f"nuclei NOT run; nothing sent.")
+        return (NUCLEI_GUARD_REFUSED_RC, 0, [], "",
+                f"{NUCLEI_GUARD_REFUSED_REASON}: {_refusal}")
+
     # ── relay 459: COVERAGE CURSOR — hand nuclei only the next unscanned slice,
     # so consecutive runs sweep the whole corpus instead of re-running the same
     # ~27% every time (relay 450 finding / 454 ruling). The slice is sized under
@@ -3565,28 +3628,68 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
     # full-corpus run exactly as before. Template-mode only — never slice a crawl.
     _slice_plan = None
     _slice_file = None
+    _guard_file = None
     try:
         _cov_dsn = ctx.dsn or os.environ.get("SUPABASE_DSN")
         if _cov_dsn and not url_list_file:
             import coverage_wire as _cw
-            _tl_cmd = ["nuclei", "-tl", "-silent", "-severity", severity_filter]
-            if tag_filter:
-                _tl_cmd += ["-tags", tag_filter]
-            _tl_cmd += nuclei_exclusion_args(ctx.waf_detected)   # same corpus as the run
-            _tlrc, _tlout, _tlerr = run_cmd(_tl_cmd, timeout=NUCLEI_CORPUS_WALL_S)
-            _filtered = [ln.strip() for ln in _tlout.splitlines() if ln.strip()]
-            if _tlrc == 0 and _filtered:
-                _slice_file, _slice_plan = _cw.plan_and_write_slice(
-                    _cov_dsn, ctx.asset_id, chunk_label, _filtered)
-                cmd += ["-t", _slice_file]
-                log(f"  {chunk_label}: coverage cursor -> slice "
-                    f"[{_slice_plan['start']}:{_slice_plan['end']}] of "
-                    f"{len(_filtered)}"
-                    f"{' (pass wrapped)' if _slice_plan.get('wrapped') else ''}")
-    except Exception as _cov_e:  # pragma: no cover - defensive, degrade to full run
+            # D-056: the cursor slices the ALLOWED list, never the raw listing.
+            _slice_file, _slice_plan = _cw.plan_and_write_slice(
+                _cov_dsn, ctx.asset_id, chunk_label, _allowed)
+            log(f"  {chunk_label}: coverage cursor -> slice "
+                f"[{_slice_plan['start']}:{_slice_plan['end']}] of "
+                f"{len(_allowed)}"
+                f"{' (pass wrapped)' if _slice_plan.get('wrapped') else ''}")
+    except Exception as _cov_e:  # pragma: no cover - defensive, degrade to the allowed list
         log(f"  {chunk_label}: coverage cursor unavailable ({_cov_e!r}) — "
-            f"full corpus this run")
+            f"the whole ALLOWED list this run")
         _slice_plan = None
+    if _slice_plan is not None and _slice_file:
+        # The cursor wrote this file. Before nuclei sees it: every line must be
+        # on the allowed list, it must not be empty, and paths become absolute.
+        try:
+            import nuclei_auth_guard as _guard
+            _bad = _guard.finalize_list_file(_slice_file, _allowed, nuclei_templates_dir())
+        except Exception as _fe:  # noqa: BLE001
+            _bad = f"the slice could not be checked ({_fe!r})"
+        if _bad:
+            log(f"  {chunk_label}: ⛔ REFUSED — {_bad}. nuclei NOT run; nothing sent.")
+            try:
+                os.remove(_slice_file)
+            except Exception:
+                pass
+            return (NUCLEI_GUARD_REFUSED_RC, 0, [], "",
+                    f"{NUCLEI_GUARD_REFUSED_REASON}: {_bad}")
+        cmd += ["-t", _slice_file]
+    else:
+        # No cursor (no DSN, crawl mode, or the cursor failed): run the whole
+        # ALLOWED list. Still `-t <file>`, never the bare library.
+        try:
+            import nuclei_auth_guard as _guard
+            _guard_file = _guard.write_list(_allowed, nuclei_templates_dir())
+        except Exception as _gw:  # noqa: BLE001
+            log(f"  {chunk_label}: ⛔ REFUSED — could not write the D-056 "
+                f"allowed list ({_gw!r}). nuclei NOT run; nothing sent.")
+            if _slice_file:
+                try:
+                    os.remove(_slice_file)
+                except Exception:
+                    pass
+            return (NUCLEI_GUARD_REFUSED_RC, 0, [], "",
+                    f"{NUCLEI_GUARD_REFUSED_REASON}: could not write the allowed list")
+        cmd += ["-t", _guard_file]
+    # Last line of defence: nuclei never runs without an explicit, NON-EMPTY
+    # template list (an empty -t list may fall back to the whole library).
+    _tfile = cmd[cmd.index("-t") + 1] if "-t" in cmd else None
+    if not _tfile or not os.path.exists(_tfile) or os.path.getsize(_tfile) == 0:
+        for _f in (_slice_file, _guard_file):
+            if _f:
+                try:
+                    os.remove(_f)
+                except Exception:
+                    pass
+        return (NUCLEI_GUARD_REFUSED_RC, 0, [], "",
+                f"{NUCLEI_GUARD_REFUSED_REASON}: no non-empty -t list on the command")
 
     rc, stdout, stderr = run_cmd(cmd, timeout=NUCLEI_CHUNK_WALL_S)
 
@@ -3628,6 +3731,11 @@ def run_nuclei_chunk(ctx: ScanContext, target_url: str,
     if _slice_file:
         try:
             os.remove(_slice_file)
+        except Exception:
+            pass
+    if _guard_file:
+        try:
+            os.remove(_guard_file)
         except Exception:
             pass
     ctx.artifacts.append((chunk_label, "jsonl", stdout))
@@ -4129,6 +4237,15 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
             url_list_file=url_list_file,
         )
         chunk_elapsed_s = round(time.time() - _chunk_t0, 1)  # #39
+        if rc == NUCLEI_GUARD_REFUSED_RC:
+            # ⛔ D-056: nuclei was NOT run, so nothing reached the target. Record
+            # it as degraded (never ok — no coverage was earned) and move on.
+            # No health check and no rotation: there was no traffic to judge.
+            mark_tool_degraded(ctx, chunk_name, NUCLEI_GUARD_REFUSED_REASON,
+                               stderr=chunk_stderr)
+            log(f"  chunk {i+1} REFUSED by the D-056 guard — {chunk_stderr}")
+            _emit_chunk_progress(ctx, _chunks_total)
+            continue
         log(f"  chunk {i+1} done: {matches} match(es), rc={rc}")
 
         # Per-chunk B1 detector (batch 2, advisor approved 2026-06-13).

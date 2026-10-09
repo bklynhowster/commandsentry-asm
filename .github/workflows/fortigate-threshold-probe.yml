@@ -80,6 +80,13 @@ jobs:
         --device=/dev/net/tun
 
     steps:
+      # ⛔ D-056-RETIRED (2026-10-08): this job fires nuclei at a target with no
+      # login-attack guard. It refuses before anything else runs.
+      - name: D-056-RETIRED - refuse
+        run: |
+          echo "::error::D-056: this job would fire nuclei with no login-attack guard. Retired 2026-10-08 (vault note 297)."
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v4
 

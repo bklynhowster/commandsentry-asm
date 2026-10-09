@@ -14,9 +14,11 @@ These tests drive the REAL command builder (run_nuclei_chunk) with run_cmd
 captured, so they read the argv nuclei would actually receive — not a comment,
 not a constant in isolation.
 
-⚠ KNOWN LIMIT, STATED NOT HIDDEN: this is a tag/id DENYLIST over an externally
-maintained library, so it fails OPEN for a future, mistagged login template. The
-fail-closed version is a content check of the listed templates before the run.
+⚠ This file pins the tag/id DENYLIST, which on its own fails OPEN for a
+mistagged login template. The FAIL-CLOSED content check that closes that hole
+(2026-10-08) is pinned in test_nuclei_auth_guard.py. Since then nuclei always
+lists its corpus first (`-tl`), so the helper below answers that listing with a
+one-template corpus and captures the SCAN command that follows.
 """
 from __future__ import annotations
 
@@ -45,26 +47,40 @@ class _Stop(Exception):
     pass
 
 
-def _captured_argv(waf_detected: bool, tag_filter=None, severity="critical,high"):
-    """Run the real run_nuclei_chunk until it calls run_cmd, and return the argv."""
+_ONE = "id: ok\ninfo:\n  name: Acme - Remote Code Execution\n  severity: critical\n"
+
+
+def _captured_argv(waf_detected: bool, tag_filter=None, severity="critical,high", tl_seen=None):
+    """Run the real run_nuclei_chunk until it calls the nuclei SCAN, and return its argv.
+    The `-tl` listing that now always comes first is answered with one benign template."""
+    import tempfile
     seen = []
+    root = tempfile.mkdtemp()
+    os.makedirs(os.path.join(root, "http"))
+    with open(os.path.join(root, "http", "ok.yaml"), "w") as fh:
+        fh.write(_ONE)
 
     def fake_run_cmd(cmd, timeout=None, **kw):
         seen.append(list(cmd))
+        if cmd and cmd[0] == "nuclei" and "-tl" in cmd:
+            return 0, "http/ok.yaml\n", ""
         raise _Stop()
 
     ctx = types.SimpleNamespace(
         waf_detected=waf_detected, dsn=None, asset_id="test-asset",
-        corpus_prewarm_meta=None)
-    orig, dsn = m.run_cmd, os.environ.pop("SUPABASE_DSN", None)
+        corpus_prewarm_meta=None, artifacts=[])
+    orig, orig_dir, dsn = m.run_cmd, m.nuclei_templates_dir, os.environ.pop("SUPABASE_DSN", None)
     m.run_cmd = fake_run_cmd
+    m.nuclei_templates_dir = lambda: root
     try:
         with pytest.raises(_Stop):
             m.run_nuclei_chunk(ctx, "https://example.invalid/", severity, tag_filter)
     finally:
-        m.run_cmd = orig
+        m.run_cmd, m.nuclei_templates_dir = orig, orig_dir
         if dsn is not None:
             os.environ["SUPABASE_DSN"] = dsn
+    if tl_seen is not None:
+        tl_seen.extend(c for c in seen if c and c[0] == "nuclei" and "-tl" in c)
     nuc = [c for c in seen if c and c[0] == "nuclei" and "-tl" not in c]
     assert len(nuc) == 1, f"expected one nuclei scan command, saw {seen}"
     return nuc[0]
@@ -97,13 +113,16 @@ def test_every_scan_command_excludes_the_untagged_login_attacks(waf):
     assert REQUIRED_IDS <= ids, f"missing {sorted(REQUIRED_IDS - ids)}"
 
 
-def test_the_cursor_listing_uses_the_same_exclusions_as_the_run():
-    """The coverage cursor slices the corpus `nuclei -tl` lists. If the listing
-    and the run disagreed, the cursor would plan slices over templates the run
-    may not fire (or, worse, the reverse)."""
-    src = open(m.__file__, encoding="utf-8").read()
-    assert "cmd += nuclei_exclusion_args(ctx.waf_detected)" in src
-    assert "_tl_cmd += nuclei_exclusion_args(ctx.waf_detected)" in src
+@pytest.mark.parametrize("waf", [False, True])
+def test_the_listing_uses_the_same_exclusions_as_the_run(waf):
+    """The guard and the coverage cursor both work from the corpus `nuclei -tl`
+    lists. If the listing and the run disagreed, they would check (or slice) a
+    different set of templates from the one the run may fire."""
+    tl = []
+    argv = _captured_argv(waf, tl_seen=tl)
+    assert len(tl) == 1, f"expected one -tl listing, saw {tl}"
+    assert _flag(tl[0], "-exclude-tags") == _flag(argv, "-exclude-tags")
+    assert _flag(tl[0], "-exclude-id") == _flag(argv, "-exclude-id")
 
 
 def test_no_exclusion_is_built_anywhere_but_the_one_helper():
