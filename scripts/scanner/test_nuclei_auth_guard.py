@@ -561,7 +561,10 @@ def test_detection_only_never_closes_a_finding_it_no_longer_looks_for():
     i = src.index('"SELECT delta_close_for_scan_run(%s, %s) AS n_closed"')
     guard_line = src.rfind("\n", 0, src.rfind("cur.execute(", 0, i))
     window = src[src.rfind("if ", 0, guard_line):i]
-    assert "not NUCLEI_DETECTION_ONLY" in window, "delta-close must be gated on detection-only"
+    assert "if delta_close_on():" in window, "delta-close must be gated on delta_close_on()"
+    # ...and delta_close_on() is off whenever detection-only is on (nikto look-only
+    # adds a second reason; test_run_nikto_look_only.py covers the full table).
+    assert m.NUCLEI_DETECTION_ONLY and not m.delta_close_on()
 
 
 def test_a_policy_skip_does_not_stop_the_steps_that_only_touch_re_observed_findings():
