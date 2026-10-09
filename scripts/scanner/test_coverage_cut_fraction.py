@@ -268,9 +268,18 @@ def test_only_the_cut_fraction_column_is_tolerated():
 # ── runner: run_nuclei_chunk hands the fraction to the cursor ────────────────
 
 def _drive_chunk(monkeypatch, rc, stderr):
+    import tempfile
     import run_medium as m
     captured = {}
     tl_list = "\n".join(f"http/x/t{i}.yaml" for i in range(50)) + "\n"
+    # Since the D-056 fail-closed guard (2026-10-08) every listed template is
+    # READ before nuclei runs, so the listing must name real, benign files.
+    root = tempfile.mkdtemp()
+    os.makedirs(os.path.join(root, "http", "x"))
+    for i in range(50):
+        with open(os.path.join(root, "http", "x", f"t{i}.yaml"), "w") as fh:
+            fh.write(f"id: t{i}\ninfo:\n  name: Acme t{i} - Detect\n  severity: high\n")
+    monkeypatch.setattr(m, "nuclei_templates_dir", lambda: root)
 
     def fake_run_cmd(cmd, timeout=None, **kw):
         if "-tl" in cmd:
@@ -279,7 +288,9 @@ def _drive_chunk(monkeypatch, rc, stderr):
 
     def fake_plan(dsn, asset_id, chunk_label, filtered, **kw):
         import tempfile
-        fd, path = tempfile.mkstemp(suffix=".txt"); os.close(fd)
+        fd, path = tempfile.mkstemp(suffix=".txt")
+        with os.fdopen(fd, "w") as fh:      # the guard refuses an empty slice
+            fh.write("\n".join(filtered[:10]) + "\n")
         return path, {"templates": filtered[:10], "last": filtered[9], "wrapped": False,
                       "start": 0, "end": 10, "corpus_size": len(filtered)}
 

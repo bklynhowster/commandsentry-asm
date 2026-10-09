@@ -250,6 +250,15 @@ def run_burst(target: str, sev: str, rate: int, wall_s: int,
 
 
 def main() -> int:
+    # ⛔ D-056-RETIRED (2026-10-08). This probe fires nuclei templates at a target
+    # with no D-056 guard: no login-attack exclusion, no content check. That is
+    # exactly what D-056 forbids. It has not run since 2026-09-04. It refuses until
+    # it is rebuilt on run_medium.d056_screen_templates. Exit 2 = refused, this
+    # file's own convention.
+    print("REFUSED (D-056): this probe would send nuclei templates with no "
+          "login-attack guard. Retired 2026-10-08, see vault note 297.",
+          file=sys.stderr)
+    return 2
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--target", default="commandcommcentral.com")
