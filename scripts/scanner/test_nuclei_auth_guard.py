@@ -684,8 +684,9 @@ def test_a_listing_outside_the_corpus_is_refused_not_skipped(corpus, monkeypatch
 # The 2026-10-09 review: every allowed template that one of 25 independent nets
 # flagged (527 of 4,494 in the production chunks, nuclei-templates v10.5.0) was
 # read in full by separate reviewers against D-056. 76 BLOCK + 19 UNSURE;
-# UNSURE stays refused until Howie rules. Pinned by id.
-THE_108 = """
+# UNSURE stays refused until Howie rules. Pinned by id. D-065 (2026-10-09):
+# Howie allowed the Jellyfin public-user-list check, so it left the list (107).
+THE_107 = """
 CNVD-2020-63964 CVE-2015-3224 CVE-2017-15944 CVE-2018-0296 CVE-2018-11759 CVE-2019-11886
 CVE-2019-12583 CVE-2019-9880 CVE-2020-14750 CVE-2020-14882 CVE-2020-14883 CVE-2020-36723
 CVE-2020-5902 CVE-2020-6287 CVE-2021-22017 CVE-2021-24219 CVE-2021-24915 CVE-2021-28480
@@ -704,7 +705,7 @@ CVE-2022-24706
 CVE-2020-11514 CVE-2020-20627 CVE-2021-25899 CVE-2021-33544 CVE-2023-22478 CVE-2023-3139
 CVE-2023-31446 CVE-2024-34257 CVE-2025-24813 CVE-2025-36604 CVE-2026-17532 CVE-2026-27174
 CVE-2026-34413 CVE-2026-34486 CVE-2026-46339 CVE-2026-50160 CVE-2026-5032
-jellyfin-public-users-exposure piwik-unauthenticated-access
+piwik-unauthenticated-access
 seeyon-unauth symfony-rce zenscrape-api-key zenserp-api-key telegram-bot-token
 gitlab-personal-token stripe-secret-key npm-access-token stackhawk-api slack-user-token
 rubygems-api-key mapbox-token-disclosure square-access
@@ -713,11 +714,45 @@ rubygems-api-key mapbox-token-disclosure square-access
 
 def test_the_review_list_is_complete():
     """95 from the first review + 13 from the review of the detection folders'
-    non-GET checks (the checks detection-only keeps)."""
-    assert len(THE_108) == 108 and len(set(THE_108)) == 108
+    non-GET checks (the checks detection-only keeps), less the one D-065 allowed."""
+    assert len(THE_107) == 107 and len(set(THE_107)) == 107
 
 
-@pytest.mark.parametrize("tid", THE_108)
+def test_the_guard_refuses_exactly_the_reviewed_list():
+    """The guard's own list is the reviewed list: nothing added or dropped silently."""
+    assert set(g.REVIEWED_REFUSE_IDS) == set(THE_107)
+
+
+# The template as nuclei-templates v10.5.0 ships it (http/misconfiguration/,
+# sha256 0f9b74a9ac9124b3...): two plain GETs of the server's own public page.
+JELLYFIN_PUBLIC_USERS = {
+    "id": "jellyfin-public-users-exposure",
+    "info": {"name": "Jellyfin Public Users - Exposure", "severity": "medium",
+             "description": "The Jellyfin media server exposed user information via the public users "
+                            "API endpoint. This endpoint could have leaked sensitive data including "
+                            "usernames, user IDs, server IDs, administrator status, password "
+                            "configuration, login activity, and user policies without authentication.",
+             "classification": {"cwe-id": "CWE-200,CWE-306"},
+             "tags": "misconfig,jellyfin,exposure,api,disclosure,vuln"},
+    "http": [{"method": "GET", "path": ["{{BaseURL}}/Users/Public", "{{BaseURL}}/jellyfin/Users/Public"],
+              "stop-at-first-match": True}],
+}
+
+
+def test_d065_the_jellyfin_public_user_list_check_may_run():
+    """D-065: one plain read of a page the server publishes to everyone."""
+    assert g.classify_doc(JELLYFIN_PUBLIC_USERS,
+                          "http/misconfiguration/jellyfin-public-users-exposure.yaml") == []
+
+
+def test_d065_the_matomo_anonymous_token_check_stays_refused():
+    """D-065: it puts a value in a login field, so it stays refused."""
+    doc = {"id": "piwik-unauthenticated-access", "info": {"name": "Matomo - Info", "severity": "high"},
+           "http": [{"method": "GET", "path": ["{{BaseURL}}/"]}]}
+    assert g.classify_doc(doc)
+
+
+@pytest.mark.parametrize("tid", THE_107)
 def test_every_template_the_10_09_review_refused_is_refused(tid):
     doc = {"id": tid, "info": {"name": "Acme - Info", "severity": "high"},
            "http": [{"method": "GET", "path": ["{{BaseURL}}/"]}]}

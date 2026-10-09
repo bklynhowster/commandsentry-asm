@@ -80,6 +80,7 @@ from canonical_host import (  # noqa: E402  (4.7 77-82 — shared decision modul
     USE_CANONICAL,
     resolve_canonical_host,
 )
+import software_inventory  # noqa: E402  (302 step 1)
 from tech_detect import (  # noqa: E402  (4.7 ⑭′ — shared with run_light)
     merge_tech_detection,
     parse_httpx_rows,
@@ -5690,6 +5691,9 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 inserted += 1
             else:
                 updated += 1
+
+        # 302 step 1 — keep the software versions httpx saw (own savepoint).
+        software_inventory.record_from_artifacts(cur, ctx, Json, log=log)
 
         for tool_name, output_format, content_str in ctx.artifacts:
             try:
