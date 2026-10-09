@@ -657,6 +657,7 @@ _CUT_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
     ("egress",                      CUT_TRANSPORT),
     ("auth_gated",                  CUT_POLICY),
     ("d056_detection_only",         CUT_POLICY),   # D-056 2026-10-09: chosen not to send
+    ("d056_nikto_guard_refused",    CUT_TOOL),     # D-056: installed nikto does not match the look-only screen; nothing sent
     ("v1_p4_pending",               CUT_POLICY),
     ("routed_safe_only",            CUT_POLICY),
     ("empty_output",                CUT_TOOL),

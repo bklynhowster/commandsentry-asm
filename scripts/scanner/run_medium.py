@@ -236,6 +236,26 @@ NUCLEI_DETECTION_ONLY = True
 NUCLEI_POLICY_SKIP_RC = 96            # sentinel: nothing left to run by policy
 NUCLEI_POLICY_SKIP_REASON = "d056_detection_only"
 
+# ⛔ D-056 for nikto, LOOK ONLY (Howie, 2026-10-09). run_nikto ran `-Tuning x6`
+# with nikto's default plugins: login-bypass, injection and command-execution
+# tests, a plugin that tries default passwords on any login prompt, one that
+# uploads and deletes a file, and the Shellshock attack (61 requests in demo's
+# 10-08/09 load-balancer log). nikto now runs only what nikto_look_only.py
+# allows, every time. There is no switch back to the full set.
+NIKTO_PROGRAM_DIR = "/opt/nikto/program"      # docker/Dockerfile clones nikto to /opt/nikto
+NIKTO_GUARD_REFUSED_REASON = "d056_nikto_guard_refused"
+# NOT a switch for nikto — run_nikto never reads it. It records that nikto's
+# retired attack tests can no longer re-check the findings they made, so the
+# open -> remediated delta-close must stay OFF, exactly as for detection-only
+# nuclei. Setting it False while nikto is look-only would false-remediate.
+NIKTO_LOOK_ONLY = True
+
+
+def delta_close_on() -> bool:
+    """May close_out mark not-re-observed findings remediated? Only when no
+    tool is running a reduced set of checks under D-056."""
+    return not (NUCLEI_DETECTION_ONLY or NIKTO_LOOK_ONLY)
+
 
 def close_out_eligible(tool_status: dict) -> bool:
     """delta_close_eligible, except that a chunk skipped by D-056 detection-only
@@ -4777,6 +4797,23 @@ def run_nikto(ctx: ScanContext) -> None:
         mark_tool_skipped(ctx, "nikto", "auth_gated")
         return
 
+    # ⛔ D-056 LOOK ONLY — screened BEFORE any network step, so a refusal sends
+    # nothing. See nikto_look_only.py: allowed plugins, look categories, and
+    # every test in nikto's database read first (non-plain ones skipped by ID).
+    try:
+        import nikto_look_only as _look
+        _look_args, _refusal, _plan = _look.look_only_args(NIKTO_PROGRAM_DIR)
+    except Exception as e:  # noqa: BLE001 — a broken screen must refuse, not crash or pass
+        _look_args, _refusal, _plan = None, f"the look-only screen raised ({e!r})", None
+    if _refusal or not _look_args:
+        _refusal = _refusal or "the look-only screen returned no arguments"
+        log(f"  ✗ nikto NOT run — D-056 look-only screen refused: {_refusal}")
+        ctx.tools_run.append("nikto")
+        mark_tool_degraded(ctx, "nikto", NIKTO_GUARD_REFUSED_REASON, stderr=_refusal)
+        return
+    log(f"  D-056 look-only: {_plan.kept} nikto test(s) may run, "
+        f"{len(_plan.skip_ids)} skipped by ID; plugins: {', '.join(_look.ALLOWED_PLUGINS)}")
+
     healthy, egress_reason = ensure_healthy_egress(ctx, max_rotations=2)
     if not healthy:
         # #30 reason taxonomy: egress_unstable vs skipped_target_unreachable.
@@ -4817,12 +4854,15 @@ def run_nikto(ctx: ScanContext) -> None:
     BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
                   "Chrome/131.0.0.0 Safari/537.36")
+    # The SCREENED tree runs: perl on its nikto.pl (not whatever `nikto` is on
+    # PATH), with PWD pointed at it so nikto's EXECDIR/plugins resolve there too
+    # (nikto.pl setup_dirs prefers $PWD/plugins when it exists).
     cmd = [
-        "nikto",
+        "perl", os.path.join(NIKTO_PROGRAM_DIR, "nikto.pl"),
         "-host", f"https://{ctx.web_host}",
         "-Pause", str(NIKTO_PAUSE_S),
         "-nointeractive", "-ask", "no",
-        "-Tuning", "x6",
+        *_look_args,     # D-056: -Plugins / -Tuning / -Option SKIPIDS / -Option DBDIR
         # Restored by Task #6. Works on upstream nikto; apt 2.1.5 rejected this.
         "-useragent", BROWSER_UA,
         "-timeout", "15",
@@ -4842,7 +4882,8 @@ def run_nikto(ctx: ScanContext) -> None:
     # input_str="" — pre-empt any future prompt from hanging the runner
     # (defensive; not the cause of the current arg-rejection bug, but cheap
     # insurance for the "tool waits on stdin" class of silent failures).
-    rc, stdout, stderr = run_cmd(cmd, timeout=NIKTO_WALL_S, input_str="")
+    rc, stdout, stderr = run_cmd(cmd, timeout=NIKTO_WALL_S, input_str="",
+                                 env_extra={"PWD": NIKTO_PROGRAM_DIR})
     ctx.artifacts.append(("nikto", "text", stdout))
     # ADR-001 Step 4 — Bug D + Bug E detector. Now reads BOTH stdout AND
     # stderr because nikto routes its `+ ERROR:` lines to stderr (verified
@@ -5802,7 +5843,7 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
             # close (open → remediated) is OFF while detection-only is on. The
             # steps below it act only on findings this scan DID re-observe, so
             # they stay on.
-            if not NUCLEI_DETECTION_ONLY:
+            if delta_close_on():
                 # Pass the EXACT source the writes used (f"commandsentry_{intensity}")
                 # so the close scopes to write-source by construction — not re-derived
                 # from scan_run.intensity (avoids any standard/medium normalization gap).
@@ -5820,8 +5861,9 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
                 else:
                     log("delta-close: 0 closed (nothing went stale this scan)")
             else:
-                log("delta-close: OFF — D-056 detection-only; exploit-check findings "
-                    "are no longer re-checked, so none may be closed as remediated")
+                log("delta-close: OFF — D-056 (nuclei detection-only, nikto look-only); "
+                    "findings from retired attack checks are no longer re-checked, "
+                    "so none may be closed as remediated")
 
             # Alerter regressed-semantics fix (spec 2026-07-11, 4.7 Q3): settle
             # BEFORE regress_observed. A finding regressed on a PRIOR scan that is
