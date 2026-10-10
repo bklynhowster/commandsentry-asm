@@ -348,6 +348,60 @@ ORDER BY e.observed_at DESC, e.asset_id;
 """
 
 # ---------------------------------------------------------------------------
+# Assets back online — added 2026-10-10 (note 307).
+#
+# The digest announced "went dark" and then never said another word about
+# the asset. pm.unimacgraphics.com was reported dark on 10-05 and showed up
+# with new findings on 10-10 — the email never said it had come back, so the
+# reader was left holding two statements that cannot both be true.
+#
+# DEFINITION: the asset's most recent asset_went_dark event (last 30 days),
+# and the FIRST liveness verdict after it in which the host answered, from
+# any route (the direct sweep or the VPN re-check). It is reported in the
+# window that contains that first answer — once, never again.
+#
+# Same Tier 2 gate as the dark query (owned + confirmed_live), so a host the
+# digest could call dark is a host it can call back.
+#
+# ⚠ THE WINDOW IS SHIFTED BACK 30 MINUTES (independent review, 2026-10-10).
+# A verdict's probed_at is the time its transaction STARTED; it is committed
+# minutes later. The discovery sweep and this digest both fire at 12:00 UTC,
+# so an answer stamped 12:05 and committed 12:09 is invisible to a digest
+# reading at 12:08, and would fall outside the next digest's window: lost.
+# Shifted windows still tile with no gap and no overlap, so each comeback is
+# reported exactly once, at most 30 minutes late.
+#
+# Placeholders, in order: window_end, window_end, window_start, window_end.
+# (No percent signs in these comments: psycopg would read them as params.)
+# ---------------------------------------------------------------------------
+SQL_CAME_BACK_IN_WINDOW = """
+WITH last_dark AS (
+  SELECT DISTINCT ON (e.asset_id) e.asset_id, e.observed_at AS dark_at
+    FROM public.asset_surface_event e
+   WHERE e.event_type = 'asset_went_dark'
+     AND e.observed_at <= %s
+     AND e.observed_at >  %s - interval '30 days'
+   ORDER BY e.asset_id, e.observed_at DESC
+), back AS (
+  SELECT d.asset_id, d.dark_at,
+         (SELECT min(v.probed_at)
+            FROM public.asset_liveness_verdict v
+           WHERE v.asset_id = d.asset_id
+             AND v.any_port_responded
+             AND v.probed_at > d.dark_at) AS back_at
+    FROM last_dark d
+)
+SELECT b.asset_id, a.name, a.organization, b.back_at, b.dark_at
+  FROM back b
+  JOIN public.assets a ON a.asset_id = b.asset_id
+ WHERE b.back_at >  %s - interval '30 minutes'
+   AND b.back_at <= %s - interval '30 minutes'
+   AND a.ownership = 'owned'
+   AND a.discovery_status = 'confirmed_live'
+ ORDER BY b.back_at DESC, b.asset_id;
+"""
+
+# ---------------------------------------------------------------------------
 # Watchdog v1 — internal pipeline health checks (added 2026-06-07)
 #
 # Two checks because they catch DIFFERENT failure classes:
@@ -805,7 +859,9 @@ def render_html(
     dashboard_url: str,
     product_name: str,
     device_classes: dict | None = None,
+    came_back: list[tuple] | None = None,
 ) -> str:
+    came_back = came_back or []
     today = window_end.strftime("%Y-%m-%d")
     win = (
         f"{window_start.strftime('%Y-%m-%d %H:%M UTC')} → "
@@ -942,6 +998,38 @@ def render_html(
             f"</tr></thead><tbody>{cells}</tbody></table>"
         )
 
+    def came_back_table(rows: list[tuple]) -> str:
+        """Rows from SQL_CAME_BACK_IN_WINDOW: (asset_id, name, organization,
+        back_at, dark_at). Says when it was reported dark and when it first
+        answered again, so the reader can match it to the earlier email."""
+        if not rows:
+            return ""
+        cells_parts = []
+        for r in rows:
+            aid, display_name, org, back_at, dark_at = r[0], (r[1] or r[0]), (r[2] or ""), r[3], r[4]
+            if org and org != display_name:
+                org_suffix = f' <span style="color:#888;">({escape(org)})</span>'
+            else:
+                org_suffix = ""
+            cells_parts.append(
+                f"<tr>"
+                f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:12px;">{escape(aid)}</td>'
+                f'<td style="padding:6px 12px 6px 0;font-size:13px;">{escape(display_name)}{org_suffix}</td>'
+                f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:11px;color:#888;">{dark_at:%Y-%m-%d %H:%M UTC}</td>'
+                f'<td style="padding:6px 0;font-family:monospace;font-size:11px;color:#888;">{back_at:%Y-%m-%d %H:%M UTC}</td>'
+                f"</tr>"
+            )
+        return (
+            f'<table style="border-collapse:collapse;width:100%;">'
+            f'<thead><tr style="text-align:left;color:#666;font-size:11px;'
+            f'text-transform:uppercase;letter-spacing:0.6px;">'
+            f'<th style="padding:0 12px 8px 0;">Asset ID</th>'
+            f'<th style="padding:0 12px 8px 0;">Name</th>'
+            f'<th style="padding:0 12px 8px 0;">Reported dark</th>'
+            f'<th style="padding:0 0 8px 0;">Answered again</th>'
+            f"</tr></thead><tbody>{''.join(cells_parts)}</tbody></table>"
+        )
+
     new_findings_section = section(
         "New findings (first detected in this window)",
         len(new_findings),
@@ -964,10 +1052,14 @@ def render_html(
     dark_assets_section = section(
         "Assets that went dark", len(dark_assets), surface_event_table(dark_assets, dark=True)
     )
+    came_back_section = section(
+        "Assets back online", len(came_back), came_back_table(came_back)
+    )
 
     pipeline_degraded = bool(stale_assets or canary_violations)
     has_changes = bool(
         new_findings or confirmed or regressed or high_risk or new_assets or dark_assets
+        or came_back
     )
 
     # Headline reflects pipeline health FIRST, then activity. Don't say
@@ -998,7 +1090,9 @@ def render_html(
             f"{_ov_note}, "
             f"<strong>{len(high_risk)}</strong> asset risk shift(s), "
             f"<strong>{len(new_assets)}</strong> new asset(s), "
-            f"<strong>{len(dark_assets)}</strong> dark asset(s) in this window."
+            f"<strong>{len(dark_assets)}</strong> dark asset(s)"
+            + (f", <strong>{len(came_back)}</strong> back online" if came_back else "")
+            + " in this window."
         )
     else:
         headline = "<strong>No changes</strong> since last run &mdash; pipeline healthy."
@@ -1101,6 +1195,7 @@ def render_html(
   {high_risk_section}
   {new_assets_section}
   {dark_assets_section}
+  {came_back_section}
 
   <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e2e2e2;font-size:11px;color:#888;">
     <a href="{escape(dashboard_url)}" style="color:#888;">Open Supabase dashboard</a> ·
@@ -1128,7 +1223,9 @@ def render_text(
     baseline: dict,
     product_name: str,
     device_classes: dict | None = None,
+    came_back: list[tuple] | None = None,
 ) -> str:
+    came_back = came_back or []
     lines: list[str] = []
     lines.append(f"{product_name} — Daily posture digest — {window_end:%Y-%m-%d}")
     lines.append(f"Window: {window_start:%Y-%m-%d %H:%M UTC} -> {window_end:%Y-%m-%d %H:%M UTC}")
@@ -1177,7 +1274,8 @@ def render_text(
     )
     lines.append("")
 
-    if not (new_findings or confirmed or regressed or high_risk or new_assets or dark_assets):
+    if not (new_findings or confirmed or regressed or high_risk or new_assets or dark_assets
+            or came_back):
         if not pipeline_degraded:
             lines.append("No changes since last run — pipeline healthy.")
         return "\n".join(lines)
@@ -1238,6 +1336,12 @@ def render_text(
             prev = r[4] if isinstance(r[4], dict) else {}
             last_seen = prev.get("last_seen", "unknown")
             lines.append(f"  {r[0]:<40}  last responded {last_seen}  (event {r[3]:%Y-%m-%d %H:%M UTC})")
+        lines.append("")
+    if came_back:
+        lines.append(f"ASSETS BACK ONLINE ({len(came_back)}):")
+        for r in came_back:
+            lines.append(f"  {r[0]:<40}  reported dark {r[4]:%Y-%m-%d %H:%M UTC}, "
+                         f"answered again {r[3]:%Y-%m-%d %H:%M UTC}")
         lines.append("")
 
     return "\n".join(lines)
@@ -1387,6 +1491,10 @@ def main() -> int:
             new_assets = cur.fetchall()
             cur.execute(SQL_DARK_ASSETS_IN_WINDOW, (window_start, window_end))
             dark_assets = cur.fetchall()
+            # Note 307 — the other half of "went dark": say when it came back.
+            cur.execute(SQL_CAME_BACK_IN_WINDOW,
+                        (window_end, window_end, window_start, window_end))
+            came_back = cur.fetchall()
 
             # Watchdog v1 — pipeline health checks (added 2026-06-07).
             # Two clocks, two thresholds, single alarm if EITHER is stale:
@@ -1455,6 +1563,8 @@ def main() -> int:
             subject_parts.append(f"{n} new")
         if (n := len(dark_assets)) > 0:
             subject_parts.append(f"{n} dark")
+        if (n := len(came_back)) > 0:
+            subject_parts.append(f"{n} back")
         subject_tail = ", ".join(subject_parts) if subject_parts else "0 changes"
         watchdog_prefix = "(!) " if (canary_violations or stale_assets) else ""
         subject = (
@@ -1472,6 +1582,7 @@ def main() -> int:
             baseline=baseline, dashboard_url=dashboard_url,
             product_name=from_name,
             device_classes=device_classes,
+            came_back=came_back,
         )
         text = render_text(
             window_start=window_start, window_end=window_end,
@@ -1484,6 +1595,7 @@ def main() -> int:
             baseline=baseline,
             product_name=from_name,
             device_classes=device_classes,
+            came_back=came_back,
         )
 
         if args.dry_run:

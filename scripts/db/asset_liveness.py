@@ -342,6 +342,20 @@ def is_verdict_fresh(probed_at, now=None, max_age_hours: int = DEFAULT_VERDICT_M
     return (n - probed_at) <= timedelta(hours=max_age_hours)
 
 
+_VERDICT_COLS = ("asset_id", "sweep_id", "probed_at", "any_port_responded", "any_port_open",
+                 "per_port_results", "probe_source")
+_SELECT_VERDICT = ("SELECT asset_id, sweep_id, probed_at, any_port_responded, any_port_open, "
+                   "       per_port_results, probe_source "
+                   "FROM public.asset_liveness_verdict ")
+
+
+def _as_verdict(row) -> dict | None:
+    """Tolerate dict_row or tuple cursors."""
+    if not row:
+        return None
+    return dict(row) if isinstance(row, dict) else dict(zip(_VERDICT_COLS, row))
+
+
 def get_fresh_verdict(conn, asset_id: str, max_age_hours: int = DEFAULT_VERDICT_MAX_AGE_H,
                       now=None) -> dict | None:
     """THE single read path every consumer uses (4.7 Q4). Returns the latest asset_liveness_verdict
@@ -349,25 +363,72 @@ def get_fresh_verdict(conn, asset_id: str, max_age_hours: int = DEFAULT_VERDICT_
     The age-guard lives HERE so it can't be forgotten on one code path — consumers must not query
     asset_liveness_verdict directly. Tolerates dict_row or tuple cursors."""
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT asset_id, sweep_id, probed_at, any_port_responded, any_port_open, "
-            "       per_port_results, probe_source "
-            "FROM public.asset_liveness_verdict WHERE asset_id = %s "
-            "ORDER BY probed_at DESC LIMIT 1",
-            (asset_id,),
-        )
-        row = cur.fetchone()
-    if not row:
+        cur.execute(_SELECT_VERDICT + "WHERE asset_id = %s ORDER BY probed_at DESC LIMIT 1",
+                    (asset_id,))
+        v = _as_verdict(cur.fetchone())
+    if v is None:
         return None
-    if isinstance(row, dict):
-        v = row
-    else:
-        v = {"asset_id": row[0], "sweep_id": row[1], "probed_at": row[2],
-             "any_port_responded": row[3], "any_port_open": row[4],
-             "per_port_results": row[5], "probe_source": row[6]}
     if not is_verdict_fresh(v["probed_at"], now=now, max_age_hours=max_age_hours):
         return None
     return v
+
+
+# ── The dark gate's evidence window (note 307, 2026-10-10) ─────────────────────────────────────
+#
+# ⛔ WHY THE DARK GATE STOPPED READING ONLY THE LATEST VERDICT. ftp.unimacgraphics.com,
+# pm.unimacgraphics.com and ftp.commandmi.com sit behind a firewall that turns away most
+# connections from GitHub's servers. From 2026-07-20 to 2026-10-10 they answered the 6-hourly
+# sweep about 1 time in 5 — always all three at the same sweep — while the deep scanner, going
+# out through the VPN, reached them on every pass. The gate asked "did the LATEST check answer?",
+# the latest check was almost always one the firewall dropped, so the digest called live servers
+# dark every week (ftp.commandmi 09-30 and 10-08; pm and ftp.unimac 10-05).
+#
+# ⇒ The rule is now the one the dark alarm actually claims: a host is dark only when NOTHING —
+#   no sweep, by any route (direct or the VPN re-check, probe_source 'liveness_vpn') — has got
+#   an answer from it for as long as the dark threshold itself. Howie's rule, applied over time:
+#   a box that answered on any port inside the window is not dead.
+#
+# ⚠ THE WINDOW MUST EQUAL import_asm_to_surface.DARK_THRESHOLD_HOURS (pinned by a test). Longer
+#   would hide a real outage past the point the alarm promises to report it; shorter would let a
+#   filtered-but-alive host through between VPN re-checks.
+DARK_EVIDENCE_WINDOW_H = 72
+
+
+def pick_dark_gate_verdict(latest: dict | None, latest_responded: dict | None, now=None,
+                           window_hours: int = DARK_EVIDENCE_WINDOW_H,
+                           max_age_hours: int = DEFAULT_VERDICT_MAX_AGE_H) -> dict | None:
+    """PURE. Choose the verdict the dark gate decides on.
+      1. Any route answered within window_hours  -> that verdict (gate: suppress).
+      2. Else the latest verdict, if fresh        -> it (gate: emit when it is silent).
+      3. Else None                                -> gate defers (4.7 Q4 fail-safe, unchanged).
+    The chosen dict carries 'gate_evidence' so the gate log says WHICH rule decided."""
+    if (latest_responded is not None and latest_responded.get("any_port_responded")
+            and is_verdict_fresh(latest_responded.get("probed_at"), now=now,
+                                 max_age_hours=window_hours)):
+        return {**latest_responded, "gate_evidence": "responded_within_window"}
+    if latest is not None and is_verdict_fresh(latest.get("probed_at"), now=now,
+                                               max_age_hours=max_age_hours):
+        return {**latest, "gate_evidence": "latest_fresh"}
+    return None
+
+
+def get_dark_gate_verdict(conn, asset_id: str, window_hours: int = DARK_EVIDENCE_WINDOW_H,
+                          max_age_hours: int = DEFAULT_VERDICT_MAX_AGE_H, now=None) -> dict | None:
+    """The dark gate's read path (same module, same age-guards — consumers still never query the
+    table directly). Reads the latest verdict and the latest ANSWERED verdict inside the window,
+    then pick_dark_gate_verdict decides. Every probe_source counts: the direct sweep and the VPN
+    re-check are two routes to one question."""
+    since = (now or datetime.now(UTC)) - timedelta(hours=window_hours)
+    with conn.cursor() as cur:
+        cur.execute(_SELECT_VERDICT + "WHERE asset_id = %s ORDER BY probed_at DESC LIMIT 1",
+                    (asset_id,))
+        latest = _as_verdict(cur.fetchone())
+        cur.execute(_SELECT_VERDICT + "WHERE asset_id = %s AND any_port_responded "
+                    "AND probed_at >= %s ORDER BY probed_at DESC LIMIT 1",
+                    (asset_id, since))
+        latest_responded = _as_verdict(cur.fetchone())
+    return pick_dark_gate_verdict(latest, latest_responded, now=now,
+                                  window_hours=window_hours, max_age_hours=max_age_hours)
 
 
 # ── Dark-signal gate (Obsidian 161 step 3, 4.7 Q1/Q4/Q6) ────────────────────────────────────────
@@ -388,8 +449,9 @@ def gate_dark_decision(verdict: dict | None) -> str:
 
 def apply_liveness_gate(dark_events, live, get_verdict, heal=None, logfn=print):
     """Gate candidate dark events on the shared liveness verdict (4.7 Q1/Q4/Q6). PURE of DB: the
-    caller injects `get_verdict(asset_id) -> verdict|None` and `heal(asset_id) -> None` (bump
-    last_probe_alive_at). Each event needs an 'asset_id'.
+    caller injects `get_verdict(asset_id) -> verdict|None` and `heal(asset_id, verdict) -> None`
+    (bump last_probe_alive_at to the verdict's probed_at — the time the host was SEEN answering,
+    not the time the gate ran; note 307). Each event needs an 'asset_id'.
       * DRY-RUN (live=False): LOG the would-decision for every candidate, return the events
         UNCHANGED (zero behaviour change, no heal) — this is the 7d soak (4.7 Q7).
       * LIVE: return only the 'emit' (genuinely-dark) events; suppress the rest; heal each
@@ -401,13 +463,15 @@ def apply_liveness_gate(dark_events, live, get_verdict, heal=None, logfn=print):
         v = get_verdict(a)
         d = gate_dark_decision(v)
         counts[d] += 1
-        detail = (f"responded={v.get('any_port_responded')},open={v.get('any_port_open')}"
+        detail = (f"responded={v.get('any_port_responded')},open={v.get('any_port_open')},"
+                  f"via={v.get('probe_source')},at={v.get('probed_at')},"
+                  f"rule={v.get('gate_evidence', 'latest_fresh')}"
                   if v else "no fresh verdict")
         logfn(f"[liveness-gate] {a}: {d} ({detail})" + ("" if live else " [dry-run]"))
         if d == "emit":
             kept.append(ev)
         elif live and d == "suppress" and heal is not None:
-            heal(a)
+            heal(a, v)
             counts["heal"] += 1
     mode = "LIVE" if live else "DRY-RUN"
     tail = "" if live else f" — returning all {len(dark_events)} unchanged"

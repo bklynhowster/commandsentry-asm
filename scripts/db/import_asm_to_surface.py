@@ -424,11 +424,21 @@ WHERE a.discovery_status = 'confirmed_live'
   AND s.service_count > 0
   AND s.last_seen IS NOT NULL
   AND s.last_seen < (now() - (%s::int * interval '1 hour'))
+  -- ⚠ A COMEBACK ENDS THE SUPPRESSION (note 307, independent review 2026-10-10). The digest
+  -- now says "back online" on the first answer after a dark event. Without this inner clause a
+  -- host that came back and died again inside the 7 days stayed silent until day 7 — the last
+  -- thing the reader was told was "back online" while it was down.
   AND NOT EXISTS (
     SELECT 1 FROM public.asset_surface_event e
     WHERE e.asset_id = s.asset_id
       AND e.event_type = 'asset_went_dark'
       AND e.observed_at > (now() - (%s::int * interval '1 day'))
+      AND NOT EXISTS (
+        SELECT 1 FROM public.asset_liveness_verdict v
+        WHERE v.asset_id = e.asset_id
+          AND v.any_port_responded
+          AND v.probed_at > e.observed_at
+      )
   );
 """
 
@@ -473,14 +483,24 @@ def detect_dark_assets(conn, source_tag: str) -> list[dict]:
 # LOGS would-suppress-vs-would-emit but changes NOTHING (7d soak, 4.7 Q7). Flip
 # DARK_LIVENESS_GATE_LIVE=1 to actually suppress probe-alive false-darks + heal their clocks.
 LIVENESS_GATE_LIVE = os.environ.get("DARK_LIVENESS_GATE_LIVE", "").strip().lower() in ("1", "true", "yes")
-Q_HEAL_PROBE_ALIVE = "UPDATE public.assets SET last_probe_alive_at = now() WHERE asset_id = %(a)s"
+# ⚠ STAMPS THE TIME THE HOST WAS SEEN ANSWERING, NOT now() (note 307, 2026-10-10). The gate
+# now decides on the newest ANSWERED verdict inside the dark window (asset_liveness.
+# get_dark_gate_verdict), which can be up to 72h old. Stamping now() would tell the portal's
+# asset page (seenAliveAt reads this column) "answered a minute ago" about a host last heard
+# from three days back. GREATEST keeps the clock monotonic when an older verdict decides.
+Q_HEAL_PROBE_ALIVE = """
+UPDATE public.assets
+   SET last_probe_alive_at = GREATEST(last_probe_alive_at, %(at)s)
+ WHERE asset_id = %(a)s
+"""
 
 
-def _heal_probe_alive(conn, asset_id: str) -> None:
+def _heal_probe_alive(conn, asset_id: str, seen_at) -> None:
     """Bump last_probe_alive_at (4.7 Q6) — the probe-healed clock, SEPARATE from last_seen /
-    last_observed (discovery). Only called for a stale asset the probe just proved alive."""
+    last_observed (discovery) — to `seen_at`, the probed_at of the verdict that proved the host
+    alive. Only called for a stale asset a probe proved alive inside the dark window."""
     with conn.cursor() as cur:
-        cur.execute(Q_HEAL_PROBE_ALIVE, {"a": asset_id})
+        cur.execute(Q_HEAL_PROBE_ALIVE, {"a": asset_id, "at": seen_at})
 
 
 # ---------------------------------------------------------------------------
@@ -1758,10 +1778,13 @@ def main() -> int:
                     # Obsidian 161 step 3 — gate on the shared liveness verdict: suppress any asset
                     # that responds on ANY port (Howie's rule) + heal its probe clock; defer (don't
                     # alert) when there's no fresh verdict (fail-safe). DRY-RUN logs, changes nothing.
+                    # Note 307: the evidence is ANY route answering inside the dark window (the
+                    # direct sweep OR the VPN re-check), not just the latest check — see
+                    # asset_liveness.get_dark_gate_verdict for why the latest check alone lied.
                     dark_events = asset_liveness.apply_liveness_gate(
                         dark_events, LIVENESS_GATE_LIVE,
-                        get_verdict=lambda a: asset_liveness.get_fresh_verdict(conn, a),
-                        heal=lambda a: _heal_probe_alive(conn, a),
+                        get_verdict=lambda a: asset_liveness.get_dark_gate_verdict(conn, a),
+                        heal=lambda a, v: _heal_probe_alive(conn, a, v.get("probed_at")),
                     )
                     if dark_events:
                         with conn.cursor() as cur:

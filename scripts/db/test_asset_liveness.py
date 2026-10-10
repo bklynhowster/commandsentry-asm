@@ -179,7 +179,7 @@ def test_apply_gate_dry_run_returns_all_unchanged_and_never_heals():
                 "dead.example.com": {"any_port_responded": False, "any_port_open": False}}
     healed = []
     out = apply_liveness_gate(events, live=False, get_verdict=_fixed_verdicts(verdicts),
-                              heal=lambda a: healed.append(a), logfn=lambda *_: None)
+                              heal=lambda a, v: healed.append(a), logfn=lambda *_: None)
     assert out == events                              # zero behaviour change during the soak
     assert healed == []                               # heal never fires in dry-run
 
@@ -192,7 +192,146 @@ def test_apply_gate_live_suppresses_alive_emits_dark_heals_only_suppressed():
                 "dead.example.com": {"any_port_responded": False, "any_port_open": False}}
     healed = []
     out = apply_liveness_gate(events, live=True, get_verdict=_fixed_verdicts(verdicts),
-                              heal=lambda a: healed.append(a), logfn=lambda *_: None)
+                              heal=lambda a, v: healed.append(a), logfn=lambda *_: None)
     assert [e["asset_id"] for e in out] == ["dead.example.com"]   # only the genuinely-dark emits
     assert healed == ["ftp.unimacgraphics.com"]                   # heal only the probe-alive suppression
     # the unimac false-dark is gone and its probe clock healed; the deferred flaky asset is NOT healed
+
+
+# ── Note 307 (2026-10-10) — the dark gate counts an answer from ANY route inside the window ──────
+# The three Command hosts behind a firewall answered the direct sweep ~1 time in 5. The gate read
+# only the LATEST verdict, which was almost always a dropped one, so it emitted "went dark" about
+# servers that had answered hours earlier (ftp.commandmi.com: answered 10-07 13:11, reported dark
+# 10-08 01:38 on the 10-07 19:12 silent sweep).
+from asset_liveness import (  # noqa: E402
+    pick_dark_gate_verdict,
+    DARK_EVIDENCE_WINDOW_H,
+)
+
+_NOW = datetime(2026, 10, 8, 1, 38, tzinfo=UTC)
+
+
+def _v(hours_ago, answered, source="liveness_sweep"):
+    return {"asset_id": "ftp.commandmi.com", "probed_at": _NOW - timedelta(hours=hours_ago),
+            "any_port_responded": answered, "any_port_open": answered, "probe_source": source}
+
+
+def test_the_10_08_ftp_commandmi_false_dark_is_suppressed():
+    """THE INCIDENT, replayed. Latest verdict: the 10-07 19:12 sweep, silent (6.4h old).
+    Latest ANSWERED verdict: 10-07 13:11 (12.4h old). Old gate: emit. New gate: suppress."""
+    latest, answered = _v(6.4, False), _v(12.45, True)
+    assert gate_dark_decision(latest) == "emit"                      # what the old gate did
+    picked = pick_dark_gate_verdict(latest, answered, now=_NOW)
+    assert gate_dark_decision(picked) == "suppress"
+    assert picked["gate_evidence"] == "responded_within_window"
+    assert picked["probed_at"] == answered["probed_at"]              # heal stamps THIS, not now()
+
+
+def test_an_answer_from_the_vpn_route_counts_the_same_as_a_direct_one():
+    picked = pick_dark_gate_verdict(_v(1, False), _v(20, True, source="liveness_vpn"), now=_NOW)
+    assert gate_dark_decision(picked) == "suppress"
+    assert picked["probe_source"] == "liveness_vpn"
+
+
+def test_an_answer_just_inside_the_window_counts_and_just_outside_does_not():
+    inside = pick_dark_gate_verdict(_v(1, False), _v(DARK_EVIDENCE_WINDOW_H - 0.01, True), now=_NOW)
+    edge = pick_dark_gate_verdict(_v(1, False), _v(DARK_EVIDENCE_WINDOW_H, True), now=_NOW)
+    outside = pick_dark_gate_verdict(_v(1, False), _v(DARK_EVIDENCE_WINDOW_H + 0.01, True), now=_NOW)
+    assert gate_dark_decision(inside) == "suppress"
+    assert gate_dark_decision(edge) == "suppress"                    # <= window, same as is_verdict_fresh
+    assert gate_dark_decision(outside) == "emit"                     # falls back to the fresh silent one
+    assert outside["gate_evidence"] == "latest_fresh"
+
+
+def test_a_real_outage_still_emits_once_nothing_has_answered_for_the_whole_window():
+    """Nothing answered by any route for longer than the threshold -> genuinely dark."""
+    picked = pick_dark_gate_verdict(_v(2, False), None, now=_NOW)
+    assert gate_dark_decision(picked) == "emit"
+
+
+def test_no_fresh_verdict_and_no_answer_still_defers():
+    """4.7 Q4 fail-safe unchanged: a probe outage never manufactures a dark alert."""
+    assert pick_dark_gate_verdict(_v(DEFAULT_VERDICT_MAX_AGE_H + 1, False), None, now=_NOW) is None
+    assert pick_dark_gate_verdict(None, None, now=_NOW) is None
+
+
+def test_an_old_answer_outranks_a_stale_silence_but_a_stale_silence_alone_defers():
+    """Probe worker down 20h, last answer 30h ago: the host was SEEN alive inside the window —
+    suppress (and heal to 30h ago). Without that answer, the same stale silence defers."""
+    picked = pick_dark_gate_verdict(_v(20, False), _v(30, True), now=_NOW)
+    assert gate_dark_decision(picked) == "suppress"
+    assert gate_dark_decision(pick_dark_gate_verdict(_v(20, False), None, now=_NOW)) == "defer"
+
+
+def test_a_row_passed_as_answered_that_did_not_answer_is_not_trusted():
+    """Defence in depth: the SQL filters on any_port_responded, but the pure picker re-checks."""
+    picked = pick_dark_gate_verdict(_v(1, False), _v(5, False), now=_NOW)
+    assert picked["gate_evidence"] == "latest_fresh"
+    assert gate_dark_decision(picked) == "emit"
+
+
+def test_a_fresh_answer_is_the_window_answer():
+    picked = pick_dark_gate_verdict(_v(1, True), _v(1, True), now=_NOW)
+    assert gate_dark_decision(picked) == "suppress"
+
+
+def test_the_evidence_window_equals_the_dark_threshold():
+    """⛔ Longer would hide a real outage past the point the alarm promises to report it; shorter
+    would let a filtered-but-alive host through between VPN re-checks."""
+    import import_asm_to_surface as imp
+    assert DARK_EVIDENCE_WINDOW_H == imp.DARK_THRESHOLD_HOURS
+
+
+def test_heal_receives_the_verdict_that_decided():
+    events = [{"asset_id": "pm.unimacgraphics.com"}]
+    seen = _v(30, True, source="liveness_vpn")
+    got = []
+    apply_liveness_gate(events, live=True, get_verdict=lambda a: seen,
+                        heal=lambda a, v: got.append((a, v["probed_at"])), logfn=lambda *_: None)
+    assert got == [("pm.unimacgraphics.com", seen["probed_at"])]
+
+
+def test_the_importer_gate_reads_the_window_not_just_the_latest_verdict():
+    """Wiring pin: the importer's dark sweep must call get_dark_gate_verdict. Reverting it to
+    get_fresh_verdict silently brings back the weekly false darks."""
+    import inspect
+    import import_asm_to_surface as imp
+    src = inspect.getsource(imp.main)
+    assert "asset_liveness.get_dark_gate_verdict(conn, a)" in src
+    assert "get_fresh_verdict" not in src
+
+
+def test_heal_sql_stamps_the_evidence_time_and_never_moves_the_clock_backwards():
+    import import_asm_to_surface as imp
+    sql = " ".join(imp.Q_HEAL_PROBE_ALIVE.split())
+    assert "now()" not in sql
+    assert "GREATEST(last_probe_alive_at, %(at)s)" in sql
+
+
+def test_the_window_read_is_bounded_in_sql_not_only_in_python():
+    """The picker re-checks the window, so an unbounded query would still decide right — but it
+    would walk an asset's whole verdict history every sweep. Pin the bound and its value."""
+    from asset_liveness import get_dark_gate_verdict
+    seen = []
+
+    class Cur:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params):
+            seen.append((" ".join(sql.split()), params))
+
+        def fetchone(self):
+            return None
+
+    class Conn:
+        def cursor(self):
+            return Cur()
+
+    assert get_dark_gate_verdict(Conn(), "x.example", now=_NOW) is None
+    sql, params = seen[1]
+    assert "AND any_port_responded AND probed_at >= %s ORDER BY probed_at DESC LIMIT 1" in sql
+    assert params == ("x.example", _NOW - timedelta(hours=DARK_EVIDENCE_WINDOW_H))
