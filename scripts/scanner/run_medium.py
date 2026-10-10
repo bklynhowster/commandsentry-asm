@@ -5432,13 +5432,13 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
 UPSERT_FINDING_SQL = """
 INSERT INTO public.findings (
     finding_id, asset_id, title, severity, category, description,
-    cwe, "references", current_status, first_detected_at,
+    cwe, cve, "references", current_status, first_detected_at,
     last_observed_at, source, tags, normalized_key, params,
     validation_status, scanner_version, validated_at,
     first_detected_scan, last_seen_scan_run
 )
 VALUES (%(finding_id)s, %(asset_id)s, %(title)s, %(severity)s, %(category)s,
-        %(description)s, %(cwe)s, %(references)s, 'detected',
+        %(description)s, %(cwe)s, %(cve)s, %(references)s, 'detected',
         now(), now(), %(source)s, %(tags)s, %(normalized_key)s, %(params)s::jsonb,
         %(validation_status)s, %(scanner_version)s,
         CASE WHEN %(validation_status)s = 'validated' THEN now() ELSE NULL END,
@@ -5447,6 +5447,16 @@ ON CONFLICT (finding_id) DO UPDATE SET
     title             = EXCLUDED.title,
     category          = EXCLUDED.category,
     description       = EXCLUDED.description,
+    -- 302 step 3 — medium and heavy keep CVE numbers (light always has; same
+    -- rule as run_light): a non-empty list wins, an empty one never blanks a
+    -- list already held. Heavy is where it matters today: the light phases it
+    -- runs (wpvulnerability, library_flaws) carry CVEs, and before this a
+    -- finding first seen on a heavy run was stored without them.
+    cve = CASE
+      WHEN EXCLUDED.cve IS NOT NULL AND array_length(EXCLUDED.cve, 1) > 0
+        THEN EXCLUDED.cve
+      ELSE findings.cve
+    END,
     current_status = CASE
       WHEN findings.current_status IN (
              'remediated', 'validated_remediated',
@@ -5668,6 +5678,9 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 "category": f.category,
                 "description": f.description,
                 "cwe": f.cwe,
+                # 302 step 3 — MediumFinding has no producer of CVEs today
+                # (detection-only nuclei templates carry none); [] never blanks.
+                "cve": list(getattr(f, "cve", None) or []),
                 "references": f.references,
                 "source": source_for_tier(MEDIUM),
                 "tags": f.tags,

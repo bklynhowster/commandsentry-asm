@@ -25,7 +25,7 @@ HEAVY_OWN = ["testssl.sh", "httpx", "gau", "content_fetch", "naabu", "fingerprin
 
 
 def test_plan_matches_what_actually_gets_credited():
-    """20 planned == 20 credited. Drift either sticks the bar short of 100% or
+    """21 planned == 21 credited. Drift either sticks the bar short of 100% or
     overshoots it.
 
     Was 19 on run #2637. Became 20 on 2026-09-10 when `corpus_prewarm` was added
@@ -33,8 +33,21 @@ def test_plan_matches_what_actually_gets_credited():
     tool_status["corpus_prewarm"] on both its ok and degraded paths. The count is
     bumped here only because the next test pins WHY it moved; a bare number
     bumped without that is how a denominator quietly goes wrong.
+
+    Became 21 on 2026-10-09 (302 step 3) when the light phase `library_flaws`
+    was added — also a real credited phase: it writes tool_status on its ok and
+    degraded paths. Pinned by test_library_flaws_is_planned_after_httpx_tech.
     """
-    assert len(build_cumulative_planned_steps(HEAVY_OWN)) == 20
+    assert len(build_cumulative_planned_steps(HEAVY_OWN)) == 21
+
+
+def test_library_flaws_is_planned_after_httpx_tech():
+    """The reason the count is 21. library_flaws credits tool_status on every
+    run, so it must be planned (or the card's denominator is one short), and it
+    reads the versions httpx_tech hands over, so it must come after it."""
+    plan = build_cumulative_planned_steps(HEAVY_OWN)
+    assert "library_flaws" in plan
+    assert plan.index("httpx_tech") < plan.index("library_flaws")
 
 
 def test_corpus_prewarm_is_planned_AND_precedes_nuclei():

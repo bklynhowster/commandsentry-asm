@@ -65,6 +65,9 @@ _register("httpx_tech", LIGHT, _light.check_httpx_tech, ORDER_LIGHT)
 _register("methods_check", LIGHT, _light.check_methods, ORDER_LIGHT)
 _register("csp_nonce_check", LIGHT, _light.check_csp_nonce, ORDER_LIGHT)
 _register("wpvulnerability", LIGHT, _light.check_wpvulnerability, ORDER_LIGHT)
+# 302 step 3. After httpx_tech (same ORDER_LIGHT band, ties keep declaration
+# order): it reads ctx.tech_versions, which httpx_tech sets.
+_register("library_flaws", LIGHT, _light.check_library_flaws, ORDER_LIGHT)
 _register("behavioral_probes", LIGHT, _light.check_behavioral_probes, ORDER_LIGHT)
 
 # ── MEDIUM tier ─────────────────────────────────────────────────────────────

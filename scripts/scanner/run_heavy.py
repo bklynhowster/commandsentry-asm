@@ -2986,6 +2986,10 @@ def write_event_findings_and_artifacts(
         "web", "network", "email", "tls", "dns",
         "secrets", "cve", "misconfig", "other",
         "cors",   # #2.05 (Obsidian 160) — enum label added in migration 20260723b; passive CORS emitter
+        # 302 step 3 — library_flaws (a light phase heavy runs) emits supply_chain,
+        # a real finding_category_t value. Without this a heavy run would rewrite
+        # it to 'other' and the category would flip with every light/heavy pass.
+        "supply_chain",
     }
 
     with conn.cursor() as cur:
@@ -3007,6 +3011,10 @@ def write_event_findings_and_artifacts(
                 "category": category,
                 "description": ev.description,
                 "cwe": ev.cwe,
+                # 302 step 3 — keep the CVE numbers the event carries (the light
+                # phases heavy runs: wpvulnerability, library_flaws). [] never
+                # blanks a list already held (UPSERT_FINDING_SQL's cve CASE).
+                "cve": list(getattr(ev, "cve", None) or []),
                 "references": ev.references,
                 "source": ev.source,
                 # Heavy events from parse_testssl_file don't carry tags;

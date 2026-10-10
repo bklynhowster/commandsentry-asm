@@ -661,6 +661,9 @@ _CUT_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
     ("v1_p4_pending",               CUT_POLICY),
     ("routed_safe_only",            CUT_POLICY),
     ("empty_output",                CUT_TOOL),
+    ("osv_lookup_failed",           CUT_TOOL),     # 302 step 3: OSV.dev did not answer; the target was never involved
+    ("library_flaws_error",         CUT_TOOL),     # 302 step 3: library_flaws hit something unexpected; contained
+    ("no_version_data",             CUT_TOOL),     # 302 step 3: httpx_tech gave no version list (its own entry says why)
     ("naabu_rc",                    CUT_TOOL),
     ("catchall_calibration_failed", CUT_TOOL),
     ("no_status_recorded",          CUT_TOOL),
