@@ -455,6 +455,18 @@ jobs:
           # is forensic rather than load-bearing — but it is a write to `assets`,
           # and "no asset state changes" would be wrong. Nothing else mutates:
           # discovery_status, went_dark_at and dark_reason are untouched.
+          #
+          # ── 2026-10-10 (note 307): THE GATE READS A WINDOW, NOT THE LATEST CHECK ──
+          # ftp.unimacgraphics.com, pm.unimacgraphics.com and ftp.commandmi.com sit
+          # behind a firewall that turns away most of GitHub's addresses: they
+          # answered this job's liveness sweep ~1 time in 5. "Latest verdict" was
+          # almost always a dropped one, so the gate emitted "went dark" weekly
+          # about servers that had answered hours earlier. Now: SUPPRESS if ANY
+          # route (this sweep, or the VPN re-check scanner.yml runs inside its
+          # tunnel, probe_source 'liveness_vpn') got an answer within the dark
+          # threshold (72h); otherwise the fresh-verdict rules above, unchanged.
+          # The heal now stamps the time the host was SEEN answering, not now() —
+          # the portal's asset page now reads that column (seenAliveAt).
           DARK_LIVENESS_GATE_LIVE: "1"
         run: |
           if [[ -z "${SUPABASE_DSN}" ]]; then

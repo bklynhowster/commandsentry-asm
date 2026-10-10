@@ -578,6 +578,7 @@ jobs:
       # ROE-gate timeout and we'd be back to square one — better to
       # surface the misconfig at bring-up than during scan execution.
       - name: Carve Supabase out of the VPN tunnel
+        id: db_carveout
         if: ${{ steps.vpn_decision.outputs.use_vpn == 'true' && github.event.inputs.skip_vpn != 'true' && steps.vpn_slot.outputs.acquired == 'true' }}
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
@@ -805,6 +806,37 @@ jobs:
           NUCLEI_STATS_ENABLED: ${{ github.event.inputs.nuclei_stats }}
         run: |
           python scripts/scanner/run_heavy.py /tmp/scan_descriptor.json
+
+      # ─── Liveness re-check through the VPN (note 307, 2026-10-10) ───
+      # ⛔ WHY: ftp.unimacgraphics.com, pm.unimacgraphics.com and
+      # ftp.commandmi.com sit behind a firewall that turns away most of
+      # GitHub's addresses. The 6-hourly liveness sweep (asm-discover.yml)
+      # reached them about 1 time in 5, so the digest called live servers
+      # dark every week — while this job, going out through the tunnel,
+      # reached them on every pass. Howie chose to check them this way.
+      #
+      # Rides THIS job's tunnel and slot: no new claim (the slot pools are
+      # small — Command has one, Prodex two), no new bring-up. Re-probes only
+      # hosts whose latest verdict did not answer. Before probing anything it
+      # proves (1) the job's egress address is NOT the runner's own (a failed
+      # mid-scan rotation leaves the job on the bare address while this
+      # step's `vpn` outcome still reads success) and (2) the tunnel carries
+      # traffic, on hosts that answered last time. Either proof fails ->
+      # nothing probed / nothing written. TCP connects only, the same ports
+      # and the same confirmed_live set as the direct sweep (D-056).
+      # Runs after the scan, before teardown, and can never fail the scan.
+      # ⚠ Kept short on purpose: the scan has already marked its scan_run
+      # complete, so vpn_slot.py may hand this slot to another job while
+      # this step still holds the tunnel.
+      - name: Liveness re-check through the VPN (quiet hosts only)
+        if: ${{ !cancelled() && steps.vpn.outcome == 'success' && steps.db_carveout.outcome == 'success' && steps.vpn_slot.outputs.acquired == 'true' && github.event.inputs.skip_vpn != 'true' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          VPN_BASELINE_IP: ${{ steps.vpn.outputs.vpn_baseline_ip }}
+        run: |
+          python scripts/db/asset_liveness_probe.py --recheck-unresponsive --run-tag "${GITHUB_RUN_ID}"
 
       # ─── Tear down VPN (always, if we brought it up) ───────────────
       # Runs even when the scan failed so we never leave a connection
