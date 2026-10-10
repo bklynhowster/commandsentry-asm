@@ -262,6 +262,12 @@ class ScanContext:
     # the card's denominator.
     dsn:           str | None = None
     planned_steps: list[str] | None = None
+    # 302 step 3 — exact (product, version) pairs httpx_tech saw, for
+    # library_flaws. A plain attribute ON PURPOSE: under cumulative heavy each
+    # phase sees only its own artifacts (phase_contract._LegacyRecorder), while
+    # plain attributes reach the real context, the channel tech_stack uses.
+    # None = httpx_tech produced no usable version list (failed or blocked).
+    tech_versions: list | None = None
 
 
 # ─── Subprocess helper ──────────────────────────────────────────────────
@@ -324,6 +330,7 @@ from stack_passive import (  # noqa: E402
     extract_set_cookie_names,
 )
 import software_inventory  # noqa: E402  (302 step 1)
+import library_flaws  # noqa: E402  (302 step 3)
 from tech_detect import (  # noqa: E402  (4.7 ⑭′ — shared with run_medium)
     merge_tech_detection,
     parse_httpx_rows,
@@ -1741,6 +1748,15 @@ def check_httpx_tech(ctx: ScanContext) -> None:
             raw_excerpt=json.dumps(rows, indent=2)[:2000],
         ))
 
+    # 302 step 3 — hand the exact versions to library_flaws. Only here, on the
+    # success path: when httpx_tech failed or was blocked, tech_versions stays
+    # unset and library_flaws reports that it had nothing to look at, rather
+    # than "looked and found nothing". Never allowed to cost httpx_tech its result.
+    try:
+        ctx.tech_versions = software_inventory.observations_from_httpx_rows(rows)
+    except Exception as e:  # noqa: BLE001
+        log(f"httpx_tech: version list not built: {e!r}")
+
     mark_tool_ok(ctx, "httpx_tech")
     ctx.tool_status["httpx_tech"].update({
         "tech_count": len(techs),
@@ -2011,6 +2027,59 @@ def _wpvuln_emit_finding(ctx: ScanContext, v, wpc) -> None:
             f"Unfixed: {v.unfixed}"
         )[:2000],
     ))
+
+
+# ─── Published flaws in JavaScript libraries via OSV.dev (302 step 3) ───────
+
+def check_library_flaws(ctx: ScanContext) -> None:
+    """Look up the exact library versions httpx_tech saw (ctx.tech_versions)
+    in OSV.dev and report each published advisory that covers that version.
+
+    Lookup-only, like wpvulnerability: the one request goes to api.osv.dev and
+    carries a package name and a version. Nothing is sent to the target.
+
+    Outcomes: no version list from httpx_tech -> skipped (no_version_data: we
+    had nothing to look at); versions but none of the reviewed libraries ->
+    ok; a lookup failure -> degraded (osv_lookup_failed), and the remaining
+    libraries are not tried, so an unreachable OSV costs one timeout, not
+    eleven. NOTHING here may fail the light scan: run() calls phases directly
+    and any escaping exception would discard every finding of the run.
+    """
+    ctx.tools_run.append("library_flaws")
+    try:
+        versions = getattr(ctx, "tech_versions", None)
+        if versions is None:
+            mark_tool_skipped(ctx, "library_flaws", "no_version_data")
+            return
+        todo = library_flaws.lookups(versions)
+        if not todo:
+            mark_tool_ok(ctx, "library_flaws")
+            return
+        added, failed, looked, found = 0, [], [], []
+        for i, (obs, pkg) in enumerate(todo):
+            try:
+                vulns = library_flaws.query_osv(pkg, obs.version)
+                advs = library_flaws.advisories_from_osv(vulns, pkg, obs.version)
+                rows = [library_flaws.finding_fields(obs, pkg, adv, ctx.hostname) for adv in advs]
+            except Exception as e:  # noqa: BLE001 — LookupFailed or anything unexpected
+                log(f"  library_flaws: {pkg} {obs.version} lookup failed: {type(e).__name__}: {str(e)[:160]}")
+                failed += [f"{p}@{o.version}" for o, p in todo[i:]]
+                break
+            looked.append({"package": pkg, "version": obs.version, "advisories": [a.id for a in advs]})
+            found += rows
+        for kw in found:
+            ctx.findings.append(LightFinding(**kw))
+            added += 1
+        ctx.artifacts.append(("library_flaws", "json", json.dumps({"looked_up": looked, "failed": failed})))
+        log(f"  library_flaws: {len(todo)} library version(s), {added} finding(s), "
+            f"{len(failed)} not checked")
+        if failed:
+            mark_tool_degraded(ctx, "library_flaws", "osv_lookup_failed")
+        else:
+            mark_tool_ok(ctx, "library_flaws")
+    except Exception as e:  # noqa: BLE001 — belt and braces: never the light scan's FATAL path
+        log(f"  library_flaws: unexpected {type(e).__name__}: {str(e)[:160]}")
+        mark_tool_degraded(ctx, "library_flaws", "library_flaws_error")
 
 
 def check_methods(ctx: ScanContext) -> None:
@@ -3587,6 +3656,8 @@ def run(descriptor_path: str, dsn: str) -> int:
             check_csp_nonce(ctx)
             log("  → check_wpvulnerability")
             check_wpvulnerability(ctx)
+            log("  → check_library_flaws")
+            check_library_flaws(ctx)
             log("→ check_behavioral_probes")
             check_behavioral_probes(ctx)
         else:
