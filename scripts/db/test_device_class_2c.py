@@ -328,10 +328,13 @@ def test_the_coverage_guard_reports_an_unmapped_observation():
 
 
 def test_the_dormant_set_is_declared_not_discovered():
-    """waf_present_differential is a ratified registry row with no producer in
-    gather_observations. Declaring it keeps the guard honest; an `else: assume
-    capable` fallback would be the fail-open shape being removed fleet-wide."""
-    assert "waf_present_differential" in dcr.DORMANT_OBSERVATIONS
+    """The dormant set is DECLARED, not discovered. It is empty since Obsidian 310
+    (2026-10-13): waf_present_differential, the last dormant row, is now produced by
+    gather_observations from stack_id_waf_differential. The set stays so the guard keeps
+    its shape; an `else: assume capable` fallback would be the fail-open shape being
+    removed fleet-wide."""
+    assert "waf_present_differential" not in dcr.DORMANT_OBSERVATIONS
+    assert "waf_differential_block" in dcr.OBSERVATION_CAPABILITY
     from derive_device_class import load_fingerprints
     obs = {r["observation"] for r in load_fingerprints() if r.get("observation")}
     assert dcr.DORMANT_OBSERVATIONS <= obs, (
@@ -379,15 +382,19 @@ def test_a_signal_is_capable_when_any_of_its_observations_is():
 def test_the_2b_tuple_and_the_capability_map_differ_only_by_the_known_delta():
     """⚠ A GAP RECORDED, NOT SILENTLY CLOSED. EVIDENCE_ARTIFACT_PATTERNS — 2b's
     class-level 'any evidence' test, reviewed and shipped — does NOT list
-    stack_id_fwbbot_check, though gather_observations reads it. So a run producing
-    ONLY that artifact does not count as evidence-capable for 2b.
+    stack_id_fwbbot_check (nor, since 310, stack_id_waf_differential), though
+    gather_observations reads both. So a run producing ONLY those artifacts does not
+    count as evidence-capable for 2b.
 
     Deriving the 2b tuple from the capability map would fix it as a side effect of a
     refactor — changing an approved rule's behaviour without review. It is pinned here
     instead, so the difference is a decision on the record rather than a discovery."""
     cap_sources = {s for c in dcr.OBSERVATION_CAPABILITY.values() for s in c.sources}
     delta = cap_sources - set(dcr.EVIDENCE_ARTIFACT_PATTERNS)
-    assert delta == {"stack_id_fwbbot_check"}, (
+    # Obsidian 310: stack_id_waf_differential joins the delta on the SAME reasoning as
+    # fwbbot — the artifact is written on every heavy run, dry-run included, so its
+    # presence is not "this run was able to look" and must not make a run 2b-capable.
+    assert delta == {"stack_id_fwbbot_check", "stack_id_waf_differential"}, (
         f"the 2b/capability delta changed: {sorted(delta)}. If that is intended, it is "
         f"a change to a shipped rule and belongs in a relay turn, not in this assert.")
 

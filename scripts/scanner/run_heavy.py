@@ -308,6 +308,11 @@ class HeavyScanContext:
     # target_proven_reachable — heavy keeps the field shape for
     # compatibility with mark_tool_* helpers that may reference it.
     target_proven_reachable: bool = False
+    # Obsidian 310 (2026-10-13): the differential probe's MEASURED BLOCK, set by
+    # run_waf_differential_probe_phase only when the probe FIRED and the classifier
+    # returned waf_present (benign passed, >=2 independent payload classes denied).
+    # Read once, in the clean close-out, by close_waf_absent_on_measured_block.
+    waf_block_measured: dict | None = None
     # waf_detected / waf_kind / tech_stack — heavy doesn't probe these
     # but the medium-side helpers (build_rotation_log, scan metadata
     # writer) read them. Default to "not detected."
@@ -2344,6 +2349,86 @@ def _maybe_emit_no_waf_finding(ctx: HeavyScanContext, baseline: dict, verdict: d
     log("  waf_differential probe: NO ENFORCING WAF proven -> HIGH finding (PCI 6.4.2 / SC-7)")
 
 
+# ── Obsidian 310 (2026-10-13): a MEASURED block closes the "no enforcing WAF" finding ──
+# uat.prodexlabs.com, 2026-10-12 19:58Z: 0 of 3 payload classes blocked -> HIGH finding
+# emitted. 2026-10-13 18:39Z: all 3 blocked behind a Google 403 page. The finding stayed
+# open and top-of-page ("no enforcing WAF") next to the chip that said "attack blocked".
+# The heavy tier deliberately runs no delta-close (close_out_heavy), so nothing ever
+# closed it. This is the ONE closure the probe itself can justify: the same rig, on the
+# same path, measured the opposite of what the finding asserts. Nothing else is closed.
+# A later measured pass-through re-emits the finding and regress_observed_for_scan_run
+# flips remediated -> regressed (the existing machinery, unchanged).
+WAF_ABSENT_CHECK_ID = "waf-absent-differential"
+MEASURED_REMEDIATION_ACTION = "measured_remediation"
+MEASURED_REMEDIATION_RULE = "note_310_measured_block_closes_waf_absent"
+
+CLOSE_WAF_ABSENT_ON_MEASURED_BLOCK_SQL = """
+UPDATE public.findings
+   SET current_status = 'remediated',
+       remediated_at  = now(),
+       updated_at     = now()
+ WHERE finding_id = %(finding_id)s
+   AND asset_id   = %(asset_id)s
+   AND source::text = 'commandsentry_heavy'
+   AND current_status::text IN ('detected', 'confirmed', 'open', 'regressed')
+RETURNING finding_id, severity::text AS severity, first_detected_at, last_observed_at
+"""
+
+MEASURED_REMEDIATION_AUDIT_SQL = """
+INSERT INTO public.admin_audit_log
+  (actor_user_id, action, target_user_id, target_email, before_state, after_state, details)
+VALUES (NULL, %(action)s, NULL, NULL, %(before)s::jsonb, %(after)s::jsonb, %(details)s::jsonb)
+"""
+
+MEASURED_REMEDIATION_HISTORY_SQL = """
+INSERT INTO public.finding_history
+  (finding_id, scan_id, observed_at, status, severity_at_scan, notes)
+VALUES (%(finding_id)s, %(scan_run_id)s, now(), 'remediated'::history_status_t,
+        %(severity)s::severity_t, %(notes)s)
+"""
+
+
+def close_waf_absent_on_measured_block(conn, ctx: HeavyScanContext, Json) -> int:
+    """CLEAN PATH ONLY. If this run's differential probe measured a block, close the open
+    'No enforcing WAF in front of live application' finding for this asset as remediated,
+    with the measurement as the audit evidence and a finding_history row bound to THIS
+    scan. Returns the number of findings closed (0 or 1). Touches nothing else."""
+    m = ctx.waf_block_measured
+    if not m:
+        return 0
+    fid = stable_finding_id(ctx.asset_id, "commandsentry_heavy", WAF_ABSENT_CHECK_ID, ctx.hostname)
+    with conn.cursor() as cur:
+        cur.execute(CLOSE_WAF_ABSENT_ON_MEASURED_BLOCK_SQL,
+                    {"finding_id": fid, "asset_id": ctx.asset_id})
+        row = cur.fetchone()
+        if not row:
+            log(f"  measured block: no open '{WAF_ABSENT_CHECK_ID}' finding to close for {ctx.asset_id}")
+            return 0
+        sev = row["severity"] if isinstance(row, dict) else row[1]
+        cur.execute(MEASURED_REMEDIATION_AUDIT_SQL, {
+            "action": MEASURED_REMEDIATION_ACTION,
+            "before": Json({"finding_id": fid, "current_status": "open_family",
+                            "source": "commandsentry_heavy", "severity": sev}),
+            "after": Json({"finding_id": fid, "current_status": "remediated"}),
+            "details": Json({"rule": MEASURED_REMEDIATION_RULE, "asset_id": ctx.asset_id,
+                             "scan_run_id": ctx.scan_run_id, "blocked": m.get("blocked"),
+                             "classify_reason": m.get("reason"),
+                             "baseline_status": m.get("baseline_status"),
+                             "measured_at": m.get("measured_at"), "egress_mode": m.get("egress_mode"),
+                             "reason": ("the same differential probe that emitted this finding "
+                                        "measured a block on this run: benign passed, "
+                                        f"{len(m.get('blocked') or [])} independent payload classes denied")}),
+        })
+        cur.execute(MEASURED_REMEDIATION_HISTORY_SQL, {
+            "finding_id": fid, "scan_run_id": ctx.scan_run_id, "severity": sev,
+            "notes": (f"closed by run_heavy scan_run {ctx.scan_run_id}: differential probe measured "
+                      f"a block (blocked={','.join(m.get('blocked') or [])})"),
+        })
+    log(f"  measured block: closed '{WAF_ABSENT_CHECK_ID}' for {ctx.asset_id} as remediated "
+        f"(blocked={m.get('blocked')}; audit + history rows written)")
+    return 1
+
+
 def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     """Differential WAF-presence active probe (4.7 Cloud Armor Q1–Q8). Same rig as
     run_fwbbot_check_probe_phase: per-asset opt-in (assets.active_probe_authorized) + per-asset
@@ -2390,6 +2475,16 @@ def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> N
             # only wafw00f (or the FORTIGATE_HOSTNAMES allowlist) can establish —
             # this deliberately does not claim it.
             ctx.waf_detected = True
+            # 310: the measurement, for the close-out. The finding this closes is the
+            # affirmative "no enforcing WAF" one (_maybe_emit_no_waf_finding, the
+            # pass-through half of this same probe); a block is its direct negation,
+            # measured by the same rig on the same path. Presence-only, names nothing.
+            ctx.waf_block_measured = {
+                "blocked": list(blocked), "reason": reason,
+                "baseline_status": baseline["status"],
+                "measured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "egress_mode": egress,
+            }
         details.update({"baseline_status": baseline["status"], "baseline_size": baseline["size"],
                         "blocked": blocked, "classify_reason": reason,
                         "evidence_class": verdict["evidence_class"]})
@@ -3739,6 +3834,15 @@ def run(descriptor_path: str, dsn: str) -> int:
                 )
             finally:
                 cur.close()
+
+        # Obsidian 310 — the ONE closure the probe can justify (see
+        # close_waf_absent_on_measured_block). After the regress loop (the finding
+        # this closes was not re-emitted on a block, so the two never touch the same
+        # row) and before finding_history, so the history row it writes is not
+        # duplicated by the re-emitted-findings writer. CLEAN PATH ONLY.
+        n_closed = close_waf_absent_on_measured_block(conn, ctx, Json)
+        if n_closed:
+            log(f"measured-block close: {n_closed} 'no enforcing WAF' finding closed as remediated")
 
         # Note 129 round 7 — finding_history per re-emitted finding.
         # Runs AFTER the per-source regress loop so the recorded

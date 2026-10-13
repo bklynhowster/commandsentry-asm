@@ -191,7 +191,7 @@ def test_waf_present_differential_asserts_presence_never_vendor():
     # If a future edit lets this signal touch the vendor bar (the "obviously it's Cloud
     # Armor" convenience inference), CI fails HERE.
     fps, th = load_fingerprints(), load_thresholds()
-    res = classify({"waf_present_differential": True}, fps, th)
+    res = classify({"waf_differential_block": True}, fps, th)
     assert res["device_class"] == "waf"
     assert res["vendor_product"] == {}                        # never names a vendor
     assert res["vendor_product_confidence"] == "unknown"      # ZERO vendor contribution
@@ -204,7 +204,7 @@ def test_waf_present_differential_composes_with_a_self_naming_vendor_tell():
     # the differential raises the device_class bar, the cookie raises the vendor bar,
     # neither blocks the other. Vendor is named FROM THE TELL, not the differential.
     fps, th = load_fingerprints(), load_thresholds()
-    res = classify({"waf_present_differential": True,
+    res = classify({"waf_differential_block": True,
                     "set_cookie_names": ["cookiesession1"]}, fps, th)
     assert res["device_class"] == "waf"
     assert res["vendor_product"].get("vendor") == "Fortinet"  # from the cookie, not the probe

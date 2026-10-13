@@ -140,6 +140,12 @@ _PASSIVE_TOOL_NAMES = ("stack_id_passive", "light_stack_passive")
 _ART_FINGERPRINT = "fingerprint%"      # -> extract_ssh_banner
 _ART_TESTSSL     = "testssl%"          # -> extract_cert
 _ART_WAFW00F     = "stack_id_wafw00f"  # -> waf_vendor_from_wafw00f
+# The differential WAF probe's artifact (run_heavy.run_waf_differential_probe_phase).
+# Read by gather_observations for the waf_present_differential observation; NOT in
+# EVIDENCE_ARTIFACT_PATTERNS, on the fwbbot precedent: the artifact is written on every
+# heavy run, dry-run included, so its presence is not "this run was able to look".
+_ART_WAF_DIFFERENTIAL = "stack_id_waf_differential"
+_DIFFERENTIAL_DEPTH = 3   # newest N artifacts; the first with a non-null verdict decides
 _ART_NUCLEI      = "nuclei%"           # capability marker only (see above)
 
 EVIDENCE_ARTIFACT_PATTERNS = (
@@ -527,6 +533,7 @@ _PASSIVE_MERGE_DEPTH = 3          # == _fresh_json_many(limit=) in gather_observ
 _CAP_ARTIFACT_PRESENT = "artifact_present"   # the row existing IS the capability
 _CAP_JSON_KEY_PRESENT = "json_key_present"   # key present, ANY value (false is a verdict)
 _CAP_JSON_NONEMPTY    = "json_nonempty"      # key present AND truthy ({} [] "" null = absence)
+_CAP_JSON_KEY_NOT_NULL = "json_key_not_null" # key present AND not null (false IS a verdict; null = did not look)
 _CAP_TEXT_EXTRACT     = "text_extract"       # a pure extractor must return truthy
 _CAP_ASSET_SURFACE    = "asset_surface"      # not an artifact at all
 
@@ -570,13 +577,24 @@ OBSERVATION_CAPABILITY: dict[str, _Cap] = {
     "fwbbot_check": _Cap(_CAP_ARTIFACT_PRESENT, ("stack_id_fwbbot_check",)),
     # not an artifact at all — the ASM import writes this into asset_surface.
     "waf_vendor_discovery": _Cap(_CAP_ASSET_SURFACE),
+    # ⚠ NOT-NULL, and the three values mean three different things (Obsidian 310).
+    # The heavy tier writes this artifact on EVERY run: `null` = the probe did not fire
+    # (not authorized / dry-run) = we did not look; `false` = fired, nothing blocked = a
+    # real measured negative; `true` = fired, >=2 payload classes blocked. KEY_PRESENT
+    # would call a dry-run "capable" and let R5 strip a measured block on a pass that
+    # never probed; NONEMPTY would call `false` absence and make the class unfalsifiable.
+    # Read to the same depth gather_observations reads, and a test pins it.
+    "waf_differential_block": _Cap(_CAP_JSON_KEY_NOT_NULL, (_ART_WAF_DIFFERENTIAL,),
+                                   field="waf_present_differential", depth=_DIFFERENTIAL_DEPTH),
 }
 
 # Registry observations with NO producer in gather_observations. DECLARED, not
 # discovered: the coverage guard would otherwise refuse to start, and a silent
 # `else: assume capable` is precisely the fail-open shape being removed fleet-wide.
-# waf_present_differential is a ratified-but-dormant row — nothing emits it yet.
-DORMANT_OBSERVATIONS = frozenset({"waf_present_differential"})
+# Empty since Obsidian 310 (2026-10-13): waf_present_differential, dormant since the
+# 4.7 Cloud Armor phase, is now fed by the heavy tier's stack_id_waf_differential
+# artifact. The set stays so the guard keeps its shape for the next ratified row.
+DORMANT_OBSERVATIONS: frozenset = frozenset()
 
 
 def signal_observation_map(fps) -> dict:
@@ -635,6 +653,8 @@ def _cap_satisfied(cap: _Cap, row) -> bool:
         return False
     if cap.mode == _CAP_JSON_KEY_PRESENT:
         return cap.field in obj          # ANY value — `false` is a real verdict
+    if cap.mode == _CAP_JSON_KEY_NOT_NULL:
+        return obj.get(cap.field) is not None   # false IS a verdict; null = did not look
     return bool(obj.get(cap.field))      # NONEMPTY: {} [] "" null all fall through
 
 
@@ -1012,6 +1032,23 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
     if isinstance(cookie_names, list) and cookie_names:
         obs["set_cookie_names"] = cookie_names   # -> fortiweb_cookiesession1 (exact match)
 
+    # Obsidian 310 (2026-10-13): the differential WAF probe's MEASUREMENT. The heavy tier
+    # fires a benign GET and three independent attack-payload classes (4.7 Q1/Q2) and
+    # writes stack_id_waf_differential on every run: verdict null = did not fire,
+    # false = fired and nothing blocked, true = benign passed and >=2 classes were denied.
+    # The newest artifact WITH A VERDICT decides, so a dry-run pass after a measured block
+    # does not erase it and a measured pass-through after a block does. -> observation
+    # waf_differential_block, the presence-only waf_present_differential signal: it raises the device_class bar (a 2nd
+    # INDEPENDENT high tell next to wafw00f's name = 'confirmed') and names NO vendor.
+    # Measured 2026-10-12 on staging.prodexlabs.com and 2026-10-13 on uat.prodexlabs.com:
+    # same wafw00f name all year, enforcement only from those dates.
+    for cand in _fresh_json_many((_ART_WAF_DIFFERENTIAL,), limit=_DIFFERENTIAL_DEPTH):
+        verdict_d = cand.get("waf_present_differential")
+        if verdict_d is None:
+            continue                                 # did not look; keep reading back
+        if verdict_d is True:
+            obs["waf_differential_block"] = True     # -> signal waf_present_differential
+        break                                        # the newest measurement decides
     # Phase D (4.7 Q5): the active-probe /fwbbot_check challenge. Freshest artifact per
     # asset, gated through _fwbbot_corroborated — emits ONLY on a corroborated challenge
     # (redirect-to-/fwbbot_check). observed-not-corroborated / banned / no-challenge /
@@ -1314,6 +1351,15 @@ def run(dsn: str, write: bool, soak_generation: int,
                           f"({_DOWNGRADE_STREAK_REQUIRED} distinct evidence-capable runs, all genuine-empty)")
                 else:
                     m2b["no_write_unknown_prior"] += 1
+                    # 310: SAY SO. ftp.commandmi.com and pm.unimacgraphics.com (2026-10-13,
+                    # the first write pass) computed `unknown` from an observation that
+                    # matched no class (status reads_ok) over a POSITIVE prior, and the
+                    # matrix's no-write fell through here without a line. A kept label
+                    # with no reason in the log is indistinguishable from a bug.
+                    if a["device_class"] in _POSITIVE_CLASSES:
+                        print(f"  · {a['asset_id']}: [2b-keep] kept {prior_s} "
+                              f"(computed unknown, status {status2b}: evidence read, nothing "
+                              f"matched a class; the 2b matrix writes nothing here)")
             else:
                 # ── R5 (4.7 ruling 5, relay 236). MUTUALLY EXCLUSIVE WITH 2b BY
                 # CONSTRUCTION: a computed `unknown` never reaches here, so the two
