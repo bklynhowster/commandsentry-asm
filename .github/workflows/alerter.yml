@@ -70,6 +70,8 @@ jobs:
           ALERTER_FROM_NAME:   ${{ vars.ALERTER_FROM_NAME  || 'COMMANDsentry' }}
           ALERTER_TO:          ${{ vars.ALERTER_TO         || 'hschneider@commandcompanies.com,howiehow@mac.com' }}
           ALERTER_DASHBOARD_URL: ${{ vars.ALERTER_DASHBOARD_URL || 'https://supabase.com/dashboard/project/hdygktppfvuspnumpfuq' }}
+          # Note 307 — links in the email go to the portal, not the raw database.
+          ALERTER_PORTAL_URL:    ${{ vars.ALERTER_PORTAL_URL    || 'https://commandsentry-portal.netlify.app' }}
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             python scripts/alerter/run_alerter.py --dry-run

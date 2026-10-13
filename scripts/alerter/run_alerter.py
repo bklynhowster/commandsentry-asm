@@ -37,8 +37,10 @@ Optional env vars:
   ALERTER_NAME             default 'daily_digest' — keys the runs table
   ALERTER_FIRST_RUN_HOURS  default 24 — how far back to look on the first
                            ever run (when there's no prior success row)
-  ALERTER_DASHBOARD_URL    per-instance Supabase dashboard link in the
-                           footer. No default (was Command's project ref).
+  ALERTER_PORTAL_URL       per-instance portal link (finding links + footer),
+                           e.g. https://commandsentry-portal.netlify.app.
+  ALERTER_DASHBOARD_URL    legacy Supabase dashboard link; used only when
+                           ALERTER_PORTAL_URL is unset.
 
 Usage:
   python3 run_alerter.py             # send email + record run
@@ -221,25 +223,54 @@ SQL_PRIOR_HIGH_RISK_SET = """
 SELECT alerter_prior_high_risk_set(%s)
 """
 
-SQL_OPEN_BASELINE = """
--- Always include a baseline snapshot of currently-open work so the
--- digest reflects today's posture, even on a "no changes" day.
+SQL_OPEN_POSTURE = """
+-- Note 307 (2026-10-13): "currently open" counts PROBLEMS the way the portal's
+-- dashboard does, not finding rows. Until push-307c this was COUNT(*) over
+-- findings on owned+confirmed_live assets, which printed HIGH 23 on a day the
+-- dashboard said 6: Slider Revolution on 3 sites was 13 rows (apex + www, one
+-- row per advisory), and findings nobody had seen in weeks counted the same
+-- as fresh ones.
 --
--- Tier 2 phantom defense (2026-06-07): join to assets and restrict to
--- confirmed_live + owned rows. Without this, the baseline counts inflate
--- with findings on ct_ghost / namesake / unverified assets — the same
--- exclusion the alerter notification gate applies, now applied here too.
-SELECT
-  COUNT(*) FILTER (WHERE f.severity = 'CRITICAL')      AS critical_open,
-  COUNT(*) FILTER (WHERE f.severity = 'HIGH')          AS high_open,
-  COUNT(*) FILTER (WHERE f.severity = 'MODERATE-HIGH') AS mod_high_open,
-  COUNT(*) FILTER (WHERE f.severity = 'MODERATE')      AS moderate_open,
-  COUNT(*) FILTER (WHERE f.severity = 'LOW')           AS low_open
+-- v_fleet_open_reps (migration 20261013a) is the dashboard's rule in SQL: the
+-- portal's scope (owned, not ghost/dark/retired, unverified only for IP and
+-- range markers), apex + www merged into one site, the portal's dedup key
+-- inside a site, v_open_findings_dedup rows elsewhere. One row per problem.
+--
+-- "stale" = no scan has seen the problem for 30+ days. The dashboard softens
+-- those; the digest says how many there are so the headline number is read
+-- for what it is.
+SELECT severity::text,
+       count(*)                                                                 AS open_now,
+       count(*) FILTER (WHERE last_observed_at < now() - interval '30 days')     AS stale_30d
+FROM public.v_fleet_open_reps
+GROUP BY severity;
+"""
+
+# Note 307 — "fixed this period" replaces the "status change(s)" counter. That
+# counter read v_alerter_changes, which only ever yields confirmed / regressed
+# / open transitions; the scanners write 'detected' and people mark things
+# 'remediated', so it printed 0 on the day the Next.js CRITICAL was fixed.
+# remediated_at is stamped by the portal's "mark remediated" and by the
+# scanner's own closure path, so it is the honest "fixed" clock.
+SQL_FIXED_IN_WINDOW = """
+SELECT f.finding_id, f.asset_id, f.title, f.severity, f.current_status, f.source,
+       f.remediated_at
 FROM findings f
 JOIN assets a ON a.asset_id = f.asset_id
-WHERE f.current_status IN ('detected', 'confirmed', 'open', 'regressed')
+WHERE f.remediated_at >  %s
+  AND f.remediated_at <= %s
+  AND f.current_status IN ('remediated', 'validated_remediated')
   AND a.ownership = 'owned'
-  AND a.discovery_status = 'confirmed_live';
+ORDER BY
+  CASE f.severity
+    WHEN 'CRITICAL'      THEN 1
+    WHEN 'HIGH'          THEN 2
+    WHEN 'MODERATE-HIGH' THEN 3
+    WHEN 'MODERATE'      THEN 4
+    WHEN 'LOW'           THEN 5
+    WHEN 'INFO'          THEN 6
+  END,
+  f.asset_id, f.finding_id;
 """
 
 # ---------------------------------------------------------------------------
@@ -640,6 +671,39 @@ def _sev_pill(sev: str) -> str:
     )
 
 
+# Note 307 — INFO is inventory (headers seen, technologies seen, paths that
+# exist), not a problem. The headline counts problems; inventory gets its own
+# number so it is neither hidden nor mistaken for risk. Element 3 of every
+# finding row is severity (SQL_NEW_FINDINGS_IN_WINDOW, SQL_NEW_CONFIRMED,
+# SQL_REGRESSED, SQL_FIXED_IN_WINDOW all select it fourth).
+def split_problems_inventory(rows: list[tuple]) -> tuple[list[tuple], list[tuple]]:
+    problems = [r for r in rows if (r[3] if len(r) > 3 else None) != "INFO"]
+    inventory = [r for r in rows if (r[3] if len(r) > 3 else None) == "INFO"]
+    return problems, inventory
+
+
+def posture_from_rows(rows: list[tuple]) -> dict:
+    """SQL_OPEN_POSTURE rows (severity, open_now, stale_30d) -> the digest's baseline dict.
+
+    Every key is present even when a severity has no row, so the renderers never KeyError
+    on a quiet fleet. problems_* exclude INFO; info_* is inventory on its own."""
+    by = {str(sev): (int(n or 0), int(st or 0)) for sev, n, st in rows}
+    get = lambda k: by.get(k, (0, 0))  # noqa: E731
+    out = {
+        "critical_open": get("CRITICAL")[0],
+        "high_open":     get("HIGH")[0],
+        "mod_high_open": get("MODERATE-HIGH")[0],
+        "moderate_open": get("MODERATE")[0],
+        "low_open":      get("LOW")[0],
+        "info_open":     get("INFO")[0],
+    }
+    out["problems_open"] = (out["critical_open"] + out["high_open"] + out["mod_high_open"]
+                            + out["moderate_open"] + out["low_open"])
+    out["problems_stale_30d"] = sum(get(k)[1] for k in ("CRITICAL", "HIGH", "MODERATE-HIGH", "MODERATE", "LOW"))
+    out["info_stale_30d"] = get("INFO")[1]
+    return out
+
+
 def _count_overlap(new_findings, confirmed, regressed) -> int:
     """How many findings appear in BOTH the creation count and the transition count.
 
@@ -697,6 +761,12 @@ def scan_tier_label(source: str | None) -> str:
     key = str(source).strip().lower()
     for prefix, label in _TIER_LABEL.items():
         if key == prefix or key.startswith(prefix + "_") or key.startswith(prefix + "-"):
+            return label
+        # The scanners' own finding_source_t values: commandsentry_light /
+        # commandsentry_medium / commandsentry_heavy. Until note 307 these
+        # rendered raw ("commandsentry_medium") because only the prefix form
+        # was known.
+        if key.endswith("_" + prefix):
             return label
     return key
 
@@ -860,8 +930,10 @@ def render_html(
     product_name: str,
     device_classes: dict | None = None,
     came_back: list[tuple] | None = None,
+    fixed: list[tuple] | None = None,
 ) -> str:
     came_back = came_back or []
+    fixed = fixed or []
     today = window_end.strftime("%Y-%m-%d")
     win = (
         f"{window_start.strftime('%Y-%m-%d %H:%M UTC')} → "
@@ -877,7 +949,7 @@ def render_html(
             f"({count})</span></h2>{body}"
         )
 
-    def find_table(rows: list[tuple]) -> str:
+    def find_table(rows: list[tuple], noun: str = "new") -> str:
         """P1-P4 + D-031: one block per asset, not one row per (asset, finding).
 
         ⛔ P1 — bcbsma appeared SIXTEEN TIMES in digest #130 because the ASSET column
@@ -894,15 +966,15 @@ def render_html(
         out = []
         for asset, worst, rs in blocks:
             full, info = split_info(rs)
-            cls = asset_class_line(asset, device_classes)
+            # Note 307: the D-031 device-class line ("unknown/unknown (dry-run
+            # classification)" on 428 of 467 assets) is gone from the digest.
+            # asset_class_line() stays for the day the classifier goes live.
             head = (
                 f'<div style="margin:18px 0 6px;padding-top:10px;'
                 f'border-top:1px solid #eee;">'
                 f'<span style="font-family:monospace;font-size:13px;color:#1a1a1a;">'
                 f'{escape(asset)}</span> {_sev_pill(worst)} '
-                f'<span style="color:#888;font-size:12px;">{len(rs)} new</span>'
-                + (f'<div style="font-size:11px;color:#888;margin-top:2px;">{escape(cls)}</div>'
-                   if cls else "")
+                f'<span style="color:#888;font-size:12px;">{len(rs)} {escape(noun)}</span>'
                 + "</div>"
             )
             body = "".join(
@@ -920,8 +992,8 @@ def render_html(
                 body += (
                     f"<tr><td colspan=\"3\" style=\"padding:5px 0;font-size:12px;color:#888;\">"
                     f'+ {len(info)} informational (inventory, headers, tech) — '
-                    f'<a href="{escape(dashboard_url.rstrip("/"))}/findings?asset={escape(asset)}'
-                    f'&severity=INFO" style="color:#888;">view</a></td></tr>'
+                    f'<a href="{escape(dashboard_url.rstrip("/"))}/assets/{escape(asset)}" '
+                    f'style="color:#888;">view</a></td></tr>'
                 )
             out.append(head + f'<table style="border-collapse:collapse;width:100%;">'
                               f"<tbody>{body}</tbody></table>")
@@ -1036,10 +1108,16 @@ def render_html(
         find_table(new_findings),
     )
     confirmed_section = section(
-        "Newly confirmed findings", len(confirmed), find_table(confirmed)
+        "Newly confirmed findings", len(confirmed), find_table(confirmed, "confirmed")
+    )
+    # "Marked": remediated_at is stamped by a person in the portal today (the
+    # stale-finding autocloser is blocked live by 20260902a). If that ever runs
+    # live, its closures will land here too, and the heading still reads true.
+    fixed_section = section(
+        "Marked fixed in this window", len(fixed), find_table(fixed, "fixed")
     )
     regressed_section = section(
-        "Regressed findings (was fixed, came back)", len(regressed), find_table(regressed)
+        "Regressed findings (was fixed, came back)", len(regressed), find_table(regressed, "regressed")
     )
     high_risk_section = section(
         "Assets elevated to HIGH / CRITICAL", len(high_risk), asset_table(high_risk)
@@ -1059,8 +1137,9 @@ def render_html(
     pipeline_degraded = bool(stale_assets or canary_violations)
     has_changes = bool(
         new_findings or confirmed or regressed or high_risk or new_assets or dark_assets
-        or came_back
+        or came_back or fixed
     )
+    new_problems, new_inventory = split_problems_inventory(new_findings)
 
     # Headline reflects pipeline health FIRST, then activity. Don't say
     # "healthy" if the watchdog has anything to report — that was exactly
@@ -1072,21 +1151,23 @@ def render_html(
             f"<strong>{len(stale_assets)}</strong> stale live asset(s). See below."
         )
     elif has_changes:
-        # ⛔ "new finding(s)" and "status change(s)" are SEPARATE quantities and
-        # must stay separate. Until 2026-09-14 this line said "finding change(s)"
-        # over len(confirmed)+len(regressed) only — a transition count wearing a
-        # creation count's name, which printed 0 on a 65-finding day. Do not
-        # re-merge them.
+        # Note 307 — creation, closure and regression are SEPARATE quantities.
+        # Creation is split into problems (CRITICAL..LOW) and inventory (INFO).
+        # "fixed" is remediated_at inside the window. "status change(s)" is gone:
+        # it read a transition view the scanners never write to, so it was 0 on
+        # the day a CRITICAL was fixed. confirmed/regressed keep their sections;
+        # regressed is named in the headline because it is a real change.
         _ov = _count_overlap(new_findings, confirmed, regressed)
         _ov_note = (
             f' <span style="color:#888;font-weight:400;">'
-            f"({_ov} finding(s) are in both counts &mdash; "
-            f"{len(new_findings) + len(confirmed) + len(regressed) - _ov} distinct)"
+            f"({_ov} finding(s) are both new and confirmed/regressed)"
             f"</span>"
         ) if _ov else ""
         headline = (
-            f"<strong>{len(new_findings)}</strong> new finding(s), "
-            f"<strong>{len(confirmed) + len(regressed)}</strong> status change(s)"
+            f"<strong>{len(new_problems)}</strong> new problem(s), "
+            f"<strong>{len(new_inventory)}</strong> new inventory item(s), "
+            f"<strong>{len(fixed)}</strong> fixed, "
+            f"<strong>{len(regressed)}</strong> regressed"
             f"{_ov_note}, "
             f"<strong>{len(high_risk)}</strong> asset risk shift(s), "
             f"<strong>{len(new_assets)}</strong> new asset(s), "
@@ -1163,12 +1244,29 @@ def render_html(
             '</div>'
         )
 
+    # Note 307 — the same numbers as the dashboard's chips (v_fleet_open_reps):
+    # problems by severity, inventory (INFO) on its own line, and how many of
+    # the problems no scan has seen in 30+ days. MOD-HIGH shows only when it is
+    # non-zero; it is a legacy severity nothing emits today.
+    _b = baseline
+    _mh = (f'<span style="margin-right:12px;">MOD-HIGH: <strong>{_b["mod_high_open"]}</strong></span>'
+           if _b.get("mod_high_open") else "")
+    _problems = _b.get("problems_open",
+                       _b["critical_open"] + _b["high_open"] + _b["mod_high_open"]
+                       + _b["moderate_open"] + _b["low_open"])
     baseline_pill = (
-        f'<span style="margin-right:12px;">CRITICAL: <strong>{baseline["critical_open"]}</strong></span>'
-        f'<span style="margin-right:12px;">HIGH: <strong>{baseline["high_open"]}</strong></span>'
-        f'<span style="margin-right:12px;">MOD-HIGH: <strong>{baseline["mod_high_open"]}</strong></span>'
-        f'<span style="margin-right:12px;">MODERATE: <strong>{baseline["moderate_open"]}</strong></span>'
-        f'<span>LOW: <strong>{baseline["low_open"]}</strong></span>'
+        f'<span style="margin-right:12px;">CRITICAL: <strong>{_b["critical_open"]}</strong></span>'
+        f'<span style="margin-right:12px;">HIGH: <strong>{_b["high_open"]}</strong></span>'
+        f'{_mh}'
+        f'<span style="margin-right:12px;">MODERATE: <strong>{_b["moderate_open"]}</strong></span>'
+        f'<span style="margin-right:12px;">LOW: <strong>{_b["low_open"]}</strong></span>'
+        f'<span style="color:#888;">= <strong>{_problems}</strong> open problem(s), counted as the portal counts them</span>'
+        f'<div style="margin-top:6px;color:#888;">'
+        f'+ <strong>{_b.get("info_open", 0)}</strong> informational (inventory: headers, technologies, paths)'
+        + (f' &middot; <strong>{_b["problems_stale_30d"]}</strong> of the open problems '
+           f'have not been seen by any scan in 30+ days'
+           if _b.get("problems_stale_30d") else "")
+        + '</div>'
     )
 
     return f"""<!DOCTYPE html>
@@ -1190,6 +1288,7 @@ def render_html(
   </div>
 
   {new_findings_section}
+  {fixed_section}
   {confirmed_section}
   {regressed_section}
   {high_risk_section}
@@ -1198,7 +1297,7 @@ def render_html(
   {came_back_section}
 
   <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e2e2e2;font-size:11px;color:#888;">
-    <a href="{escape(dashboard_url)}" style="color:#888;">Open Supabase dashboard</a> ·
+    <a href="{escape(dashboard_url)}" style="color:#888;">Open the {escape(product_name)} portal</a> ·
     Generated {window_end.strftime("%Y-%m-%d %H:%M UTC")} ·
     See <code>scripts/alerter/run_alerter.py</code> for source
   </div>
@@ -1224,8 +1323,10 @@ def render_text(
     product_name: str,
     device_classes: dict | None = None,
     came_back: list[tuple] | None = None,
+    fixed: list[tuple] | None = None,
 ) -> str:
     came_back = came_back or []
+    fixed = fixed or []
     lines: list[str] = []
     lines.append(f"{product_name} — Daily posture digest — {window_end:%Y-%m-%d}")
     lines.append(f"Window: {window_start:%Y-%m-%d %H:%M UTC} -> {window_end:%Y-%m-%d %H:%M UTC}")
@@ -1267,29 +1368,37 @@ def render_text(
         )
         lines.append("")
 
+    _b = baseline
+    _problems = _b.get("problems_open",
+                       _b["critical_open"] + _b["high_open"] + _b["mod_high_open"]
+                       + _b["moderate_open"] + _b["low_open"])
     lines.append(
-        f"Currently open: CRITICAL={baseline['critical_open']}  HIGH={baseline['high_open']}  "
-        f"MOD-HIGH={baseline['mod_high_open']}  MODERATE={baseline['moderate_open']}  "
-        f"LOW={baseline['low_open']}"
+        f"Currently open (counted as the portal counts them): CRITICAL={_b['critical_open']}  "
+        f"HIGH={_b['high_open']}  "
+        + (f"MOD-HIGH={_b['mod_high_open']}  " if _b.get("mod_high_open") else "")
+        + f"MODERATE={_b['moderate_open']}  LOW={_b['low_open']}  = {_problems} open problem(s)"
     )
+    lines.append(f"  + {_b.get('info_open', 0)} informational (inventory: headers, technologies, paths)")
+    if _b.get("problems_stale_30d"):
+        lines.append(f"  {_b['problems_stale_30d']} of the open problems have not been seen by any scan in 30+ days")
     lines.append("")
 
+    new_problems, new_inventory = split_problems_inventory(new_findings)
     if not (new_findings or confirmed or regressed or high_risk or new_assets or dark_assets
-            or came_back):
+            or came_back or fixed):
         if not pipeline_degraded:
             lines.append("No changes since last run — pipeline healthy.")
         return "\n".join(lines)
 
+    lines.append(
+        f"This window: {len(new_problems)} new problem(s), {len(new_inventory)} new inventory item(s), "
+        f"{len(fixed)} fixed, {len(regressed)} regressed, {len(high_risk)} asset risk shift(s), "
+        f"{len(new_assets)} new asset(s), {len(dark_assets)} dark, {len(came_back)} back online."
+    )
     _ov = _count_overlap(new_findings, confirmed, regressed)
     if _ov:
-        lines.append(
-            f"NOTE: {_ov} finding(s) are counted in BOTH sections below "
-            f"(created and transitioned in the same window). "
-            f"Distinct findings touched: "
-            f"{len(new_findings) + len(confirmed) + len(regressed) - _ov}. "
-            f"The two numbers are not addable."
-        )
-        lines.append("")
+        lines.append(f"NOTE: {_ov} finding(s) are both new and confirmed/regressed in this window.")
+    lines.append("")
 
     if new_findings:
         # P1-P4 in plaintext too — same grouping, same merge, same INFO collapse.
@@ -1299,8 +1408,7 @@ def render_text(
         lines.append(f"NEW FINDINGS — first detected in this window ({len(new_findings)}):")
         for asset, worst, rs in group_by_asset(merge_service_inventory(new_findings)):
             full, info = split_info(rs)
-            cls = asset_class_line(asset, device_classes)
-            lines.append(f"  {asset}  [{worst}]  {len(rs)} new" + (f"   {cls}" if cls else ""))
+            lines.append(f"  {asset}  [{worst}]  {len(rs)} new")
             for r in full:
                 tier = scan_tier_label(r[5] if len(r) > 5 else None)
                 lines.append(f"    [{r[3]:<13}] {r[2][:70]}  ({r[0]}, {tier})")
@@ -1308,6 +1416,11 @@ def render_text(
                 lines.append(f"    + {len(info)} informational (inventory, headers, tech)")
         lines.append("")
 
+    if fixed:
+        lines.append(f"MARKED FIXED IN THIS WINDOW ({len(fixed)}):")
+        for r in fixed:
+            lines.append(f"  [{r[3]:<13}] {r[1]:<32} {(r[2] or '')[:60]}  ({r[0]})")
+        lines.append("")
     if confirmed:
         lines.append(f"NEWLY CONFIRMED ({len(confirmed)}):")
         for r in confirmed:
@@ -1421,6 +1534,10 @@ def main() -> int:
     name         = _env("ALERTER_NAME", default="daily_digest") or "daily_digest"
     first_hours  = int(_env("ALERTER_FIRST_RUN_HOURS", default="24") or "24")
     dashboard_url= _env("ALERTER_DASHBOARD_URL", default="")
+    # Note 307 — links go to the PORTAL (finding pages, the footer), not to the
+    # raw database. ALERTER_PORTAL_URL is set per repo in alerter.yml; the old
+    # Supabase link is the fallback only so an unset var cannot break a send.
+    portal_url   = (_env("ALERTER_PORTAL_URL", default="") or "").rstrip("/") or dashboard_url
 
     if not args.dry_run and not (from_addr and from_name and to_addrs):
         _missing = [n for n, v in (("ALERTER_FROM", from_addr),
@@ -1467,15 +1584,11 @@ def main() -> int:
             # The snapshot we persist for next run's dedup = full current set
             current_high_risk_ids = sorted({r[0] for r in live_high_risk})
 
-            cur.execute(SQL_OPEN_BASELINE)
-            b = cur.fetchone()
-            baseline = {
-                "critical_open": b[0],
-                "high_open":     b[1],
-                "mod_high_open": b[2],
-                "moderate_open": b[3],
-                "low_open":      b[4],
-            }
+            # Note 307 — counted as the portal counts them (v_fleet_open_reps).
+            cur.execute(SQL_OPEN_POSTURE)
+            baseline = posture_from_rows(cur.fetchall())
+            cur.execute(SQL_FIXED_IN_WINDOW, (window_start, window_end))
+            fixed = cur.fetchall()
 
             # Asset-surface events in window (added 2026-06-07 — closes the
             # "0 chng while real-time emails fire" gap). Same Tier 2 gate as
@@ -1551,12 +1664,20 @@ def main() -> int:
             subject_parts.append(f"{n} canary")
         if (n := len(stale_assets)) > 0:
             subject_parts.append(f"{n} stale")
-        # Subject carries BOTH quantities. "chng" alone read as 0 on nights
-        # when 65 findings were created — see SQL_NEW_FINDINGS_IN_WINDOW.
-        if (n := len(new_findings)) > 0:
-            subject_parts.append(f"{n} new find")
-        if (n := len(confirmed) + len(regressed)) > 0:
-            subject_parts.append(f"{n} chng")
+        # Note 307 — the subject names problems, inventory, fixes and
+        # regressions separately. "N new find" counted inventory as findings and
+        # "chng" could never be non-zero.
+        new_problems, new_inventory = split_problems_inventory(new_findings)
+        if (n := len(new_problems)) > 0:
+            subject_parts.append(f"{n} new problem{'s' if n != 1 else ''}")
+        if (n := len(new_inventory)) > 0:
+            subject_parts.append(f"{n} new info")
+        if (n := len(fixed)) > 0:
+            subject_parts.append(f"{n} fixed")
+        if (n := len(regressed)) > 0:
+            subject_parts.append(f"{n} regressed")
+        if (n := len(confirmed)) > 0:
+            subject_parts.append(f"{n} confirmed")
         if (n := len(high_risk)) > 0:
             subject_parts.append(f"{n} asset")
         if (n := len(new_assets)) > 0:
@@ -1579,10 +1700,11 @@ def main() -> int:
             stale_assets=stale_assets, canary_violations=canary_violations,
             discovery_stale_hours=discovery_stale_hours,
             deepscan_stale_hours=deepscan_stale_hours,
-            baseline=baseline, dashboard_url=dashboard_url,
+            baseline=baseline, dashboard_url=portal_url,
             product_name=from_name,
             device_classes=device_classes,
             came_back=came_back,
+            fixed=fixed,
         )
         text = render_text(
             window_start=window_start, window_end=window_end,
@@ -1596,6 +1718,7 @@ def main() -> int:
             product_name=from_name,
             device_classes=device_classes,
             came_back=came_back,
+            fixed=fixed,
         )
 
         if args.dry_run:
@@ -1639,7 +1762,8 @@ def main() -> int:
         if status == "error":
             print(f"alerter failed: {err}", file=sys.stderr)
             return 1
-        print(f"alerter ok: confirmed={len(confirmed)} regressed={len(regressed)} high_risk={len(high_risk)} sent={sent}")
+        print(f"alerter ok: new_problems={len(new_problems)} new_inventory={len(new_inventory)} fixed={len(fixed)} "
+              f"confirmed={len(confirmed)} regressed={len(regressed)} high_risk={len(high_risk)} sent={sent}")
         return 0
 
 
