@@ -1,21 +1,32 @@
 name: Device-class classify
 
 # One-click device-class classifier runner (4.7 D2/D3/D4 + E1-E6).
-#   dry-run (default): writes device_class_dryrun audit rows ONLY — the 14-day
-#                      soak instrument. Change nothing about assets or scanning.
-#   write:            ALSO stamps assets.device_class + confidence + evidence +
-#                      vendor_product — CLASSIFY-ONLY, changes NO routing (D4 Phase A).
+#   dry-run:  writes device_class_dryrun audit rows ONLY — the soak instrument.
+#             Changes nothing about assets or scanning.
+#   write:    ALSO stamps assets.device_class + confidence + evidence + vendor_product.
 #
-# Ungated on purpose (unlike Migrate): classify-only, no DDL, no routing/scan-behavior
-# change, reversible metadata — so soak re-runs are frictionless. Uses THIS instance's
-# SUPABASE_DSN (same secret as Migrate); the workflow in each repo hits its own DB.
+# ⚠ "classify-only, no routing change" (D4 Phase A) is true of the RUNNER, not of the
+# system: scripts/asm/cloud_ip_check.py reads assets.device_class to pick the port
+# scope (cloud_endpoint/cdn/waf -> curated ports; origin_host -> full sweep; unknown ->
+# the local CIDR table, else full sweep). A stamp that moves an asset between those
+# buckets changes its next scan. The runner records that per row as
+# device_class_dryrun.would_reroute; the audit trail is the place to look.
+#
+# Ungated on purpose (unlike Migrate): no DDL, reversible metadata. Uses THIS
+# instance's SUPABASE_DSN (same secret as Migrate); the workflow in each repo hits
+# its own DB.
 
 on:
-  # 4.7 (Obsidian 154, 2026-07-22): scheduled DRY-RUN soak of the cron path. Every
-  # 6h, DRY-RUN ONLY — a schedule trigger sends no `mode` input, so the write gate
-  # below stays false (154-Q1: do NOT flip write on the schedule until soak-end
-  # ~07-27; manual write dispatches continue in the meantime). Offset per instance
-  # to avoid the two DBs contending simultaneously (154-Q2): Command @:15, Prodex @:45.
+  # 4.7 (Obsidian 154, 2026-07-22): scheduled every 6h, offset per instance so the two
+  # DBs do not contend (154-Q2): Command @:15, Prodex @:45.
+  #
+  # WRITE MODE ON THE SCHEDULE since 2026-10-13 (Obsidian 309; the soak 154 opened on
+  # 07-22 ran 11 weeks in dry-run: the proposals were identical on every pass from
+  # 09-18/09-22 on, the known-good FortiWeb hosts kept their class, and the single-
+  # signal "suspected" hosts were reviewed one by one — 154-Q1's exit bar). A schedule
+  # trigger sends no `mode` input; the gate below treats "no input" as write. A manual
+  # dispatch still DEFAULTS to dry-run (a human click should not write by accident)
+  # and writes only when mode=write is chosen.
   schedule:
     - cron: '15 */6 * * *'
   workflow_dispatch:
@@ -46,8 +57,16 @@ jobs:
       - name: Run device-class classifier
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          # Inputs reach the shell as ENV, never interpolated into the script body.
+          # MODE: 'write' on the schedule (no input), the chosen value on a dispatch.
+          MODE: ${{ github.event.inputs.mode || 'write' }}
+          SOAK_GENERATION: ${{ github.event.inputs.soak_generation || '1' }}
         run: |
-          ARGS="--soak-generation ${{ github.event.inputs.soak_generation || '1' }}"
-          if [ "${{ github.event.inputs.mode }}" = "write" ]; then ARGS="$ARGS --write"; fi
-          echo "::notice::device_class_runner.py $ARGS"
+          ARGS="--soak-generation $SOAK_GENERATION"
+          case "$MODE" in
+            write)   ARGS="$ARGS --write" ;;
+            dry-run) ;;
+            *) echo "::error::unknown mode '$MODE' (want write or dry-run)"; exit 1 ;;
+          esac
+          echo "::notice::device_class_runner.py $ARGS  (event: ${{ github.event_name }})"
           python scripts/db/device_class_runner.py $ARGS
