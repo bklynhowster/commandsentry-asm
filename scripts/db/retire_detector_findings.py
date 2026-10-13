@@ -55,6 +55,18 @@ Usage:
     both and a hard-coded example is how you end up pinning the wrong one).
 
 Exit: 0 ok | 2 THRESHOLD ABORT / wrong instance | 1 usage or DB error.
+
+## 2026-10-13 — a retirement this tool could not express (note 308, item 1)
+
+The testssl parser dropped a set of check ids on 2026-07-25 (testssl.py METADATA_IDS). Their
+open rows needed retiring, but this tool's class is (source, severity): testssl/LOW would also
+match LIVE checks (LUCKY13, OCSP_stapling, ...) and criterion (2) would rightly refuse. It also
+has no runner — every database write in this project goes through GitHub. So that batch shipped
+as migration 20261013b_retire_testssl_metadata_findings.sql with the same guardrails in SQL
+(criterion (2) anchored on the parser-change date, threshold 200, audit row per finding, same
+action and rule strings). scripts/db/test_retired_parser_ids_have_migrations.py now fails when
+an id joins METADATA_IDS without such a migration. If a check-id-scoped retirement comes up
+again, add --check-id here rather than writing a third mechanism.
 """
 from __future__ import annotations
 
