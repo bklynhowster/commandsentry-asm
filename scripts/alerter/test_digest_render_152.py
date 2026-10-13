@@ -179,9 +179,10 @@ def test_the_html_digest_groups_merges_collapses_and_links(monkeypatch):
     # P3 + P4
     assert "Service inventory: 53/tcp" in html
     assert "+ 1 informational" in html
-    # D-031
-    assert "FortiWeb" in html and "dry-run classification" in html
+    # D-031 tier label stays; the device-class line is gone (note 307: it read
+    # "unknown/unknown (dry-run classification)" on 428 of 467 assets).
     assert "medium scan" in html
+    assert "dry-run classification" not in html and "FortiWeb" not in html
 
 
 def test_the_plaintext_digest_KEEPS_the_finding_id():
@@ -190,7 +191,7 @@ def test_the_plaintext_digest_KEEPS_the_finding_id():
     assert "f-csp" in text
     assert "Service inventory: 53/tcp" in text
     assert "+ 1 informational" in text
-    assert "Google Cloud Armor" in text
+    assert "Google Cloud Armor" not in text and "dry-run classification" not in text
 
 
 def test_new_assets_heading_says_discovered_in_this_window():

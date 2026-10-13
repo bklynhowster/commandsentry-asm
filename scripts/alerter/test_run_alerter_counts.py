@@ -128,14 +128,30 @@ def test_a_window_with_only_new_findings_is_not_reported_as_no_changes():
     assert "Missing DMARC record" in text
 
 
-def test_headline_names_new_findings_and_status_changes_separately():
-    """The two quantities must never be merged again. 'finding change(s)' over
+def test_headline_names_new_problems_inventory_fixed_and_regressed_separately():
+    """The quantities must never be merged again. 'finding change(s)' over
     len(confirmed)+len(regressed) is a transition count wearing a creation
-    count's name — that is exactly what printed 0 on a 65-finding day."""
-    html, _ = _render(new_findings=[FINDING, FINDING], confirmed=[FINDING])
-    assert "<strong>2</strong> new finding(s)" in html
-    assert "<strong>1</strong> status change(s)" in html
+    count's name — that is exactly what printed 0 on a 65-finding day.
+
+    Note 307 (2026-10-13): "status change(s)" itself is gone. It read
+    v_alerter_changes, which the scanners never write to, so it printed 0 on
+    the day the Next.js CRITICAL was fixed. Creation is now split into problems
+    (CRITICAL..LOW) and inventory (INFO); "fixed" is remediated_at in the
+    window; "regressed" is named on its own.
+    """
+    info = ("F-INFO", "a.example", "Detected technologies: nginx", "INFO", "detected", "light", W_END)
+    fixed = ("F-FIX", "a.example", "Next.js middleware bypass", "CRITICAL", "remediated", "nuclei", W_END)
+    html, text = _render(new_findings=[FINDING, FINDING, info], confirmed=[FINDING], fixed=[fixed],
+                         regressed=[FINDING])
+    assert "<strong>2</strong> new problem(s)" in html
+    assert "<strong>1</strong> new inventory item(s)" in html
+    assert "<strong>1</strong> fixed" in html
+    assert "<strong>1</strong> regressed" in html
+    assert "status change(s)" not in html, "the dead transition counter must stay dead"
     assert "finding change(s)" not in html, "the merged, misnamed count must stay dead"
+    assert "Marked fixed in this window" in html and "Next.js middleware bypass" in html
+    assert "2 new problem(s), 1 new inventory item(s), 1 fixed, 1 regressed" in text
+    assert "MARKED FIXED IN THIS WINDOW (1)" in text
 
 
 def test_adding_the_new_section_did_not_displace_the_existing_ones():
@@ -177,12 +193,8 @@ def test_the_two_counts_overlap_and_the_digest_says_so():
     only_new = ("F-NEW", "b.example", "Missing SPF", "LOW", "detected", "light", W_END)
 
     html, text = _render(new_findings=[shared, only_new], confirmed=[shared])
-    # 2 new + 1 change = 3 naive, 2 distinct
-    assert "1 finding(s) are in both counts" in html
-    assert "2 distinct" in html
-    assert "counted in BOTH sections" in text
-    assert "Distinct findings touched: 2" in text
-    assert "not addable" in text
+    assert "1 finding(s) are both new and confirmed/regressed" in html
+    assert "1 finding(s) are both new and confirmed/regressed" in text
 
 
 def test_no_overlap_note_when_the_sets_are_disjoint():
@@ -190,8 +202,8 @@ def test_no_overlap_note_when_the_sets_are_disjoint():
     a = ("F-A", "a.example", "T", "LOW", "detected", "light", W_END)
     b = ("F-B", "b.example", "T", "LOW", "confirmed", "light", W_END)
     html, text = _render(new_findings=[a], confirmed=[b])
-    assert "in both counts" not in html
-    assert "counted in BOTH sections" not in text
+    assert "both new and confirmed" not in html
+    assert "both new and confirmed" not in text
 
 
 def test_overlap_helper_degrades_to_zero_on_a_column_reorder():
