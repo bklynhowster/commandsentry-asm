@@ -106,14 +106,19 @@ def test_app_context_leak_does_not_count_as_a_waf_block():
     assert res["blocked"] == []
 
 
-# ── gate 1: a differential against a non-2xx baseline is undefined (e.g. dead origin) ─
+# ── gate 1: a differential against a non-2xx baseline is UNDEFINED (311: None, not False) ─
 def test_baseline_not_2xx_is_inconclusive():
+    """A dead origin measured nothing. Before 311 this returned False — the same value as a
+    MEASURED pass-through — and run_heavy's own gate was the only thing between it and a
+    HIGH finding. None is the absence of a measurement; False is one."""
     base = {"status": 504, "size": 1313, "tokens": set(), "headers": set()}
     payloads = [{"cls": c, "status": 504, "size": 1313, "tokens": set(), "headers": set()}
                 for c in INDEPENDENT_CLASSES]
     res = classify_waf_differential(base, payloads)
-    assert res["waf_present"] is False
-    assert "baseline not 2xx" in res["reason"]
+    assert res["waf_present"] is None
+    assert res["undefined"] == "baseline_not_served" and res["redirect_to"] is None
+    assert "baseline not served" in res["reason"]
+    assert res["blocked"] == []
 
 
 # ── two variations of the SAME class don't satisfy the >=2 INDEPENDENT-class bar ──

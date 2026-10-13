@@ -138,7 +138,8 @@ from run_light import derive_hostname
 # Pure differential WAF-presence logic (4.7 Cloud Armor Q1–Q8). No I/O — the
 # collector below does the HTTP (benign baseline + payload GETs) and hands the
 # captured responses to the classifier. Same-dir module, imported like run_medium.
-from waf_differential import classify_waf_differential, INDEPENDENT_CLASSES
+from waf_differential import (classify_waf_differential, INDEPENDENT_CLASSES, baseline_served,
+                              UNDEFINED_REDIRECT)
 
 # @phase contract + registry (spec 190 / 4.7 rulings 191). content_fetch is the
 # FIRST CITIZEN — built, dark, and small enough to prove the contract on before
@@ -313,6 +314,11 @@ class HeavyScanContext:
     # returned waf_present (benign passed, >=2 independent payload classes denied).
     # Read once, in the clean close-out, by close_waf_absent_on_measured_block.
     waf_block_measured: dict | None = None
+    # 311 (2026-10-13): the differential probe FIRED and the benign baseline was a
+    # REDIRECT (3xx) — no page at this address on this path, nothing to compare. Set only
+    # on that exact shape (a dead origin is left None: "could not test" is not "no app
+    # here"). Read once, in the clean close-out, by retract_waf_absent_on_redirect.
+    waf_baseline_redirect: dict | None = None
     # waf_detected / waf_kind / tech_stack — heavy doesn't probe these
     # but the medium-side helpers (build_rotation_log, scan metadata
     # writer) read them. Default to "not detected."
@@ -2205,6 +2211,19 @@ def _redact_set_cookie(raw: str) -> str:
     return "\n".join(out)
 
 
+def _waf_redirect_target(raw_headers: str) -> str:
+    """The Location header's value with its query string removed, or "" when there is
+    none. www.commandcompanies.com 2026-10-13: `location: https://commandcompanies.com/
+    ?q6a3eca=1%27%20OR…` -> 'https://commandcompanies.com/'. The probe param and value
+    are ours; the host and path are the far end's answer."""
+    for line in (raw_headers or "").splitlines():
+        s = line.strip()
+        if s.lower().startswith("location:"):
+            target = s.split(":", 1)[1].strip()
+            return target.split("?", 1)[0].split("#", 1)[0][:512]
+    return ""
+
+
 def _parse_waf_probe(stdout: str, body: str, capture: bool = False) -> dict:
     """One probe response -> the classifier's shape {status, size, tokens, headers}. status
     and size come from curl's OWN -w sentinel (CS_STATUS/CS_SIZE) — ground truth, not a header
@@ -2234,6 +2253,12 @@ def _parse_waf_probe(stdout: str, body: str, capture: bool = False) -> dict:
            "time_total": t_total, "time_connect": t_connect,
            # relay 528 — a positive block signal independent of the status code.
            "block_tell": _waf_block_page_tell(body or "")}
+    # 311 — on a redirect, WHERE it points is the one fact the reader needs ("test that
+    # host instead"). Taken from the Location header curl already dumped; the query string
+    # is dropped because it carries our own probe value. Not sensitive: it is the address
+    # the far end sends every visitor to. Read for every response, meaningful on 3xx.
+    if 300 <= status < 400:
+        out["redirect_to"] = _waf_redirect_target(stdout or "")
     if capture:
         hdrs = "\n".join(ln for ln in (stdout or "").splitlines()
                          if not ln.startswith("CS_STATUS:"))
@@ -2310,13 +2335,17 @@ def _fire_waf_differential_probe(ctx: HeavyScanContext, work_dir: Path,
 
 
 def _no_waf_proven(baseline: dict, verdict: dict) -> bool:
-    """Affirmative 'no enforcing WAF' gate. True ONLY when the benign baseline was clean
-    (2xx/3xx) AND the classifier blocked ZERO classes — the one False-verdict shape that proves
-    ABSENCE. A non-2xx baseline is inconclusive (dead origin) and a single-class block is
-    ambiguous (app input-validator); NEITHER earns the finding (the empirical bar)."""
-    if verdict.get("waf_present"):
+    """Affirmative 'no enforcing WAF' gate. True ONLY when the benign baseline was SERVED
+    (2xx — 311: this read `< 400` and let www.commandcompanies.com's 301 bounce earn a HIGH
+    about a 'live application' that does not exist at that address) AND the verdict is a
+    MEASURED False (never None, the undefined shape) AND the classifier blocked ZERO classes
+    — the one shape that proves ABSENCE. A redirect or dead-origin baseline is inconclusive
+    and a single-class block is ambiguous (app input-validator); NEITHER earns the finding
+    (the empirical bar). baseline_served is the classifier's own gate-1 predicate, so the
+    emitter cannot drift from it again."""
+    if verdict.get("waf_present") is not False:
         return False
-    if not (200 <= int(baseline.get("status") or 0) < 400):
+    if not baseline_served(baseline.get("status")):
         return False
     return len(verdict.get("blocked") or []) == 0
 
@@ -2429,6 +2458,84 @@ def close_waf_absent_on_measured_block(conn, ctx: HeavyScanContext, Json) -> int
     return 1
 
 
+# ── 311 (2026-10-13): A REDIRECT RETRACTS THE FINDING THIS PROBE MINTED ─────────────
+# www.commandcompanies.com, 22:06Z: the probe's first live run on Command measured four
+# identical 301 bounces to commandcompanies.com and the old gate turned that into a HIGH
+# "No enforcing WAF in front of live application". There is no application at that
+# address on that path — the premise of the finding is false, which is what
+# 'false_positive' means in finding_status_t ("the scanner is wrong; the issue isn't
+# really there", migration 20260522b). This is the second and last closure the probe can
+# justify on its own: the same rig, on the same path, found the address does not serve a
+# page. ONLY a redirect baseline retracts; a dead origin (0 / 5xx) touches nothing,
+# because "could not test today" is not "the finding was never valid".
+REDIRECT_RETRACTION_ACTION = "redirect_retraction"
+REDIRECT_RETRACTION_RULE = "note_311_redirect_baseline_retracts_waf_absent"
+
+RETRACT_WAF_ABSENT_ON_REDIRECT_SQL = """
+UPDATE public.findings
+   SET current_status = 'false_positive',
+       updated_at     = now()
+ WHERE finding_id = %(finding_id)s
+   AND asset_id   = %(asset_id)s
+   AND source::text = 'commandsentry_heavy'
+   AND current_status::text IN ('detected', 'confirmed', 'open', 'regressed')
+RETURNING finding_id, severity::text AS severity, first_detected_at, last_observed_at
+"""
+
+REDIRECT_RETRACTION_HISTORY_SQL = """
+INSERT INTO public.finding_history
+  (finding_id, scan_id, observed_at, status, severity_at_scan, notes)
+VALUES (%(finding_id)s, %(scan_run_id)s, now(), 'false_positive'::history_status_t,
+        %(severity)s::severity_t, %(notes)s)
+"""
+
+
+def retract_waf_absent_on_redirect(conn, ctx: HeavyScanContext, Json) -> int:
+    """CLEAN PATH ONLY. If this run's differential probe found the benign baseline was a
+    REDIRECT, retract the open 'No enforcing WAF in front of live application' finding for
+    this asset as false_positive — there is no live application at this address on the
+    probe's path, so the finding's premise does not hold — with the capture as the audit
+    evidence and a finding_history row bound to THIS scan. Returns 0 or 1. Touches
+    nothing else; remediated_at stays NULL (not a remediation, note 126)."""
+    r = ctx.waf_baseline_redirect
+    if not r:
+        return 0
+    fid = stable_finding_id(ctx.asset_id, "commandsentry_heavy", WAF_ABSENT_CHECK_ID, ctx.hostname)
+    target = r.get("redirect_to") or ""
+    with conn.cursor() as cur:
+        cur.execute(RETRACT_WAF_ABSENT_ON_REDIRECT_SQL,
+                    {"finding_id": fid, "asset_id": ctx.asset_id})
+        row = cur.fetchone()
+        if not row:
+            log(f"  redirect baseline: no open '{WAF_ABSENT_CHECK_ID}' finding to retract for {ctx.asset_id}")
+            return 0
+        sev = row["severity"] if isinstance(row, dict) else row[1]
+        cur.execute(MEASURED_REMEDIATION_AUDIT_SQL, {
+            "action": REDIRECT_RETRACTION_ACTION,
+            "before": Json({"finding_id": fid, "current_status": "open_family",
+                            "source": "commandsentry_heavy", "severity": sev}),
+            "after": Json({"finding_id": fid, "current_status": "false_positive"}),
+            "details": Json({"rule": REDIRECT_RETRACTION_RULE, "asset_id": ctx.asset_id,
+                             "scan_run_id": ctx.scan_run_id,
+                             "baseline_status": r.get("baseline_status"),
+                             "redirect_to": target or None,
+                             "measured_at": r.get("measured_at"), "egress_mode": r.get("egress_mode"),
+                             "reason": ("the same differential probe that emitted this finding found "
+                                        f"the benign baseline is a redirect (HTTP {r.get('baseline_status')}"
+                                        f"{' to ' + target if target else ''}): no application is served "
+                                        "at this address on the probe path, so 'no enforcing WAF in "
+                                        "front of live application' had no live application to be about")}),
+        })
+        cur.execute(REDIRECT_RETRACTION_HISTORY_SQL, {
+            "finding_id": fid, "scan_run_id": ctx.scan_run_id, "severity": sev,
+            "notes": (f"retracted by run_heavy scan_run {ctx.scan_run_id}: differential baseline "
+                      f"redirected (HTTP {r.get('baseline_status')}{' to ' + target if target else ''})"),
+        })
+    log(f"  redirect baseline: retracted '{WAF_ABSENT_CHECK_ID}' for {ctx.asset_id} as false_positive "
+        f"(HTTP {r.get('baseline_status')}{' to ' + target if target else ''}; audit + history rows written)")
+    return 1
+
+
 def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     """Differential WAF-presence active probe (4.7 Cloud Armor Q1–Q8). Same rig as
     run_fwbbot_check_probe_phase: per-asset opt-in (assets.active_probe_authorized) + per-asset
@@ -2488,13 +2595,31 @@ def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> N
         details.update({"baseline_status": baseline["status"], "baseline_size": baseline["size"],
                         "blocked": blocked, "classify_reason": reason,
                         "evidence_class": verdict["evidence_class"]})
-        log(f"  waf_differential probe: LIVE egress={egress} — waf_present={waf_present} "
-            f"blocked={blocked} ({reason})")
+        if waf_present is None:
+            # 311 — the probe fired but measured nothing: the baseline was not a served
+            # page. Recorded as UNDEFINED, with the kind and (on a redirect) the target,
+            # so the portal can say "redirects to X — test that host" instead of "not
+            # run". A redirect also retracts the finding this probe minted for the same
+            # address (retract_waf_absent_on_redirect, clean path).
+            details["undefined"] = verdict.get("undefined")
+            if verdict.get("redirect_to"):
+                details["baseline_redirect_to"] = verdict["redirect_to"]
+            if verdict.get("undefined") == UNDEFINED_REDIRECT:
+                ctx.waf_baseline_redirect = {
+                    "baseline_status": baseline["status"],
+                    "redirect_to": verdict.get("redirect_to") or "",
+                    "measured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "egress_mode": egress,
+                }
+            log(f"  waf_differential probe: LIVE egress={egress} — UNDEFINED ({reason})")
+        else:
+            log(f"  waf_differential probe: LIVE egress={egress} — waf_present={waf_present} "
+                f"blocked={blocked} ({reason})")
         _maybe_emit_no_waf_finding(ctx, baseline, verdict)
     v = {"schema": 1, "probe_class": "waf_differential", "authorized": authorized,
          "dry_run": not fire,
          "observed": (None if not fire else True),
-         "corroborated": (None if not fire else bool(waf_present)),
+         "corroborated": (None if (not fire or waf_present is None) else bool(waf_present)),
          "details": details}
     # persist-only stack-id artifact (parity with fwbbot) — gather_observations reads
     # waf_present_differential from here (follow-up wiring). NULL until a live run classifies.
@@ -3843,6 +3968,12 @@ def run(descriptor_path: str, dsn: str) -> int:
         n_closed = close_waf_absent_on_measured_block(conn, ctx, Json)
         if n_closed:
             log(f"measured-block close: {n_closed} 'no enforcing WAF' finding closed as remediated")
+        # 311 — the second and last: a REDIRECT baseline retracts the same finding as
+        # false_positive (no application at this address). Same placement, same reasons;
+        # the two are mutually exclusive by construction (a block needs a served baseline).
+        n_retracted = retract_waf_absent_on_redirect(conn, ctx, Json)
+        if n_retracted:
+            log(f"redirect retraction: {n_retracted} 'no enforcing WAF' finding retracted as false_positive")
 
         # Note 129 round 7 — finding_history per re-emitted finding.
         # Runs AFTER the per-source regress loop so the recorded
