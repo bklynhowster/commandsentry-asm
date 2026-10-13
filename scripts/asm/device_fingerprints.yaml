@@ -246,8 +246,12 @@ fingerprints:
   # which we never assert. Vendor attribution requires a separate self-naming tell
   # (Server header / vendor cookie / vendor challenge endpoint) under R4 citation
   # discipline. Applies identically to Azure Front Door WAF / AWS WAF.
+  # Observation name differs from the signal name on purpose (the capability map is
+  # keyed on observations and must never carry a signal name): the OBSERVATION is the
+  # measurement (waf_differential_block = the probe's verdict was true); the SIGNAL is
+  # what it proves. Fed since Obsidian 310 (2026-10-13) from stack_id_waf_differential.
   - signal: waf_present_differential
-    observation: waf_present_differential
+    observation: waf_differential_block
     match_bool: true
     device_class: waf
     evidence_class: presence_only

@@ -170,7 +170,7 @@ def test_the_promotion_does_not_need_the_tallies_to_tie():
     that ONE edge, not evidence of N devices — so the rule deliberately carries
     no count condition. Pinned so the choice is tested rather than argued."""
     r = d.classify({"http_headers": "x-ac: 3.dca _dfw\nserver: nginx",
-                   "waf_present": True, "waf_present_differential": True}, FPS, TH)
+                   "waf_present": True, "waf_differential_block": True}, FPS, TH)
     assert r["device_class"] == "hosting_edge", (
         f"the promotion wrongly requires an equal tally: {r['device_class']}")
 

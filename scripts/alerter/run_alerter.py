@@ -433,6 +433,63 @@ SELECT b.asset_id, a.name, a.organization, b.back_at, b.dark_at
 """
 
 # ---------------------------------------------------------------------------
+# Security device enforcement flips — added 2026-10-13 (Obsidian 310).
+#
+# uat.prodexlabs.com: on 10-12 the heavy tier's differential probe measured
+# every attack-payload class passing straight through; on 10-13 it measured
+# all of them blocked behind a Google 403 page. The scanner saw the device
+# come on within a day and the email said nothing. The only trace was a chip
+# on the asset page.
+#
+# DEFINITION: for each asset, every MEASUREMENT of the differential probe
+# (stack_id_waf_differential with a non-null verdict; null = the probe did
+# not fire, which is not a measurement), ordered by scan completion. A row is
+# reported when its verdict differs from the previous measurement, or when it
+# is the asset's first measurement and it is a block. A first-ever
+# pass-through is NOT reported here: that is the HIGH "No enforcing WAF"
+# finding's job, and it is already in the new-problems section. Each flip is
+# reported once, in the window holding the measurement.
+#
+# Presence-only, like the probe: it says BLOCKED or PASSED THROUGH and names
+# no product. The classifier and the asset page carry the vendor name.
+#
+# Same gate as dark/back (owned + confirmed_live). Same 30-minute shift as
+# the comeback query: the artifact commits at the scan's close-out.
+# Placeholders, in order: window_start, window_end.
+# (No percent signs in these comments: psycopg would read them as params.)
+# ---------------------------------------------------------------------------
+SQL_ENFORCEMENT_FLIPS_IN_WINDOW = """
+WITH m AS (
+  SELECT r.asset_id,
+         r.completed_at AS measured_at,
+         (a.content_jsonb->>'waf_present_differential')::boolean AS blocked,
+         a.content_jsonb->'blocked' AS classes
+    FROM public.scan_run_artifacts a
+    JOIN public.scan_run r ON r.scan_run_id = a.scan_run_id
+   WHERE a.tool_name = 'stack_id_waf_differential'
+     AND r.status::text = 'complete'
+     AND r.completed_at IS NOT NULL
+     AND a.content_jsonb->>'waf_present_differential' IS NOT NULL
+), ordered AS (
+  SELECT m.*,
+         lag(m.blocked)     OVER (PARTITION BY m.asset_id ORDER BY m.measured_at) AS prev_blocked,
+         lag(m.measured_at) OVER (PARTITION BY m.asset_id ORDER BY m.measured_at) AS prev_at
+    FROM m
+)
+SELECT o.asset_id, a.name, a.organization, o.measured_at, o.blocked,
+       o.prev_blocked, o.prev_at, o.classes
+  FROM ordered o
+  JOIN public.assets a ON a.asset_id = o.asset_id
+ WHERE o.measured_at >  %s - interval '30 minutes'
+   AND o.measured_at <= %s - interval '30 minutes'
+   AND o.prev_blocked IS DISTINCT FROM o.blocked
+   AND (o.blocked OR o.prev_blocked IS NOT NULL)
+   AND a.ownership = 'owned'
+   AND a.discovery_status = 'confirmed_live'
+ ORDER BY o.measured_at DESC, o.asset_id;
+"""
+
+# ---------------------------------------------------------------------------
 # Watchdog v1 — internal pipeline health checks (added 2026-06-07)
 #
 # Two checks because they catch DIFFERENT failure classes:
@@ -911,6 +968,17 @@ def asset_class_line(asset_id: str, classes: dict | None) -> str:
 NEW_ASSETS_HEADING = "Assets discovered in this window"
 
 
+def enforcement_words(blocked: bool, prev_blocked) -> tuple[str, str]:
+    """PURE. The verdict words for one enforcement flip and their colour.
+    blocked=True  -> "BLOCKED" (green): a device in front is denying attack payloads.
+    blocked=False -> "PASSED THROUGH" (red): they reached the application; the HIGH
+                     'No enforcing WAF' finding carries the detail.
+    prev_blocked is None on a first measurement (only a first BLOCK is reported)."""
+    if blocked:
+        return ("BLOCKED" if prev_blocked is None else "NOW BLOCKED"), "#1a7f37"
+    return "NOW PASSING THROUGH", "#b42318"
+
+
 def render_html(
     *,
     window_start: datetime,
@@ -931,9 +999,11 @@ def render_html(
     device_classes: dict | None = None,
     came_back: list[tuple] | None = None,
     fixed: list[tuple] | None = None,
+    enforcement_flips: list[tuple] | None = None,
 ) -> str:
     came_back = came_back or []
     fixed = fixed or []
+    enforcement_flips = enforcement_flips or []
     today = window_end.strftime("%Y-%m-%d")
     win = (
         f"{window_start.strftime('%Y-%m-%d %H:%M UTC')} → "
@@ -1134,10 +1204,52 @@ def render_html(
         "Assets back online", len(came_back), came_back_table(came_back)
     )
 
+    def enforcement_table(rows: list[tuple]) -> str:
+        """Rows from SQL_ENFORCEMENT_FLIPS_IN_WINDOW: (asset_id, name, organization,
+        measured_at, blocked, prev_blocked, prev_at, classes). One line per flip, in
+        the probe's own words: blocked or passed through, when, and what it was last."""
+        if not rows:
+            return ""
+        cells_parts = []
+        for r in rows:
+            aid, display_name, org = r[0], (r[1] or r[0]), (r[2] or "")
+            measured_at, blocked, prev_blocked, prev_at = r[3], r[4], r[5], r[6]
+            verdict, color = enforcement_words(blocked, prev_blocked)
+            prev_txt = (f"previous test {prev_at:%Y-%m-%d %H:%M UTC}: "
+                        f"{'blocked' if prev_blocked else 'passed through'}"
+                        if prev_at is not None else "first test")
+            org_suffix = (f' <span style="color:#888;">({escape(org)})</span>'
+                          if org and org != display_name else "")
+            cells_parts.append(
+                f"<tr>"
+                f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:12px;">{escape(aid)}</td>'
+                f'<td style="padding:6px 12px 6px 0;font-size:13px;">{escape(display_name)}{org_suffix}</td>'
+                f'<td style="padding:6px 12px 6px 0;font-size:12px;font-weight:bold;color:{color};">{escape(verdict)}</td>'
+                f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:11px;color:#888;">{measured_at:%Y-%m-%d %H:%M UTC}</td>'
+                f'<td style="padding:6px 0;font-size:11px;color:#888;">{escape(prev_txt)}</td>'
+                f"</tr>"
+            )
+        return (
+            f'<table style="border-collapse:collapse;width:100%;">'
+            f'<thead><tr style="text-align:left;font-size:11px;color:#888;">'
+            f'<th style="padding:0 12px 6px 0;">Asset</th><th style="padding:0 12px 6px 0;">Name</th>'
+            f'<th style="padding:0 12px 6px 0;">Attack payloads</th><th style="padding:0 12px 6px 0;">Measured</th>'
+            f'<th style="padding:0 0 6px 0;">Before</th>'
+            f"</tr></thead><tbody>{''.join(cells_parts)}</tbody></table>"
+            f'<p style="font-size:11px;color:#888;margin:8px 0 0 0;">Measured by the heavy scan\'s '
+            f'differential test: one harmless request, then three independent attack-style '
+            f'test strings on the same path. &ldquo;Blocked&rdquo; means a security device in '
+            f'front of the host denied them; it names no product.</p>'
+        )
+
+    enforcement_section = section(
+        "Security device enforcement", len(enforcement_flips), enforcement_table(enforcement_flips)
+    )
+
     pipeline_degraded = bool(stale_assets or canary_violations)
     has_changes = bool(
         new_findings or confirmed or regressed or high_risk or new_assets or dark_assets
-        or came_back or fixed
+        or came_back or fixed or enforcement_flips
     )
     new_problems, new_inventory = split_problems_inventory(new_findings)
 
@@ -1173,6 +1285,7 @@ def render_html(
             f"<strong>{len(new_assets)}</strong> new asset(s), "
             f"<strong>{len(dark_assets)}</strong> dark asset(s)"
             + (f", <strong>{len(came_back)}</strong> back online" if came_back else "")
+            + (f", <strong>{len(enforcement_flips)}</strong> security device change(s)" if enforcement_flips else "")
             + " in this window."
         )
     else:
@@ -1295,6 +1408,7 @@ def render_html(
   {new_assets_section}
   {dark_assets_section}
   {came_back_section}
+  {enforcement_section}
 
   <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e2e2e2;font-size:11px;color:#888;">
     <a href="{escape(dashboard_url)}" style="color:#888;">Open the {escape(product_name)} portal</a> ·
@@ -1324,9 +1438,11 @@ def render_text(
     device_classes: dict | None = None,
     came_back: list[tuple] | None = None,
     fixed: list[tuple] | None = None,
+    enforcement_flips: list[tuple] | None = None,
 ) -> str:
     came_back = came_back or []
     fixed = fixed or []
+    enforcement_flips = enforcement_flips or []
     lines: list[str] = []
     lines.append(f"{product_name} — Daily posture digest — {window_end:%Y-%m-%d}")
     lines.append(f"Window: {window_start:%Y-%m-%d %H:%M UTC} -> {window_end:%Y-%m-%d %H:%M UTC}")
@@ -1385,7 +1501,7 @@ def render_text(
 
     new_problems, new_inventory = split_problems_inventory(new_findings)
     if not (new_findings or confirmed or regressed or high_risk or new_assets or dark_assets
-            or came_back or fixed):
+            or came_back or fixed or enforcement_flips):
         if not pipeline_degraded:
             lines.append("No changes since last run — pipeline healthy.")
         return "\n".join(lines)
@@ -1393,7 +1509,8 @@ def render_text(
     lines.append(
         f"This window: {len(new_problems)} new problem(s), {len(new_inventory)} new inventory item(s), "
         f"{len(fixed)} fixed, {len(regressed)} regressed, {len(high_risk)} asset risk shift(s), "
-        f"{len(new_assets)} new asset(s), {len(dark_assets)} dark, {len(came_back)} back online."
+        f"{len(new_assets)} new asset(s), {len(dark_assets)} dark, {len(came_back)} back online"
+        + (f", {len(enforcement_flips)} security device change(s)." if enforcement_flips else ".")
     )
     _ov = _count_overlap(new_findings, confirmed, regressed)
     if _ov:
@@ -1455,6 +1572,14 @@ def render_text(
         for r in came_back:
             lines.append(f"  {r[0]:<40}  reported dark {r[4]:%Y-%m-%d %H:%M UTC}, "
                          f"answered again {r[3]:%Y-%m-%d %H:%M UTC}")
+        lines.append("")
+    if enforcement_flips:
+        lines.append(f"SECURITY DEVICE ENFORCEMENT ({len(enforcement_flips)}):")
+        for r in enforcement_flips:
+            verdict, _ = enforcement_words(r[4], r[5])
+            prev_txt = (f"previous test {r[6]:%Y-%m-%d %H:%M UTC}: {'blocked' if r[5] else 'passed through'}"
+                        if r[6] is not None else "first test")
+            lines.append(f"  {r[0]:<40}  attack payloads {verdict} (measured {r[3]:%Y-%m-%d %H:%M UTC}; {prev_txt})")
         lines.append("")
 
     return "\n".join(lines)
@@ -1608,6 +1733,9 @@ def main() -> int:
             cur.execute(SQL_CAME_BACK_IN_WINDOW,
                         (window_end, window_end, window_start, window_end))
             came_back = cur.fetchall()
+            # Obsidian 310 — a security device starting (or stopping) to block.
+            cur.execute(SQL_ENFORCEMENT_FLIPS_IN_WINDOW, (window_start, window_end))
+            enforcement_flips = cur.fetchall()
 
             # Watchdog v1 — pipeline health checks (added 2026-06-07).
             # Two clocks, two thresholds, single alarm if EITHER is stale:
@@ -1686,6 +1814,8 @@ def main() -> int:
             subject_parts.append(f"{n} dark")
         if (n := len(came_back)) > 0:
             subject_parts.append(f"{n} back")
+        if (n := len(enforcement_flips)) > 0:
+            subject_parts.append(f"{n} security device")
         subject_tail = ", ".join(subject_parts) if subject_parts else "0 changes"
         watchdog_prefix = "(!) " if (canary_violations or stale_assets) else ""
         subject = (
@@ -1705,6 +1835,7 @@ def main() -> int:
             device_classes=device_classes,
             came_back=came_back,
             fixed=fixed,
+            enforcement_flips=enforcement_flips,
         )
         text = render_text(
             window_start=window_start, window_end=window_end,
@@ -1719,6 +1850,7 @@ def main() -> int:
             device_classes=device_classes,
             came_back=came_back,
             fixed=fixed,
+            enforcement_flips=enforcement_flips,
         )
 
         if args.dry_run:
