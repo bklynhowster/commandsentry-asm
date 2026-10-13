@@ -97,19 +97,72 @@ def _payload_blocked(baseline: dict, resp: dict) -> bool:
     return True
 
 
+# ── 311 (2026-10-13): A REDIRECT IS NOT A TEST ───────────────────────────────────────
+# www.commandcompanies.com, the first live differential on Command after the probe was
+# armed: the benign baseline came back HTTP 301 (nginx, "301 Moved Permanently", 162 B,
+# Location: https://commandcompanies.com/?q…) and so did all three attack payloads —
+# byte-identical bounces. Gate 1 read `< 400`, so the 301 counted as a clean baseline, the
+# tally said "0 of 3 blocked", and the collector published a HIGH "No enforcing WAF in
+# front of live application" about an address that serves no application at all. The
+# portal's copy of this rule had already been tightened to 2xx on 2026-09-28
+# (served-status.mjs, ftp.sciimage.com 302/302) and rendered "ATTACK TEST NOT RUN" two
+# inches above the finding that said the test ran. Same capture, two rules, one page lying.
+#
+# The probe is a COMPARISON. A baseline that did not serve a page establishes nothing to
+# compare against, so the verdict is UNDEFINED — `waf_present: None` — never False. False
+# is a measurement ("we sent attacks and nothing refused them"); None is the absence of
+# one. Downstream, None is already the dry-run shape: the classifier's NOT_NULL capability
+# ignores it, the digest's lag() window skips it, the portal's chip reads it as not
+# measured. A 3xx baseline is told apart from a dead one (0 / 5xx) because they mean
+# different things to the finding this probe mints: a REDIRECT says "no application at
+# this address, on this path" (the finding's premise was false — see run_heavy's
+# retract_waf_absent_on_redirect); a dead origin says only "could not test today".
+UNDEFINED_REDIRECT = "baseline_redirect"
+UNDEFINED_NOT_SERVED = "baseline_not_served"
+
+
+def baseline_served(status) -> bool:
+    """The ONE definition of 'the benign request was answered with a page': 2xx only.
+    Mirrors served() in the portal's served-status.mjs — the two must agree or the page
+    contradicts itself (that was #481d there, and 311 here)."""
+    try:
+        s = int(status or 0)
+    except (TypeError, ValueError):
+        return False
+    return 200 <= s < 300
+
+
 def classify_waf_differential(baseline: dict, payloads: list) -> dict:
-    """Return {waf_present, evidence_class, blocked, reason}.
+    """Return {waf_present, evidence_class, blocked, reason[, undefined, redirect_to]}.
 
     - waf_present True  => a payload-inspecting WAF is BLOCKING in front (presence_only,
                            renders "Behind a WAF (suspected)"; NEVER a vendor — Q3).
-    - waf_present False => not asserted (either nothing blocks, or <2 independent classes
-                           blocked, or the baseline itself wasn't clean).
+    - waf_present False => MEASURED and not asserted: the baseline was served and either
+                           nothing blocked or <2 independent classes did.
+    - waf_present None  => UNDEFINED (311): the baseline was not a served page, so there
+                           is nothing to compare. `undefined` says which kind —
+                           'baseline_redirect' (3xx; `redirect_to` carries the Location
+                           target without its query string) or 'baseline_not_served'
+                           (0 / 4xx / 5xx). Not a measurement; never earns a finding.
     `payloads` = list of {cls: 'sqli'|'xss'|'lfi', status, size, tokens, headers}.
     """
-    # gate 1 — a differential is only meaningful if the BENIGN baseline passed.
-    if not (200 <= baseline.get("status", 0) < 400):
-        return {"waf_present": False, "evidence_class": "presence_only",
-                "blocked": [], "reason": f"baseline not 2xx/3xx (status={baseline.get('status')}) — differential undefined"}
+    # gate 1 — a differential is only meaningful if the BENIGN baseline was SERVED (2xx).
+    if not baseline_served(baseline.get("status")):
+        status = baseline.get("status")
+        try:
+            is_redirect = 300 <= int(status or 0) < 400
+        except (TypeError, ValueError):
+            is_redirect = False
+        if is_redirect:
+            target = baseline.get("redirect_to") or ""
+            return {"waf_present": None, "evidence_class": "presence_only", "blocked": [],
+                    "undefined": UNDEFINED_REDIRECT, "redirect_to": target or None,
+                    "reason": (f"baseline redirected (status={status}"
+                               f"{' to ' + target if target else ''}) — nothing to compare; "
+                               "not a measurement. Test the address it redirects to.")}
+        return {"waf_present": None, "evidence_class": "presence_only", "blocked": [],
+                "undefined": UNDEFINED_NOT_SERVED, "redirect_to": None,
+                "reason": f"baseline not served (status={status}) — nothing to compare; not a measurement"}
 
     blocked = sorted({p["cls"] for p in payloads
                       if p.get("cls") in INDEPENDENT_CLASSES and _payload_blocked(baseline, p)})
