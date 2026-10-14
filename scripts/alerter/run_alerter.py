@@ -528,8 +528,25 @@ def unrecognized_block_pages(rows: list[tuple]) -> list[tuple]:
     pages matched NO library entry: (asset_id, name, organization, measured_at,
     [{cls, status, size}, ...]). A block where at least one page named its vendor is
     not reported here — that name went to the classifier. A block whose denies carried
-    no readable body (nothing captured) is not reported either: there is no page to add."""
+    no readable body (nothing captured) is not reported either: there is no page to add.
+
+    ⛔ 316 (2026-10-14). The Command digest of 10-14 12:08Z CRASHED here, in 6 seconds:
+    the first morning with a measured block inside the window (the apex, 09:13Z) was
+    the first time this ran for real, and the digest job installs psycopg only — the
+    library reads artifact_signatures.yaml with PyYAML, which was not there. No email
+    went out. The job now installs PyYAML (alerter.yml); AND this section can never
+    take the digest down again: the library is loaded ONCE, up front, and if it cannot
+    be, the section is skipped with one log line and the rest of the email is sent.
+    A side section's failure is not a reason to send nothing."""
     out = []
+    if not rows:
+        return out
+    try:
+        entries = _bps.load_block_page_entries()
+    except Exception as e:  # PyYAML missing, the YAML unreadable, an entry malformed
+        print(f"[alerter] block-page library unavailable ({type(e).__name__}: {e}); "
+              f"'Block pages not recognized' skipped this run", file=sys.stderr)
+        return out
     seen: set = set()
     for r in rows:                      # ordered newest first: one line per asset, its newest block
         if r[0] in seen:
@@ -541,7 +558,7 @@ def unrecognized_block_pages(rows: list[tuple]) -> list[tuple]:
                 fired = json.loads(fired)
             except ValueError:
                 fired = None
-        res = _bps.scan_fired(fired if isinstance(fired, list) else [])
+        res = _bps.scan_fired(fired if isinstance(fired, list) else [], entries)
         if res["matched"] or not res["unrecognized"]:
             continue
         out.append((r[0], r[1], r[2], r[3], res["unrecognized"]))

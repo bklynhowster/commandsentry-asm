@@ -8,7 +8,10 @@ knows nothing by that shape, so the email says so and the page stays with the sc
 commandcompanies.com's block (10-14) answered with Wordfence's page and the Automattic
 edge's 406 — both known, both named, nothing to report here.
 """
+import os
 import re
+
+import pytest
 from datetime import datetime, timezone
 
 import run_alerter as ra
@@ -110,6 +113,35 @@ def test_nothing_unrecognized_changes_nothing():
     b = _render(unrecognized_pages=[])
     assert a == b
     assert "Block pages not recognized" not in a[0] and "BLOCK PAGES NOT RECOGNIZED" not in a[1]
+
+
+def test_316_a_missing_library_skips_the_section_and_never_kills_the_digest(monkeypatch, capsys):
+    """2026-10-14 12:08Z: the Command digest crashed in 6 s with RuntimeError('PyYAML required')
+    on the first measured block in its window. The section must degrade to nothing, loudly."""
+    def boom():
+        raise RuntimeError("PyYAML required to read artifact_signatures.yaml")
+    monkeypatch.setattr(ra._bps, "load_block_page_entries", boom)
+    assert ra.unrecognized_block_pages([UAT_ROW, APEX_ROW]) == []
+    err = capsys.readouterr().err
+    assert "block-page library unavailable" in err and "RuntimeError" in err
+    # and with the library present the section works exactly as before
+    monkeypatch.undo()
+    assert [r[0] for r in ra.unrecognized_block_pages([UAT_ROW, APEX_ROW])] == ["uat.prodexlabs.com"]
+    # the library is loaded ONCE per run, not once per row
+    calls = []
+    real = ra._bps.load_block_page_entries
+    monkeypatch.setattr(ra._bps, "load_block_page_entries", lambda: (calls.append(1), real())[1])
+    ra.unrecognized_block_pages([UAT_ROW, APEX_ROW, NO_BODY_ROW])
+    assert len(calls) == 1
+    assert ra.unrecognized_block_pages([]) == [] and calls == [1], "no rows: the library is not even opened"
+
+
+def test_316_the_digest_job_installs_pyyaml():
+    path = os.path.join(os.path.dirname(ra.__file__), "..", "..", ".github", "workflows", "alerter.yml")
+    if not os.path.exists(path):
+        pytest.skip("this instance runs no digest (Prodex has no alerter.yml; the code is kept identical)")
+    wf = open(path, encoding="utf-8").read()
+    assert "pyyaml" in wf, "alerter.yml does not install PyYAML; the block-page library cannot load in the digest job"
 
 
 def test_subject_and_query_are_wired():
