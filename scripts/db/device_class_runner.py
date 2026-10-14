@@ -70,6 +70,7 @@ from derive_device_class import (  # noqa: E402
 # precisely the defect this replaced. Deliberately NOT wrapped in try/except --
 # this is a first-party module in the same repo, and a routing metric that
 # quietly falls back to a guess is the fail-open shape being eliminated fleet-wide.
+from block_page_signatures import scan_fired  # noqa: E402  (312: the block-page library)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "asm"))
 from cloud_ip_check import CLOUD_CLASSES  # noqa: E402
 try:  # cloud fallback re-derives from surface_data (4.7 F1/F4; E2 re-derive-every-run)
@@ -586,6 +587,13 @@ OBSERVATION_CAPABILITY: dict[str, _Cap] = {
     # Read to the same depth gather_observations reads, and a test pins it.
     "waf_differential_block": _Cap(_CAP_JSON_KEY_NOT_NULL, (_ART_WAF_DIFFERENTIAL,),
                                    field="waf_present_differential", depth=_DIFFERENTIAL_DEPTH),
+    # Obsidian 312 (2026-10-14): the BLOCK PAGES ride on the same artifact. "We looked"
+    # is the same fact — the probe FIRED (verdict not null): a fired probe that denied
+    # nothing captured no page, and that is a real "no vendor named here", so R5 may
+    # drop a stale block-page signal after a measured pass-through. A dry run still
+    # keeps it. Same depth as the measurement it travels with.
+    "block_page_markers": _Cap(_CAP_JSON_KEY_NOT_NULL, (_ART_WAF_DIFFERENTIAL,),
+                               field="waf_present_differential", depth=_DIFFERENTIAL_DEPTH),
 }
 
 # Registry observations with NO producer in gather_observations. DECLARED, not
@@ -1048,6 +1056,18 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
             continue                                 # did not look; keep reading back
         if verdict_d is True:
             obs["waf_differential_block"] = True     # -> signal waf_present_differential
+        # Obsidian 312 (2026-10-14): the deny pages the SAME capture carried. A page that
+        # names its own vendor is a vendor artifact (block_page_signatures: two cited
+        # markers, both present) -> observation block_page_markers = the library entry
+        # names -> the block_page_* rows. Read from the newest FIRED artifact only, with
+        # the measurement it belongs to; a page on a pass-through capture cannot exist
+        # (nothing was denied), so the observation is simply absent and R5 may demote.
+        # commandcompanies.com 2026-10-14: wafw00f "generic"; the XSS deny was
+        # Wordfence's own page, the LFI deny was the Automattic edge's 406.
+        fired = ((cand.get("details") or {}).get("fired") or [])
+        pages = scan_fired(fired)
+        if pages["matched"]:
+            obs["block_page_markers"] = list(pages["matched"])   # -> block_page_* rows (exact)
         break                                        # the newest measurement decides
     # Phase D (4.7 Q5): the active-probe /fwbbot_check challenge. Freshest artifact per
     # asset, gated through _fwbbot_corroborated — emits ONLY on a corroborated challenge

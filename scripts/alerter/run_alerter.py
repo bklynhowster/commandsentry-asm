@@ -59,6 +59,8 @@ import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common"))
 import mailer as _mailer  # noqa: E402 — shared provider-branching send path
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "normalize"))
+import block_page_signatures as _bps  # noqa: E402 — Obsidian 312: the block-page library
 from datetime import datetime, timedelta, timezone
 from html import escape, unescape
 
@@ -488,6 +490,75 @@ SELECT o.asset_id, a.name, a.organization, o.measured_at, o.blocked,
    AND a.discovery_status = 'confirmed_live'
  ORDER BY o.measured_at DESC, o.asset_id;
 """
+
+# ---------------------------------------------------------------------------
+# Unrecognized block pages — added 2026-10-14 (Obsidian 312).
+#
+# Howie, 2026-10-13: "What if there's a Palo Alto in front of us or a Cisco …"
+# The heavy differential probe captures every deny page it receives. The
+# block-page library (scripts/normalize/block_page_signatures.py, cited entries
+# in artifact_signatures.yaml) names the vendor when the page names itself. When
+# a measured block's deny pages match NOTHING in the library, the device is real
+# and unnamed — and the right thing is to say so, once, and keep the page: this
+# query returns every MEASURED BLOCK in the window with its captured deny
+# responses; the Python side runs the library over them and reports the ones
+# nobody recognized. Same window shift and ownership gate as the flips above.
+# Placeholders, in order: window_start, window_end.
+# ---------------------------------------------------------------------------
+SQL_MEASURED_BLOCKS_IN_WINDOW = """
+SELECT r.asset_id, a.name, a.organization, r.completed_at AS measured_at,
+       art.content_jsonb->'details'->'fired' AS fired
+  FROM public.scan_run_artifacts art
+  JOIN public.scan_run r ON r.scan_run_id = art.scan_run_id
+  JOIN public.assets a ON a.asset_id = r.asset_id
+ WHERE art.tool_name = 'stack_id_waf_differential'
+   AND r.status::text = 'complete'
+   AND r.completed_at IS NOT NULL
+   AND (art.content_jsonb->>'waf_present_differential')::boolean IS TRUE
+   AND r.completed_at >  %s - interval '30 minutes'
+   AND r.completed_at <= %s - interval '30 minutes'
+   AND a.ownership = 'owned'
+   AND a.discovery_status = 'confirmed_live'
+ ORDER BY r.completed_at DESC, r.asset_id;
+"""
+
+
+def unrecognized_block_pages(rows: list[tuple]) -> list[tuple]:
+    """Rows from SQL_MEASURED_BLOCKS_IN_WINDOW -> the measured blocks whose captured deny
+    pages matched NO library entry: (asset_id, name, organization, measured_at,
+    [{cls, status, size}, ...]). A block where at least one page named its vendor is
+    not reported here — that name went to the classifier. A block whose denies carried
+    no readable body (nothing captured) is not reported either: there is no page to add."""
+    out = []
+    seen: set = set()
+    for r in rows:                      # ordered newest first: one line per asset, its newest block
+        if r[0] in seen:
+            continue
+        seen.add(r[0])
+        fired = r[4]
+        if isinstance(fired, str):
+            try:
+                fired = json.loads(fired)
+            except ValueError:
+                fired = None
+        res = _bps.scan_fired(fired if isinstance(fired, list) else [])
+        if res["matched"] or not res["unrecognized"]:
+            continue
+        out.append((r[0], r[1], r[2], r[3], res["unrecognized"]))
+    return out
+
+
+def unrecognized_words(denies: list[dict]) -> str:
+    """'HTTP 403 x3, about 134 B' — the shape of the pages nobody recognized."""
+    by: dict = {}
+    for d in denies:
+        by.setdefault(d.get("status"), []).append(d.get("size") or 0)
+    parts = []
+    for status, sizes in sorted(by.items(), key=lambda kv: str(kv[0])):
+        n = len(sizes)
+        avg = int(sum(sizes) / n) if n else 0
+        parts.append(f"HTTP {status}" + (f" x{n}" if n > 1 else "") + (f", about {avg:,} B" if avg else ""))
+    return "; ".join(parts)
 
 # ---------------------------------------------------------------------------
 # Watchdog v1 — internal pipeline health checks (added 2026-06-07)
@@ -1000,10 +1071,12 @@ def render_html(
     came_back: list[tuple] | None = None,
     fixed: list[tuple] | None = None,
     enforcement_flips: list[tuple] | None = None,
+    unrecognized_pages: list[tuple] | None = None,
 ) -> str:
     came_back = came_back or []
     fixed = fixed or []
     enforcement_flips = enforcement_flips or []
+    unrecognized_pages = unrecognized_pages or []
     today = window_end.strftime("%Y-%m-%d")
     win = (
         f"{window_start.strftime('%Y-%m-%d %H:%M UTC')} → "
@@ -1246,10 +1319,44 @@ def render_html(
         "Security device enforcement", len(enforcement_flips), enforcement_table(enforcement_flips)
     )
 
+    def unrecognized_table(rows: list[tuple]) -> str:
+        """Rows from unrecognized_block_pages: (asset_id, name, organization, measured_at,
+        denies). One line per measured block whose deny pages the library does not know."""
+        if not rows:
+            return ""
+        cells_parts = []
+        for r in rows:
+            aid, display_name, org, measured_at, denies = r[0], (r[1] or r[0]), (r[2] or ""), r[3], r[4]
+            org_suffix = (f' <span style="color:#888;">({escape(org)})</span>'
+                          if org and org != display_name else "")
+            cells_parts.append(
+                f"<tr>"
+                f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:12px;">{escape(aid)}</td>'
+                f'<td style="padding:6px 12px 6px 0;font-size:13px;">{escape(display_name)}{org_suffix}</td>'
+                f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:11px;color:#888;">{measured_at:%Y-%m-%d %H:%M UTC}</td>'
+                f'<td style="padding:6px 0;font-size:11px;color:#888;">{escape(unrecognized_words(denies))}</td>'
+                f"</tr>"
+            )
+        return (
+            f'<table style="border-collapse:collapse;width:100%;">'
+            f'<thead><tr style="text-align:left;font-size:11px;color:#888;">'
+            f'<th style="padding:0 12px 6px 0;">Asset</th><th style="padding:0 12px 6px 0;">Name</th>'
+            f'<th style="padding:0 12px 6px 0;">Measured</th><th style="padding:0 0 6px 0;">Deny pages</th>'
+            f"</tr></thead><tbody>{''.join(cells_parts)}</tbody></table>"
+            f'<p style="font-size:11px;color:#888;margin:8px 0 0 0;">Something in front of these hosts '
+            f'blocked the attack-style test strings, and the page it answered with names no vendor the '
+            f'block-page library knows. The device is real; its make is not. The captured page is saved '
+            f'with the scan for review and for adding to the library, with a citation.</p>'
+        )
+
+    unrecognized_section = section(
+        "Block pages not recognized", len(unrecognized_pages), unrecognized_table(unrecognized_pages)
+    )
+
     pipeline_degraded = bool(stale_assets or canary_violations)
     has_changes = bool(
         new_findings or confirmed or regressed or high_risk or new_assets or dark_assets
-        or came_back or fixed or enforcement_flips
+        or came_back or fixed or enforcement_flips or unrecognized_pages
     )
     new_problems, new_inventory = split_problems_inventory(new_findings)
 
@@ -1286,6 +1393,7 @@ def render_html(
             f"<strong>{len(dark_assets)}</strong> dark asset(s)"
             + (f", <strong>{len(came_back)}</strong> back online" if came_back else "")
             + (f", <strong>{len(enforcement_flips)}</strong> security device change(s)" if enforcement_flips else "")
+            + (f", <strong>{len(unrecognized_pages)}</strong> unrecognized block page(s)" if unrecognized_pages else "")
             + " in this window."
         )
     else:
@@ -1409,6 +1517,7 @@ def render_html(
   {dark_assets_section}
   {came_back_section}
   {enforcement_section}
+  {unrecognized_section}
 
   <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e2e2e2;font-size:11px;color:#888;">
     <a href="{escape(dashboard_url)}" style="color:#888;">Open the {escape(product_name)} portal</a> ·
@@ -1439,10 +1548,12 @@ def render_text(
     came_back: list[tuple] | None = None,
     fixed: list[tuple] | None = None,
     enforcement_flips: list[tuple] | None = None,
+    unrecognized_pages: list[tuple] | None = None,
 ) -> str:
     came_back = came_back or []
     fixed = fixed or []
     enforcement_flips = enforcement_flips or []
+    unrecognized_pages = unrecognized_pages or []
     lines: list[str] = []
     lines.append(f"{product_name} — Daily posture digest — {window_end:%Y-%m-%d}")
     lines.append(f"Window: {window_start:%Y-%m-%d %H:%M UTC} -> {window_end:%Y-%m-%d %H:%M UTC}")
@@ -1501,7 +1612,7 @@ def render_text(
 
     new_problems, new_inventory = split_problems_inventory(new_findings)
     if not (new_findings or confirmed or regressed or high_risk or new_assets or dark_assets
-            or came_back or fixed or enforcement_flips):
+            or came_back or fixed or enforcement_flips or unrecognized_pages):
         if not pipeline_degraded:
             lines.append("No changes since last run — pipeline healthy.")
         return "\n".join(lines)
@@ -1510,7 +1621,8 @@ def render_text(
         f"This window: {len(new_problems)} new problem(s), {len(new_inventory)} new inventory item(s), "
         f"{len(fixed)} fixed, {len(regressed)} regressed, {len(high_risk)} asset risk shift(s), "
         f"{len(new_assets)} new asset(s), {len(dark_assets)} dark, {len(came_back)} back online"
-        + (f", {len(enforcement_flips)} security device change(s)." if enforcement_flips else ".")
+        + (f", {len(enforcement_flips)} security device change(s)" if enforcement_flips else "")
+        + (f", {len(unrecognized_pages)} unrecognized block page(s)" if unrecognized_pages else "") + "."
     )
     _ov = _count_overlap(new_findings, confirmed, regressed)
     if _ov:
@@ -1580,6 +1692,12 @@ def render_text(
             prev_txt = (f"previous test {r[6]:%Y-%m-%d %H:%M UTC}: {'blocked' if r[5] else 'passed through'}"
                         if r[6] is not None else "first test")
             lines.append(f"  {r[0]:<40}  attack payloads {verdict} (measured {r[3]:%Y-%m-%d %H:%M UTC}; {prev_txt})")
+        lines.append("")
+    if unrecognized_pages:
+        lines.append(f"BLOCK PAGES NOT RECOGNIZED ({len(unrecognized_pages)}):")
+        for r in unrecognized_pages:
+            lines.append(f"  {r[0]:<40}  attack strings blocked (measured {r[3]:%Y-%m-%d %H:%M UTC}) by a device "
+                         f"whose block page the library does not know ({unrecognized_words(r[4])}); page saved with the scan")
         lines.append("")
 
     return "\n".join(lines)
@@ -1736,6 +1854,9 @@ def main() -> int:
             # Obsidian 310 — a security device starting (or stopping) to block.
             cur.execute(SQL_ENFORCEMENT_FLIPS_IN_WINDOW, (window_start, window_end))
             enforcement_flips = cur.fetchall()
+            # Obsidian 312 — a measured block whose deny page the library does not know.
+            cur.execute(SQL_MEASURED_BLOCKS_IN_WINDOW, (window_start, window_end))
+            unrecognized_pages = unrecognized_block_pages(cur.fetchall())
 
             # Watchdog v1 — pipeline health checks (added 2026-06-07).
             # Two clocks, two thresholds, single alarm if EITHER is stale:
@@ -1816,6 +1937,8 @@ def main() -> int:
             subject_parts.append(f"{n} back")
         if (n := len(enforcement_flips)) > 0:
             subject_parts.append(f"{n} security device")
+        if (n := len(unrecognized_pages)) > 0:
+            subject_parts.append(f"{n} unrecognized block page")
         subject_tail = ", ".join(subject_parts) if subject_parts else "0 changes"
         watchdog_prefix = "(!) " if (canary_violations or stale_assets) else ""
         subject = (
@@ -1836,6 +1959,7 @@ def main() -> int:
             came_back=came_back,
             fixed=fixed,
             enforcement_flips=enforcement_flips,
+            unrecognized_pages=unrecognized_pages,
         )
         text = render_text(
             window_start=window_start, window_end=window_end,
@@ -1851,6 +1975,7 @@ def main() -> int:
             came_back=came_back,
             fixed=fixed,
             enforcement_flips=enforcement_flips,
+            unrecognized_pages=unrecognized_pages,
         )
 
         if args.dry_run:

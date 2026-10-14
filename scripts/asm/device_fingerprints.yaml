@@ -400,6 +400,63 @@ fingerprints:
     evidence_class: vendor_identifying
     vendor_product: {vendor: Microsoft, product: Azure Front Door}
 
+  # ── BLOCK-PAGE LIBRARY rows (Obsidian 312, 2026-10-14) — HIGH, vendor-identifying ──
+  # The second vendor signal, from the deny pages the heavy differential probe
+  # already captures. Observation `block_page_markers` is the LIST OF LIBRARY ENTRY
+  # NAMES whose two markers both appeared on a deny response (gather_observations
+  # -> scripts/normalize/block_page_signatures.py). EXACT match on the entry name
+  # (4.7 Q8e: a discrete token). Every row is R4-enforced: its match_value must be a
+  # cited artifact_signatures.yaml entry whose vendor equals the row's vendor, or the
+  # classifier refuses to start (_ARTIFACT_CITED_OBS in derive_device_class).
+  #
+  # ⚠ dedupe_key = wafw00f_detection on the pages wafw00f ALSO matches (its plugins
+  # read the same block pages: fortiweb, wordfence, cloudflare, f5bigipasm). Such a
+  # row NAMES the vendor — commandcompanies.com 2026-10-14: wafw00f said "generic",
+  # the page said Wordfence — but is the same artifact as wafw00f's verdict, so it
+  # never counts as a second independent tell (4.7 R4: dedupe on shared artifact).
+  # The Automattic 406 page has no wafw00f plugin: its own key, independent, and
+  # together with the x-ac header (a different artifact) it reaches confirmed.
+  - signal: block_page_wordfence
+    observation: block_page_markers
+    match_semantic: exact
+    match_values: [wordfence_block_page]
+    device_class: waf                                      # a WordPress plugin WAF, inside the site
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Defiant, product: Wordfence}
+    dedupe_key: wafw00f_detection
+  - signal: block_page_automattic
+    observation: block_page_markers
+    match_semantic: exact
+    match_values: [automattic_sentries_block_page]
+    device_class: hosting_edge
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Automattic}
+    dedupe_key: block_page_automattic                      # independent of x-ac (a different artifact)
+  - signal: block_page_cloudflare
+    observation: block_page_markers
+    match_semantic: exact
+    match_values: [cloudflare_block_page]
+    device_class: waf
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Cloudflare, product: Cloudflare}
+    dedupe_key: wafw00f_detection
+  - signal: block_page_f5
+    observation: block_page_markers
+    match_semantic: exact
+    match_values: [f5_asm_block_page]
+    device_class: waf
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: F5, product: BIG-IP ASM}
+    dedupe_key: wafw00f_detection
+  - signal: block_page_fortiweb
+    observation: block_page_markers
+    match_semantic: exact
+    match_values: [fortiweb_block_page]
+    device_class: waf
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Fortinet, product: FortiWeb}
+    dedupe_key: wafw00f_detection
+
   # ── Slots to characterize as the fleet is swept ──────────────────────────
   # DEFERRED (need a citation and/or AND-matching, added when first observed):
   # Akamai (Server: AkamaiGHost — needs a primary-doc quote); the AND-condition
