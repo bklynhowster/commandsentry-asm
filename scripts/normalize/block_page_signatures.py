@@ -126,6 +126,24 @@ def scan_fired(fired: list | None, entries: list[dict] | None = None) -> dict:
     return {"matched": matched, "unrecognized": unrecognized}
 
 
+def annotate_fired(fired: list | None, entries: list[dict] | None = None) -> list:
+    """(315) Write each deny's FIRST matching library entry onto the fired record as
+    `block_page`, in place, and return the list. A deny with no body, no match, or a
+    served/redirect response gets no key — the portal then says the status, never a
+    guessed name. Pure apart from the in-place write; same reading rule as scan_fired."""
+    entries = load_block_page_entries() if entries is None else entries
+    for f in fired or []:
+        if not isinstance(f, dict) or not is_deny(f.get("status")):
+            continue
+        body = f.get("body_head")
+        if not body:
+            continue
+        hits = match_block_page(body, entries)
+        if hits:
+            f["block_page"] = hits[0]
+    return fired or []
+
+
 def _selftest() -> int:
     entries = load_block_page_entries()
     names = [e["name"] for e in entries]
