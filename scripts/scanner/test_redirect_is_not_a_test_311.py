@@ -203,7 +203,9 @@ def test_a_miss_writes_no_audit_and_no_history():
                                  "measured_at": "2026-10-13T22:05:47Z", "egress_mode": "vpn"}
     conn = _Conn(hit=False)
     assert h.retract_waf_absent_on_redirect(conn, ctx, _json) == 0
-    assert len(conn.cur.calls) == 1 and conn.cur.calls[0][0].startswith("UPDATE public.findings")
+    # 314: the retraction tries both probe-minted findings (absent, then partial); a miss
+    # on each is one UPDATE and nothing else.
+    assert len(conn.cur.calls) == 2 and all(c[0].startswith("UPDATE public.findings") for c in conn.cur.calls)
 
 
 def test_a_hit_writes_the_update_the_audit_and_the_history_in_that_order():
@@ -211,11 +213,15 @@ def test_a_hit_writes_the_update_the_audit_and_the_history_in_that_order():
     ctx.waf_baseline_redirect = {"baseline_status": 301, "redirect_to": "https://commandcompanies.com/",
                                  "measured_at": "2026-10-13T22:05:47Z", "egress_mode": "vpn"}
     conn = _Conn(hit=True)
-    assert h.retract_waf_absent_on_redirect(conn, ctx, _json) == 1
+    # 314: both probe-minted findings are retracted (the mock answers a hit for each);
+    # the first three calls are the 'no enforcing WAF' retraction exactly as before.
+    assert h.retract_waf_absent_on_redirect(conn, ctx, _json) == 2
     sqls = [c[0] for c in conn.cur.calls]
+    assert len(sqls) == 6
     assert sqls[0].startswith("UPDATE public.findings")
     assert sqls[1].startswith("INSERT INTO public.admin_audit_log")
     assert sqls[2].startswith("INSERT INTO public.finding_history")
+    assert conn.cur.calls[0][1]["finding_id"] != conn.cur.calls[3][1]["finding_id"]
     audit = conn.cur.calls[1][1]
     assert audit["action"] == h.REDIRECT_RETRACTION_ACTION == "redirect_retraction"
     assert audit["details"]["rule"] == h.REDIRECT_RETRACTION_RULE
