@@ -48,6 +48,33 @@ def _ctx():
                               scan_run_id="7f0a3c2e-1d6b-4d2c-9a47-2b7a4f0b3d11", queue_id="q", intensity="heavy")
 
 
+def test_the_probe_annotates_each_deny_with_its_block_page_315(monkeypatch, tmp_path):
+    """(315) _fire_waf_differential_probe names the block page per class in the capture it
+    returns, through the one library (block_page_signatures). The apex bodies: XSS ->
+    wordfence_block_page, LFI -> automattic_sentries_block_page, SQLi (served) -> nothing."""
+    import block_page_signatures as bps
+    assert h.annotate_fired is bps.annotate_fired, "the probe uses the library's own annotator"
+    outputs = {}
+    def fake_run_cmd(args, timeout=None):
+        url = args[-1]; sink = args[args.index("-o") + 1]
+        cls = next((c for c in ("sqli", "xss", "lfi") if f"waf_probe_{c}.body" in sink), "benign")
+        code, size, hdrs, body = (200, 177181, "", APEX_HOME) if cls == "benign" else APEX[cls]
+        open(sink, "w").write(body)
+        return 0, f"{hdrs}CS_STATUS:{code} CS_SIZE:{size} CS_TIME:0.3 CS_CONNECT:0.1", ""
+    monkeypatch.setattr(h, "run_cmd", fake_run_cmd)
+    monkeypatch.setattr(h.time, "sleep", lambda s: None)
+    ctx = _ctx()
+    baseline, payloads, details = h._fire_waf_differential_probe(ctx, tmp_path, "vpn")
+    by = {f["cls"]: f for f in details["fired"]}
+    assert by["xss"]["block_page"] == "wordfence_block_page"
+    assert by["lfi"]["block_page"] == "automattic_sentries_block_page"
+    assert "block_page" not in by["sqli"] and "block_page" not in by["benign"]
+    # and a library that cannot load costs nothing but a log line
+    monkeypatch.setattr(h, "annotate_fired", lambda fired: (_ for _ in ()).throw(RuntimeError("no yaml")))
+    baseline, payloads, details = h._fire_waf_differential_probe(ctx, tmp_path, "vpn")
+    assert all("block_page" not in f for f in details["fired"]) and len(details["fired"]) == 4
+
+
 def _run_phase(monkeypatch, tmp_path, responses, *, authorized=True, live=True):
     monkeypatch.setattr(h, "_read_active_probe_policy", lambda ctx: (authorized, "vpn", ""))
     monkeypatch.setattr(h, "_ACTIVE_PROBE_LIVE", live)

@@ -140,6 +140,8 @@ from run_light import derive_hostname
 # captured responses to the classifier. Same-dir module, imported like run_medium.
 from waf_differential import (classify_waf_differential, INDEPENDENT_CLASSES, baseline_served,
                               UNDEFINED_REDIRECT)
+# 315 — the capture names the block page per class (scripts/normalize, on sys.path above).
+from block_page_signatures import annotate_fired
 
 # @phase contract + registry (spec 190 / 4.7 rulings 191). content_fetch is the
 # FIRST CITIZEN — built, dark, and small enough to prove the contract on before
@@ -2334,6 +2336,15 @@ def _fire_waf_differential_probe(ctx: HeavyScanContext, work_dir: Path,
                       "time_connect": resp.get("time_connect"),
                       "raw_headers": resp.get("raw_headers"),
                       "body_head": resp.get("body_head")})
+    # 315 — each deny carries the name of the block page it answered with, when the
+    # library knows it (fired[i].block_page = the artifact_signatures.yaml entry). The
+    # portal reads it to say WHO refused each attack ("refused — Wordfence's block
+    # page" / "refused — the Automattic edge"); an unknown page keeps only its status.
+    # Same reading rule as the classifier and the digest (scan_fired); one library.
+    try:
+        annotate_fired(fired)
+    except Exception as e:  # the library failing to load must never cost the capture
+        log(f"  waf_differential probe: block-page annotation skipped ({type(e).__name__}: {e})")
     details = {"param": param, "egress_mode": egress,
                "egress_interface": _PROBE_EGRESS_INTERFACE or None,
                "pacing_s": _WAF_PROBE_PACING_S, "fired": fired}

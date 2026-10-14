@@ -169,6 +169,25 @@ def test_scan_fired_reads_denies_only_and_reports_the_unrecognized():
 
 
 # ── the registry rows: cited, weighted, deduped as the artifacts dictate ──────
+def test_annotate_fired_names_each_deny_by_its_page_and_nothing_else():
+    """(315) The capture carries the name of the block page per class, so the portal can
+    say WHO refused each attack. Same reading rule as scan_fired: denies with a body only;
+    a served page, a redirect, a bodiless deny and an unknown page get no name."""
+    fired = [{"cls": "benign", "status": 200, "size": 177181},
+             {"cls": "sqli", "status": 200, "size": 177181, "body_head": "<title>Home</title>"},
+             {"cls": "xss", "status": 403, "size": 17006, "body_head": WORDFENCE_403},
+             {"cls": "lfi", "status": 406, "size": 1156, "body_head": SENTRIES_406},
+             {"cls": "log4shell-param", "status": 403, "size": 134, "body_head": GOOGLE_403},
+             {"cls": "ssrf-metadata", "status": 403, "size": 15},
+             {"cls": "bounce", "status": 301, "size": 162, "body_head": "<title>301 Moved Permanently</title>"}]
+    out = bps.annotate_fired(fired)
+    assert out is fired, "in place: the record the artifact writes is the record annotated"
+    assert [f.get("block_page") for f in fired] == [None, None, "wordfence_block_page", "automattic_sentries_block_page", None, None, None]
+    assert bps.annotate_fired([]) == [] and bps.annotate_fired(None) == []
+    # scan_fired and annotate_fired agree on what is recognized
+    assert bps.scan_fired(fired)["matched"] == ["wordfence_block_page", "automattic_sentries_block_page"]
+
+
 def test_every_block_page_row_cites_an_entry_with_the_same_vendor_and_is_high():
     fps, th = load_fingerprints(), load_thresholds()
     rows = [fp for fp in fps if fp.get("observation") == "block_page_markers"]
