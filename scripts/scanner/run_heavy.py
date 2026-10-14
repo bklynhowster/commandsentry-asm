@@ -319,6 +319,12 @@ class HeavyScanContext:
     # on that exact shape (a dead origin is left None: "could not test" is not "no app
     # here"). Read once, in the clean close-out, by retract_waf_absent_on_redirect.
     waf_baseline_redirect: dict | None = None
+    # 314 (2026-10-14): the differential probe FIRED, the baseline was served, and the
+    # classifier measured a PASS-THROUGH on every class (waf_present False, nothing
+    # blocked) — the shape that mints the HIGH. Read once, in the clean close-out, by
+    # supersede_partial_on_measured_absence: the MODERATE "partial" finding cannot stay
+    # open beside the HIGH that says everything got through.
+    waf_absence_measured: dict | None = None
     # waf_detected / waf_kind / tech_stack — heavy doesn't probe these
     # but the medium-side helpers (build_rotation_log, scan metadata
     # writer) read them. Default to "not detected."
@@ -2378,6 +2384,80 @@ def _maybe_emit_no_waf_finding(ctx: HeavyScanContext, baseline: dict, verdict: d
     log("  waf_differential probe: NO ENFORCING WAF proven -> HIGH finding (PCI 6.4.2 / SC-7)")
 
 
+# ── 314 (2026-10-14): THE BLOCK WAS PARTIAL, AND THE FINDING SAYS WHICH CLASS GOT IN ────
+# commandcompanies.com, 2026-10-14 09:13Z: the first measured block on Command. XSS -> 403
+# (a Wordfence page), LFI -> 406 (the Automattic edge's page), and SQLi -> 200, the full
+# 177 KB home page, served by the application. The verdict collapsed that into one bit —
+# "blocked: yes" — and the page said ATTACK BLOCKED above no finding at all. One of three
+# attack strings reaching the application behind an enforcing WAF is the actionable part
+# of the measurement, and it was the part nobody could see. Howie, 10-14: "what do we do
+# with the telemetry that we found?" — this.
+#
+# Shape: MODERATE (not HIGH — a WAF IS enforcing; the HIGH is for its absence), one
+# stable id per asset, presence-only like its sibling (names the CLASSES, never a
+# product; the badge beside it names the device from the classifier's own evidence).
+# "Passed through" is measured, not inferred: the class is not in the classifier's
+# blocked set AND the application answered it with a served (2xx) page. An app choke
+# (5xx) or a redirect on one class is neither blocked nor passed and earns nothing.
+#
+# Lifecycle, all clean-path, all in the close-out beside 310/311:
+#   every class blocked        -> close as remediated (close_partial_on_full_block)
+#   nothing blocked (the HIGH) -> close as closed_reclassified: superseded by the HIGH
+#                                 (supersede_partial_on_measured_absence); a later partial
+#                                 reopens it first (reopen_partial_if_superseded), because
+#                                 the upsert's downgrade guard never reopens a closed row
+#   redirect baseline          -> retracted false_positive with its sibling (311)
+#   partial again after remediated -> the existing regress machinery flips it
+WAF_PARTIAL_CHECK_ID = "waf-partial-coverage"
+
+
+def _classes_passed_through(payloads: list, blocked: list) -> list:
+    """The fired classes the application SERVED (2xx) that the classifier did not count as
+    blocked. Sorted; names only classes in the fired set. Pure."""
+    fired = {c for c, _ in _WAF_PAYLOADS}
+    out = set()
+    for p in payloads or []:
+        cls = p.get("cls")
+        if cls in fired and cls not in (blocked or []) and baseline_served(p.get("status")):
+            out.add(cls)
+    return sorted(out)
+
+
+def _maybe_emit_partial_coverage_finding(ctx: HeavyScanContext, baseline: dict, verdict: dict) -> None:
+    """Emit the MODERATE 'partial WAF coverage' finding when the probe measured a block on
+    some classes and the application served at least one other. Presence-only: names the
+    attack classes, never a product."""
+    m = ctx.waf_block_measured
+    if not m or verdict.get("waf_present") is not True:
+        return
+    passed = list(m.get("passed") or [])
+    if not passed:
+        return
+    blocked = list(verdict.get("blocked") or [])
+    label = lambda cs: ", ".join(_WAF_CLASS_LABEL.get(c, c.upper()) for c in cs)
+    n_fired = len(_WAF_PAYLOADS)
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ctx.findings.append(FindingEvent(
+        finding_id=stable_finding_id(ctx.asset_id, "commandsentry_heavy",
+                                     WAF_PARTIAL_CHECK_ID, ctx.hostname),
+        asset_id=ctx.asset_id, scan_id=ctx.scan_run_id, source="commandsentry_heavy",
+        title=(f"WAF enforcement is partial: {len(passed)} of {n_fired} attack classes "
+               f"reached the application ({label(passed)})"),
+        severity="MODERATE", category="config", observed_at=now_iso, matched_at=ctx.hostname,
+        description=(
+            f"Differential probe: a benign baseline returned HTTP {baseline.get('status')}; "
+            f"of the {n_fired} independent attack-payload classes tested ({_waf_classes_tested_label()}), "
+            f"{len(blocked)} were blocked ({label(blocked)}) and {len(passed)} reached the "
+            f"application unblocked ({label(passed)}) — the application answered with a served page. "
+            "A payload-inspecting control IS enforcing in front of this host, but its rule set does "
+            "not cover every class tested; the uncovered class is exposed to application-layer attack "
+            "exactly as if no WAF were present (PCI DSS 6.4.2; NIST SP 800-53 SC-7). Presence-only "
+            "method: this names the attack classes measured and no product."),
+        subdomain=ctx.hostname, port=TESTSSL_PORT, protocol="https",
+    ))
+    log(f"  waf_differential probe: PARTIAL coverage — passed={passed} blocked={blocked} -> MODERATE finding")
+
+
 # ── Obsidian 310 (2026-10-13): a MEASURED block closes the "no enforcing WAF" finding ──
 # uat.prodexlabs.com, 2026-10-12 19:58Z: 0 of 3 payload classes blocked -> HIGH finding
 # emitted. 2026-10-13 18:39Z: all 3 blocked behind a Google 403 page. The finding stayed
@@ -2500,14 +2580,23 @@ def retract_waf_absent_on_redirect(conn, ctx: HeavyScanContext, Json) -> int:
     r = ctx.waf_baseline_redirect
     if not r:
         return 0
-    fid = stable_finding_id(ctx.asset_id, "commandsentry_heavy", WAF_ABSENT_CHECK_ID, ctx.hostname)
+    # 314: the probe mints two findings about "the live application at this address";
+    # a redirect baseline falsifies the premise of both.
+    n = 0
+    for check_id in (WAF_ABSENT_CHECK_ID, WAF_PARTIAL_CHECK_ID):
+        n += _retract_one_on_redirect(conn, ctx, Json, check_id, r)
+    return n
+
+
+def _retract_one_on_redirect(conn, ctx: HeavyScanContext, Json, check_id: str, r: dict) -> int:
+    fid = stable_finding_id(ctx.asset_id, "commandsentry_heavy", check_id, ctx.hostname)
     target = r.get("redirect_to") or ""
     with conn.cursor() as cur:
         cur.execute(RETRACT_WAF_ABSENT_ON_REDIRECT_SQL,
                     {"finding_id": fid, "asset_id": ctx.asset_id})
         row = cur.fetchone()
         if not row:
-            log(f"  redirect baseline: no open '{WAF_ABSENT_CHECK_ID}' finding to retract for {ctx.asset_id}")
+            log(f"  redirect baseline: no open '{check_id}' finding to retract for {ctx.asset_id}")
             return 0
         sev = row["severity"] if isinstance(row, dict) else row[1]
         cur.execute(MEASURED_REMEDIATION_AUDIT_SQL, {
@@ -2523,16 +2612,168 @@ def retract_waf_absent_on_redirect(conn, ctx: HeavyScanContext, Json) -> int:
                              "reason": ("the same differential probe that emitted this finding found "
                                         f"the benign baseline is a redirect (HTTP {r.get('baseline_status')}"
                                         f"{' to ' + target if target else ''}): no application is served "
-                                        "at this address on the probe path, so 'no enforcing WAF in "
-                                        "front of live application' had no live application to be about")}),
+                                        "at this address on the probe path, so a finding about the live "
+                                        "application here had no live application to be about")}),
         })
         cur.execute(REDIRECT_RETRACTION_HISTORY_SQL, {
             "finding_id": fid, "scan_run_id": ctx.scan_run_id, "severity": sev,
             "notes": (f"retracted by run_heavy scan_run {ctx.scan_run_id}: differential baseline "
                       f"redirected (HTTP {r.get('baseline_status')}{' to ' + target if target else ''})"),
         })
-    log(f"  redirect baseline: retracted '{WAF_ABSENT_CHECK_ID}' for {ctx.asset_id} as false_positive "
+    log(f"  redirect baseline: retracted '{check_id}' for {ctx.asset_id} as false_positive "
         f"(HTTP {r.get('baseline_status')}{' to ' + target if target else ''}; audit + history rows written)")
+    return 1
+
+
+# ── 314: the partial-coverage finding's three closures (clean path, beside 310/311) ──────
+FULL_BLOCK_CLOSES_PARTIAL_RULE = "note_314_full_block_closes_partial"
+ABSENCE_SUPERSEDES_PARTIAL_ACTION = "measured_absence_supersedes"
+ABSENCE_SUPERSEDES_PARTIAL_RULE = "note_314_measured_absence_supersedes_partial"
+PARTIAL_REOPEN_ACTION = "partial_coverage_reopened"
+PARTIAL_REOPEN_RULE = "note_314_partial_again_reopens_superseded"
+
+SUPERSEDE_PARTIAL_SQL = """
+UPDATE public.findings
+   SET current_status = 'closed_reclassified',
+       updated_at     = now()
+ WHERE finding_id = %(finding_id)s
+   AND asset_id   = %(asset_id)s
+   AND source::text = 'commandsentry_heavy'
+   AND current_status::text IN ('detected', 'confirmed', 'open', 'regressed')
+RETURNING finding_id, severity::text AS severity, first_detected_at, last_observed_at
+"""
+
+SUPERSEDE_PARTIAL_HISTORY_SQL = """
+INSERT INTO public.finding_history
+  (finding_id, scan_id, observed_at, status, severity_at_scan, notes)
+VALUES (%(finding_id)s, %(scan_run_id)s, now(), 'closed_reclassified'::history_status_t,
+        %(severity)s::severity_t, %(notes)s)
+"""
+
+REOPEN_SUPERSEDED_PARTIAL_SQL = """
+UPDATE public.findings
+   SET current_status    = 'regressed',
+       remediated_at     = NULL,
+       last_regressed_at = now(),
+       updated_at        = now()
+ WHERE finding_id = %(finding_id)s
+   AND asset_id   = %(asset_id)s
+   AND source::text = 'commandsentry_heavy'
+   AND current_status::text = 'closed_reclassified'
+RETURNING finding_id, severity::text AS severity
+"""
+
+
+def _partial_fid(ctx: HeavyScanContext) -> str:
+    return stable_finding_id(ctx.asset_id, "commandsentry_heavy", WAF_PARTIAL_CHECK_ID, ctx.hostname)
+
+
+def close_partial_on_full_block(conn, ctx: HeavyScanContext, Json) -> int:
+    """CLEAN PATH ONLY. This run measured a block on EVERY fired class: close the open
+    'partial coverage' finding as remediated (the measured pair, note 126), audit + history
+    bound to THIS scan. 0 or 1."""
+    m = ctx.waf_block_measured
+    if not m or m.get("passed"):
+        return 0
+    fid = _partial_fid(ctx)
+    with conn.cursor() as cur:
+        cur.execute(CLOSE_WAF_ABSENT_ON_MEASURED_BLOCK_SQL, {"finding_id": fid, "asset_id": ctx.asset_id})
+        row = cur.fetchone()
+        if not row:
+            log(f"  full block: no open '{WAF_PARTIAL_CHECK_ID}' finding to close for {ctx.asset_id}")
+            return 0
+        sev = row["severity"] if isinstance(row, dict) else row[1]
+        cur.execute(MEASURED_REMEDIATION_AUDIT_SQL, {
+            "action": MEASURED_REMEDIATION_ACTION,
+            "before": Json({"finding_id": fid, "current_status": "open_family",
+                            "source": "commandsentry_heavy", "severity": sev}),
+            "after": Json({"finding_id": fid, "current_status": "remediated"}),
+            "details": Json({"rule": FULL_BLOCK_CLOSES_PARTIAL_RULE, "asset_id": ctx.asset_id,
+                             "scan_run_id": ctx.scan_run_id, "blocked": m.get("blocked"),
+                             "classify_reason": m.get("reason"),
+                             "baseline_status": m.get("baseline_status"),
+                             "measured_at": m.get("measured_at"), "egress_mode": m.get("egress_mode"),
+                             "reason": ("the same differential probe that emitted this finding "
+                                        "measured a block on EVERY fired class this run: "
+                                        f"blocked={m.get('blocked')}, nothing passed through")}),
+        })
+        cur.execute(MEASURED_REMEDIATION_HISTORY_SQL, {
+            "finding_id": fid, "scan_run_id": ctx.scan_run_id, "severity": sev,
+            "notes": (f"closed by run_heavy scan_run {ctx.scan_run_id}: differential probe measured "
+                      f"a block on every class (blocked={','.join(m.get('blocked') or [])})"),
+        })
+    log(f"  full block: closed '{WAF_PARTIAL_CHECK_ID}' for {ctx.asset_id} as remediated "
+        f"(blocked={m.get('blocked')}; audit + history rows written)")
+    return 1
+
+
+def supersede_partial_on_measured_absence(conn, ctx: HeavyScanContext, Json) -> int:
+    """CLEAN PATH ONLY. This run measured a pass-through on EVERY class (the HIGH was
+    emitted): the open 'partial coverage' finding is superseded — closed_reclassified, the
+    one closed status that is not a win (not remediated: nothing got better) and not an
+    error (not false_positive: it was true when measured). Audit + history. 0 or 1."""
+    a = ctx.waf_absence_measured
+    if not a:
+        return 0
+    fid = _partial_fid(ctx)
+    absent_fid = stable_finding_id(ctx.asset_id, "commandsentry_heavy", WAF_ABSENT_CHECK_ID, ctx.hostname)
+    with conn.cursor() as cur:
+        cur.execute(SUPERSEDE_PARTIAL_SQL, {"finding_id": fid, "asset_id": ctx.asset_id})
+        row = cur.fetchone()
+        if not row:
+            log(f"  measured absence: no open '{WAF_PARTIAL_CHECK_ID}' finding to supersede for {ctx.asset_id}")
+            return 0
+        sev = row["severity"] if isinstance(row, dict) else row[1]
+        cur.execute(MEASURED_REMEDIATION_AUDIT_SQL, {
+            "action": ABSENCE_SUPERSEDES_PARTIAL_ACTION,
+            "before": Json({"finding_id": fid, "current_status": "open_family",
+                            "source": "commandsentry_heavy", "severity": sev}),
+            "after": Json({"finding_id": fid, "current_status": "closed_reclassified"}),
+            "details": Json({"rule": ABSENCE_SUPERSEDES_PARTIAL_RULE, "asset_id": ctx.asset_id,
+                             "scan_run_id": ctx.scan_run_id, "superseded_by": absent_fid,
+                             "baseline_status": a.get("baseline_status"),
+                             "measured_at": a.get("measured_at"), "egress_mode": a.get("egress_mode"),
+                             "reason": ("the same differential probe measured a pass-through on EVERY "
+                                        "class this run: nothing is enforcing, so 'partial coverage' is "
+                                        f"superseded by the HIGH '{WAF_ABSENT_CHECK_ID}' finding")}),
+        })
+        cur.execute(SUPERSEDE_PARTIAL_HISTORY_SQL, {
+            "finding_id": fid, "scan_run_id": ctx.scan_run_id, "severity": sev,
+            "notes": (f"superseded by run_heavy scan_run {ctx.scan_run_id}: differential probe measured "
+                      f"a pass-through on every class; see {WAF_ABSENT_CHECK_ID}"),
+        })
+    log(f"  measured absence: superseded '{WAF_PARTIAL_CHECK_ID}' for {ctx.asset_id} as closed_reclassified "
+        f"(audit + history rows written)")
+    return 1
+
+
+def reopen_partial_if_superseded(conn, ctx: HeavyScanContext, Json) -> int:
+    """CLEAN PATH ONLY. This run measured a PARTIAL block again and the finding is sitting in
+    closed_reclassified from an earlier measured absence: the upsert's downgrade guard never
+    reopens a closed row and the regress helper only reads remediated, so this is the one
+    place it comes back — as regressed, with the audit row. 0 or 1."""
+    m = ctx.waf_block_measured
+    if not m or not m.get("passed"):
+        return 0
+    fid = _partial_fid(ctx)
+    with conn.cursor() as cur:
+        cur.execute(REOPEN_SUPERSEDED_PARTIAL_SQL, {"finding_id": fid, "asset_id": ctx.asset_id})
+        row = cur.fetchone()
+        if not row:
+            return 0
+        sev = row["severity"] if isinstance(row, dict) else row[1]
+        cur.execute(MEASURED_REMEDIATION_AUDIT_SQL, {
+            "action": PARTIAL_REOPEN_ACTION,
+            "before": Json({"finding_id": fid, "current_status": "closed_reclassified",
+                            "source": "commandsentry_heavy", "severity": sev}),
+            "after": Json({"finding_id": fid, "current_status": "regressed"}),
+            "details": Json({"rule": PARTIAL_REOPEN_RULE, "asset_id": ctx.asset_id,
+                             "scan_run_id": ctx.scan_run_id, "blocked": m.get("blocked"),
+                             "passed": m.get("passed"), "measured_at": m.get("measured_at"),
+                             "reason": ("the differential probe measured a partial block again after "
+                                        "the finding was superseded by a measured absence")}),
+        })
+    log(f"  partial again: reopened superseded '{WAF_PARTIAL_CHECK_ID}' for {ctx.asset_id} as regressed")
     return 1
 
 
@@ -2591,10 +2832,20 @@ def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> N
                 "baseline_status": baseline["status"],
                 "measured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "egress_mode": egress,
+                # 314: the classes the application SERVED despite the block on the others.
+                "passed": _classes_passed_through(payloads, blocked),
+            }
+        elif waf_present is False and _no_waf_proven(baseline, verdict):
+            ctx.waf_absence_measured = {
+                "baseline_status": baseline["status"],
+                "measured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "egress_mode": egress,
             }
         details.update({"baseline_status": baseline["status"], "baseline_size": baseline["size"],
                         "blocked": blocked, "classify_reason": reason,
                         "evidence_class": verdict["evidence_class"]})
+        if ctx.waf_block_measured is not None:
+            details["passed_through"] = list(ctx.waf_block_measured["passed"])
         if waf_present is None:
             # 311 — the probe fired but measured nothing: the baseline was not a served
             # page. Recorded as UNDEFINED, with the kind and (on a redirect) the target,
@@ -2616,6 +2867,7 @@ def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> N
             log(f"  waf_differential probe: LIVE egress={egress} — waf_present={waf_present} "
                 f"blocked={blocked} ({reason})")
         _maybe_emit_no_waf_finding(ctx, baseline, verdict)
+        _maybe_emit_partial_coverage_finding(ctx, baseline, verdict)
     v = {"schema": 1, "probe_class": "waf_differential", "authorized": authorized,
          "dry_run": not fire,
          "observed": (None if not fire else True),
@@ -3973,7 +4225,19 @@ def run(descriptor_path: str, dsn: str) -> int:
         # the two are mutually exclusive by construction (a block needs a served baseline).
         n_retracted = retract_waf_absent_on_redirect(conn, ctx, Json)
         if n_retracted:
-            log(f"redirect retraction: {n_retracted} 'no enforcing WAF' finding retracted as false_positive")
+            log(f"redirect retraction: {n_retracted} probe-minted finding(s) retracted as false_positive")
+        # 314 — the partial-coverage finding's own closures, same slot, same reasons.
+        # The three are mutually exclusive by construction: full block / measured
+        # absence / partial again cannot all describe one run.
+        n_partial_closed = close_partial_on_full_block(conn, ctx, Json)
+        if n_partial_closed:
+            log(f"full-block close: {n_partial_closed} 'partial coverage' finding closed as remediated")
+        n_superseded = supersede_partial_on_measured_absence(conn, ctx, Json)
+        if n_superseded:
+            log(f"measured absence: {n_superseded} 'partial coverage' finding superseded (closed_reclassified)")
+        n_reopened = reopen_partial_if_superseded(conn, ctx, Json)
+        if n_reopened:
+            log(f"partial again: {n_reopened} superseded 'partial coverage' finding reopened as regressed")
 
         # Note 129 round 7 — finding_history per re-emitted finding.
         # Runs AFTER the per-source regress loop so the recorded
