@@ -1770,9 +1770,18 @@ def main() -> int:
     # Migrated 2026-05-28: RESEND_API_KEY → SENDGRID_API_KEY. Fall back to
     # the legacy var name during the transition so an unset SENDGRID_API_KEY
     # in CI doesn't break the digest before secrets are updated.
+    #
+    # 319 (2026-10-14): NOT required any more. The first Prodex digest died
+    # here with "error: RESEND_API_KEY not set" — Prodex sends over SMTP and
+    # has no SendGrid/Resend key at all, and `api_key` is ignored by the send
+    # path (the mailer reads its own provider's settings; see send_via_
+    # sendgrid's docstring). Whether THIS instance can send is the mailer's
+    # startup check (check_config / warn_if_unconfigured, 4.7 M5), which knows
+    # the provider; a SendGrid-only demand up here is the cross-instance bug
+    # 4.7 M1 removed from the send path, surviving in the preamble.
     api_key      = (
         _env("SENDGRID_API_KEY", required=False)
-        or _env("RESEND_API_KEY", required=not args.dry_run)
+        or _env("RESEND_API_KEY", required=False)
         or ""
     )
     # PER-INSTANCE IDENTITY — NO CROSS-TENANT DEFAULTS (2026-07-29).
