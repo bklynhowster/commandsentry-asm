@@ -623,7 +623,12 @@ SQL_STALE_LIVE_ASSETS = """
 -- stops surfacing it without the gap being closed."
 --
 -- Clocks:
---   discovery   = assets.last_observed       (asm-discover.yml, 6h cron)
+--   discovery   = GREATEST(assets.last_observed, assets.last_probe_alive_at)
+--                 last_observed is asm-discover (6h cron); last_probe_alive_at is
+--                 the liveness probe (Obsidian 161 / 4.7 Q6). Migration 20260724a:
+--                 "freshness consumers compose (last_observed OR last_probe_alive_at)".
+--                 320 (2026-10-15): this consumer now does. A host the probe proved
+--                 alive is not a host we lost sight of. seen_via says which clock won.
 --   deep_scan   = asset_surface.last_seen    (scanner.yml + per-sub loop)
 --
 -- Thresholds passed in by caller; defaults are 9h discovery (= cron + 3h
@@ -637,35 +642,46 @@ SQL_STALE_LIVE_ASSETS = """
 --
 -- The output includes per-row reason flags so the renderer can show
 -- WHICH clock(s) tripped, not just that something tripped.
+WITH c AS (
+  SELECT a.asset_id,
+         a.last_observed,
+         a.last_probe_alive_at,
+         GREATEST(a.last_observed, a.last_probe_alive_at)        AS seen_at,
+         CASE WHEN a.last_probe_alive_at IS NOT NULL
+               AND (a.last_observed IS NULL OR a.last_probe_alive_at > a.last_observed)
+              THEN 'probe' ELSE 'discovery' END                  AS seen_via,
+         s.asset_id                                              AS surface_asset_id,
+         s.last_seen
+  FROM public.assets a
+  LEFT JOIN public.asset_surface s ON s.asset_id = a.asset_id
+  WHERE a.ownership = 'owned'
+    AND a.discovery_status = 'confirmed_live'
+    AND a.apex_domain = ANY(%(apexes)s)
+)
 SELECT
-  a.asset_id,
-  a.last_observed,
-  s.last_seen                                            AS deep_scan_last_seen,
-  EXTRACT(EPOCH FROM (now() - a.last_observed))/3600.0   AS hours_since_discovery,
+  c.asset_id,
+  c.seen_at                                                AS last_observed,
+  c.last_seen                                              AS deep_scan_last_seen,
+  EXTRACT(EPOCH FROM (now() - c.seen_at))/3600.0           AS hours_since_discovery,
   CASE
-    WHEN s.asset_id  IS NULL                             THEN NULL
-    ELSE EXTRACT(EPOCH FROM (now() - s.last_seen))/3600.0
-  END                                                    AS hours_since_deep_scan,
+    WHEN c.surface_asset_id IS NULL                        THEN NULL
+    ELSE EXTRACT(EPOCH FROM (now() - c.last_seen))/3600.0
+  END                                                      AS hours_since_deep_scan,
   -- Per-row reason flags
-  (a.last_observed IS NULL OR a.last_observed < (now() - (%(disc_h)s::int  * interval '1 hour'))) AS discovery_stale,
-  (s.asset_id      IS NULL)                                                                       AS never_deep_scanned,
-  (s.asset_id      IS NOT NULL AND s.last_seen < (now() - (%(deep_h)s::int * interval '1 hour'))) AS deep_scan_stale
-FROM public.assets a
-LEFT JOIN public.asset_surface s ON s.asset_id = a.asset_id
-WHERE a.ownership = 'owned'
-  AND a.discovery_status = 'confirmed_live'
-  AND a.apex_domain = ANY(%(apexes)s)
-  AND (
-       a.last_observed IS NULL
-    OR a.last_observed < (now() - (%(disc_h)s::int * interval '1 hour'))
-    OR s.asset_id      IS NULL
-    OR s.last_seen     < (now() - (%(deep_h)s::int * interval '1 hour'))
-  )
+  (c.seen_at IS NULL OR c.seen_at < (now() - (%(disc_h)s::int  * interval '1 hour')))                   AS discovery_stale,
+  (c.surface_asset_id IS NULL)                                                                            AS never_deep_scanned,
+  (c.surface_asset_id IS NOT NULL AND c.last_seen < (now() - (%(deep_h)s::int * interval '1 hour')))    AS deep_scan_stale,
+  c.seen_via
+FROM c
+WHERE c.seen_at IS NULL
+   OR c.seen_at < (now() - (%(disc_h)s::int * interval '1 hour'))
+   OR c.surface_asset_id IS NULL
+   OR c.last_seen < (now() - (%(deep_h)s::int * interval '1 hour'))
 ORDER BY
   -- Worst cases first: never deep-scanned, then oldest discovery clock
-  (s.asset_id IS NULL) DESC,
-  a.last_observed NULLS FIRST,
-  a.asset_id;
+  (c.surface_asset_id IS NULL) DESC,
+  c.seen_at NULLS FIRST,
+  c.asset_id;
 """
 
 SQL_CANARY_VIOLATIONS = """
@@ -1067,6 +1083,60 @@ def enforcement_words(blocked: bool, prev_blocked) -> tuple[str, str]:
     return "NOW PASSING THROUGH", "#b42318"
 
 
+
+def _ago(hours) -> str:
+    """'3 hours ago' / '2 days ago' / '20 days ago' for a float of hours."""
+    if hours is None:
+        return "?"
+    h = float(hours)
+    if h < 1.5:
+        return "about an hour ago"
+    if h < 48:
+        return f"{int(round(h))} hours ago"
+    return f"{int(round(h / 24))} days ago"
+
+
+def _day(dt) -> str:
+    """'Oct 9' — a reader's date, not a log timestamp."""
+    return f"{dt:%b} {dt.day}"
+
+
+def stale_row_words(r) -> tuple[str, str, str]:
+    """320 (2026-10-15) — one row of "we may have lost sight of these", in words a reader
+    does not have to decode.
+
+    Howie, on the shipped 'disc=2026-09-25 12:23 UTC (479.7h) deep=…' line: "I, as the
+    main creator of this with you, am completely confused" — and he wants the people who
+    read these mails not to be. So no clock names (discovery / probe / deep scan), no
+    column names, no hours-with-decimals: when we last saw it, when we last fully scanned
+    it. Returns (asset_id, seen_sentence, scan_sentence). The red/`!` marking is the
+    renderer's. Accepts the 9-tuple from SQL_STALE_LIVE_ASSETS and the pre-320 8-tuple.
+    seen_via (which of our two checks saw it last) stays in the row for us; the reader
+    does not need it.
+    """
+    aid, lo, ls, hrs_disc, hrs_deep, disc_stale, never_ds, deep_ds = r[:8]
+    seen = "never seen by our checks" if lo is None else f"last seen {_day(lo)} ({_ago(hrs_disc)})"
+    if never_ds:
+        scan = "never had a full scan"
+    elif ls is None:
+        scan = "no full scan on record"
+    else:
+        scan = f"last full scan {_day(ls)} ({_ago(hrs_deep)})"
+    return aid, seen, scan
+
+
+STALE_INTRO = ("Sentry looks for every host it knows about every 6 hours, and gives each one "
+               "a full scan at least once a week. The hosts below have fallen behind on that. "
+               "This is a gap in our own checking, not a problem found on the hosts.")
+
+
+def stale_overdue_note(discovery_stale_hours, deepscan_stale_hours) -> str:
+    """What the red / '!' marks, in words."""
+    dd = int(deepscan_stale_hours)
+    full = f"{dd // 24} days" if dd % 24 == 0 else f"{dd} hours"
+    return (f"not seen in {int(discovery_stale_hours)} hours, no full scan in {full}, or never")
+
+
 def render_html(
     *,
     window_start: datetime,
@@ -1381,10 +1451,16 @@ def render_html(
     # "healthy" if the watchdog has anything to report — that was exactly
     # the lie that hid the 2026-06-06 over-suppression.
     if pipeline_degraded:
+        # 320 — say what it means: a coverage gap on OUR side, in words.
+        _parts = []
+        if stale_assets:
+            _parts.append(f"Sentry has lost sight of <strong>{len(stale_assets)}</strong> host(s)")
+        if canary_violations:
+            _parts.append(f"<strong>{len(canary_violations)}</strong> canary violation(s)")
         headline = (
-            f'<strong style="color:#a51c30;">&#x26A0; SCAN PIPELINE DEGRADED</strong> '
-            f"&mdash; <strong>{len(canary_violations)}</strong> canary violation(s), "
-            f"<strong>{len(stale_assets)}</strong> stale live asset(s). See below."
+            f'<strong style="color:#a51c30;">&#x26A0; COVERAGE GAP</strong> '
+            f"&mdash; {'; '.join(_parts)}. That is a gap in our own checking, "
+            f"not a problem on those hosts. See below."
         )
     elif has_changes:
         # Note 307 — creation, closure and regression are SEPARATE quantities.
@@ -1440,36 +1516,25 @@ def render_html(
         if stale_assets:
             stale_rows_parts = []
             for r in stale_assets:
-                # 8-tuple shape from SQL_STALE_LIVE_ASSETS
-                aid, lo, ls, hrs_disc, hrs_deep, disc_stale, never_ds, deep_ds = r
-                lo_fmt = lo.strftime("%Y-%m-%d %H:%M UTC") if lo else "NEVER"
-                ls_fmt = ls.strftime("%Y-%m-%d %H:%M UTC") if ls else "no surface row"
-                hrs_disc_fmt = f"{hrs_disc:.1f}h" if hrs_disc is not None else "?"
-                hrs_deep_fmt = f"{hrs_deep:.1f}h" if hrs_deep is not None else "n/a"
-                # Highlight the clock(s) actually tripped, mute the OK one
-                disc_style  = "color:#a51c30;font-weight:600;" if disc_stale else "color:#666;"
-                if never_ds:
-                    deep_style, deep_label = "color:#a51c30;font-weight:600;", "NEVER deep-scanned"
-                elif deep_ds:
-                    deep_style, deep_label = "color:#a51c30;font-weight:600;", f"{ls_fmt} ({hrs_deep_fmt})"
-                else:
-                    deep_style, deep_label = "color:#666;",                   f"{ls_fmt} ({hrs_deep_fmt})"
+                # 320 — words, not clocks. stale_row_words reads the SQL row (9-tuple).
+                aid, disc_words, deep_words = stale_row_words(r)
+                disc_stale, never_ds, deep_ds = r[5], r[6], r[7]
+                disc_style = "color:#a51c30;font-weight:600;" if disc_stale else "color:#666;"
+                deep_style = "color:#a51c30;font-weight:600;" if (never_ds or deep_ds) else "color:#666;"
                 stale_rows_parts.append(
                     f"<tr>"
                     f'<td style="padding:4px 12px 4px 0;font-family:monospace;font-size:12px;vertical-align:top;">{escape(aid)}</td>'
-                    f'<td style="padding:4px 12px 4px 0;font-size:12px;{disc_style}vertical-align:top;">discovery: {escape(lo_fmt)} ({escape(hrs_disc_fmt)})</td>'
-                    f'<td style="padding:4px 0;font-size:12px;{deep_style}vertical-align:top;">deep-scan: {escape(deep_label)}</td>'
+                    f'<td style="padding:4px 12px 4px 0;font-size:12px;{disc_style}vertical-align:top;">{escape(disc_words)}</td>'
+                    f'<td style="padding:4px 0;font-size:12px;{deep_style}vertical-align:top;">{escape(deep_words)}</td>'
                     f"</tr>"
                 )
             stale_block = (
                 '<div style="margin-top:8px;font-size:12px;color:#1a1a1a;">'
-                f'<div style="font-weight:600;margin-bottom:4px;">Stale live assets '
-                f'(discovery &gt; {discovery_stale_hours}h OR deep-scan &gt; {deepscan_stale_hours}h OR never deep-scanned):</div>'
+                f'<div style="font-weight:600;margin-bottom:4px;">We may have lost sight of these ({len(stale_assets)})</div>'
+                f'<div style="margin-bottom:6px;color:#444;">{escape(STALE_INTRO)}</div>'
                 f'<table style="border-collapse:collapse;">{"".join(stale_rows_parts)}</table>'
-                '<div style="margin-top:6px;color:#666;">Clock note: '
-                '<em>discovery</em> = assets.last_observed (asm-discover.yml every 6h). '
-                '<em>deep-scan</em> = asset_surface.last_seen (scanner.yml + per-sub loop). '
-                'Red = tripped, grey = OK.</div>'
+                '<div style="margin-top:6px;color:#666;">Red = overdue '
+                f'({escape(stale_overdue_note(discovery_stale_hours, deepscan_stale_hours))}).</div>'
                 '</div>'
             )
         watchdog_banner = (
@@ -1477,7 +1542,7 @@ def render_html(
             'border-radius:6px;padding:12px 16px;margin:0 0 16px;">'
             '<div style="font-size:13px;font-weight:700;color:#a51c30;'
             'text-transform:uppercase;letter-spacing:0.8px;">'
-            'Watchdog &mdash; pipeline integrity check</div>'
+            "Sentry's own health check</div>"
             f'{canary_block}{stale_block}'
             '</div>'
         )
@@ -1578,37 +1643,31 @@ def render_text(
 
     pipeline_degraded = bool(stale_assets or canary_violations)
     if pipeline_degraded:
-        lines.append("!!! WATCHDOG — SCAN PIPELINE DEGRADED !!!")
+        _gap = []
+        if stale_assets:
+            _gap.append(f"Sentry has lost sight of {len(stale_assets)} host(s)")
+        if canary_violations:
+            _gap.append(f"{len(canary_violations)} canary violation(s)")
+        lines.append(f"!!! COVERAGE GAP — {'; '.join(_gap)} !!!")
         if canary_violations:
             lines.append(f"  CANARY VIOLATIONS ({len(canary_violations)}) — scope_verified apex/www not confirmed_live+owned:")
             for r in canary_violations:
                 aid, st, own, lo = r
                 lines.append(f"    {aid:<45} disc={st:<14} own={own}")
         if stale_assets:
-            lines.append(
-                f"  STALE LIVE ASSETS ({len(stale_assets)}) — discovery > {discovery_stale_hours}h "
-                f"OR deep-scan > {deepscan_stale_hours}h OR never deep-scanned:"
-            )
+            import textwrap as _tw
+            lines.extend(_tw.wrap(STALE_INTRO, width=88, initial_indent="  ", subsequent_indent="  "))
             for r in stale_assets:
-                aid, lo, ls, hrs_disc, hrs_deep, disc_stale, never_ds, deep_ds = r
-                lo_fmt = lo.strftime("%Y-%m-%d %H:%M UTC") if lo else "NEVER"
-                hrs_disc_fmt = f"{hrs_disc:.1f}h" if hrs_disc is not None else "?"
-                disc_marker = "!" if disc_stale else " "
-                if never_ds:
-                    deep_str = "!!NEVER deep-scanned"
-                elif deep_ds:
-                    ls_fmt = ls.strftime("%Y-%m-%d %H:%M UTC") if ls else "?"
-                    hrs_deep_fmt = f"{hrs_deep:.1f}h" if hrs_deep is not None else "?"
-                    deep_str = f"!{ls_fmt} ({hrs_deep_fmt})"
-                else:
-                    ls_fmt = ls.strftime("%Y-%m-%d %H:%M UTC") if ls else "n/a"
-                    hrs_deep_fmt = f"{hrs_deep:.1f}h" if hrs_deep is not None else "n/a"
-                    deep_str = f" {ls_fmt} ({hrs_deep_fmt})"
-                lines.append(f"    {aid:<45} {disc_marker}disc={lo_fmt} ({hrs_disc_fmt})  deep={deep_str}")
+                # 320 — words, not clocks; '!' marks the clock that tripped.
+                aid, disc_words, deep_words = stale_row_words(r)
+                disc_stale, never_ds, deep_ds = r[5], r[6], r[7]
+                dm = "!" if disc_stale else " "
+                sm = "!" if (never_ds or deep_ds) else " "
+                lines.append(f"    {aid}")
+                lines.append(f"      {dm} {disc_words}")
+                lines.append(f"      {sm} {deep_words}")
         lines.append(
-            "  Clock note: discovery=assets.last_observed (asm-discover every 6h). "
-            "deep-scan=asset_surface.last_seen (scanner.yml + per-sub loop). "
-            "'!' prefix = clock tripped."
+            f"  ('!' = overdue: {stale_overdue_note(discovery_stale_hours, deepscan_stale_hours)}.)"
         )
         lines.append("")
 
@@ -1938,7 +1997,7 @@ def main() -> int:
         if (n := len(canary_violations)) > 0:
             subject_parts.append(f"{n} canary")
         if (n := len(stale_assets)) > 0:
-            subject_parts.append(f"{n} stale")
+            subject_parts.append(f"{n} we lost sight of")
         # Note 307 — the subject names problems, inventory, fixes and
         # regressions separately. "N new find" counted inventory as findings and
         # "chng" could never be non-zero.
