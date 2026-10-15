@@ -1217,6 +1217,23 @@ ON CONFLICT (asset_id) DO UPDATE SET
 RETURNING asset_id, (xmax = 0) AS inserted, cloud_drift;
 """
 
+# 320 (2026-10-15) — THE DISCOVERY CLOCK OF AN ALIAS THAT HAS ITS OWN ROW.
+# www.<apex> (and the apex's other aliases) are routed into the APEX bucket — they
+# are the same site, so no row of their own is upserted and assets.last_observed on
+# any such row never moves. But rows of their own DO exist (the 2026-06-06 split made
+# www.* rows; scanner.yml scans them; the portal shows them), and the digest's
+# watchdog read the four main www sites as "discovery stale since June 6" every
+# morning while discovery was listing them every six hours. Howie, 2026-10-15: "I, as
+# the main creator of this with you, am completely confused." Discovery saw the name;
+# say so on the row that exists. Never INSERT (the alias model stands), never touch
+# status or ownership (those are the upsert's promotion rules), GREATEST so the clock
+# only moves forward.
+STAMP_ALIAS_ROW_SEEN = """
+UPDATE public.assets
+   SET last_observed = GREATEST(last_observed, %(seen)s)
+ WHERE asset_id = %(asset_id)s
+"""
+
 # Auto-create row for a newly-discovered subdomain. Sets kind + apex_domain
 # so the new asset appears properly in the dashboard from the moment it's
 # discovered. ON CONFLICT updates last_observed (+ promotion rules same as
@@ -1499,6 +1516,13 @@ def import_one(
                     "cloud_provider": _derived_provider,
                 })
             a_row = cur.fetchone()
+            if is_apex:
+                # 320 — the names this bucket absorbed (www.<apex>, stored aliases):
+                # stamp the discovery clock on any row of their own. See STAMP_ALIAS_ROW_SEEN.
+                for _alias in sorted({(s.get("name") or "").lower().strip()
+                                      for s in sub_list if isinstance(s, dict)} - {bucket_id.lower(), ""}):
+                    cur.execute(STAMP_ALIAS_ROW_SEEN,
+                                {"asset_id": _alias, "seen": bucket_lifecycle["last_seen"]})
             if a_row and a_row[1]:
                 assets_inserted += 1
                 # A6 (relay 172/178) — remember WHICH assets this run inserted.

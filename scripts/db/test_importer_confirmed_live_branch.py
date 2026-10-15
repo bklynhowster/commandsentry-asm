@@ -274,3 +274,44 @@ def test_phantom_path_still_uses_completed_at_when_it_is_there():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# 320 (2026-10-15) — the discovery clock of www.<apex> when it has a row of its own.
+# ---------------------------------------------------------------------------
+
+def _doc2(subs: list[dict], *, service_count: int) -> dict:
+    d = _doc(subs[0], service_count=service_count)
+    d["subdomains"] = subs
+    d["summary"]["subdomain_count"] = len(subs)
+    return d
+
+
+def test_320_discovery_stamps_the_www_row_it_folds_into_the_apex():
+    """www.example.com is routed into the apex bucket (same site), so it gets no upsert of
+    its own — and before 320 its own row's last_observed never moved: the digest called
+    the four main Command www sites "discovery stale since June 6" every morning."""
+    conn = _FakeConn(resurrect_row=None)
+    res = _run(conn, _doc2([_sub("example.com"), _sub("www.example.com")], service_count=2))
+    assert res["status"] == "ok"
+    stamps = [(s, p) for s, p in conn.calls if "SET last_observed = GREATEST(last_observed" in s]
+    assert [p["asset_id"] for _, p in stamps] == ["www.example.com"], stamps
+    assert stamps[0][1]["seen"] == "2026-09-15T18:13:22Z", "the same clock the apex got"
+    # the alias model stands: no row is CREATED for www, and the apex's own upsert still runs once
+    inserts = [s for s, _ in conn.calls if s.startswith("INSERT INTO public.assets")]
+    assert len(inserts) == 1, inserts
+    assert not any(p.get("asset_id") == "www.example.com" for s, p in conn.calls
+                   if s.startswith("INSERT INTO public.assets") and isinstance(p, dict))
+
+
+def test_320_no_alias_no_stamp():
+    conn = _FakeConn(resurrect_row=None)
+    _run(conn, _doc(_sub("example.com"), service_count=1))
+    assert not [s for s, _ in conn.calls if "SET last_observed = GREATEST(last_observed" in s]
+
+
+def test_320_the_stamp_never_inserts_and_never_touches_status():
+    sql = " ".join(m.STAMP_ALIAS_ROW_SEEN.split())
+    assert sql.startswith("UPDATE public.assets SET last_observed = GREATEST(last_observed, %(seen)s) WHERE asset_id = %(asset_id)s")
+    for forbidden in ("INSERT", "discovery_status", "ownership", "last_alive_at"):
+        assert forbidden not in sql, forbidden
