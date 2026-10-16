@@ -584,8 +584,8 @@ def unrecognized_words(denies: list[dict]) -> str:
 #
 #   1. STALENESS (per-asset on the DISCOVERY clock = assets.last_observed):
 #      finds confirmed_live + owned assets whose last_observed has aged
-#      past the discovery cadence threshold (default 9h = 6h cron + 3h
-#      grace). LEFT JOIN to asset_surface so we can show last_seen
+#      past the discovery cadence threshold (default 24h since 321; was
+#      9h = 6h cron + 3h grace). LEFT JOIN to asset_surface so we can show last_seen
 #      alongside, but the WHERE filter is on assets.last_observed —
 #      asset_surface might legitimately lag if there's a deep-scan
 #      rotation policy.
@@ -607,41 +607,61 @@ def unrecognized_words(denies: list[dict]) -> str:
 #      19:55 UTC broken-dnsx-gate misclassification of 4 www aliases).
 #      Cheap, reuses the scope_verified allowlist we already maintain.
 #
+# 321 (2026-10-16) — the FULL-SCAN leg reads public.scan_run (newest complete or degraded
+# run), NOT asset_surface.last_seen. The discovery importer upserts asset_surface.last_seen
+# on every 6-hourly pass, so that column moved with discovery and "no full scan in 7 days"
+# could never fire for a host discovery kept seeing. Howie, 2026-10-16, on ns02.sciimage.com
+# printed as "last full scan Oct 16" (its last real scan: 2026-08-27): "To me, it looks like
+# an impossibility." Hosts marked assets.not_web_scannable (the nameservers, skipped by the
+# weekly sweep on purpose since 4.7 ruling 74) are not counted as behind on full scans, and
+# a host known for less than the full-scan window is not overdue for its first one yet.
+#
 # Per Howie 2026-06-07: a global MAX(last_observed) would have missed
 # both the partial-cron-stop and the demotion bug. Two narrow checks
 # beat one wide check.
 # ---------------------------------------------------------------------------
 
 SQL_STALE_LIVE_ASSETS = """
--- Per-asset staleness check on BOTH clocks. An asset alarms if EITHER
--- the discovery clock OR the deep-scan clock is stale (or never set).
+-- Per-asset check on BOTH clocks. An asset is listed if EITHER clock is overdue.
 --
--- Why both: a one-clock check would let "discovery happened but no deep
--- scan ever ran" slip through silently — exactly the insite.sciimage.com
--- pattern (HIGH-risk finding, asset present in DB, NEVER deep-scanned by
--- this pipeline). Per Howie 2026-06-07: "the thing that surfaced the gap
--- stops surfacing it without the gap being closed."
+-- Why both: a one-clock check would let "discovery happened but no full scan ever ran"
+-- slip through silently — exactly the insite.sciimage.com pattern (HIGH-risk finding,
+-- asset present in DB, NEVER deep-scanned by this pipeline). Per Howie 2026-06-07:
+-- "the thing that surfaced the gap stops surfacing it without the gap being closed."
 --
 -- Clocks:
---   discovery   = GREATEST(assets.last_observed, assets.last_probe_alive_at)
---                 last_observed is asm-discover (6h cron); last_probe_alive_at is
---                 the liveness probe (Obsidian 161 / 4.7 Q6). Migration 20260724a:
---                 "freshness consumers compose (last_observed OR last_probe_alive_at)".
---                 320 (2026-10-15): this consumer now does. A host the probe proved
---                 alive is not a host we lost sight of. seen_via says which clock won.
---   deep_scan   = asset_surface.last_seen    (scanner.yml + per-sub loop)
+--   seen       = GREATEST(assets.last_observed, assets.last_probe_alive_at)
+--                last_observed is asm-discover (6h cron); last_probe_alive_at is the
+--                liveness probe (Obsidian 161 / 4.7 Q6). Migration 20260724a: "freshness
+--                consumers compose (last_observed OR last_probe_alive_at)". 320: a host the
+--                probe proved alive is not a host we lost sight of. seen_via names the winner.
+--   full scan  = newest public.scan_run with status complete or degraded (321).
+--                NOT asset_surface.last_seen: import_asm_to_surface.py upserts that column
+--                on every discovery pass, so it moved with discovery (ns02.sciimage.com read
+--                "last full scan Oct 16" on 2026-10-16; its last real scan was 2026-08-27).
+--                Degraded counts, as in enqueue-fleet.yml: a degraded run still collected
+--                and persisted findings. Failed and running do not.
 --
--- Thresholds passed in by caller; defaults are 9h discovery (= cron + 3h
--- grace) and 168h deep-scan (= 7d, generous because scanner.yml rotation
--- is slower than discovery).
+-- Not counted as behind on full scans:
+--   * assets.not_web_scannable: skipped by the weekly sweep on purpose (4.7 ruling 74,
+--     the nameservers). Still listed if we stop SEEING them; the row says why there is
+--     no recent full scan (skipped = true).
+--   * a host known for less than the full-scan window (first_observed, else created_at)
+--     that has not had its first full scan yet: it is not overdue yet.
 --
--- IMPORTANT: scoped to assets whose apex_domain is in the scope_verified
--- allowlist. Without that scope, manually-added or non-scope_verified
--- assets (commandmi.com, edelivery-bessemer.com, netlify.app) would
--- false-positive forever.
+-- Thresholds passed in by caller; defaults are 24h seen (321: a nameserver an outside
+-- source lists about 2 passes in 3 was flagged at 9h) and 192h full scan (321: 8 days.
+-- The weekly sweep rescans a host once its last scan is older than 7 days, so on-schedule
+-- rescans land just past 168h: measured over 45 days, median 168.2h, 97 in 100 within 170h,
+-- Command and Prodex alike. At 168h every host on schedule would read "behind" for an
+-- hour or two each week. One day of grace.)
 --
--- The output includes per-row reason flags so the renderer can show
--- WHICH clock(s) tripped, not just that something tripped.
+-- IMPORTANT: scoped to assets whose apex_domain is in the scope_verified allowlist.
+-- Without that scope, manually-added or non-scope_verified assets (commandmi.com,
+-- edelivery-bessemer.com, netlify.app) would false-positive forever.
+--
+-- Columns 0-8 keep their 320 positions (the renderers index 5, 6 and 7); 9 is new.
+-- deep_scan_last_seen / hours_since_deep_scan now carry the scan_run clock.
 WITH c AS (
   SELECT a.asset_id,
          a.last_observed,
@@ -650,38 +670,44 @@ WITH c AS (
          CASE WHEN a.last_probe_alive_at IS NOT NULL
                AND (a.last_observed IS NULL OR a.last_probe_alive_at > a.last_observed)
               THEN 'probe' ELSE 'discovery' END                  AS seen_via,
-         s.asset_id                                              AS surface_asset_id,
-         s.last_seen
+         COALESCE(a.not_web_scannable, false)                    AS skipped,
+         COALESCE(a.first_observed, a.created_at)                AS known_since,
+         (SELECT max(r.completed_at)
+            FROM public.scan_run r
+           WHERE r.asset_id = a.asset_id
+             AND r.status IN ('complete', 'degraded'))           AS scanned_at
   FROM public.assets a
-  LEFT JOIN public.asset_surface s ON s.asset_id = a.asset_id
   WHERE a.ownership = 'owned'
     AND a.discovery_status = 'confirmed_live'
     AND a.apex_domain = ANY(%(apexes)s)
+), f AS (
+  SELECT c.*,
+         (c.seen_at IS NULL OR c.seen_at < (now() - (%(disc_h)s::int * interval '1 hour')))   AS discovery_stale,
+         (NOT c.skipped AND c.scanned_at IS NULL
+          AND (c.known_since IS NULL
+               OR c.known_since < (now() - (%(deep_h)s::int * interval '1 hour'))))            AS never_scanned,
+         (NOT c.skipped AND c.scanned_at IS NOT NULL
+          AND c.scanned_at < (now() - (%(deep_h)s::int * interval '1 hour')))                  AS scan_stale
+  FROM c
 )
 SELECT
-  c.asset_id,
-  c.seen_at                                                AS last_observed,
-  c.last_seen                                              AS deep_scan_last_seen,
-  EXTRACT(EPOCH FROM (now() - c.seen_at))/3600.0           AS hours_since_discovery,
-  CASE
-    WHEN c.surface_asset_id IS NULL                        THEN NULL
-    ELSE EXTRACT(EPOCH FROM (now() - c.last_seen))/3600.0
-  END                                                      AS hours_since_deep_scan,
-  -- Per-row reason flags
-  (c.seen_at IS NULL OR c.seen_at < (now() - (%(disc_h)s::int  * interval '1 hour')))                   AS discovery_stale,
-  (c.surface_asset_id IS NULL)                                                                            AS never_deep_scanned,
-  (c.surface_asset_id IS NOT NULL AND c.last_seen < (now() - (%(deep_h)s::int * interval '1 hour')))    AS deep_scan_stale,
-  c.seen_via
-FROM c
-WHERE c.seen_at IS NULL
-   OR c.seen_at < (now() - (%(disc_h)s::int * interval '1 hour'))
-   OR c.surface_asset_id IS NULL
-   OR c.last_seen < (now() - (%(deep_h)s::int * interval '1 hour'))
+  f.asset_id,
+  f.seen_at                                                AS last_observed,
+  f.scanned_at                                             AS deep_scan_last_seen,
+  EXTRACT(EPOCH FROM (now() - f.seen_at))/3600.0           AS hours_since_discovery,
+  EXTRACT(EPOCH FROM (now() - f.scanned_at))/3600.0        AS hours_since_deep_scan,
+  f.discovery_stale,
+  f.never_scanned                                          AS never_deep_scanned,
+  f.scan_stale                                             AS deep_scan_stale,
+  f.seen_via,
+  f.skipped
+FROM f
+WHERE f.discovery_stale OR f.never_scanned OR f.scan_stale
 ORDER BY
-  -- Worst cases first: never deep-scanned, then oldest discovery clock
-  (c.surface_asset_id IS NULL) DESC,
-  c.seen_at NULLS FIRST,
-  c.asset_id;
+  -- Worst cases first: never fully scanned, then the oldest sighting
+  f.never_scanned DESC,
+  f.seen_at NULLS FIRST,
+  f.asset_id;
 """
 
 SQL_CANARY_VIOLATIONS = """
@@ -1110,31 +1136,45 @@ def stale_row_words(r) -> tuple[str, str, str]:
     read these mails not to be. So no clock names (discovery / probe / deep scan), no
     column names, no hours-with-decimals: when we last saw it, when we last fully scanned
     it. Returns (asset_id, seen_sentence, scan_sentence). The red/`!` marking is the
-    renderer's. Accepts the 9-tuple from SQL_STALE_LIVE_ASSETS and the pre-320 8-tuple.
-    seen_via (which of our two checks saw it last) stays in the row for us; the reader
-    does not need it.
+    renderer's. Accepts the 10-tuple from SQL_STALE_LIVE_ASSETS (321) and the older 9- and
+    8-tuples. seen_via (which of our two checks saw it last) stays in the row for us; the
+    reader does not need it.
+
+    321 (2026-10-16): the scan date is a real full scan (scan_run), and a host we skip on
+    purpose (not a website: the nameservers) says so instead of showing a date or being
+    called behind.
     """
     aid, lo, ls, hrs_disc, hrs_deep, disc_stale, never_ds, deep_ds = r[:8]
+    skipped = bool(r[9]) if len(r) > 9 else False
     seen = "never seen by our checks" if lo is None else f"last seen {_day(lo)} ({_ago(hrs_disc)})"
-    if never_ds:
+    if skipped:
+        scan = "not full-scanned on purpose (not a website)"
+    elif never_ds:
         scan = "never had a full scan"
     elif ls is None:
-        scan = "no full scan on record"
+        scan = "first full scan not due yet"
     else:
         scan = f"last full scan {_day(ls)} ({_ago(hrs_deep)})"
     return aid, seen, scan
 
 
-STALE_INTRO = ("Sentry looks for every host it knows about every 6 hours, and gives each one "
-               "a full scan at least once a week. The hosts below have fallen behind on that. "
+STALE_INTRO = ("Sentry looks for every host it knows about every 6 hours, and gives each website "
+               "a full scan about once a week. The hosts below have fallen behind on that. "
                "This is a gap in our own checking, not a problem found on the hosts.")
+
+
+def _span(hours) -> str:
+    """24 -> 'a day', 168 -> '7 days', 9 -> '9 hours'."""
+    h = int(hours)
+    if h == 24:
+        return "a day"
+    return f"{h // 24} days" if h % 24 == 0 else f"{h} hours"
 
 
 def stale_overdue_note(discovery_stale_hours, deepscan_stale_hours) -> str:
     """What the red / '!' marks, in words."""
-    dd = int(deepscan_stale_hours)
-    full = f"{dd // 24} days" if dd % 24 == 0 else f"{dd} hours"
-    return (f"not seen in {int(discovery_stale_hours)} hours, no full scan in {full}, or never")
+    return (f"not seen in {_span(discovery_stale_hours)}, no full scan in "
+            f"{_span(deepscan_stale_hours)}, or never")
 
 
 def render_html(
@@ -1945,15 +1985,18 @@ def main() -> int:
 
             # Watchdog v1 — pipeline health checks (added 2026-06-07).
             # Two clocks, two thresholds, single alarm if EITHER is stale:
-            #   ALERTER_DISCOVERY_STALE_HOURS (default 9h  = 6h cron + 3h)
-            #   ALERTER_DEEPSCAN_STALE_HOURS  (default 168h = 7d, generous)
+            #   ALERTER_DISCOVERY_STALE_HOURS (default 24h since 321; was 9h = 6h cron + 3h.
+            #     ns02.sciimage.com, listed by an outside source about 2 passes in 3 and
+            #     sometimes missed twice running, read as "lost sight" at 9h)
+            #   ALERTER_DEEPSCAN_STALE_HOURS  (default 192h = 8 days since 321; the weekly
+            #     sweep rescans just past 7 days, so 168h flagged hosts on schedule)
             # Per Howie 2026-06-07: a discovery-only check lets the
             # "discovery touched it but no deep scan ever ran" pattern
             # slip through silently (insite.sciimage.com — HIGH risk,
             # 73d since last deep-scan, would have gone invisible after
             # the next discovery run touched it).
-            discovery_stale_hours = int(_env("ALERTER_DISCOVERY_STALE_HOURS", default="9") or "9")
-            deepscan_stale_hours  = int(_env("ALERTER_DEEPSCAN_STALE_HOURS",  default="168") or "168")
+            discovery_stale_hours = int(_env("ALERTER_DISCOVERY_STALE_HOURS", default="24") or "24")
+            deepscan_stale_hours  = int(_env("ALERTER_DEEPSCAN_STALE_HOURS",  default="192") or "192")
             targets_yml = _env("ALERTER_TARGETS_YML", default="data/targets.yml") or "data/targets.yml"
             scope_apexes = load_scope_verified_apexes(targets_yml)
 
