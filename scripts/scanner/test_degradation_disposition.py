@@ -129,7 +129,8 @@ def test_testssl_tool_problems_degrade_not_abort():
     testssl-the-tool. A missing binary or a timeout must NOT kill a 16-phase
     cumulative run."""
     for s in ("tool_missing", "wall_timeout", "no_jsonfile", "empty_jsonfile",
-              "unexpected_json_shape", "stat_failed", "json_parse_failed:ValueError"):
+              "unexpected_json_shape", "stat_failed", "json_parse_failed:ValueError",
+              "no_tls_handshake:245"):
         assert testssl_degradation(s).disposition == DEGRADED, s
 
 
