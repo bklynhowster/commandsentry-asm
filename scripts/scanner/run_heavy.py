@@ -474,6 +474,14 @@ def testssl_is_degraded(
         are NOT a standalone degrade trigger anymore — the truncation
         guard (reach without completion) catches the truly-interrupted
         case without false-positiving on every real scan.
+      - 2026-10-18 (round 5) — reach is a POSITIVE read, not a record-id
+        coincidence. A legacy/reset TLS endpoint emits the shape
+        `service="Couldn't determine service"` + every protocol
+        `not offered` + `scanTime="Scan interrupted"`; round 4 read that
+        as reach+completion and marked a failed handshake (rc=245) as a
+        clean complete scan, and the parser fabricated "TLS 1.2/1.3 not
+        offered" findings for a host that demonstrably serves TLS. See
+        wrap-up 2026-10-18 2139 (testssl blind on two TLS hosts).
 
     Detection order:
       - Tool not found / binary missing                    → DEGRADED
@@ -485,14 +493,24 @@ def testssl_is_degraded(
         non-fatal diagnostic noise routine in real scans)
       - has_reach AND NOT has_completion                   → DEGRADED
         (truncated mid-scan; don't trust partial verdict)    (`scan_incomplete`)
-      - NOT has_reach                                      → DEGRADED
+      - NOT has_reach AND has_protocol_probe               → DEGRADED
+        (connected + probed, no handshake, no service)        (`no_tls_handshake`
+                                                              / `no_tls_handshake:N`)
+      - NOT has_reach AND NOT has_protocol_probe           → DEGRADED
                                                               (`no_reach_evidence`
                                                               / `nonzero_rc_no_reach_evidence:N`)
 
-      has_reach      = any record id in {service, TLS1, TLS1_1,
-                       TLS1_2, TLS1_3, SSLv2, SSLv3}
-                       (testssl emits `TLS1`, not `TLS1_0`.)
-      has_completion = any record id in {overall_grade, scanTime}
+      has_reach         = a genuine positive read: a protocol record
+                          whose finding shows the handshake completed
+                          (`offered*` / `*downgraded*`), OR a `service`
+                          record naming a real service (a plaintext
+                          banner — how a genuinely no-TLS host still
+                          proves it was reached).
+      has_protocol_probe = any protocol record id in {TLS1, TLS1_1,
+                          TLS1_2, TLS1_3, SSLv2, SSLv3} regardless of
+                          finding (testssl emits `TLS1`, not `TLS1_0`).
+      has_completion     = `overall_grade` present, OR `scanTime` with a
+                          real duration (never "Scan interrupted").
 
     Returns (is_degraded, reason_slug). Empty slug iff not degraded.
     """
@@ -560,51 +578,80 @@ def testssl_is_degraded(
     #
     # NOTE: testssl emits `TLS1` (not `TLS1_0`) for the TLS 1.0 probe.
     # Round-3 had this wrong; fixed here.
-    _REACH_IDS = {
-        "service",
+    _PROTOCOL_IDS = {
         "TLS1_3", "TLS1_2", "TLS1_1", "TLS1",
         "SSLv3", "SSLv2",
     }
     _COMPLETION_IDS = {"overall_grade", "scanTime"}
 
-    has_reach_evidence = False
+    # Reach is a POSITIVE read (round 5, 2026-10-18). Round 4 counted any
+    # service/protocol record id as reach, which mis-classified a failed
+    # handshake as a clean scan: a legacy/reset TLS endpoint emits
+    # `service="Couldn't determine service"` and every protocol as
+    # `not offered` (testssl rc=245, scanTime "Scan interrupted"), and the
+    # parser then fabricated "TLS 1.2/1.3 not offered" findings. See the
+    # 2026-10-18 2139 wrap-up (testssl blind on two TLS hosts).
+    #
+    # A real read is signalled by a protocol record whose finding shows the
+    # handshake COMPLETED (`offered*`, `*downgraded*`) or by a `service`
+    # record naming a real service (a plaintext banner — how a genuinely
+    # no-TLS host still proves it was reached).
+    has_protocol_probe = False
+    has_handshake = False
+    has_real_service = False
     has_completion = False
     for rec in data:
         if not isinstance(rec, dict):
             continue
         rid = rec.get("id") or ""
-        if rid in _REACH_IDS:
-            has_reach_evidence = True
-        if rid in _COMPLETION_IDS:
-            has_completion = True
+        finding = (rec.get("finding") or "").lower()
+        if rid in _PROTOCOL_IDS:
+            has_protocol_probe = True
+            if finding.startswith("offered") or "downgraded" in finding:
+                has_handshake = True
+        elif rid == "service":
+            if "couldn't determine service" not in finding:
+                has_real_service = True
+        elif rid in _COMPLETION_IDS:
+            # overall_grade always counts; scanTime counts only when it is a
+            # real duration, never testssl's "Scan interrupted" marker (what a
+            # crash/abort emits instead of finishing the battery).
+            if rid == "overall_grade" or "scan interrupted" not in finding:
+                has_completion = True
+
+    has_reach_evidence = has_handshake or has_real_service
 
     if not has_reach_evidence:
-        # No service / TLS1_x / SSLv2 / SSLv3 record → testssl didn't
-        # reach the TLS stack at all. Unreachable host or malformed
-        # output. SAFE default: DEGRADED. The legacy
-        # `tool_diagnostic_records_only` slug is gone — engine_problem-
-        # only output now lands here via no_reach_evidence (no service,
-        # no TLS1_x → no_reach_evidence is the correct + sufficient
-        # signal; the diagnostic-marker slug was a forensics nicety the
-        # real-world fix doesn't need).
+        if has_protocol_probe:
+            # Connected and probed the protocols, but no handshake completed
+            # and no service banner read — the "blind" case: a reachable host
+            # whose TLS we could not negotiate (egress reset / legacy / absent
+            # TLS). DEGRADE, not abort: the host's reachability is not in
+            # question, only testssl's TLS read.
+            if rc != 0:
+                return True, f"no_tls_handshake:{rc}"
+            return True, "no_tls_handshake"
+        # No protocol records and no service → testssl never read the host at
+        # all. Unreachable host or diagnostic-only output. SAFE default:
+        # DEGRADED. (engine_problem-only output lands here — the legacy
+        # `tool_diagnostic_records_only` slug is gone; no_reach_evidence is the
+        # correct + sufficient signal.)
         if rc != 0:
             return True, f"nonzero_rc_no_reach_evidence:{rc}"
         return True, "no_reach_evidence"
 
     if not has_completion:
-        # Reached but no overall_grade / scanTime → scan was interrupted
-        # mid-battery. Even with reach records, we don't trust a
-        # truncated verdict on what was/wasn't checked. The truncation
-        # guard 4.8 explicitly called for.
+        # Reached but no overall_grade / real scanTime → scan was interrupted
+        # mid-battery. Even with reach records, we don't trust a truncated
+        # verdict on what was/wasn't checked. The truncation guard 4.8
+        # explicitly called for.
         return True, "scan_incomplete"
 
-    # has_reach AND has_completion → testssl ran the full battery
-    # against the host. Engine_problem / scanProblem records here are
-    # non-fatal diagnostic noise (the routine OCSP / STARTTLS hiccups
-    # in real scans); the completion records prove the test suite
-    # finished anyway. Non-zero rc is fine (testssl returns rc!=0 on
-    # real findings). Zero LOW+ findings is fine — that's the
-    # fully-remediated state v1 exists to detect.
+    # has_reach AND has_completion → testssl ran the full battery against the
+    # host. Engine_problem / scanProblem records here are non-fatal diagnostic
+    # noise (the routine OCSP / STARTTLS hiccups in real scans); the completion
+    # records prove the test suite finished anyway. Zero LOW+ findings is fine —
+    # that's the fully-remediated state v1 exists to detect.
     return False, ""
 
 
@@ -612,6 +659,15 @@ def testssl_is_degraded(
 # Obsidian 193 / 4.7 correction 2026-08-29), so the slug→disposition split lives
 # HERE, co-located with the function that knows what the slugs mean — not in a
 # lookup table at the call site.
+#
+# 2026-10-19 — what the runner ACTUALLY does with EITHER class: run_testssl_phase
+# raises DegradedRunError for any degraded verdict (ABORT or DEGRADE alike), and
+# the top-level handler marks the WHOLE heavy run degraded and skips the phases
+# after testssl (httpx, gau, naabu, fingerprintx) — there is no per-phase
+# continue path for a degraded testssl. The disposition split below is therefore
+# descriptive for tests (testssl_degradation()) only, until the runner routes the
+# two dispositions differently: shipping no_tls_handshake as DEGRADE does NOT
+# keep the rest of the heavy run going, it records the run degraded and stops it.
 #
 # ABORT: the reachability ANCHOR failing, reported via testssl. Note the anchor
 # is the reachability CONDITION, not testssl-the-tool: testssl dying on a
@@ -627,7 +683,8 @@ _TESTSSL_ABORT_SLUGS = ("no_reach_evidence", "nonzero_rc_no_reach_evidence", "sc
 # DEGRADE: the tool misbehaved; the target's reachability is not in question.
 _TESTSSL_DEGRADE_SLUGS = ("tool_missing", "wall_timeout", "no_jsonfile",
                           "empty_jsonfile", "unexpected_json_shape",
-                          "stat_failed", "json_parse_failed")
+                          "stat_failed", "json_parse_failed",
+                          "no_tls_handshake")
 
 
 def testssl_degradation(reason: str) -> Degradation:

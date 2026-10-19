@@ -128,6 +128,7 @@ class DegradedRunError(Exception):
       - "validate_mode_target_not_allowlisted" — batch 2 (validate-mode)
       - "vpn_bringup_failed"            — batch 2 (validate-mode)
       - "asset_pre_flight_unreachable"  — pre-first-chunk probe failed
+      - "no_tls_handshake"              — connected + probed but no TLS handshake completed (egress reset / decommissioned / absent TLS)
     """
 
     def __init__(self, reason: str, context: str = "") -> None:
@@ -648,6 +649,7 @@ _CUT_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
     ("content_signature_blocked",   CUT_FILTER),
     ("ban",                         CUT_FILTER),
     ("tls_handshake_failed",        CUT_FILTER),  # 2026-10-18: reset AFTER connect = refusal by a reachable host (legacy cipher floor), not transport
+    ("no_tls_handshake",            CUT_FILTER),  # 2026-10-18: connected + probed but no TLS handshake completed (egress reset / decommissioned / absent TLS) — reachable, not transport
     ("curl_failed",                 CUT_TRANSPORT),
     ("homepage_fetch_failed",       CUT_TRANSPORT),
     ("all_probes_failed",           CUT_TRANSPORT),

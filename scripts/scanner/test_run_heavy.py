@@ -177,19 +177,93 @@ def test_service_only_plus_completion_is_NOT_degraded():
 
 
 def test_tls1_legacy_id_satisfies_reach():
-    """testssl emits `TLS1` (NOT `TLS1_0`) for the TLS 1.0 probe.
-    Round-3 had the ID wrong; round-4 fixes the reach set. Verify the
-    canonical token works as reach evidence.
+    """testssl emits `TLS1` (NOT `TLS1_0`) for the TLS 1.0 probe — and reach
+    is now a POSITIVE read (round 5), so the `TLS1` token only counts when its
+    finding shows the handshake completed (`offered`). A bare `not offered` is
+    not reach evidence.
     """
     p = _write_json([
         {"id": "TLS1", "ip": "host/1.2.3.4", "port": "443",
+         "severity": "OK", "finding": "offered"},
+        {"id": "scanTime", "ip": "host/1.2.3.4", "port": "443",
+         "severity": "INFO", "finding": "98s"},
+    ])
+    try:
+        degraded, reason = testssl_is_degraded(0, p, "", "")
+        assert not degraded, f"TLS1 offered + completion misclassified: {reason!r}"
+    finally:
+        p.unlink()
+
+
+# Verbatim shape of the "blind" deep scan — ftp.sciimage.com 2026-09-06 run
+# e6360fac (and staging-gpt55.prodexlabs.com 09-28 onward): testssl CONNECTED
+# and probed every protocol but completed NO handshake. `service` reads
+# "Couldn't determine service", every protocol reads `not offered`, scanTime
+# reads "Scan interrupted", rc=245. Round-4 marked this as a clean complete
+# scan and the parser fabricated "TLS 1.2/1.3 not offered" findings; round-5
+# degrades it as no_tls_handshake.
+_BLIND_RECORDS = [
+    {"id": "engine_problem", "ip": "/", "port": "443", "severity": "WARN",
+     "finding": "No engine or GOST support via engine with your /opt/testssl.sh/bin/openssl.Linux.x86_64"},
+    {"id": "service", "ip": "ftp.sciimage.com/24.157.51.76", "port": "443",
+     "severity": "DEBUG", "finding": "Couldn't determine service, skipping all HTTP checks"},
+    {"id": "SSLv2", "ip": "ftp.sciimage.com/24.157.51.76", "port": "443",
+     "severity": "OK", "finding": "not offered"},
+    {"id": "SSLv3", "ip": "ftp.sciimage.com/24.157.51.76", "port": "443",
+     "severity": "OK", "finding": "not offered"},
+    {"id": "TLS1", "ip": "ftp.sciimage.com/24.157.51.76", "port": "443",
+     "severity": "INFO", "finding": "not offered"},
+    {"id": "TLS1_1", "ip": "ftp.sciimage.com/24.157.51.76", "port": "443",
+     "severity": "INFO", "finding": "not offered"},
+    {"id": "TLS1_2", "ip": "ftp.sciimage.com/24.157.51.76", "port": "443",
+     "severity": "MEDIUM", "finding": "not offered"},
+    {"id": "TLS1_3", "ip": "ftp.sciimage.com/24.157.51.76", "port": "443",
+     "severity": "LOW", "finding": "not offered"},
+    {"id": "scanTime", "ip": "ftp.sciimage.com/24.157.51.76", "port": "443",
+     "severity": "WARN", "finding": "Scan interrupted"},
+]
+
+
+def test_blind_no_handshake_rc245_is_degraded():
+    """The blind shape: connected + probed, no handshake, no service, rc=245.
+    Must be DEGRADED (no_tls_handshake) so it is not credited as coverage and
+    does not emit false "TLS not offered" findings.
+    """
+    p = _write_json(list(_BLIND_RECORDS))
+    try:
+        degraded, reason = testssl_is_degraded(245, p, "", "")
+        assert degraded, "blind no-handshake run must be degraded"
+        assert reason == "no_tls_handshake:245", f"got {reason!r}"
+    finally:
+        p.unlink()
+
+
+def test_blind_no_handshake_rc0_is_degraded():
+    """Same blind shape with rc=0 — still degraded; the slug drops the suffix."""
+    p = _write_json(list(_BLIND_RECORDS))
+    try:
+        degraded, reason = testssl_is_degraded(0, p, "", "")
+        assert degraded, "blind no-handshake run must be degraded"
+        assert reason == "no_tls_handshake", f"got {reason!r}"
+    finally:
+        p.unlink()
+
+
+def test_not_offered_protocol_line_is_not_reach():
+    """A bare 'not offered' protocol line is NOT reach evidence on its own —
+    it is exactly what a reset/absent-TLS host emits. Without a positive
+    handshake or a real service banner the run is degraded (no_tls_handshake).
+    """
+    p = _write_json([
+        {"id": "TLS1_3", "ip": "host/1.2.3.4", "port": "443",
          "severity": "OK", "finding": "not offered"},
         {"id": "scanTime", "ip": "host/1.2.3.4", "port": "443",
          "severity": "INFO", "finding": "98s"},
     ])
     try:
         degraded, reason = testssl_is_degraded(0, p, "", "")
-        assert not degraded, f"TLS1+completion misclassified: {reason!r}"
+        assert degraded, "bare not-offered line must not count as reach"
+        assert reason == "no_tls_handshake", f"got {reason!r}"
     finally:
         p.unlink()
 

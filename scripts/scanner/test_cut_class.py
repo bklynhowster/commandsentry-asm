@@ -133,6 +133,15 @@ def test_tls_handshake_failed_maps_to_filter():
     assert D.classify_cut_reason("tls_handshake_failed") == D.CUT_FILTER
 
 
+def test_no_tls_handshake_maps_to_filter():
+    """2026-10-18 testssl blind fix: connected + probed but no TLS handshake
+    completed is a reachable host refusing/absent TLS at the handshake layer,
+    not a transport failure. Must classify to filter (same class as the light
+    tier's tls_handshake_failed) so the new slug never reads `unclassified`."""
+    assert D.classify_cut_reason("no_tls_handshake") == D.CUT_FILTER
+    assert D.classify_cut_reason("no_tls_handshake:245") == D.CUT_FILTER
+
+
 # ── phase_cut_reason: three producers, three keys ───────────────────────────
 def test_reads_all_three_producer_keys():
     assert D.phase_cut_reason({"ok": False, "reason": "wall_clock_cut_400s"}) \
@@ -166,6 +175,7 @@ def test_degraded_wins_even_when_ok_is_true():
 # taxonomy that under-counts every class until someone notices.
 DOCUMENTED_SLUGS: dict[str, str] = {
     "rotation_exhausted":                          D.CUT_FILTER,
+    "no_tls_handshake":                            D.CUT_FILTER,
     "tool_status_invariant":                       D.CUT_TOOL,
     "target_unreachable_after_run":                D.CUT_TRANSPORT,
     "target_unreachable_pre_run":                  D.CUT_TRANSPORT,
