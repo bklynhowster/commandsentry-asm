@@ -385,9 +385,13 @@ def mark_tool_skipped(ctx: ScanContext, tool_name: str, reason: str) -> None:
 
 
 def tls_check_is_degraded(exception: BaseException) -> tuple[bool, str]:
-    """Python ssl/socket exceptions during TLS handshake.
-    Distinguishes "connection refused" (target down — degraded) from
-    "TLS handshake error" (got a verdict — healthy)."""
+    """Classify a failure of the CONNECT stage of check_tls (TCP → port 443).
+
+    Only sees exceptions raised by socket.create_connection(). A failure here
+    means we never reached a listener, so the network_* labels are honest. The
+    handshake that follows is classified separately by
+    tls_handshake_stage_reason() — see that helper's docstring for why the two
+    stages were split (2026-10-18 TLS reclassify)."""
     msg = str(exception).lower()
     # Network-layer failures: degraded
     if isinstance(exception, (ConnectionRefusedError, ConnectionResetError, TimeoutError)):
@@ -404,6 +408,29 @@ def tls_check_is_degraded(exception: BaseException) -> tuple[bool, str]:
     if "ssl" in msg or "handshake" in msg:
         return True, "tls_handshake_failed"
     return True, "unknown_exception"
+
+
+def tls_handshake_stage_reason(exception: BaseException) -> str:
+    """Classify a failure raised AFTER the TCP connect already succeeded.
+
+    check_tls() splits connect() from wrap_socket() so this helper only ever
+    sees handshake-stage exceptions. Once create_connection() returns, the host
+    demonstrably answers on 443 — so a failure here is a TLS-handshake
+    rejection, NOT an unreachable host.
+
+    The 2026-10-18 diagnosis proved the cost of merging the stages:
+    ftp.unimacgraphics.com / ftp.commandmi.com accept the TCP connect, then
+    RST the modern ClientHello (their floor is legacy TLS 1.0/1.1 + 3DES /
+    RSA-SHA1 while Python ssl.create_default_context() speaks OpenSSL
+    SECLEVEL-2 TLS 1.2/1.3) — surfaced as ConnectionResetError. Fed through the
+    old single try into tls_check_is_degraded(), that reset hit the isinstance
+    network check first and was logged network_unreachable. Reclassify it as
+    what it actually is.
+    """
+    if isinstance(exception, (ConnectionResetError, ConnectionAbortedError,
+                              BrokenPipeError, TimeoutError, ssl.SSLError)):
+        return "tls_handshake_failed"
+    return "unknown_exception"
 
 
 def httpx_header_key(header_name: str) -> str:
@@ -632,8 +659,22 @@ def naabu_is_degraded(rc: int, stdout: str) -> tuple[bool, str]:
 def check_tls(ctx: ScanContext) -> None:
     """Inspect the TLS cert via Python's ssl module (no openssl subprocess)."""
     ctx.tools_run.append("tls_check")
+
+    # Stage 1 — TCP connect. A failure here is transport: we never reached a
+    # listener, so tls_check_is_degraded's network_* label is honest.
     try:
-        with socket.create_connection((ctx.hostname, 443), timeout=10) as sock:
+        sock = socket.create_connection((ctx.hostname, 443), timeout=10)
+    except Exception as e:
+        log(f"tls_check: connect failed: {e}")
+        _, reason = tls_check_is_degraded(e)
+        mark_tool_degraded(ctx, "tls_check", reason)
+        return
+
+    # Stage 2 — TLS handshake. create_connection() already returned, so the host
+    # answers on 443; any failure now is a handshake rejection (e.g. a legacy
+    # cipher floor RSTing our modern ClientHello), NOT network_unreachable.
+    try:
+        with sock:
             sslctx = ssl.create_default_context()
             sslctx.check_hostname = False
             sslctx.verify_mode = ssl.CERT_NONE
@@ -642,9 +683,8 @@ def check_tls(ctx: ScanContext) -> None:
                 der  = ssock.getpeercert(binary_form=True)
                 version = ssock.version()
     except Exception as e:
-        log(f"tls_check: connect/handshake failed: {e}")
-        _, reason = tls_check_is_degraded(e)
-        mark_tool_degraded(ctx, "tls_check", reason)
+        log(f"tls_check: handshake failed: {e}")
+        mark_tool_degraded(ctx, "tls_check", tls_handshake_stage_reason(e))
         return
 
     not_after_str = cert.get("notAfter", "")

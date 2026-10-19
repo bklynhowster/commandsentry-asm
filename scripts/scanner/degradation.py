@@ -647,6 +647,7 @@ _CUT_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
     ("tech_detect_rc",              CUT_TOOL),
     ("content_signature_blocked",   CUT_FILTER),
     ("ban",                         CUT_FILTER),
+    ("tls_handshake_failed",        CUT_FILTER),  # 2026-10-18: reset AFTER connect = refusal by a reachable host (legacy cipher floor), not transport
     ("curl_failed",                 CUT_TRANSPORT),
     ("homepage_fetch_failed",       CUT_TRANSPORT),
     ("all_probes_failed",           CUT_TRANSPORT),
