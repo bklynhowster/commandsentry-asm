@@ -125,6 +125,14 @@ def test_prefix_matching_does_not_over_reach():
     assert D.classify_cut_reason("urban_myth") == D.CUT_UNCLASSIFIED
 
 
+def test_tls_handshake_failed_maps_to_filter():
+    """2026-10-18 TLS reclassify (Fix 1): a reset raised AFTER the TCP connect
+    is a refusal by a reachable endpoint (legacy cipher floor RSTing the modern
+    ClientHello), not a transport failure. Must classify as filter so the stage
+    split doesn't have the new slug reading `unclassified` in production."""
+    assert D.classify_cut_reason("tls_handshake_failed") == D.CUT_FILTER
+
+
 # ── phase_cut_reason: three producers, three keys ───────────────────────────
 def test_reads_all_three_producer_keys():
     assert D.phase_cut_reason({"ok": False, "reason": "wall_clock_cut_400s"}) \
