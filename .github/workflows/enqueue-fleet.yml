@@ -32,7 +32,7 @@ on:
         type: string
         default: '25'
       exclude_suffixes:
-        description: 'Comma-separated apexes/hostnames to EXCLUDE (an entry also excludes its subdomains). Command FortiGate set: commandcommcentral.com,sciimage.com'
+        description: 'Comma-separated apexes/hostnames to EXCLUDE (an entry also excludes its subdomains). Optional scheduling exclusion; safe-only routing itself is evidence-based (rule 4b).'
         type: string
         default: ''
       dry_run:
@@ -80,10 +80,11 @@ jobs:
           if [ "${BATCH_LIMIT:-0}" != "0" ]; then LIMIT_SQL="limit ${BATCH_LIMIT}"; fi
 
           # ── exclude_suffixes (2026-09-06) ───────────────────────────────────────
-          # Skip named apexes/hostnames and everything under them. Built for the
-          # FortiGate-fronted set (commandcommcentral.com, sciimage.com), which trips
-          # WAF bans and gets ~no template coverage anyway -- see FORTIGATE_APEXES /
-          # FORTIGATE_HOSTNAMES in run_medium.py.
+          # Skip named apexes/hostnames and everything under them (operator-supplied).
+          # The FortiGate set is no longer a fixed list: safe-only routing is now
+          # evidence-based (rule 4b) and decided at scan time by
+          # run_medium.is_fortigate_target from the recorded device vendor, so an
+          # exclusion here is a scheduling choice, not the safety control.
           #
           # Charset-validated before it reaches SQL: letters, digits, dot, hyphen and
           # comma ONLY. That bars quotes and semicolons, so a dispatch input cannot

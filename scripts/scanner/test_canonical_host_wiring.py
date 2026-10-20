@@ -193,8 +193,14 @@ def test_validate_mode_allowlist_still_uses_asset_hostname():
     ), "validate-mode allowlist must assert on the ASSET hostname"
 
 
-def test_fortigate_match_still_uses_asset_hostname():
-    assert "ctx.hostname in FORTIGATE_HOSTNAMES" in CODE
+def test_fortigate_target_reads_evidence_not_a_hostname_list():
+    """Branches 2+3 (the hand hostname/apex lists) are gone: the predicate
+    keys on runtime waf_kind and the recorded per-asset vendor."""
+    start = CODE.index("def is_fortigate_target")
+    end = CODE.index("def ", start + 1)
+    body = CODE[start:end]
+    assert "ctx.hostname" not in body, "predicate must not key on a hand hostname"
+    assert "vendor_product" in body, "predicate must read the recorded vendor"
 
 
 def test_resolution_runs_before_detect_waf():
