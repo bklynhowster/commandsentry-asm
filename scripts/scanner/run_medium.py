@@ -81,6 +81,7 @@ from canonical_host import (  # noqa: E402  (4.7 77-82 — shared decision modul
     resolve_canonical_host,
 )
 import software_inventory  # noqa: E402  (302 step 1)
+from enforcement_mechanism import is_fortinet_vendor  # noqa: E402  (rule 4b: evidence-based FortiGate routing)
 from tech_detect import (  # noqa: E402  (4.7 ⑭′ — shared with run_light)
     merge_tech_detection,
     parse_httpx_rows,
@@ -3182,44 +3183,34 @@ def detect_tech_stack(ctx: ScanContext) -> None:
 # FortiGate may not announce itself in headers. The allowlist is the
 # defensive fallback so we apply safe-only + patient defaults reliably.
 #
-# Source-of-truth: CLAUDE.md "Command hosting topology" memory +
-# 2026-05-31 audit. Update when new Command vhosts come into scope or
-# move between hosting tiers.
-FORTIGATE_HOSTNAMES: set[str] = {
-    "test.commandcommcentral.com",
-    "www.commandcommcentral.com",
-    "api.commandcommcentral.com",  # Monitor mode, but still FortiGate
-    "sciimage.com",
-    "www.sciimage.com",
-    "vpn.sciimage.com",
-    "ftp.sciimage.com",
-}
-
-# Apex domains where every subdomain is on Command's FortiGate. Cheaper
-# than enumerating every vhost; safer than relying only on wafw00f.
-FORTIGATE_APEXES: set[str] = {
-    "commandcommcentral.com",
-    "sciimage.com",
-}
+# ── FortiGate routing (rule 4b) ─────────────────────────────────────────────
+# Safe-only routing keys on EVIDENCE, never on a hand-written list of hosts.
+# Two branches: the scan's own runtime wafw00f verdict (a) and the classifier's
+# recorded Fortinet vendor on THIS asset (b), read off the poll descriptor. No
+# hostname list, no apex inheritance.
+def _descriptor_asset(ctx) -> dict:
+    """The per-asset block of the poll descriptor, or {} — fail closed to 'no
+    evidence' when the descriptor is absent (e.g. __new__-built test contexts)."""
+    desc = getattr(ctx, "descriptor", None)
+    if not isinstance(desc, dict):
+        return {}
+    asset = desc.get("asset")
+    return asset if isinstance(asset, dict) else {}
 
 
 def is_fortigate_target(ctx: ScanContext) -> bool:
-    """True if the scan target sits behind Command's FortiGate.
+    """True if this scan target sits behind a FortiGate, on evidence only.
 
     Order of evidence:
-      1. wafw00f said so (ctx.waf_kind contains 'forti')
-      2. exact hostname match against FORTIGATE_HOSTNAMES
-      3. apex domain match against FORTIGATE_APEXES
+      1. wafw00f said so at scan time (ctx.waf_kind contains 'forti')
+      2. the classifier recorded a Fortinet vendor on THIS asset
+         (vendor_product_confidence in {suspected, confirmed})
     """
     if ctx.waf_kind and "forti" in ctx.waf_kind:
         return True
-    if ctx.hostname in FORTIGATE_HOSTNAMES:
-        return True
-    # Apex / subdomain match
-    parts = ctx.hostname.split(".")
-    for i in range(len(parts)):
-        candidate = ".".join(parts[i:])
-        if candidate in FORTIGATE_APEXES:
+    asset = _descriptor_asset(ctx)
+    if asset.get("vendor_product_confidence") in ("suspected", "confirmed"):
+        if is_fortinet_vendor(asset.get("vendor_product")):
             return True
     return False
 
@@ -3416,7 +3407,7 @@ def build_chunk_plan(ctx: ScanContext) -> list[tuple[str, str | None, str]]:
     # IPs for breadth-via-rotation rather than breadth-via-templates.
     if is_fortigate_target(ctx):
         log(f"  target_class=FortiGate (waf_kind={ctx.waf_kind}, "
-            f"hostname_match={ctx.hostname in FORTIGATE_HOSTNAMES}) → safe-only plan")
+            f"vendor={_descriptor_asset(ctx).get('vendor_product')}) → safe-only plan")
         return [
             ("medium", "tech", f"FortiGate safe-only chunk {i+1}/5")
             for i in range(5)
@@ -4155,15 +4146,14 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         if is_fortigate_target(ctx):
             ctx.chunk_plan_meta["plan_delta_reason"] = "routed_safe_only"
             ctx.chunk_plan_meta["plan_routing"] = "safe_only"
-            # ⚠ Presumption vs evidence. wafw00f has never once returned a
-            # named FortiWeb verdict fleet-wide (all-time: 7 <none>, 2 generic,
-            # 0 named), so in practice this route is decided by the hardcoded
-            # FORTIGATE_HOSTNAMES / FORTIGATE_APEXES lists, not by observation.
-            # Record which, so the record never implies evidence we do not have.
+            # Evidence, not presumption (rule 4b). Branch a = the scan's own
+            # wafw00f verdict (60 named FortiWeb verdicts since the ANSI-strip
+            # fix — relay 222, ruling 9); branch b = the classifier's recorded
+            # Fortinet vendor on this asset. Record which.
             ctx.chunk_plan_meta["plan_routing_basis"] = (
                 "wafw00f_confirmed"
                 if (ctx.waf_kind and "forti" in ctx.waf_kind)
-                else "hardcoded_presumption"
+                else "recorded_device_class"
             )
         # 🔴 Derive this from ctx, NEVER from tool_status. Run #2649 recorded
         # `tech_detect_unusable` on a run where detection SUCCEEDED (17 techs)

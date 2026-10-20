@@ -76,7 +76,8 @@ _HOSTING_EDGE_CLASSES = ("hosting_edge",)
 # the VENDOR means the wrong class cannot route those hosts into a signature
 # test they will silently fail. The class fix is separate (Axis 1) and does not
 # have to land first for the verdict to stop over-claiming.
-_RATE_BASED_VENDOR_TOKENS = ("forti", "automattic")
+_FORTINET_TOKEN = "forti"  # FortiWeb / FortiGate / Fortinet — single spelling, see is_fortinet_vendor
+_RATE_BASED_VENDOR_TOKENS = (_FORTINET_TOKEN, "automattic")
 
 
 def _vendor_haystack(vendor_product) -> str:
@@ -109,6 +110,14 @@ def is_rate_based_vendor(vendor_product) -> bool:
     if not hay:
         return False
     return any(tok in hay for tok in _RATE_BASED_VENDOR_TOKENS)
+
+
+def is_fortinet_vendor(vendor_product) -> bool:
+    """True if the recorded vendor names Fortinet (FortiWeb / FortiGate /
+    Fortinet). Single spelling of the token: _FORTINET_TOKEN, also read by
+    _RATE_BASED_VENDOR_TOKENS above and by run_medium.is_fortigate_target's
+    branch b. Shape-tolerant via _vendor_haystack (dict, bare string, none)."""
+    return _FORTINET_TOKEN in _vendor_haystack(vendor_product)
 
 
 def resolve_enforcement_mechanism(device_class, vendor_product=None) -> str:

@@ -178,6 +178,8 @@ FETCH_ASSET_SQL = """
 select a.asset_id, a.name, a.organization, a.type, a.kind, a.apex_domain,
        a.aliases, a.current_risk,
        a.enforcement_probe_authorized,
+       a.device_class, a.device_class_confidence,
+       a.vendor_product, a.vendor_product_confidence,
        s.top_hosting_org
 from public.assets a
 left join public.asset_surface s on s.asset_id = a.asset_id
@@ -318,6 +320,13 @@ def build_descriptor(
             "apex_domain":  asset.get("apex_domain"),
             "aliases":      asset.get("aliases") or [],
             "current_risk": asset.get("current_risk"),
+            # FortiGate evidence-based routing (rule 4b): the recorded device
+            # class / vendor, read by is_fortigate_target's branch b off this
+            # descriptor. None when the column is absent.
+            "device_class":               asset.get("device_class"),
+            "device_class_confidence":    asset.get("device_class_confidence"),
+            "vendor_product":             asset.get("vendor_product"),
+            "vendor_product_confidence":  asset.get("vendor_product_confidence"),
             # 2026-06-02: surface top_hosting_org so scanner.yml's
             # vpn_decision step can route Light scans through VPN for
             # IP-class-sensitive hosts (Pressable / Atomic). None when

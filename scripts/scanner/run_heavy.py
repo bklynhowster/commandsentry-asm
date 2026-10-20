@@ -3070,9 +3070,10 @@ def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> N
             # Sets waf_detected ONLY, never waf_kind: this probe is presence-only
             # and names no vendor (4.7 Q3/Q8). needs_softened_rate() keys on
             # waf_detected, so the gentler rate + intrusive-tag exclusion fire.
-            # The FortiGate SAFE-ONLY branch requires waf_kind=='forti*', which
-            # only wafw00f (or the FORTIGATE_HOSTNAMES allowlist) can establish —
-            # this deliberately does not claim it.
+            # The FortiGate SAFE-ONLY branch requires Fortinet evidence — the
+            # scan's own wafw00f verdict (waf_kind=='forti*') or the classifier's
+            # recorded Fortinet vendor on this asset — this deliberately does not
+            # claim it.
             ctx.waf_detected = True
             # 310: the measurement, for the close-out. The finding this closes is the
             # affirmative "no enforcing WAF" one (_maybe_emit_no_waf_finding, the

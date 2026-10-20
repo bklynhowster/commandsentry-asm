@@ -22,6 +22,7 @@ from enforcement_mechanism import (  # noqa: E402
     MECHANISM_SIGNATURE,
     enforcement_applies,
     is_rate_based_vendor,
+    is_fortinet_vendor,
     resolve_enforcement_mechanism,
 )
 
@@ -69,6 +70,14 @@ def test_bare_string_vendor_resolves_like_the_dict():
         assert is_rate_based_vendor(junk) is False, junk
 
 
+
+
+def test_is_fortinet_vendor():
+    for name in ("Fortinet", "fortinet", "FortiWeb", "FortiGate"):
+        assert is_fortinet_vendor({"vendor": name}) is True, name
+        assert is_fortinet_vendor(name) is True, name
+    for non in ("Automattic", "Cloudflare", "Google Cloud", None, "", 123, []):
+        assert is_fortinet_vendor(non) is False, non
 
 
 def test_fixtures_cover_all_three_mechanisms():

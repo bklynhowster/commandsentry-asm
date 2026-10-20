@@ -503,7 +503,7 @@ def _ctx_with_nuclei_entries(**kw):
         "omitted_unconditional": ["critical,high", "medium:cve",
                                   "medium:exposure,config"],
         "plan_routing": "safe_only",
-        "plan_routing_basis": "hardcoded_presumption",
+        "plan_routing_basis": "wafw00f_confirmed",
         "plan_delta_reason": "routed_safe_only",
     }
     return ctx
@@ -536,7 +536,7 @@ def test_chunk_plan_meta_actually_REACHES_the_nuclei_entry():
     assert entry.get("omitted_unconditional") == [
         "critical,high", "medium:cve", "medium:exposure,config"], (
         f"chunk_plan_meta did not reach the nuclei entry: {entry}")
-    assert entry.get("plan_routing_basis") == "hardcoded_presumption", entry
+    assert entry.get("plan_routing_basis") == "wafw00f_confirmed", entry
     assert entry.get("ok") is True, "the merge must not disturb the verdict"
     assert "omitted_unconditional" not in ctx.tool_status["wafw00f"], (
         "meta is nuclei-scoped — stamping it on wafw00f/nikto/ffuf makes a "

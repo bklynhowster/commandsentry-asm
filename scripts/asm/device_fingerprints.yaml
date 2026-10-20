@@ -105,13 +105,15 @@ fingerprints:
     vendor_product: {vendor: Fortinet, product: FortiGate}
 
   # ── WAF behavioral (HIGH) ────────────────────────────────────────────────
-  # NOTE (2026-07-18): the fwbbot_check + waf_vendor observations are not yet
-  # emitted by gather_observations (run_medium computes ctx.waf_kind but nothing
-  # persists it — the E1 gap), so these rows are DORMANT today. They are kept,
-  # not deleted, because they ARE empirical/vendor-identifying (the device names
-  # itself) — they light up the moment E1 wires the observation. This is the
-  # opposite of the ip_range rows, which were deleted: those could never be
-  # anything but insider inference.
+  # NOTE (2026-07-18, corrected 2026-10-20): the fwbbot_check observation is not
+  # yet emitted (grep finds it only under scripts/normalize/*), so the
+  # challenge-endpoint row below is DORMANT until the active-probe observation is
+  # wired (Phase B/D). The waf_vendor rows are LIVE: device_class_runner.py
+  # (:1005-1007) emits obs["waf_vendor"] from the wafw00f verdict — the
+  # recorded-vendor path the FortiGate safe-only branch b reads. These rows are
+  # kept, not deleted, because they ARE empirical/vendor-identifying (the device
+  # names itself); the opposite of the ip_range rows, which were deleted because
+  # those could never be anything but insider inference.
   # 4.7 Q1 rename 2026-07-20 (vendor + artifact explicit in the name). Cited in
   # artifact_signatures.yaml (challenge_endpoint_path). DORMANT until the
   # active-probe `fwbbot_check` observation is wired (Phase B/D); corroborating
@@ -290,7 +292,7 @@ fingerprints:
   # exclusive with the vendor Server rows above (a WAF/CDN rewrites Server to its own brand); any
   # residual overlap (e.g. X-Powered-By passed through a CDN) is neutralised because origin_host
   # loses every classify() tie AND yields to the cloud fallback (runner _resolve). An SSH-bannered
-  # appliance (ftp.sciimage.com) has NO app-server header -> stays edge_firewall (4.7 Q5).
+  # appliance (ftp.sciimage.com) has NO app-server header; LIVE it is waf/suspected (empty vendor), not edge_firewall (4.7 Q5's expectation is stale, 2026-10-20).
   - signal: origin_host_app_server_header
     observation: http_headers
     match_regex: "server:\\s*(apache|nginx|gunicorn|werkzeug|microsoft-iis|iis|jetty|tomcat|kestrel)|x-powered-by:|x-aspnet|x-django|x-rails"
