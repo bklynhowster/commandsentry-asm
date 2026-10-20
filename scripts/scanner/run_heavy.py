@@ -87,6 +87,7 @@ import json
 import os
 import re
 import hashlib
+import ipaddress
 import secrets
 import subprocess
 import sys
@@ -941,6 +942,178 @@ def _dump_small_testssl_json(jsonfile: Path) -> None:
             "diagnostic")
 
 
+# ─── CAA verdict shim (testssl 3.3dev e0c0a665 bug, 2026-10-19) ─────────────
+# Upstream testssl 3.3dev commits from 06-22 on broke DNS_CAArecord: the
+# check's guard `[[ ! $tmp =~ [a-zA-Z] ]]` reads a `local -i ret=0 tmp=0`
+# integer that is only ever assigned inside the `else` branch it guards, so
+# EVERY target takes the skip branch and emits the INFO record below; the
+# caller also still calls `get_caa_rr_record` while the function was renamed to
+# `get_caa_rrecord` (command-not-found). Net: no real CAA verdict since the
+# 08-26 image rebuild pulled the buggy clone. Upstream bug, not ours.
+#
+# This shim is the fallback: when the only DNS_CAArecord record is that exact
+# INFO skip and the target is a hostname (not an IP literal), we do the CAA
+# dig walk-up upstream's loop would have done, and hand the parser a real
+# verdict in place of the skip. The parser still mints source='testssl' + the
+# stable finding id, so the existing rows re-observe rather than duplicate. A
+# real testssl verdict (the day upstream fixes it) passes through untouched.
+_CAA_SKIP_FINDING = "not checked IP address scan, no domain to query"
+_CAA_NO_FINDING = "--"
+_CAA_ARTIFACT_NAME = "dns_caa"
+_DIG_STATUS_RE = re.compile(r"status:\s*([A-Z]+)")
+# RFC 6844/8659: CAA is only ever published at the apex of a name, so the
+# walk-up stops at the two-label suffix — querying the bare TLD is scan noise.
+_CAA_RECORD_LINE_RE = re.compile(r"\bIN\s+(?:CAA|TYPE257)\s+")
+
+
+def _is_ip_literal(host: str) -> bool:
+    """True when host is a bare IPv4 or IPv6 literal (no domain to query CAA on)."""
+    try:
+        ipaddress.ip_address(host.strip())
+        return True
+    except ValueError:
+        return False
+
+
+def _caa_walk_nodes(hostname: str) -> list[str]:
+    """Suffixes from the full FQDN up to (incl.) the two-label suffix — the
+    nodes upstream's `caa_node=${caa_node#*.}` loop queries, minus the bare
+    TLD. "a.b.example.com" -> ["a.b.example.com", "b.example.com",
+    "example.com"]."""
+    labels = [l for l in hostname.strip().rstrip(".").split(".") if l]
+    return [".".join(labels[i:]) for i in range(max(0, len(labels) - 1))]
+
+
+def _dig_caa(node: str) -> tuple[int, str]:
+    """One dig CAA lookup. Returns (rc, stdout). Matches upstream's per-attempt
+    `+timeout=3`; +tries=1 so a SERVFAIL is observed, not masked into a longer
+    timeout. run_cmd already maps FileNotFoundError->127 and timeout->124."""
+    rc, out, _ = run_cmd(
+        ["dig", "+timeout=3", "+tries=1", "+noall", "+comments", "+answer",
+         "-t", "CAA", node],
+        timeout=8,
+    )
+    return rc, out
+
+
+def _parse_caa_answer(rc: int, out: str) -> tuple[str, list[str]]:
+    """Classify one dig answer into (status, caa_values).
+
+    status ∈ {"unmeasurable", "noerror", "nxdomain"} — a non-zero dig exit, a
+    SERVFAIL/REFUSED header, or an unreadable header is "unmeasurable" and MUST
+    NOT be filed as "no CAA". caa_values is the rdata of every CAA/TYPE257
+    record in the answer section; a CNAME-only answer yields an empty list (a
+    CNAME line is not a CAA line), matching upstream's ignore-CNAME-only rule.
+    """
+    if rc != 0:
+        return "unmeasurable", []
+    m = _DIG_STATUS_RE.search(out or "")
+    status = m.group(1) if m else ""
+    if status in ("SERVFAIL", "REFUSED") or status not in ("NOERROR", "NXDOMAIN"):
+        return "unmeasurable", []
+    caa: list[str] = []
+    for line in (out or "").splitlines():
+        if _CAA_RECORD_LINE_RE.search(line):
+            parts = line.split(None, 4)
+            if len(parts) >= 5:
+                caa.append(parts[4])
+    return status.lower(), caa
+
+
+def _lookup_caa(hostname: str) -> tuple[str, dict]:
+    """Walk up from the FQDN toward the TLD doing dig CAA lookups, stopping at
+    the first node with a non-empty CAA RRset. Returns (verdict, details):
+    verdict ∈ {"no_caa", "caa_present", "unmeasurable"}; details carries the
+    walk for the dns_caa artifact."""
+    nodes = _caa_walk_nodes(hostname)
+    walk: list[dict] = []
+    if not nodes:
+        return "unmeasurable", {"reason": "no_queryable_nodes", "walk": walk}
+    for node in nodes:
+        rc, out = _dig_caa(node)
+        status, caa = _parse_caa_answer(rc, out)
+        walk.append({"node": node, "status": status, "caa": caa})
+        if status == "unmeasurable":
+            return "unmeasurable", {"reason": node, "walk": walk}
+        if caa:
+            return "caa_present", {"node": node, "caa": caa, "walk": walk}
+    return "no_caa", {"walk": walk}
+
+
+def _apply_caa_shim(
+    ctx: HeavyScanContext, jsonfile: Path
+) -> tuple[Path, dict | None]:
+    """Rewrite the DNS_CAArecord INFO skip (the testssl 3.3dev bug) into a real
+    verdict, in a patched copy of the testssl JSON. The raw artifact stays
+    unmodified (the caller stores jsonfile's bytes verbatim). Returns
+    (parse_path, artifact): parse_path is the patched file when the shim fired,
+    else jsonfile; artifact is the dns_caa record, or None when it didn't fire
+    (IP-literal target, or no skip record present).
+
+    Non-fatal by design: this is a fallback on top of testssl's own verdict,
+    not a load-bearing step. Any unexpected error after the skip-match is
+    caught here and returns (jsonfile, None), so it can never fail the whole
+    heavy run (which would skip httpx/gau/naabu/fingerprintx — Lesson #25's
+    consequence path, labelled failed).
+    """
+    try:
+        data = json.loads(jsonfile.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return jsonfile, None
+    if not isinstance(data, list) or _is_ip_literal(ctx.hostname):
+        return jsonfile, None
+
+    # The id match is deliberately exact: testssl emits multi-certificate ids
+    # like "DNS_CAArecord hostCert#1", and _normalize_id keeps them verbatim, so
+    # a looser match would mint a NEW finding id (a duplicate row) instead of
+    # re-observing the plain DNS_CAArecord finding. Only the plain id fires.
+    skip_idx = [i for i, r in enumerate(data)
+                if isinstance(r, dict)
+                and r.get("id") == "DNS_CAArecord"
+                and str(r.get("severity") or "").upper() == "INFO"
+                and str(r.get("finding") or "").strip() == _CAA_SKIP_FINDING]
+    if not skip_idx:
+        return jsonfile, None
+
+    try:
+        verdict, details = _lookup_caa(ctx.hostname)
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        artifact = {
+            "schema": 1,
+            "hostname": ctx.hostname,
+            "collected_at": now_iso,
+            "verdict": verdict,
+            "walk": details.get("walk", []),
+            "provenance": (
+                "Sentry CAA fallback (testssl 3.3dev DNS_CAArecord bug e0c0a665); "
+                "verdict from a dig CAA walk-up, emitted under testssl's own "
+                "DNS_CAArecord identity so the original rows re-observe."
+            ),
+        }
+
+        patched = list(data)
+        for i in skip_idx:
+            rec = dict(data[i])
+            if verdict == "no_caa":
+                rec["severity"] = "LOW"
+                rec["finding"] = _CAA_NO_FINDING
+            elif verdict == "caa_present":
+                rec["severity"] = "OK"
+                rec["finding"] = ", ".join(details.get("caa", [])) or "available"
+            else:  # unmeasurable — emit no record; the artifact records the failure
+                patched[i] = None
+                continue
+            patched[i] = rec
+        patched = [r for r in patched if r is not None]
+
+        patched_path = jsonfile.with_name(f"{jsonfile.stem}_caa.json")
+        patched_path.write_text(json.dumps(patched), encoding="utf-8")
+        return patched_path, artifact
+    except Exception as e:  # non-fatal — a CAA shim failure must never fail the run
+        log(f"  dns_caa (CAA shim): non-fatal failure, filing no verdict — {e!r}")
+        return jsonfile, None
+
+
 def run_testssl_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
     """Run testssl.sh and emit FindingEvents into ctx.findings. Marks
     'testssl.sh' in ctx.tools_run + ctx.tool_status. On degradation,
@@ -998,11 +1171,21 @@ def run_testssl_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
         # in degradation.py); the tool name lives in context.
         raise DegradedRunError(reason, context=tool_name)
 
+    # CAA shim — replace testssl 3.3dev's DNS_CAArecord skip record (e0c0a665)
+    # with a real dig-CAA walk-up verdict, in a patched copy, so the finding
+    # keeps source='testssl' and its stable id while the rows re-observe. The
+    # raw artifact above is already the unmodified original.
+    parse_jsonfile, dns_caa_artifact = _apply_caa_shim(ctx, jsonfile)
+    if dns_caa_artifact is not None:
+        ctx.artifacts.append((_CAA_ARTIFACT_NAME, "json", json.dumps(dns_caa_artifact)))
+        log(f"  dns_caa (CAA shim): verdict={dns_caa_artifact['verdict']} "
+            f"host={ctx.hostname}")
+
     # Bridge to the canonical parser. fallback_observed_at = now() so
     # downstream UTC normalization (to_utc_iso) keeps shape.
     fallback_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     events = parse_testssl_file(
-        json_path=jsonfile,
+        json_path=parse_jsonfile,
         asset_id=ctx.asset_id,
         # scan_id is used by the offline path to build finding_history
         # entries; in the live path we don't write finding_history (the
