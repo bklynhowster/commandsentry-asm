@@ -180,6 +180,11 @@ select a.asset_id, a.name, a.organization, a.type, a.kind, a.apex_domain,
        a.enforcement_probe_authorized,
        a.device_class, a.device_class_confidence,
        a.vendor_product, a.vendor_product_confidence,
+       -- 328 (2026-10-21): cloud-endpoint columns for the job-3 ruling-C
+       -- cert-hygiene demotion (stamped by the importer via
+       -- derive_cloud_endpoint.py; the heavy runtime reads them off the
+       -- descriptor's asset block at the testssl parse call).
+       a.is_cloud_endpoint, a.cloud_provider,
        s.top_hosting_org
 from public.assets a
 left join public.asset_surface s on s.asset_id = a.asset_id
@@ -327,6 +332,15 @@ def build_descriptor(
             "device_class_confidence":    asset.get("device_class_confidence"),
             "vendor_product":             asset.get("vendor_product"),
             "vendor_product_confidence":  asset.get("vendor_product_confidence"),
+            # 328 (2026-10-21) — job 3, Howie's ruling C: cert-hygiene findings
+            # on cloud/SaaS-endpoint assets demote to INFO (a name pointed at
+            # a provider's shared endpoint is a deployment choice; the cert
+            # mismatch/expiry that follows is the provider's to fix). The
+            # heavy runner reads these off this block at the testssl parse
+            # call. Boolean-strict like enforcement_probe_authorized:
+            # absent/NULL (column never stamped) → False → plain severities.
+            "is_cloud_endpoint": asset.get("is_cloud_endpoint") is True,
+            "cloud_provider":    asset.get("cloud_provider"),
             # 2026-06-02: surface top_hosting_org so scanner.yml's
             # vpn_decision step can route Light scans through VPN for
             # IP-class-sensitive hosts (Pressable / Atomic). None when
