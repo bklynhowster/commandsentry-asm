@@ -270,3 +270,32 @@ def test_shim_trigger_is_exact_against_mutations(monkeypatch, tmp_path):
         parse_path, artifact = h._apply_caa_shim(_ctx(), jf)
         assert artifact is None, f"{field} mutation fired the shim"
         assert parse_path == jf, f"{field} mutation rewrote the parse input"
+
+
+# ─── 328 (2026-10-21) — postfixed skip records: the shim stays exact ────────
+
+def test_postfixed_caa_skip_stays_dropped_shim_fires_only_on_plain(monkeypatch, tmp_path):
+    """testssl 3.3dev also emits postfixed ids on the DNS_CAArecord skip record
+    ("DNS_CAArecord <hostCert#1>"). The shim's trigger stays EXACT (a looser
+    match would patch the copies too — one real verdict, "(2 reports)"); the
+    postfixed copy is INFO and is dropped by SKIP_SEVERITIES at parse level,
+    and after 328's _normalize_id strip it re-observes the plain finding
+    anyway. One event: the plain LOW verdict."""
+    monkeypatch.setattr(h, "_lookup_caa", lambda host: ("no_caa", {"walk": []}))
+    postfixed = _skip_record()
+    postfixed["id"] = "DNS_CAArecord <hostCert#1>"
+    jf = tmp_path / "testssl.json"
+    jf.write_text(json.dumps([_skip_record(), postfixed]))
+    parse_path, artifact = h._apply_caa_shim(_ctx(), jf)
+    # the shim fired exactly once — on the plain record
+    assert artifact is not None and artifact["verdict"] == "no_caa"
+    patched = json.loads(parse_path.read_text())
+    # the postfixed copy was NOT patched (exact match) and stays INFO
+    assert any(r["id"] == "DNS_CAArecord <hostCert#1>"
+               and str(r["severity"]).upper() == "INFO" for r in patched)
+    # and the parse drops it: one event, the plain LOW verdict
+    events = h.parse_testssl_file(
+        json_path=parse_path, asset_id="a.b.example.com",
+        scan_id="s", scan_root=tmp_path, fallback_observed_at="2026-01-01T00:00:00Z",
+    )
+    assert len(events) == 1 and events[0].severity == "LOW"

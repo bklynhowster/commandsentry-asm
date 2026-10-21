@@ -167,6 +167,17 @@ CERT_HYGIENE_IDS = {
     "cert_chain_of_trust",
     "cert_trust",
     "cert_expirationStatus",
+    # 328 (2026-10-21, Howie's job-3 question-3 ruling: "wire the wildcard rule
+    # in this push"): cert_trust_wildcard joins the set so the policy demotion
+    # inside _cert_hygiene_severity — the only reader of _CERT_POLICY_IDS —
+    # actually executes T2's ratified demotion. Before 328 the id sat outside
+    # this membership gate (since the T2 commit, 2026-09-18), so relay 152's
+    # "a wildcard certificate is a policy choice, not a weakness → INFO" was
+    # dead code and every wildcard row stayed LOW. Fleet effect at next
+    # re-observation: 35 Command + 13 Prodex plain wildcard rows demote
+    # LOW → INFO (nothing retroactive; the upsert keeps the stored severity
+    # only when it is strictly less severe — demotions land on a conflict).
+    "cert_trust_wildcard",
 }
 CERT_HYGIENE_MAX_SEVERITY = "MODERATE"
 
@@ -318,6 +329,29 @@ TITLE_LABELS = {
 CIPHER_ID_RE = re.compile(r"^(cipher[-_][a-z0-9_]+?)(?:_x[0-9a-fA-F]+)$")
 
 
+# ── 328 (2026-10-21) — testssl 3.3dev per-certificate postfix ids ────────────
+# When an endpoint presents MORE THAN ONE host certificate (email.commandcompanies.com:
+# Microsoft rotated the outlook.com leaf between the 10-12 and 10-19 heavies, so the
+# 10-19 artifact carries two leaf PEMs), testssl 3.3dev re-emits per-certificate
+# records with a trailing per-cert postfix token on the id:
+#     "cert_trust <hostCert#1>"                 (per-host-cert form)
+#     "intermediate_cert <#1> <hostCert#2>"     (double postfix)
+#     "DNS_CAArecord hostCert#1"                (bracket-less form, testssl.sh:9468)
+# Passed through verbatim (the old behaviour), each suffixed id minted a NEW
+# finding identity: one real name-mismatch showed as three findings (one
+# MODERATE + two HIGH) and one wildcard fact as three rows. Strip the postfix
+# BEFORE grouping so suffixed records re-observe the plain finding.
+#
+# STRICT ON PURPOSE (round-1 review, minor 4): `#` is required, brackets are
+# optional, `hostCert` is optional, and the token is whitespace-delimited — so
+# ids that merely end in digits are untouched ("TLS1_2" and
+# "clientsimulation-java_80442" have no whitespace+#; CIPHER_ID_RE's `_x<hex>`
+# suffix has neither). A loose `\s+\d+$` would eat a hypothetical future
+# "cert_trust 443" whole. Fleet-checked 2026-10-21: 158 distinct templates,
+# 0 end in a whitespace-separated integer, 0 in bare <digits>.
+_HOSTCERT_POSTFIX_RE = re.compile(r"(?:\s+<?(?:hostCert)?#\d+>?)+$")
+
+
 # ── IP-sourced hostname-match guard (4.7 ruling Q1/Q3, 2026-07-24) ──
 # Normalizer-side backstop to the asm-discover.sh --ip scanner guard. When
 # testssl is pointed at a bare IP literal (discover_ip's `testssl --ip "$ip"
@@ -353,6 +387,12 @@ def _normalize_id(testssl_id: str) -> tuple[str, bool]:
     """
     if not testssl_id:
         return ("unknown", False)
+    # 328 (2026-10-21): strip trailing per-cert postfix tokens (see
+    # _HOSTCERT_POSTFIX_RE above) BEFORE the cipher match, so a postfixed
+    # record groups onto — and re-observes — the plain finding id instead
+    # of minting a duplicate row.
+    if _HOSTCERT_POSTFIX_RE.search(testssl_id):
+        testssl_id = _HOSTCERT_POSTFIX_RE.sub("", testssl_id)
     m = CIPHER_ID_RE.match(testssl_id)
     if m:
         return (m.group(1), True)
@@ -372,6 +412,86 @@ def _parse_host_ip(ip_field: str) -> tuple[Optional[str], Optional[str]]:
         ip = parts[1] if parts[1] else None
         return (sub, ip)
     return (parts[0] if parts[0] else None, None)
+
+
+# ── 328 refinement — ruling C, Howie 2026-10-21 (KB 12 job 3): demote cert
+# findings on a cloud endpoint ONLY when the certificate does not name the
+# host (the provider's own cert). ──────────────────────────────────────────
+# The evidence is the certificate's OWN name records in the same testssl
+# artifact — cert_commonName (one name) and cert_subjectAltName (space-
+# separated names, wildcards allowed). Measured on the live 10-19 artifact
+# for email.commandcompanies.com: CN "outlook.com", SANs covering only
+# Microsoft names — the cert does not name the host, so its trust findings
+# are the provider's to fix. When the cert DOES name the scanned host it was
+# issued for that host — the findings are the owner's business and keep
+# their severity (portal-tims.unimacgraphics.com serves a cert whose CN and
+# SAN are the host itself: nothing demotes there). NO name records in the
+# artifact = NO demotion: absence of evidence is not evidence of a
+# provider's cert — identify from what was observed, never from absence.
+_CERT_NAME_IDS = frozenset({"cert_commonName", "cert_subjectAltName"})
+# One DNS name (or IP literal) per token: optional "*.", then dot-separated
+# labels of [a-z0-9-]. Prose around the names ("response is self-signed")
+# fails the match and is ignored on purpose.
+_CERT_NAME_TOKEN_RE = re.compile(
+    r"^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$",
+    re.IGNORECASE,
+)
+
+
+def _cert_covers_host(cert_names: list, host: Optional[str]) -> bool:
+    """True when any certificate name (CN/SAN token) covers the scanned host.
+
+    Exact (case-insensitive) match, or a wildcard "*.suffix" covering the
+    host's LEFT-MOST label exactly — "*.example.com" covers "a.example.com",
+    not "a.b.example.com" (RFC 6125 single-label semantics).
+    """
+    if not host:
+        return False
+    h = host.strip().strip(".").lower()
+    if not h:
+        return False
+    for raw in cert_names:
+        name = (raw or "").strip().strip(".").lower()
+        if not name or not _CERT_NAME_TOKEN_RE.match(name):
+            continue  # prose or an odd token — not a name we can trust
+        if name == h:
+            return True
+        if name.startswith("*."):
+            suffix = name[1:]  # ".example.com"
+            prefix = h[: len(h) - len(suffix)]
+            if h.endswith(suffix) and prefix and "." not in prefix:
+                return True
+    return False
+
+
+def _cert_names_scanned_host(data, asset_id: str) -> Optional[bool]:
+    """One pass over the RAW records: does the served certificate name the
+    host this scan tested? True = proven it does; False = proven it does
+    not; None = UNPROVEN — no cert-name records in the artifact, or no host
+    to test against (the demotion must NOT fire on None: absence of
+    evidence is not evidence of a provider's cert). The scanned host is
+    testssl's nodename (the ip field's "fqdn/ip" part), falling back to the
+    asset id when no record carries a name; the certificate's names come
+    from cert_commonName / cert_subjectAltName records — metadata ids,
+    skipped from findings, but still present in the raw artifact this
+    function reads."""
+    host: Optional[str] = None
+    cert_names: list = []
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        if host is None:
+            sub, _ = _parse_host_ip(rec.get("ip") or "")
+            if sub and not _is_bare_ip(sub):
+                host = sub
+        grouped_id, _ = _normalize_id(rec.get("id") or "")
+        if grouped_id in _CERT_NAME_IDS:
+            cert_names.extend((rec.get("finding") or "").split())
+    if host is None and asset_id and not _is_bare_ip(asset_id):
+        host = asset_id
+    if not cert_names or host is None:
+        return None
+    return _cert_covers_host(cert_names, host)
 
 
 def _category_for_id(testssl_id: str) -> str:
@@ -398,11 +518,25 @@ def parse_testssl_file(
     scan_id: str,
     scan_root: Path,
     fallback_observed_at: Optional[str] = None,
+    cloud_endpoint: bool = False,
 ) -> list[FindingEvent]:
     """
     Parse one testssl.json file. Cipher entries are grouped into a single
     FindingEvent per (grouped_id, severity, host:port) tuple, with affected
     cipher details accumulated into the description.
+
+    cloud_endpoint (328, Howie's job-3 ruling C, 2026-10-21, refined the same
+    day): True when the ASSET being scanned is recorded as a cloud/SaaS
+    endpoint (the descriptor carries assets.is_cloud_endpoint; the heavy
+    runner passes it). Then a cert-hygiene finding demotes to INFO —
+    demote-and-keep, never delete — ONLY when the served certificate does
+    not name the scanned host (the provider's own cert: a DNS name pointed
+    at a provider's shared endpoint is a deployment choice, the mismatch
+    that follows is inherent to it, and it is the provider's to fix, not a
+    defect in the owner's own posture), and NEVER for cert_expirationStatus
+    (the expiry early-warning keeps its severity whatever cert is served).
+    The fact stays visible for an auditor; it stops counting as a weakness.
+    Defaults False: the offline normalizer and every other caller unchanged.
     """
     if not json_path.is_file():
         return []
@@ -415,6 +549,14 @@ def parse_testssl_file(
 
     rel_evidence = relative_to_scan_root(json_path, scan_root)
     observed_at = to_utc_iso(fallback_observed_at) or fallback_observed_at or ""
+
+    # 328 refinement (ruling C — see _cert_names_scanned_host above): one
+    # pass over the raw records decides whether the served certificate names
+    # the scanned host. True = proven it does, False = proven it does not,
+    # None = unproven (no cert-name records). Computed ONCE, from the
+    # artifact's own cert-name records, so the demotion below stands on
+    # evidence the artifact keeps and every demotion is re-checkable.
+    cert_names_host = _cert_names_scanned_host(data, asset_id)
 
     # Group records by (grouped_id, severity, ip_field, port)
     groups: dict[tuple, list[dict]] = {}
@@ -471,6 +613,28 @@ def parse_testssl_file(
             canonical_sev = _cert_hygiene_severity(
                 grouped_id, rec.get("finding") or "", canonical_sev
             )
+
+        # 328 — Howie's job-3 ruling C (2026-10-21), refined the same day:
+        # "demote cert findings on cloud endpoints only when the certificate
+        # does not name the host (the provider's own cert), and never demote
+        # cert_expirationStatus." On a cloud/SaaS endpoint the provider's own
+        # certificate is a deployment fact, not an owner defect — same
+        # demote-and-keep shape as T2/T3, applied AFTER the ceiling so it is
+        # the last word. A cert that NAMES the scanned host was issued for
+        # that host: its findings are the owner's to fix and keep their
+        # severity. cert_expirationStatus is never demoted here — the expiry
+        # early-warning is the single most operationally useful TLS finding
+        # we emit (tests/test_cert_hygiene_severity.py) and an expiring cert
+        # predicts an outage whoever owns it. And the demotion fires only
+        # on PROOF (cert_names_host is False): no cert-name records in the
+        # artifact means the condition is unproven and the severity stands.
+        if (
+            cloud_endpoint
+            and grouped_id in CERT_HYGIENE_IDS
+            and grouped_id != "cert_expirationStatus"
+            and cert_names_host is False
+        ):
+            canonical_sev = "INFO"
 
         # ── T3 (relay 152) — THE CIPHER INVENTORY IS NOT A WEAKNESS ────────
         # testssl reports every accepted TLS 1.2 suite as its own LOW record, so

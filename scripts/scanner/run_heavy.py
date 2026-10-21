@@ -1063,10 +1063,14 @@ def _apply_caa_shim(
     if not isinstance(data, list) or _is_ip_literal(ctx.hostname):
         return jsonfile, None
 
-    # The id match is deliberately exact: testssl emits multi-certificate ids
-    # like "DNS_CAArecord hostCert#1", and _normalize_id keeps them verbatim, so
-    # a looser match would mint a NEW finding id (a duplicate row) instead of
-    # re-observing the plain DNS_CAArecord finding. Only the plain id fires.
+    # The id match is deliberately exact (rationale rewritten 2026-10-21, 328 —
+    # the old "a looser match would mint a NEW finding id" no longer holds):
+    # _normalize_id now strips per-cert postfix tokens, so a postfixed skip
+    # record would re-observe the same DNS_CAArecord finding anyway — but a
+    # looser match would ALSO patch the postfixed copies, folding a second
+    # "verdict" record into the merged group (one real verdict, "(2 reports)").
+    # Only the plain id fires; postfixed skip records are INFO and are dropped
+    # by SKIP_SEVERITIES before the parser ever sees them.
     skip_idx = [i for i, r in enumerate(data)
                 if isinstance(r, dict)
                 and r.get("id") == "DNS_CAArecord"
@@ -1195,6 +1199,14 @@ def run_testssl_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
         scan_id=ctx.scan_run_id,
         scan_root=work_dir,
         fallback_observed_at=fallback_ts,
+        # 328 — job-3 ruling C (Howie, 2026-10-21): cert-hygiene demotes to
+        # INFO when the ASSET is recorded as a cloud/SaaS endpoint. Read off
+        # the descriptor's asset block (the FortiGate device_class precedent —
+        # key on recorded columns, never hand-lists). Absent/False on assets
+        # the importer never stamped → plain severities.
+        cloud_endpoint=(
+            (ctx.descriptor.get("asset") or {}).get("is_cloud_endpoint") is True
+        ),
     )
     log(f"  testssl: parsed {len(events)} FindingEvent(s) "
         f"(canonical source='testssl', stable_finding_id)")
