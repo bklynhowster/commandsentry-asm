@@ -13,10 +13,10 @@ push/s314/realdb_314.py):
     answered with a served (2xx) page. An app choke (5xx) on one class is neither.
   * the phase records `passed` on the measured block and in the artifact; the MODERATE
     finding is emitted only when the block is partial; a full block emits nothing; a
-    pass-through on every class still emits the HIGH, never this.
+    pass-through on every class still emits the absence finding (MODERATE since 3b), never this.
   * the finding names the classes, never a product (presence-only, like its sibling).
   * three closures, clean path, beside 310/311: full block -> remediated; measured absence
-    -> closed_reclassified (superseded by the HIGH); partial again -> reopened as regressed.
+    -> closed_reclassified (superseded by the absence finding); partial again -> reopened as regressed.
   * the 311 redirect retraction now covers both probe-minted findings.
 """
 import ast

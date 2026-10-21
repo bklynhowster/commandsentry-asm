@@ -52,7 +52,7 @@ def test_a_flip_is_a_change_against_the_previous_measurement_per_asset():
 
 
 def test_a_first_block_is_reported_and_a_first_pass_through_is_not():
-    """The HIGH 'No enforcing WAF' finding already reports a first pass-through."""
+    """The 'No enforcing WAF' finding (MODERATE since 3b) already reports a first pass-through."""
     assert "(o.blocked OR o.prev_blocked IS NOT NULL)" in _sql()
 
 

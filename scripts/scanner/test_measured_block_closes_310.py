@@ -127,7 +127,7 @@ class _Cur:
         self.calls.append((" ".join(sql.split()), params))
 
     def fetchone(self):
-        return {"finding_id": "x", "severity": "HIGH", "first_detected_at": None, "last_observed_at": None} if self.hit else None
+        return {"finding_id": "x", "severity": "MODERATE", "first_detected_at": None, "last_observed_at": None} if self.hit else None
 
 
 class _Conn:
@@ -174,7 +174,7 @@ def test_a_hit_writes_the_update_the_audit_and_the_history_in_that_order():
     assert audit["details"]["blocked"] == ["lfi", "sqli", "xss"]
     assert audit["after"]["current_status"] == "remediated"
     hist = conn.cur.calls[2][1]
-    assert hist["scan_run_id"] == ctx.scan_run_id and hist["severity"] == "HIGH"
+    assert hist["scan_run_id"] == ctx.scan_run_id and hist["severity"] == "MODERATE"  # 3b: absence is MODERATE
     assert "'remediated'::history_status_t" in sqls[2]
 
 
