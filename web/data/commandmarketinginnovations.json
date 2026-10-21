@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-10-21T01:06:22Z_9dbd3c9d",
-    "started_at": "2026-10-21T01:06:22Z",
-    "completed_at": "2026-10-21T01:09:00Z",
-    "duration_seconds": 158,
+    "id": "scan_2026-10-21T06:49:54Z_d950feea",
+    "started_at": "2026-10-21T06:49:54Z",
+    "completed_at": "2026-10-21T06:52:28Z",
+    "duration_seconds": 154,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-10-21T01:09:00Z",
-      "last_seen": "2026-10-21T01:09:00Z",
+      "first_discovered": "2026-10-21T06:52:28Z",
+      "last_seen": "2026-10-21T06:52:28Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -258,8 +258,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-10-21T01:09:00Z",
-      "last_seen": "2026-10-21T01:09:00Z",
+      "first_discovered": "2026-10-21T06:52:29Z",
+      "last_seen": "2026-10-21T06:52:29Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -509,7 +509,7 @@
           },
           {
             "name": "WPMU DEV Smush",
-            "version": "4.3.4",
+            "version": "4.3.5",
             "category": "wp-plugin"
           },
           {
@@ -566,9 +566,12 @@
       }
     }
   ],
-  "phantom_subdomains": [],
+  "phantom_subdomains": [
+    "api.commandmarketinginnovations.com",
+    "users.commandmarketinginnovations.com"
+  ],
   "deltas": {
-    "since_scan": "scan_2026-10-20T18:42:48Z_2950ac17",
+    "since_scan": "scan_2026-10-21T01:06:22Z_9dbd3c9d",
     "added": {
       "subdomains": [],
       "services": [],
@@ -580,56 +583,19 @@
       "hosts": []
     },
     "changed": {
-      "fingerprint": [],
+      "fingerprint": [
+        {
+          "subdomain": "www.commandmarketinginnovations.com",
+          "name": "WPMU DEV Smush",
+          "from": "4.3.4",
+          "to": "4.3.5"
+        }
+      ],
       "cert": [],
       "reachability": []
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-09-21T12:51:03Z_be2eb20b",
-      "started_at": "2026-09-21T12:51:03Z",
-      "completed_at": "2026-09-21T12:55:46Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 2,
-      "service_count": 8,
-      "subdomain_names": [
-        "commandmarketinginnovations.com",
-        "www.commandmarketinginnovations.com"
-      ],
-      "ports_by_sub": {
-        "commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        },
-        "www.commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.0",
-        "Mailcheck": "1.1.2",
-        "Slider Revolution": "6.7.58",
-        "WPMU DEV Smush": "4.3.3",
-        "Yoast SEO": "28.5",
-        "jQuery Migrate": "3.4.1",
-        "punycode": "1.0.0"
-      }
-    },
     {
       "scan_id": "scan_2026-09-21T18:44:28Z_3d5eef7d",
       "started_at": "2026-09-21T18:44:28Z",
@@ -5853,6 +5819,50 @@
         "Mailcheck": "1.1.2",
         "Slider Revolution": "6.7.58",
         "WPMU DEV Smush": "4.3.4",
+        "Yoast SEO": "28.7",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-10-21T06:49:54Z_d950feea",
+      "started_at": "2026-10-21T06:49:54Z",
+      "completed_at": "2026-10-21T06:52:28Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.7.58",
+        "WPMU DEV Smush": "4.3.5",
         "Yoast SEO": "28.7",
         "jQuery Migrate": "3.4.1",
         "punycode": "1.0.0"
