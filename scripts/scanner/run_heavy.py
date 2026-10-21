@@ -328,6 +328,15 @@ class HeavyScanContext:
     # supersede_partial_on_measured_absence: the MODERATE "partial" finding cannot stay
     # open beside the HIGH that says everything got through.
     waf_absence_measured: dict | None = None
+    # 3b (2026-10-21, Howie's job-3b rulings): which absence-family finding this run
+    # emitted — "absent" (MODERATE), "present_not_enforcing" (MODERATE-HIGH, only on
+    # CONFIRMED waf evidence), "skipped" (not a WAF candidate: mail/ftp kind or a
+    # confirmed edge_firewall appliance) or None — plus the exposure read's outcome.
+    # Read in the clean close-out by settle_waf_absence_family. Close-out code reads
+    # these with getattr(...) so a __new__-built test context without them is safe.
+    waf_absence_emitted: str | None = None
+    waf_exposure_read_ok: bool = False
+    waf_exposed_emitted: bool = False
     # waf_detected / waf_kind / tech_stack — heavy doesn't probe these
     # but the medium-side helpers (build_rotation_log, scan metadata
     # writer) read them. Default to "not detected."
@@ -2305,7 +2314,7 @@ def run_fwbbot_check_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
 # not even Cloud Armor on a GCP asset). The pure decision lives in
 # waf_differential.classify_waf_differential; this collector only fires the HTTP
 # and shapes the responses for it. The INVERSE — a clean baseline that blocks
-# NOTHING — is the affirmative "no enforcing WAF" signal, emitted HIGH
+# NOTHING — is the affirmative "no enforcing WAF" signal, emitted (MODERATE since 3b; was HIGH)
 # (PCI DSS 6.4.2 / NIST SP 800-53 SC-7).
 #
 # Safety (4.7 Q4): GET-only, ONE random query param, a self-identifying
@@ -2404,7 +2413,7 @@ def _waf_body_tokens(body: str) -> set:
 # FULL block page at HTTP 500 — measured on commandcommcentral 2026-09-29: canonical and
 # %2f-encoded traversal both returned 500 with body "Web Page Blocked! / Client IP: ... /
 # Attack ID: 20000008". _EDGE_STATUS does not contain 500, so those blocks were discarded
-# and the asset scored waf_present=False — which ships a customer-facing HIGH saying "no
+# and the asset scored waf_present=False — which ships a customer-facing HIGH (MODERATE since 3b) saying "no
 # enforcing WAF" about a fully protected host. Status alone cannot identify a block.
 #
 # ⚠ TWO markers are required, never one. "blocked" alone appears on ordinary application
@@ -2619,32 +2628,170 @@ def _no_waf_proven(baseline: dict, verdict: dict) -> bool:
     return len(verdict.get("blocked") or []) == 0
 
 
+# ── 3b (2026-10-21): HOW SENTRY RATES MISSING PROTECTION — Howie's rulings ──────────────
+# "No enforcing WAF" was HIGH on its own, and on every Command host carrying it, it was
+# the ONLY HIGH: a missing safety net, not a hole, painting the host red. Howie, 10-21
+# 12:53 / 15:36–15:38 (KB 12 job 3b, handoff 004):
+#   - absence alone                         -> MODERATE (a missing compensating control)
+#   - a CONFIRMED WAF that blocked nothing  -> MODERATE-HIGH, its own finding id: a paid
+#     control believed to work that does not (D1). Only `confirmed` evidence may say a WAF
+#     is there: note 266 proved the `suspected` "Cloud Armor" class is the Google front
+#     end, not a WAF (rule 4b).
+#   - absence (either kind) PLUS an open finding with a published flaw (CVE), MODERATE or
+#     worse                                 -> HIGH, its own finding id naming those flaws
+#     (D2; re-read every heavy, so it follows the facts). Its own id because the upsert's
+#     downgrade protection (import_jsonl.py, run_light "Severity downgrade protection")
+#     never raises a stored row — a separate identity both escalates and says why.
+#   - not a WAF candidate (mail / ftp kind, or a CONFIRMED edge_firewall appliance — a
+#     VPN gateway is itself the security device, D3) -> no finding from this family.
+WAF_PRESENT_NOT_ENFORCING_CHECK_ID = "waf-present-not-enforcing"
+WAF_EXPOSED_CHECK_ID = "waf-absent-exposed"
+WAF_FINDING_SKIP_KINDS = frozenset({"mail", "ftp"})
+
+WAF_EXPOSURE_READ_SQL = """
+SELECT finding_id, title, severity::text AS severity, cve
+  FROM public.findings
+ WHERE asset_id = %(asset_id)s
+   AND cve IS NOT NULL AND cardinality(cve) > 0
+   AND current_status::text IN ('detected', 'confirmed', 'open', 'regressed')
+   AND severity::text IN ('CRITICAL', 'HIGH', 'MODERATE-HIGH', 'MODERATE')
+   AND finding_id NOT LIKE %(own_prefix)s
+ ORDER BY CASE severity::text WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
+                              WHEN 'MODERATE-HIGH' THEN 3 ELSE 4 END, finding_id
+ LIMIT 20
+"""
+
+
+def _descriptor_asset(ctx) -> dict:
+    return (getattr(ctx, "descriptor", None) or {}).get("asset") or {}
+
+
+def _waf_finding_applies(ctx) -> bool:
+    """3b D3: is this asset a candidate for 'is a WAF in front of it?' at all? Not when
+    its recorded kind is mail or ftp, and not when it is a CONFIRMED edge_firewall (a VPN
+    gateway / firewall appliance is itself the security device). Recorded columns only,
+    never a hand list (rule 4b). Unknown kind / class -> a candidate (the honest default)."""
+    a = _descriptor_asset(ctx)
+    if (a.get("kind") or "").strip().lower() in WAF_FINDING_SKIP_KINDS:
+        return False
+    if a.get("device_class") == "edge_firewall" and a.get("device_class_confidence") == "confirmed":
+        return False
+    return True
+
+
+def _waf_confirmed_present(ctx) -> bool:
+    """3b D1: a WAF is recorded as present on CONFIRMED evidence only (note 266)."""
+    a = _descriptor_asset(ctx)
+    return a.get("device_class") == "waf" and a.get("device_class_confidence") == "confirmed"
+
+
+def _read_waf_exposure(ctx) -> tuple[bool, list]:
+    """3b D2: the asset's OPEN findings that list a CVE, MODERATE or worse — the weaknesses
+    a WAF would stand in front of. Read-only, short connection, transport retried like
+    _read_active_probe_policy. Returns (read_ok, rows). Any failure -> (False, []): the
+    caller emits nothing and the close-out closes nothing (unknown is not 'none')."""
+    if not getattr(ctx, "dsn", None):
+        return False, []
+    try:
+        psycopg, dict_row, _ = _import_deps()
+        own_prefix = f"{ctx.asset_id}:commandsentry_heavy:waf-%"
+        for _attempt in range(1, 4):
+            try:
+                with psycopg.connect(ctx.dsn, autocommit=True, connect_timeout=5) as c:
+                    with c.cursor(row_factory=dict_row) as cur:
+                        cur.execute(WAF_EXPOSURE_READ_SQL,
+                                    {"asset_id": ctx.asset_id, "own_prefix": own_prefix})
+                        return True, [dict(r) for r in cur.fetchall()]
+            except Exception:
+                if _attempt < 3:
+                    time.sleep(1 if _attempt == 1 else 3)
+                else:
+                    raise
+    except Exception as e:  # transport exhausted -> unknown, never "no exposure"
+        log(f"  waf_differential probe: exposure read UNREADABLE ({type(e).__name__}) — "
+            "no exposed finding emitted, none closed")
+    return False, []
+
+
+def _no_waf_description(baseline: dict) -> str:
+    return (
+        f"Differential probe: a benign baseline returned HTTP {baseline.get('status')} and "
+        f"all {len(_WAF_PAYLOADS)} independent attack-payload classes tested "
+        f"({_waf_classes_tested_label()}) passed through to the origin unblocked")
+
+
 def _maybe_emit_no_waf_finding(ctx: HeavyScanContext, baseline: dict, verdict: dict) -> None:
-    """Emit the affirmative 'no enforcing WAF in front of a live app' HIGH finding when proven
-    (PCI DSS 6.4.2 / NIST SP 800-53 SC-7). The positive 'Behind a WAF' verdict is device-class
-    metadata (persisted artifact); the ABSENCE of a compensating control is a security finding
-    in its own right. source='commandsentry_heavy'; presence-only (names no product)."""
+    """Emit the absence-family finding when absence is proven (3b rulings above): MODERATE
+    'No enforcing WAF', or MODERATE-HIGH 'WAF detected but not blocking attacks' on a
+    CONFIRMED waf, or nothing on a non-candidate asset — and, beside either, the HIGH
+    'exposed' finding when the asset has open CVE-listed findings. Presence-only: names no
+    product. source='commandsentry_heavy'. Everything goes through ctx.findings, so the
+    normal upsert writes it and the regress machinery reopens it."""
     if not _no_waf_proven(baseline, verdict):
         return
+    if not _waf_finding_applies(ctx):
+        ctx.waf_absence_emitted = "skipped"
+        log("  waf_differential probe: no enforcing WAF measured, but the asset is not a WAF "
+            "candidate (mail/ftp kind or confirmed edge_firewall) -> no finding (3b D3)")
+        return
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    head = _no_waf_description(baseline)
+    if _waf_confirmed_present(ctx):
+        ctx.waf_absence_emitted = "present_not_enforcing"
+        check_id, sev = WAF_PRESENT_NOT_ENFORCING_CHECK_ID, "MODERATE-HIGH"
+        title = "WAF detected but not blocking attacks"
+        desc = (head + " — although this asset's recorded evidence CONFIRMS a WAF in front of it. "
+                "The control is present but not enforcing (monitor mode, a disabled policy or rules "
+                "that do not cover these classes): a protection believed to be in place is not. "
+                "PCI DSS 6.4.2; NIST SP 800-53 SC-7. Presence-only method: names no product.")
+    else:
+        ctx.waf_absence_emitted = "absent"
+        check_id, sev = WAF_ABSENT_CHECK_ID, "MODERATE"
+        title = "No enforcing WAF in front of live application"
+        desc = (head + " — no payload-inspecting WAF is enforcing in front of this live "
+                "application. That is a missing compensating control (PCI DSS 6.4.2; NIST SP "
+                "800-53 SC-7), not a vulnerability on its own: it matters most where the "
+                "application has a weakness a WAF would block, which Sentry reports as a "
+                "separate HIGH finding when it sees one. Presence-only method: this asserts the "
+                "ABSENCE of blocking and names no product.")
     ctx.findings.append(FindingEvent(
-        finding_id=stable_finding_id(ctx.asset_id, "commandsentry_heavy",
-                                     "waf-absent-differential", ctx.hostname),
+        finding_id=stable_finding_id(ctx.asset_id, "commandsentry_heavy", check_id, ctx.hostname),
         asset_id=ctx.asset_id, scan_id=ctx.scan_run_id, source="commandsentry_heavy",
-        title="No enforcing WAF in front of live application",
-        severity="HIGH", category="config", observed_at=now_iso, matched_at=ctx.hostname,
-        description=(
-            f"Differential probe: a benign baseline returned HTTP {baseline.get('status')} and "
-            f"all {len(_WAF_PAYLOADS)} independent attack-payload classes tested "
-            f"({_waf_classes_tested_label()}) "
-            "passed through to the origin unblocked — no payload-inspecting WAF is enforcing in "
-            "front of this live application. A WAF is a required compensating control (PCI DSS "
-            "6.4.2) and boundary protection (NIST SP 800-53 SC-7); its absence leaves the origin "
-            "directly exposed to application-layer attacks. Presence-only method: this asserts "
-            "the ABSENCE of blocking and names no product."),
+        title=title, severity=sev, category="config", observed_at=now_iso,
+        matched_at=ctx.hostname, description=desc,
         subdomain=ctx.hostname, port=TESTSSL_PORT, protocol="https",
     ))
-    log("  waf_differential probe: NO ENFORCING WAF proven -> HIGH finding (PCI 6.4.2 / SC-7)")
+    log(f"  waf_differential probe: NO ENFORCING WAF proven -> {sev} '{check_id}' (3b)")
+    _maybe_emit_exposed_finding(ctx, now_iso)
+
+
+def _maybe_emit_exposed_finding(ctx: HeavyScanContext, now_iso: str) -> None:
+    """3b D2: absence proven this run + open CVE-listed findings on the asset -> HIGH
+    'exposed' finding naming them. Its own id (see the block comment)."""
+    ok, rows = _read_waf_exposure(ctx)
+    ctx.waf_exposure_read_ok = ok
+    if not ok or not rows:
+        return
+    named = "; ".join(
+        f"{r.get('title')} [{r.get('severity')}; {', '.join((r.get('cve') or [])[:3])}]"
+        for r in rows[:5])
+    more = f" (+{len(rows) - 5} more)" if len(rows) > 5 else ""
+    ctx.findings.append(FindingEvent(
+        finding_id=stable_finding_id(ctx.asset_id, "commandsentry_heavy",
+                                     WAF_EXPOSED_CHECK_ID, ctx.hostname),
+        asset_id=ctx.asset_id, scan_id=ctx.scan_run_id, source="commandsentry_heavy",
+        title=f"Known-vulnerable component with no enforcing WAF in front ({len(rows)} open)",
+        severity="HIGH", category="config", observed_at=now_iso, matched_at=ctx.hostname,
+        description=(
+            "Nothing in front of this application blocked the differential probe's attack "
+            "classes, and the application has open findings with published flaws (CVE) that a "
+            f"WAF would stand in front of: {named}{more}. Either half alone is MODERATE; "
+            "together they are the actionable risk. Closes when either half stops holding."),
+        subdomain=ctx.hostname, port=TESTSSL_PORT, protocol="https",
+    ))
+    ctx.waf_exposed_emitted = True
+    log(f"  waf_differential probe: {len(rows)} open CVE-listed finding(s) + no enforcing WAF "
+        f"-> HIGH '{WAF_EXPOSED_CHECK_ID}' (3b D2)")
 
 
 # ── 314 (2026-10-14): THE BLOCK WAS PARTIAL, AND THE FINDING SAYS WHICH CLASS GOT IN ────
@@ -2656,7 +2803,7 @@ def _maybe_emit_no_waf_finding(ctx: HeavyScanContext, baseline: dict, verdict: d
 # of the measurement, and it was the part nobody could see. Howie, 10-14: "what do we do
 # with the telemetry that we found?" — this.
 #
-# Shape: MODERATE (not HIGH — a WAF IS enforcing; the HIGH is for its absence), one
+# Shape: MODERATE (a WAF IS enforcing; absence was HIGH until 3b, now MODERATE too), one
 # stable id per asset, presence-only like its sibling (names the CLASSES, never a
 # product; the badge beside it names the device from the classifier's own evidence).
 # "Passed through" is measured, not inferred: the class is not in the classifier's
@@ -2665,7 +2812,7 @@ def _maybe_emit_no_waf_finding(ctx: HeavyScanContext, baseline: dict, verdict: d
 #
 # Lifecycle, all clean-path, all in the close-out beside 310/311:
 #   every class blocked        -> close as remediated (close_partial_on_full_block)
-#   nothing blocked (the HIGH) -> close as closed_reclassified: superseded by the HIGH
+#   nothing blocked (absence) -> close as closed_reclassified: superseded by the absence
 #                                 (supersede_partial_on_measured_absence); a later partial
 #                                 reopens it first (reopen_partial_if_superseded), because
 #                                 the upsert's downgrade guard never reopens a closed row
@@ -2692,6 +2839,8 @@ def _maybe_emit_partial_coverage_finding(ctx: HeavyScanContext, baseline: dict, 
     attack classes, never a product."""
     m = ctx.waf_block_measured
     if not m or verdict.get("waf_present") is not True:
+        return
+    if not _waf_finding_applies(ctx):   # 3b D3: same candidacy as the absence family
         return
     passed = list(m.get("passed") or [])
     if not passed:
@@ -2970,6 +3119,88 @@ def close_partial_on_full_block(conn, ctx: HeavyScanContext, Json) -> int:
     return 1
 
 
+# ── 3b: settle the absence family at close-out (clean path, beside 310/311/314) ──────────
+ABSENCE_FAMILY_RULE = "note_3b_absence_family"
+
+
+def _transition_waf_row(conn, ctx, Json, check_id: str, sql: str, history_sql: str | None,
+                        new_status: str, action: str, reason: str) -> int:
+    """Run one status UPDATE on this asset's `check_id` row (generic, finding_id-scoped SQL
+    from 310/314), and write the audit row and — when given — the history row. 0 or 1."""
+    fid = stable_finding_id(ctx.asset_id, "commandsentry_heavy", check_id, ctx.hostname)
+    with conn.cursor() as cur:
+        cur.execute(sql, {"finding_id": fid, "asset_id": ctx.asset_id})
+        row = cur.fetchone()
+        if not row:
+            return 0
+        sev = row["severity"] if isinstance(row, dict) else row[1]
+        cur.execute(MEASURED_REMEDIATION_AUDIT_SQL, {
+            "action": action,
+            "before": Json({"finding_id": fid, "source": "commandsentry_heavy", "severity": sev}),
+            "after": Json({"finding_id": fid, "current_status": new_status}),
+            "details": Json({"rule": ABSENCE_FAMILY_RULE, "asset_id": ctx.asset_id,
+                             "scan_run_id": ctx.scan_run_id, "reason": reason}),
+        })
+        if history_sql:
+            cur.execute(history_sql, {"finding_id": fid, "scan_run_id": ctx.scan_run_id,
+                                      "severity": sev,
+                                      "notes": f"{new_status} by run_heavy scan_run {ctx.scan_run_id}: {reason}"})
+    log(f"  absence family: '{check_id}' -> {new_status} ({reason})")
+    return 1
+
+
+def settle_waf_absence_family(conn, ctx: HeavyScanContext, Json) -> int:
+    """CLEAN PATH ONLY (3b). After 310/311/314's own closures:
+    - a measured BLOCK closes the two 3b ids too (remediated) — same rule as 310;
+    - a REDIRECT baseline retracts them (false_positive) — same rule as 311;
+    - absence emitted as one kind supersedes the other kind (closed_reclassified) and
+      reopens its own row if an earlier run had superseded it;
+    - a measured absence on a non-candidate asset closes the family (closed_reclassified);
+    - the 'exposed' row closes (remediated) when this run measured, the exposure read
+      SUCCEEDED and it was not re-emitted — a failed read closes nothing.
+    Returns the number of rows transitioned."""
+    n = 0
+    if getattr(ctx, "waf_block_measured", None):
+        for cid in (WAF_PRESENT_NOT_ENFORCING_CHECK_ID, WAF_EXPOSED_CHECK_ID):
+            n += _transition_waf_row(conn, ctx, Json, cid, CLOSE_WAF_ABSENT_ON_MEASURED_BLOCK_SQL,
+                                     MEASURED_REMEDIATION_HISTORY_SQL, "remediated",
+                                     MEASURED_REMEDIATION_ACTION, "differential probe measured a block")
+        return n
+    r = getattr(ctx, "waf_baseline_redirect", None)
+    if r:
+        for cid in (WAF_PRESENT_NOT_ENFORCING_CHECK_ID, WAF_EXPOSED_CHECK_ID):
+            n += _retract_one_on_redirect(conn, ctx, Json, cid, r)
+        return n
+    if not getattr(ctx, "waf_absence_measured", None):
+        return 0
+    kind = getattr(ctx, "waf_absence_emitted", None)
+    if kind == "skipped":
+        for cid in (WAF_ABSENT_CHECK_ID, WAF_PRESENT_NOT_ENFORCING_CHECK_ID, WAF_EXPOSED_CHECK_ID):
+            n += _transition_waf_row(conn, ctx, Json, cid, SUPERSEDE_PARTIAL_SQL,
+                                     SUPERSEDE_PARTIAL_HISTORY_SQL, "closed_reclassified",
+                                     ABSENCE_SUPERSEDES_PARTIAL_ACTION,
+                                     "asset is not a WAF candidate (3b D3)")
+        return n
+    if kind in ("absent", "present_not_enforcing"):
+        mine = WAF_ABSENT_CHECK_ID if kind == "absent" else WAF_PRESENT_NOT_ENFORCING_CHECK_ID
+        other = WAF_PRESENT_NOT_ENFORCING_CHECK_ID if kind == "absent" else WAF_ABSENT_CHECK_ID
+        n += _transition_waf_row(conn, ctx, Json, other, SUPERSEDE_PARTIAL_SQL,
+                                 SUPERSEDE_PARTIAL_HISTORY_SQL, "closed_reclassified",
+                                 ABSENCE_SUPERSEDES_PARTIAL_ACTION, f"superseded by '{mine}'")
+        # history_sql=None on purpose, as in 314's reopen_partial_if_superseded (audit row
+        # only): `mine` was emitted this run, so write_finding_history_for_scan_run — which
+        # runs right after this step — writes its history row for this scan.
+        n += _transition_waf_row(conn, ctx, Json, mine, REOPEN_SUPERSEDED_PARTIAL_SQL, None,
+                                 "regressed", PARTIAL_REOPEN_ACTION, f"'{mine}' measured again")
+        if getattr(ctx, "waf_exposure_read_ok", False) and not getattr(ctx, "waf_exposed_emitted", False):
+            n += _transition_waf_row(conn, ctx, Json, WAF_EXPOSED_CHECK_ID,
+                                     CLOSE_WAF_ABSENT_ON_MEASURED_BLOCK_SQL,
+                                     MEASURED_REMEDIATION_HISTORY_SQL, "remediated",
+                                     MEASURED_REMEDIATION_ACTION,
+                                     "no open CVE-listed finding remains on the asset")
+    return n
+
+
 def supersede_partial_on_measured_absence(conn, ctx: HeavyScanContext, Json) -> int:
     """CLEAN PATH ONLY. This run measured a pass-through on EVERY class (the HIGH was
     emitted): the open 'partial coverage' finding is superseded — closed_reclassified, the
@@ -2998,7 +3229,7 @@ def supersede_partial_on_measured_absence(conn, ctx: HeavyScanContext, Json) -> 
                              "measured_at": a.get("measured_at"), "egress_mode": a.get("egress_mode"),
                              "reason": ("the same differential probe measured a pass-through on EVERY "
                                         "class this run: nothing is enforcing, so 'partial coverage' is "
-                                        f"superseded by the HIGH '{WAF_ABSENT_CHECK_ID}' finding")}),
+                                        f"superseded by the '{WAF_ABSENT_CHECK_ID}' finding (MODERATE since 3b)")}),
         })
         cur.execute(SUPERSEDE_PARTIAL_HISTORY_SQL, {
             "finding_id": fid, "scan_run_id": ctx.scan_run_id, "severity": sev,
@@ -3046,7 +3277,7 @@ def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> N
     egress, DRY-RUN default (ACTIVE_PROBE_LIVE unset fires nothing), persist-only
     stack_id_waf_differential artifact + one active_probe_audit row. Presence-only — NEVER names
     a vendor (Q3/Q8). On a clean baseline that blocks NOTHING, emits the affirmative 'no
-    enforcing WAF' HIGH finding (PCI 6.4.2 / SC-7). gather_observations turning a POSITIVE
+    enforcing WAF' finding (MODERATE since 3b; PCI 6.4.2 / SC-7). gather_observations turning a POSITIVE
     presence verdict into the waf_present_differential device-class observation is the follow-up."""
     authorized, egress, egress_reason = _read_active_probe_policy(ctx)
     fire = authorized and _ACTIVE_PROBE_LIVE
@@ -4502,6 +4733,10 @@ def run(descriptor_path: str, dsn: str) -> int:
         n_reopened = reopen_partial_if_superseded(conn, ctx, Json)
         if n_reopened:
             log(f"partial again: {n_reopened} superseded 'partial coverage' finding reopened as regressed")
+        # 3b — the absence family's own settling, same slot, same clean-path reasons.
+        n_family = settle_waf_absence_family(conn, ctx, Json)
+        if n_family:
+            log(f"absence family: {n_family} row(s) settled (3b)")
 
         # Note 129 round 7 — finding_history per re-emitted finding.
         # Runs AFTER the per-source regress loop so the recorded

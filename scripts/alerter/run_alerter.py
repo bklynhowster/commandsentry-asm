@@ -448,7 +448,7 @@ SELECT b.asset_id, a.name, a.organization, b.back_at, b.dark_at
 # not fire, which is not a measurement), ordered by scan completion. A row is
 # reported when its verdict differs from the previous measurement, or when it
 # is the asset's first measurement and it is a block. A first-ever
-# pass-through is NOT reported here: that is the HIGH "No enforcing WAF"
+# pass-through is NOT reported here: that is the "No enforcing WAF" (MODERATE since 3b)
 # finding's job, and it is already in the new-problems section. Each flip is
 # reported once, in the window holding the measurement.
 #
@@ -1101,8 +1101,8 @@ NEW_ASSETS_HEADING = "Assets discovered in this window"
 def enforcement_words(blocked: bool, prev_blocked) -> tuple[str, str]:
     """PURE. The verdict words for one enforcement flip and their colour.
     blocked=True  -> "BLOCKED" (green): a device in front is denying attack payloads.
-    blocked=False -> "PASSED THROUGH" (red): they reached the application; the HIGH
-                     'No enforcing WAF' finding carries the detail.
+    blocked=False -> "PASSED THROUGH" (red): they reached the application; the
+                     'No enforcing WAF' finding (MODERATE since 3b) carries the detail.
     prev_blocked is None on a first measurement (only a first BLOCK is reported)."""
     if blocked:
         return ("BLOCKED" if prev_blocked is None else "NOW BLOCKED"), "#1a7f37"
