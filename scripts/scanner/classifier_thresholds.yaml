@@ -60,6 +60,12 @@ signals:
     - block_page_cloudflare
     - block_page_f5
     - block_page_fortiweb
+    # ── VPN gateway self-identification (KB 12 job 3c, 2026-10-22) ──────────────
+    # The device answering its own client/login requests before login. Two different
+    # artifacts for the ASA (hello / login page) = two independent tells.
+    - cisco_asa_anyconnect_hello       # AnyConnect hello answered with config-auth (+ version)
+    - cisco_asa_webvpn_login_page      # the ASA's own /+CSCOE+/logon.html WebVPN page
+    - fortigate_sslvpn_landing         # FortiGate SSL-VPN landing (top.location=/remote/login)
   medium:
     - cert_issuer_subject_pattern      # e.g. a GoDaddy wildcard cert, or a vendor-named cert CN
     # ip_in_vendor_mgmt_range DELETED 2026-07-18 (4.7 R1): an IP range attributes a

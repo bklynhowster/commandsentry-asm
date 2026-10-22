@@ -37,8 +37,20 @@ def test_plan_matches_what_actually_gets_credited():
     Became 21 on 2026-10-09 (302 step 3) when the light phase `library_flaws`
     was added — also a real credited phase: it writes tool_status on its ok and
     degraded paths. Pinned by test_library_flaws_is_planned_after_httpx_tech.
+
+    Became 22 on 2026-10-22 (KB 12 job 3c) when the light phase `stack_fingerprint`
+    was added — a real credited phase (tool_status on its ok and degraded paths).
+    Pinned by test_stack_fingerprint_is_planned_as_a_light_phase.
     """
-    assert len(build_cumulative_planned_steps(HEAVY_OWN)) == 21
+    assert len(build_cumulative_planned_steps(HEAVY_OWN)) == 22
+
+
+def test_stack_fingerprint_is_planned_as_a_light_phase():
+    """The reason the count is 22: stack_fingerprint credits tool_status on every run,
+    so heavy's cumulative plan must count it."""
+    plan = build_cumulative_planned_steps(HEAVY_OWN)
+    assert "stack_fingerprint" in plan
+    assert plan.index("library_flaws") < plan.index("stack_fingerprint")
 
 
 def test_library_flaws_is_planned_after_httpx_tech():

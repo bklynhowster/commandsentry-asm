@@ -319,6 +319,39 @@ fingerprints:
     evidence_class: vendor_identifying
     vendor_product: {vendor: Fortinet}
 
+  # ── VPN gateway, named by its own pre-login answers (HIGH) — KB 12 job 3c ──
+  # Light-tier stack_fingerprint (scripts/scanner/stack_fingerprint.py), 2026-10-22,
+  # Howie: "the fingerprinting of anything that's called the security stack whether it's
+  # a Cisco VPN product or a Fortinet product". The requests of three reviewed public
+  # nuclei templates (projectdiscovery/nuclei-templates @ 388f6de, severity info):
+  # cisco-asa-detect (the AnyConnect client's X-Aggregate-Auth hello; the ASA answers
+  # with its own config-auth document and version), cisco-asa-panel (the ASA's WebVPN
+  # login page, /+CSCOE+/logon.html), fortinet-fortigate-panel (the FortiGate SSL-VPN
+  # landing, top.location="/remote/login"). Each is the device answering in its own
+  # protocol — self-naming, not a corpus artifact, so no artifact_signatures entry.
+  # INDEPENDENT (4.7 R4-revised): the hello and the login pages are different requests
+  # in DIFFERENT artifacts (stack_id_vpn_hello / stack_id_vpn_portal), so an ASA that
+  # answers both is 'confirmed'; one alone is 'suspected'. The FortiGate landing is one
+  # tell: it confirms only with another independent Fortinet tell.
+  - signal: cisco_asa_anyconnect_hello
+    observation: asa_vpn_hello
+    match_bool: true
+    device_class: edge_firewall
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Cisco, product: ASA}
+  - signal: cisco_asa_webvpn_login_page
+    observation: asa_logon_page
+    match_bool: true
+    device_class: edge_firewall
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Cisco, product: ASA}
+  - signal: fortigate_sslvpn_landing
+    observation: fortigate_sslvpn_page
+    match_bool: true
+    device_class: edge_firewall
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Fortinet, product: FortiGate}
+
   # ── Automattic managed WP hosting edge (MEDIUM) ───────────────────────────
   # NON-Fortinet edge. Automattic fronts the WP origin; the public surface is
   # their edge (nginx + rate-based filtering — "Pressable silently 403-filters").

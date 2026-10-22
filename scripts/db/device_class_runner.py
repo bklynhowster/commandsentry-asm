@@ -148,9 +148,19 @@ _ART_WAFW00F     = "stack_id_wafw00f"  # -> waf_vendor_from_wafw00f
 _ART_WAF_DIFFERENTIAL = "stack_id_waf_differential"
 _DIFFERENTIAL_DEPTH = 3   # newest N artifacts; the first with a non-null verdict decides
 _ART_NUCLEI      = "nuclei%"           # capability marker only (see above)
+# KB 12 job 3c (2026-10-22): the light tier's VPN-gateway checks
+# (scripts/scanner/stack_fingerprint.py). TWO artifacts on purpose: the AnyConnect
+# hello and the login pages are different requests, so a Cisco ASA answering both is
+# two independent tells (4.7 R4-revised: independence = different artifact).
+_ART_VPN_HELLO   = "stack_id_vpn_hello"
+_ART_VPN_PORTAL  = "stack_id_vpn_portal"
+# Not a registry observation: version / firmware build date read by the same checks,
+# attached to vendor_product when the winning vendor/product is the one they name.
+APPLIANCE_DETAILS = "_appliance_details"
 
 EVIDENCE_ARTIFACT_PATTERNS = (
     _ART_FINGERPRINT, _ART_TESTSSL, _ART_WAFW00F, _ART_NUCLEI,
+    _ART_VPN_HELLO, _ART_VPN_PORTAL,
 ) + _PASSIVE_TOOL_NAMES
 
 _STATUS_READS_OK = "reads_ok"                        # got observations -> classify normally
@@ -594,6 +604,14 @@ OBSERVATION_CAPABILITY: dict[str, _Cap] = {
     # keeps it. Same depth as the measurement it travels with.
     "block_page_markers": _Cap(_CAP_JSON_KEY_NOT_NULL, (_ART_WAF_DIFFERENTIAL,),
                                field="waf_present_differential", depth=_DIFFERENTIAL_DEPTH),
+    # KB 12 job 3c. ⚠ NOT-NULL: stack_fingerprint writes a check's result as null when
+    # the host gave NO answer (did not look) and as {"matched": false, ...} when it
+    # answered and was not the device (a real negative R5 may act on). A timeout must
+    # never strip a gateway identified on an earlier pass.
+    "asa_vpn_hello":  _Cap(_CAP_JSON_KEY_NOT_NULL, (_ART_VPN_HELLO,), field="asa_hello"),
+    "asa_logon_page": _Cap(_CAP_JSON_KEY_NOT_NULL, (_ART_VPN_PORTAL,), field="asa_logon"),
+    "fortigate_sslvpn_page": _Cap(_CAP_JSON_KEY_NOT_NULL, (_ART_VPN_PORTAL,),
+                                  field="fortigate_sslvpn"),
 }
 
 # Registry observations with NO producer in gather_observations. DECLARED, not
@@ -1077,6 +1095,27 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
     if _fwbbot_corroborated(probe):
         obs["fwbbot_check"] = True
 
+    # KB 12 job 3c (2026-10-22): the VPN gateway named by its own pre-login answers.
+    # Newest artifact of each kind decides; a null check (no answer) emits nothing and,
+    # by the NOT-NULL capability above, cannot demote either.
+    details: dict = {}
+    hello = (_fresh_json(_ART_VPN_HELLO) or {}).get("asa_hello") or {}
+    if hello.get("matched"):
+        obs["asa_vpn_hello"] = True                      # -> cisco_asa_anyconnect_hello
+        d = {k: hello[k] for k in ("version", "version_raw") if hello.get(k)}
+        if d:
+            details["cisco/asa"] = d
+    portal = _fresh_json(_ART_VPN_PORTAL) or {}
+    if (portal.get("asa_logon") or {}).get("matched"):
+        obs["asa_logon_page"] = True                     # -> cisco_asa_webvpn_login_page
+    fgt = portal.get("fortigate_sslvpn") or {}
+    if fgt.get("matched"):
+        obs["fortigate_sslvpn_page"] = True           # -> fortigate_sslvpn_landing
+        if fgt.get("release_date"):
+            details["fortinet/fortigate"] = {"release_date": fgt["release_date"]}
+    if details:
+        obs[APPLIANCE_DETAILS] = details
+
     # 157 (4.7 Q1/Q2): discovery-tier wafw00f from asset_surface (light scan), distinct
     # from the heavy stack_id_wafw00f above. Registry dedupes the two (dedupe_key) so heavy
     # wins when both fire and discovery-only caps at 'suspected'. This is what lifts the
@@ -1201,6 +1240,23 @@ def _merge_cloud_provider(fp: dict, cloud: dict | None) -> None:
         vp["cloud_provider"] = cp
 
 
+def attach_appliance_details(res: dict, obs: dict) -> dict:
+    """KB 12 job 3c. Add the version / firmware build date the VPN-gateway checks read
+    to vendor_product — ONLY when the winning vendor_product names that same vendor and
+    product (a flat {vendor, product}). Never invents one; never touches a multi-vendor
+    {"vendors": [...]} result. The advisory watch reads it (note 146 R3: confirmed only).
+    PURE apart from updating res["vendor_product"] in place; returns res."""
+    det = obs.get(APPLIANCE_DETAILS) or {}
+    vp = res.get("vendor_product")
+    if not det or not isinstance(vp, dict) or not vp.get("vendor") or "vendors" in vp:
+        return res
+    key = f"{str(vp.get('vendor', '')).strip().lower()}/{str(vp.get('product', '')).strip().lower()}"
+    extra = det.get(key)
+    if extra:
+        vp.update(extra)
+    return res
+
+
 def classify_asset(cur, a: dict, fps, th, fresh_days, nuclei_re, cloud_reg) -> tuple[dict, bool]:
     """(result, from_cloud). F3: fingerprint FIRST — any non-unknown result (confirmed OR
     suspected) wins the CLASS and blocks the cloud fallback from BECOMING the class. But
@@ -1209,7 +1265,8 @@ def classify_asset(cur, a: dict, fps, th, fresh_days, nuclei_re, cloud_reg) -> t
     Google Cloud CDN · on Google Cloud'. The cloud fallback still BECOMES the result only
     when fingerprints are unknown. NOTE: assets.is_cloud_endpoint is a rotating-pool churn
     flag (D6-F5), NOT a topology signal — cloud topology keys on cloud_provider (F1)."""
-    fp = classify(gather_observations(cur, a["asset_id"], fresh_days, nuclei_re), fps, th)
+    obs = gather_observations(cur, a["asset_id"], fresh_days, nuclei_re)
+    fp = attach_appliance_details(classify(obs, fps, th), obs)
     cloud = _cloud_fallback(cur, a["asset_id"], cloud_reg, fresh_days)
     # 157 Fix 4: a real edge/waf/cdn fingerprint blocks cloud AND composes hosting; but origin_host
     # (weakest role) does NOT block here — it falls through to _resolve, which yields to the cloud

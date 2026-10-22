@@ -39,7 +39,7 @@ on:
       soak_generation:
         description: 'Soak generation — bump after a soak-clock reset (4.7 E3)'
         type: string
-        default: '1'
+        default: '2'   # 2026-10-22 KB 12 job 3c: new VPN-gateway signals (146 R2 reset; Howie decision 3)
 
 concurrency:
   group: device-class-${{ github.ref }}
@@ -60,7 +60,7 @@ jobs:
           # Inputs reach the shell as ENV, never interpolated into the script body.
           # MODE: 'write' on the schedule (no input), the chosen value on a dispatch.
           MODE: ${{ github.event.inputs.mode || 'write' }}
-          SOAK_GENERATION: ${{ github.event.inputs.soak_generation || '1' }}
+          SOAK_GENERATION: ${{ github.event.inputs.soak_generation || '2' }}
         run: |
           ARGS="--soak-generation $SOAK_GENERATION"
           case "$MODE" in
