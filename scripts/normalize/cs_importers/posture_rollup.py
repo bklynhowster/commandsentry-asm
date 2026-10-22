@@ -5,15 +5,19 @@ Reads findings.jsonl + assets.jsonl, computes a current_risk + current_risk_reas
 for each asset, and writes the updated assets back. The verdict is what the
 CISO-tier dashboard view actually displays — not the raw severity counts.
 
-Verdict rules (conservative, deliberately simple):
+Verdict rules — ONE RATING RULE (KB 12 job 3m, Howie 2026-10-22: "Absolutely."):
+the worst open finding, as the database's recompute_asset_current_risk_for()
+does. The database is authoritative; import_jsonl.py no longer copies this
+module's verdict into assets (its refresh sets the rating).
     Any open CRITICAL          → CRITICAL
     Any open HIGH              → HIGH
-    Any MODERATE-HIGH OR ≥3 MODERATE → MODERATE-HIGH
-    1-2 open MODERATE          → MODERATE
+    Any open MODERATE-HIGH     → MODERATE-HIGH   (never from a count of MODERATEs)
+    Any open MODERATE          → MODERATE
     ≥3 open LOW                → LOW
     1-2 open LOW               → LOW
     INFO only                  → INFO
     No findings at all (ASM-tracked) → UNKNOWN
+    Findings, but all resolved       → UNKNOWN ("All N … resolved.")
 
 "Open" means current_status is one of: detected, confirmed, open, regressed.
 RESOLVED statuses (remediated, validated_remediated, false_positive, wont_fix,
@@ -75,7 +79,7 @@ def compute_asset_verdict(findings_for_asset: list[dict]) -> tuple[str, str, lis
 
     open_findings = [f for f in findings_for_asset if f.get("current_status") in OPEN_STATUSES]
     if not open_findings:
-        return ("LOW", f"All {len(findings_for_asset)} previously-detected findings are resolved.", [])
+        return ("UNKNOWN", f"All {len(findings_for_asset)} previously-detected findings are resolved.", [])
 
     # Sort open findings: highest severity first, then most recently observed first
     open_findings_sorted = sorted(
@@ -99,7 +103,7 @@ def compute_asset_verdict(findings_for_asset: list[dict]) -> tuple[str, str, lis
         n = counts["HIGH"]
         top_title = _top_finding_summary(open_findings_sorted, "HIGH")
         reason = f"{n} open HIGH finding{_plural(n)}" + (f"; top: {top_title}" if top_title else "")
-    elif counts.get("MODERATE-HIGH", 0) > 0 or counts.get("MODERATE", 0) >= 3:
+    elif counts.get("MODERATE-HIGH", 0) > 0:      # job 3m: no MODERATE-count escalation
         verdict = "MODERATE-HIGH"
         total_m = counts.get("MODERATE", 0) + counts.get("MODERATE-HIGH", 0)
         top_title = _top_finding_summary(open_findings_sorted)

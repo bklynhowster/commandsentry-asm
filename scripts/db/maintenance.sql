@@ -66,96 +66,20 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- refresh_asset_posture(asset_id)
---   Recompute assets.current_risk + current_risk_reason from the
---   *currently open* findings (status in detected/confirmed/open/regressed).
+--   KB 12 job 3m (2026-10-22, migration 20261022a): ONE RATING RULE. Hands the
+--   call to recompute_asset_current_risk_for() — the trigger's function — so an
+--   asset's rating is its single worst open finding (de-duplicated, from
+--   v_open_findings_dedup) whoever asks. Howie, 2026-10-22: "Absolutely."
 --
---   Risk ladder:
---     any open CRITICAL              -> CRITICAL
---     any open HIGH                  -> HIGH
---     >= 4 open MODERATE-or-higher   -> MODERATE-HIGH
---     any open MODERATE              -> MODERATE
---     any open LOW                   -> LOW
---     else                           -> INFO
---
---   current_risk_reason is a one-line human string with the count + top
---   finding title.
+--   ⛔ Do not give this function its own ladder again. Until 20261022a it
+--   counted RAW findings, rated 4+ MODERATE as MODERATE-HIGH and called a
+--   never-scanned name INFO; whichever of the two rules ran last won, and the
+--   2026-10-22 digest reported ten "elevated" assets with no new finding.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION refresh_asset_posture(p_asset_id text)
+CREATE OR REPLACE FUNCTION public.refresh_asset_posture(p_asset_id text)
 RETURNS void
-LANGUAGE plpgsql AS $$
-DECLARE
-  v_crit  int;
-  v_high  int;
-  v_modh  int;
-  v_mod   int;
-  v_low   int;
-  v_top_title text;
-  v_top_id    text;
-  v_risk  risk_t;
-  v_reason text;
-  v_total_modh_or_higher int;
-BEGIN
-  SELECT
-    COUNT(*) FILTER (WHERE severity = 'CRITICAL'),
-    COUNT(*) FILTER (WHERE severity = 'HIGH'),
-    COUNT(*) FILTER (WHERE severity = 'MODERATE-HIGH'),
-    COUNT(*) FILTER (WHERE severity = 'MODERATE'),
-    COUNT(*) FILTER (WHERE severity = 'LOW')
-  INTO v_crit, v_high, v_modh, v_mod, v_low
-  FROM findings
-  WHERE asset_id = p_asset_id
-    AND current_status IN ('detected','confirmed','open','regressed');
-
-  v_total_modh_or_higher := v_crit + v_high + v_modh + v_mod;
-
-  -- pick the "top" finding for the reason string
-  SELECT finding_id, title INTO v_top_id, v_top_title
-  FROM findings
-  WHERE asset_id = p_asset_id
-    AND current_status IN ('detected','confirmed','open','regressed')
-  ORDER BY
-    CASE severity
-      WHEN 'CRITICAL'      THEN 1
-      WHEN 'HIGH'          THEN 2
-      WHEN 'MODERATE-HIGH' THEN 3
-      WHEN 'MODERATE'      THEN 4
-      WHEN 'LOW'           THEN 5
-      WHEN 'INFO'          THEN 6
-      ELSE 9
-    END,
-    last_observed_at DESC NULLS LAST,
-    finding_id
-  LIMIT 1;
-
-  -- compute risk band
-  IF v_crit > 0 THEN
-    v_risk := 'CRITICAL';
-    v_reason := v_crit || ' open CRITICAL finding(s); top: ' || COALESCE(v_top_title, v_top_id);
-  ELSIF v_high > 0 THEN
-    v_risk := 'HIGH';
-    v_reason := v_high || ' open HIGH finding(s); top: ' || COALESCE(v_top_title, v_top_id);
-  ELSIF v_total_modh_or_higher >= 4 THEN
-    v_risk := 'MODERATE-HIGH';
-    v_reason := v_total_modh_or_higher
-                || ' open MODERATE-or-higher findings; top: '
-                || COALESCE(v_top_title, v_top_id);
-  ELSIF v_mod > 0 OR v_modh > 0 THEN
-    v_risk := 'MODERATE';
-    v_reason := (v_mod + v_modh) || ' open MODERATE finding(s); top: '
-                || COALESCE(v_top_title, v_top_id);
-  ELSIF v_low > 0 THEN
-    v_risk := 'LOW';
-    v_reason := v_low || ' open LOW finding(s)';
-  ELSE
-    v_risk := 'INFO';
-    v_reason := 'no open findings above INFO';
-  END IF;
-
-  UPDATE assets
-     SET current_risk        = v_risk,
-         current_risk_reason = v_reason
-   WHERE asset_id = p_asset_id;
-END $$;
+LANGUAGE sql
+AS 'SELECT public.recompute_asset_current_risk_for(p_asset_id)';
 
 
 -- ---------------------------------------------------------------------------
