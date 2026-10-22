@@ -41,6 +41,20 @@ every other close path treats as "not mine" — plan review, refutation 3):
 
 Sources are a list (SOURCES) so another feed can be added without a redesign
 (Howie, 2026-10-21 19:41; VulnCheck's free feed is the planned first add-on).
+
+Security devices (KB 12 job 3c, Howie 2026-10-22 07:28 and 09:01 "Yes to all four."):
+a CONFIRMED Cisco ASA, FortiGate or FortiWeb (SECURITY_DEVICES) is matched against
+EVERY advisory on CISA's exploited list for its product, not just the last 90 days
+("an unpatched two-year-old exploited flaw on a firewall is the whole point"), and
+  * a version read from the device (vendor_product.version, the light tier's
+    stack_fingerprint) is range-matched as above;
+  * a firmware build date only (vendor_product.release_date, FortiGate) keeps the
+    advisories published AFTER the build: "built <month>; N advisories since —
+    confirm it's patched";
+  * severity: any CVE on CISA's exploited list -> CRITICAL; a shown version inside
+    an affected range -> HIGH; otherwise MODERATE.
+A CVE scored only by its reporting vendor (no NVD "Primary" score) now reads that
+"Secondary" score instead of none (folded into 3c from the 330 read-back).
 """
 from __future__ import annotations
 
@@ -91,9 +105,20 @@ PRODUCTS = {
 }
 # assets.vendor_product (vendor, product) lower-cased -> (map key, display, CPEs).
 # Used only when vendor_product_confidence = 'confirmed' (note 146).
+# Cisco ASA under BOTH NVD names: NVD re-keyed it from a: to o: in 2023-08 and older
+# records still carry the deprecated a: form (checker, 3c plan review, NVD live
+# 2026-10-22: o: 1089 records, a: 680, deprecatedBy o:). FortiGate's OS is FortiOS.
 VENDOR_PRODUCTS = {
     ("fortinet", "fortiweb"): ("fortiweb", "Fortinet FortiWeb", ("a:fortinet:fortiweb",)),
+    ("cisco", "asa"): ("cisco_asa", "Cisco ASA",
+                       ("o:cisco:adaptive_security_appliance_software",
+                        "a:cisco:adaptive_security_appliance_software")),
+    ("fortinet", "fortigate"): ("fortigate", "Fortinet FortiGate (FortiOS)", ("o:fortinet:fortios",)),
 }
+# Edge security appliances (job 3c, D4 and its widening to FortiWeb): every CISA-KEV
+# advisory counts regardless of age, and a KEV match is CRITICAL.
+SECURITY_DEVICES = frozenset({"fortiweb", "cisco_asa", "fortigate"})
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 EARLIER = "listed by an earlier run; outside today's look-back window, still unconfirmed as patched"
 ACTIVE = ("detected", "confirmed", "open", "regressed")   # the watcher may update or close these
@@ -188,16 +213,22 @@ def affects(cve: dict, cpes, version) -> bool:
 
 
 def cvss(cve: dict) -> float | None:
-    """Highest primary base score across CVSS v4.0 / v3.1 / v3.0. PURE."""
-    best = None
-    for key in ("cvssMetricV40", "cvssMetricV31", "cvssMetricV30"):
-        for m in (cve.get("metrics") or {}).get(key) or []:
-            if m.get("type") not in (None, "Primary"):
-                continue
-            s = (m.get("cvssData") or {}).get("baseScore")
-            if isinstance(s, (int, float)):
-                best = s if best is None else max(best, s)
-    return best
+    """Highest NVD ("Primary") base score across CVSS v4.0 / v3.1 / v3.0; when NVD
+    has not scored it, the highest "Secondary" (reporting vendor) score — as
+    cve_scoring.py does — so a critical CVE NVD has not scored yet is not missed.
+    PURE."""
+    for wanted in ((None, "Primary"), ("Secondary",)):
+        best = None
+        for key in ("cvssMetricV40", "cvssMetricV31", "cvssMetricV30"):
+            for m in (cve.get("metrics") or {}).get(key) or []:
+                if m.get("type") not in wanted:
+                    continue
+                s = (m.get("cvssData") or {}).get("baseScore")
+                if isinstance(s, (int, float)):
+                    best = s if best is None else max(best, s)
+        if best is not None:
+            return best
+    return None
 
 
 # ── reading the public sources ───────────────────────────────────────────────
@@ -231,10 +262,14 @@ def _iso(dt: datetime) -> str:
 
 def nvd_url(cpe: str, kind: str, now: datetime, start_index: int = 0) -> str:
     """kind 'recent': published in the last RECENT_DAYS; kind 'kev': added to
-    CISA KEV in the last KEV_DAYS. PURE."""
+    CISA KEV in the last KEV_DAYS; kind 'kev_all': every CVE on CISA KEV for the
+    product, any age (security devices, job 3c). PURE."""
+    match = urllib.parse.quote(f"cpe:2.3:{cpe}", safe="")
+    if kind == "kev_all":
+        return (f"{NVD_API}?virtualMatchString={match}&noRejected&hasKev"
+                f"&resultsPerPage={NVD_PAGE}&startIndex={start_index}")
     days, a, b = ((RECENT_DAYS, "pubStartDate", "pubEndDate") if kind == "recent"
                   else (KEV_DAYS, "kevStartDate", "kevEndDate"))
-    match = urllib.parse.quote(f"cpe:2.3:{cpe}", safe="")
     return (f"{NVD_API}?virtualMatchString={match}&noRejected"
             f"&{a}={_iso(now - timedelta(days=days))}&{b}={_iso(now)}"
             f"&resultsPerPage={NVD_PAGE}&startIndex={start_index}")
@@ -306,24 +341,26 @@ class Sources:
         return self._cve_cache[cve_id]
 
 
-def advisories_for(src: Sources, cpes, kev_ids) -> dict:
-    """{cve_id: Advisory} for one product: recent critical + recent KEV. Raises
-    SourceError if any query fails (the product is then skipped this run)."""
+def advisories_for(src: Sources, cpes, kev_ids, all_kev: bool = False) -> dict:
+    """{cve_id: Advisory} for one product: recent critical + KEV (last KEV_DAYS, or
+    every KEV entry when all_kev — security devices). Raises SourceError if any
+    query fails (the product is then skipped this run)."""
     found = {}
     for cpe in cpes:
         for cve in src.nvd_query(cpe, "recent"):
             a = _advisory(cve, kev_ids)
             if a.score is not None and a.score >= MIN_CVSS:
                 found[a.cve_id] = a
-        for cve in src.nvd_query(cpe, "kev"):
+        for cve in src.nvd_query(cpe, "kev_all" if all_kev else "kev"):
             a = _advisory(cve, kev_ids)
-            a.kev = True                         # NVD returned it for the KEV window
+            a.kev = True                         # NVD returned it for a KEV query
             found[a.cve_id] = a
     return found
 
 
 SOURCES = [("nvd_recent_critical", "NVD, published in the last 30 days, CVSS >= 9.0"),
-           ("nvd_kev", "NVD's copy of CISA's known-exploited list, added in the last 90 days"),
+           ("nvd_kev", "NVD's copy of CISA's known-exploited list, added in the last 90 days "
+                       "(every entry, any age, for an edge security device)"),
            ("cisa_kev", "CISA's known-exploited catalog (severity flag)")]
 
 
@@ -385,6 +422,19 @@ class Host:
     asset_id: str
     products: dict            # key -> version or None
     scanned: bool             # a tech list from the last INVENTORY_DAYS exists
+    release_dates: dict = field(default_factory=dict)   # key -> 'YYYY-MM-DD' (firmware build)
+
+
+def appliance_version(vendor_product) -> str | None:
+    """The version the device showed (job 3c, vendor_product.version), only if it
+    is a plain dotted number. PURE."""
+    v = vendor_product.get("version") if isinstance(vendor_product, dict) else None
+    return v.strip() if isinstance(v, str) and vtuple(v.strip()) else None
+
+
+def appliance_release_date(vendor_product) -> str | None:
+    d = vendor_product.get("release_date") if isinstance(vendor_product, dict) else None
+    return d if isinstance(d, str) and DATE_RE.match(d) else None
 
 
 def build_inventory(tech_rows, appliance_rows) -> dict:
@@ -396,8 +446,19 @@ def build_inventory(tech_rows, appliance_rows) -> dict:
         ap = appliance_product(r["vendor_product"])
         if ap:
             h = inv.setdefault(r["asset_id"], Host(r["asset_id"], {}, False))
-            h.products[ap[0]] = None
+            ver = appliance_version(r["vendor_product"])
+            h.products[ap[0]] = ver
+            rd = None if ver else appliance_release_date(r["vendor_product"])
+            if rd:
+                h.release_dates[ap[0]] = rd
     return inv
+
+
+def published_after(adv, day: str) -> bool:
+    """Was this advisory published after the firmware build day? Unknown -> True
+    (keep: never proof of safety). PURE."""
+    p = (adv.published or "")[:10]
+    return True if not DATE_RE.match(p) else p > day
 
 
 def cpes_for(key: str):
@@ -422,23 +483,47 @@ class Action:
     reopen: bool = False
 
 
-def finding_fields(asset_id, key, version, advs) -> dict:
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def severity_for(key, version, kev) -> str:
+    """Job 3c D4: on an edge security device a CISA-KEV CVE is CRITICAL, a shown
+    version in an affected range HIGH, otherwise MODERATE. Everything else as 3d:
+    HIGH when on CISA's list, else MODERATE. PURE."""
+    if key in SECURITY_DEVICES:
+        return "CRITICAL" if kev else ("HIGH" if version else "MODERATE")
+    return "HIGH" if kev else "MODERATE"
+
+
+def finding_fields(asset_id, key, version, advs, release_date=None) -> dict:
     """Finding columns for one (asset, product) and its kept advisories. PURE."""
     disp, _ = cpes_for(key)
     advs = sorted(advs, key=lambda a: (not a.kev, -(a.score or 0), a.cve_id))
     kev = any(a.kev for a in advs)
+    n_kev = sum(1 for a in advs if a.kev)
+    device = key in SECURITY_DEVICES
     n = len(advs)
     what = f"{n} advisor{'y' if n == 1 else 'ies'}"
+    how = ("Nothing was sent to the site to check: this comes from public advisories only."
+           if not device else
+           "No attack was sent to check: the device was named from what it shows anyone "
+           "before login, and the match comes from public advisories.")
     if version:
         title = f"{disp} {version} is in the affected range of {what}{' on CISA’s exploited list' if kev else ''}"
         head = (f"{asset_id} shows {disp} {version}. That version is in the affected range of "
                 f"the advisories below. Version-based: matched from the version the site shows, "
                 f"not confirmed by testing — a vendor can patch without changing the number.")
+    elif release_date:
+        y, m = release_date[:4], MONTHS[int(release_date[5:7]) - 1]
+        title = (f"{disp} firmware built {m} {y} — {what} published since"
+                 f"{f', {n_kev} on CISA’s exploited list' if kev else ''}: confirm it’s patched")
+        head = (f"{asset_id} shows {disp} but not its version. Its login page gives away the "
+                f"firmware's build date, {release_date}. The advisories below were published "
+                f"after that build, so it may not have their fixes. Confirm it is patched. {how}")
     else:
         title = f"Runs {disp}, version not shown — {what}{' on CISA’s exploited list' if kev else ''}: confirm it’s patched"
         head = (f"The scans see {disp} on {asset_id} but not its version, so Sentry cannot tell "
-                f"whether the fixes below are applied. Confirm it is patched. Nothing was sent "
-                f"to the site to check: this comes from public advisories only.")
+                f"whether the fixes below are applied. Confirm it is patched. {how}")
     lines = [head, ""]
     for a in advs[:20]:
         tag = " — on CISA’s known-exploited list" if a.kev else ""
@@ -449,12 +534,14 @@ def finding_fields(asset_id, key, version, advs) -> dict:
     lines += ["", "Sources: " + "; ".join(d for _, d in SOURCES) + "."]
     return dict(
         title=title[:200],
-        severity="HIGH" if kev else "MODERATE",
+        severity=severity_for(key, version, kev),
         category="supply_chain",
         description="\n".join(lines),
         cve=[a.cve_id for a in advs],
         references=[f"https://nvd.nist.gov/vuln/detail/{a.cve_id}" for a in advs[:20]],
         tags=["advisory-watch", "version-shown" if version else "version-not-shown", key]
+             + (["firmware-build-date"] if (release_date and not version) else [])
+             + (["security-device"] if device else [])
              + (["cisa-kev"] if kev else []),
         affected_component=disp,
         affected_component_version=version,
@@ -479,14 +566,16 @@ def plan(inventory: dict, found: dict, failed: set, existing: dict, recheck: dic
             if key in failed:
                 continue                                   # a failed lookup changes nothing
             _, cpes = cpes_for(key)
-            new = {c: a for c, a in found.get(key, {}).items() if affects(a.record, cpes, version)}
+            built = None if version else host.release_dates.get(key)
+            new = {c: a for c, a in found.get(key, {}).items()
+                   if affects(a.record, cpes, version) and (built is None or published_after(a, built))}
             keep = dict(new)
             if cur:
                 for c in cur.get("cve") or []:
                     if c in keep:
                         continue
                     if c in found.get(key, {}):
-                        continue          # this run's own record ruled it out (affects() said no)
+                        continue          # this run's own record ruled it out (version range or build date)
                     earlier = Advisory(c, None, None, c in kev_ids, EARLIER)
                     if version is None:
                         keep[c] = earlier
@@ -500,11 +589,13 @@ def plan(inventory: dict, found: dict, failed: set, existing: dict, recheck: dic
                 if cur and cur["status"] in WATCHER_CLOSED and not new:
                     continue      # closed by the watcher; nothing NEW matches -> stay closed
                 acts.append(Action("upsert", fid, asset_id, key,
-                                   finding_fields(asset_id, key, version, keep.values()),
+                                   finding_fields(asset_id, key, version, keep.values(), built),
                                    reopen=bool(cur and cur["status"] in WATCHER_CLOSED)))
             elif cur and cur["status"] in ACTIVE:
                 acts.append(Action("close", fid, asset_id, key,
-                                   reason=f"{cpes_for(key)[0]} {version} is outside every listed advisory's affected range"))
+                                   reason=(f"{cpes_for(key)[0]} firmware built {built} is newer than every listed advisory"
+                                           if built else
+                                           f"{cpes_for(key)[0]} {version} is outside every listed advisory's affected range")))
     for fid, cur in sorted(existing.items()):
         if fid in seen_ids or cur["status"] not in ACTIVE:
             continue
@@ -613,7 +704,7 @@ def run(conn, src: Sources, dry_run=False, log=print, Json=None) -> dict:
     found, failed = {}, set()
     for key in sorted({k for h in inv.values() for k in h.products}):
         try:
-            found[key] = advisories_for(src, cpes_for(key)[1], kev)
+            found[key] = advisories_for(src, cpes_for(key)[1], kev, all_kev=key in SECURITY_DEVICES)
             log(f"  {key}: {len(found[key])} advisories")
         except SourceError as e:
             failed.add(key)

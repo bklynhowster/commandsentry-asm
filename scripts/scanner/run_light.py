@@ -331,6 +331,7 @@ from stack_passive import (  # noqa: E402
 )
 import software_inventory  # noqa: E402  (302 step 1)
 import library_flaws  # noqa: E402  (302 step 3)
+import stack_fingerprint  # noqa: E402  (job 3c — security-stack fingerprints)
 from tech_detect import (  # noqa: E402  (4.7 ⑭′ — shared with run_medium)
     merge_tech_detection,
     parse_httpx_rows,
@@ -2122,6 +2123,39 @@ def check_library_flaws(ctx: ScanContext) -> None:
         mark_tool_degraded(ctx, "library_flaws", "library_flaws_error")
 
 
+LIGHT_UA = "Mozilla/5.0 (compatible; COMMANDsentry/1.0)"
+
+
+def check_stack_fingerprint(ctx: ScanContext) -> None:
+    """(KB 12 job 3c) Name a Cisco ASA / FortiGate VPN gateway and read its version
+    or firmware build date from what it shows anyone before login: the AnyConnect
+    client's hello, the ASA WebVPN login page, the FortiGate SSL-VPN landing page.
+    At most 3 GETs per port, no credentials, no retries (stack_fingerprint.py has
+    the rules and the template provenance). No finding here: it writes two artifacts
+    the device classifier reads; the advisory watch turns a CONFIRMED product into
+    findings (note 146 R3's gate). Written matched or not — "looked, saw nothing" is
+    a real verdict."""
+    tool = stack_fingerprint.TOOL_NAME
+    ctx.tools_run.append(tool)
+
+    def fetch(port, path, headers, body):
+        return stack_fingerprint.https_get(ctx.hostname, port, path, headers, body,
+                                           user_agent=LIGHT_UA)
+
+    try:
+        hello, portal, sent = stack_fingerprint.run_checks(
+            ctx.hostname, getattr(ctx, "open_ports", None) or set(), fetch)
+    except Exception as e:  # never let an identification step sink the scan
+        log(f"  {tool}: failed ({type(e).__name__}: {e})")
+        mark_tool_degraded(ctx, tool, f"exception:{type(e).__name__}")
+        return
+    ctx.artifacts.append((stack_fingerprint.HELLO_ARTIFACT, "json", json.dumps(hello)))
+    ctx.artifacts.append((stack_fingerprint.PORTAL_ARTIFACT, "json", json.dumps(portal)))
+    named = stack_fingerprint.identified(hello, portal)
+    log(f"  {tool}: {sent} request(s); " + ("; ".join(named) if named else "no VPN gateway named"))
+    mark_tool_ok(ctx, tool)
+
+
 def check_methods(ctx: ScanContext) -> None:
     """Run OPTIONS, parse Allow header, flag dangerous methods."""
     ctx.tools_run.append("methods_check")
@@ -3698,6 +3732,8 @@ def run(descriptor_path: str, dsn: str) -> int:
             check_wpvulnerability(ctx)
             log("  → check_library_flaws")
             check_library_flaws(ctx)
+            log("  → check_stack_fingerprint (job 3c)")
+            check_stack_fingerprint(ctx)
             log("→ check_behavioral_probes")
             check_behavioral_probes(ctx)
         else:

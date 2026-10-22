@@ -102,7 +102,17 @@ def test_affects_keeps_unknown_versions_and_drops_patched_ones():
 
 def test_cvss_takes_the_highest_primary_score():
     assert aw.cvss(php2shell()) == 9.8
-    assert aw.cvss({"metrics": {"cvssMetricV31": [{"type": "Secondary", "cvssData": {"baseScore": 10}}]}}) is None
+    # job 3c (the 330 read-back's Proposed item): NVD's own score wins when present...
+    both = {"metrics": {"cvssMetricV31": [{"type": "Primary", "cvssData": {"baseScore": 7.5}},
+                                          {"type": "Secondary", "cvssData": {"baseScore": 10}}]}}
+    assert aw.cvss(both) == 7.5
+
+
+def test_cvss_falls_back_to_the_vendors_score_when_nvd_has_none():
+    # ...and a CVE only its reporting vendor has scored is no longer "score not re-read"
+    # (nor skipped by the 30-day CVSS >= 9.0 filter).
+    assert aw.cvss({"metrics": {"cvssMetricV31": [{"type": "Secondary", "cvssData": {"baseScore": 10}}]}}) == 10
+    assert aw.cvss({"metrics": {}}) is None
 
 
 # ── sources ─────────────────────────────────────────────────────────────────────────
@@ -316,3 +326,150 @@ def test_the_watcher_contacts_only_nvd_and_cisa():
     conn = Conn([{"asset_id": "w.example.com", "tech": {"tech": ["PHP", "Nginx:1.31.6"]}}])
     aw.run(conn, src, dry_run=True, log=lambda *a: None, Json=lambda x: x)
     assert get.urls and all(u.startswith((aw.NVD_API, aw.KEV_FEED)) for u in get.urls)
+
+
+# ── job 3c: edge security devices (Howie 2026-10-22, "Yes to all four.") ──────────
+def asa_cve(cve_id="CVE-2025-20333", kev=True, published="2025-09-25T16:15:00.000",
+            start="9.16.0", end="9.16.4.85", cpe="o:cisco:adaptive_security_appliance_software"):
+    rec = {"id": cve_id, "published": published,
+           "descriptions": [{"lang": "en", "value": "Cisco ASA WebVPN flaw."}],
+           "metrics": {"cvssMetricV31": [{"type": "Secondary", "cvssData": {"baseScore": 9.9}}]},
+           "configurations": [{"nodes": [{"cpeMatch": [
+               {"vulnerable": True, "criteria": f"cpe:2.3:{cpe}:*:*:*:*:*:*:*:*",
+                "versionStartIncluding": start, "versionEndExcluding": end}]}]}]}
+    if kev:
+        rec["cisaExploitAdd"] = "2025-09-25"
+    return rec
+
+
+def test_asa_is_read_under_both_nvd_names():
+    disp, cpes = aw.cpes_for("cisco_asa")
+    assert cpes == ("o:cisco:adaptive_security_appliance_software",
+                    "a:cisco:adaptive_security_appliance_software")
+    assert aw.cpes_for("fortigate")[1] == ("o:fortinet:fortios",)
+    assert aw.SECURITY_DEVICES == {"fortiweb", "cisco_asa", "fortigate"}
+
+
+def test_inventory_carries_the_version_or_the_build_date_never_both():
+    inv = aw.build_inventory([], [
+        {"asset_id": "vpn.example.com", "vendor_product": {"vendor": "Cisco", "product": "ASA",
+                                                          "version": "9.16.4.48", "version_raw": "9.16(4)48"}},
+        {"asset_id": "fgt.example.com", "vendor_product": {"vendor": "Fortinet", "product": "FortiGate",
+                                                          "release_date": "2024-02-20"}},
+        {"asset_id": "odd.example.com", "vendor_product": {"vendor": "Cisco", "product": "ASA",
+                                                          "version": "9.16(4)48", "release_date": "20240220"}},
+        {"asset_id": "both.example.com", "vendor_product": {"vendor": "Fortinet", "product": "FortiGate",
+                                                           "version": "7.2.7", "release_date": "2024-02-20"}}])
+    assert inv["both.example.com"].products == {"fortigate": "7.2.7"}
+    assert inv["both.example.com"].release_dates == {}                    # a version wins over a date
+    assert inv["vpn.example.com"].products == {"cisco_asa": "9.16.4.48"}
+    assert inv["vpn.example.com"].release_dates == {}
+    assert inv["fgt.example.com"].products == {"fortigate": None}
+    assert inv["fgt.example.com"].release_dates == {"fortigate": "2024-02-20"}
+    assert inv["odd.example.com"].products == {"cisco_asa": None}       # unparseable: never guessed
+    assert inv["odd.example.com"].release_dates == {}
+
+
+def test_security_devices_ask_for_every_kev_entry_others_the_90_day_window():
+    get = FakeGet([])
+    src = aw.Sources(get=get, sleep=lambda s: None, now=NOW)
+    aw.advisories_for(src, ("o:fortinet:fortios",), set(), all_kev=True)
+    aw.advisories_for(src, ("a:php:php",), set())
+    fortios = [u for u in get.urls if "fortios" in u]
+    php = [u for u in get.urls if "php" in u]
+    assert any("hasKev" in u and "kevStartDate" not in u for u in fortios)
+    assert not any("hasKev" in u for u in php) and any("kevStartDate" in u for u in php)
+
+
+def test_kev_on_a_security_device_is_critical_even_without_a_version():
+    a = adv(asa_cve(), kev=True)
+    (act,) = aw.plan(host({"cisco_asa": None}, scanned=False, asset="vpn.example.com"),
+                     {"cisco_asa": {a.cve_id: a}}, set(), {}, {})
+    assert act.fields["severity"] == "CRITICAL"
+    assert "security-device" in act.fields["tags"] and "cisa-kev" in act.fields["tags"]
+    assert "No attack was sent" in act.fields["description"]
+    assert "Nothing was sent to the site" not in act.fields["description"]
+
+
+def test_a_shown_asa_version_in_range_is_high_without_kev_and_out_of_range_is_nothing():
+    a = adv(asa_cve(kev=False), kev=False)
+    inv = host({"cisco_asa": "9.16.4.48"}, scanned=False, asset="vpn.example.com")
+    (act,) = aw.plan(inv, {"cisco_asa": {a.cve_id: a}}, set(), {}, {})
+    assert act.fields["severity"] == "HIGH" and "9.16.4.48 is in the affected range" in act.fields["title"]
+    patched = host({"cisco_asa": "9.16.4.85"}, scanned=False, asset="vpn.example.com")
+    assert aw.plan(patched, {"cisco_asa": {a.cve_id: a}}, set(), {}, {}) == []
+
+
+def test_severity_ladder():
+    assert aw.severity_for("cisco_asa", None, True) == "CRITICAL"
+    assert aw.severity_for("fortiweb", None, True) == "CRITICAL"          # the D4 widening
+    assert aw.severity_for("fortigate", "7.2.1", False) == "HIGH"
+    assert aw.severity_for("fortigate", None, False) == "MODERATE"
+    assert aw.severity_for("php", None, True) == "HIGH"                   # 3d unchanged
+    assert aw.severity_for("php", "8.3.10", False) == "MODERATE"
+
+
+def test_build_date_keeps_only_advisories_published_after_it():
+    old = adv(asa_cve("CVE-2023-27997", published="2023-06-13T09:15:00.000",
+                      cpe="o:fortinet:fortios", start="7.2.0", end="7.2.5"), kev=True)
+    new = adv(asa_cve("CVE-2024-21762", published="2024-02-09T09:15:00.000",
+                      cpe="o:fortinet:fortios", start="7.2.0", end="7.2.7"), kev=True)
+    newer = adv(asa_cve("CVE-2025-1", published="2025-01-14T09:15:00.000", kev=False,
+                        cpe="o:fortinet:fortios", start="7.2.0", end="7.2.11"), kev=False)
+    inv = {"fgt.example.com": aw.Host("fgt.example.com", {"fortigate": None}, False,
+                                      {"fortigate": "2024-01-31"})}
+    found = {"fortigate": {a.cve_id: a for a in (old, new, newer)}}
+    (act,) = aw.plan(inv, found, set(), {}, {})
+    assert act.fields["cve"] == ["CVE-2024-21762", "CVE-2025-1"]
+    t = act.fields["title"]
+    assert t.startswith("Fortinet FortiGate (FortiOS) firmware built Jan 2024 — 2 advisories published since")
+    assert "1 on CISA’s exploited list" in t and t.endswith("confirm it’s patched")
+    assert act.fields["severity"] == "CRITICAL" and "firmware-build-date" in act.fields["tags"]
+    assert "2024-01-31" in act.fields["description"]
+
+
+def test_a_newer_build_drops_listed_advisories_published_before_it():
+    a = adv(asa_cve("CVE-2024-21762", published="2024-02-09T09:15:00.000",
+                    cpe="o:fortinet:fortios", start="7.2.0", end="7.2.7"), kev=True)
+    inv = {"fgt.example.com": aw.Host("fgt.example.com", {"fortigate": None}, False,
+                                      {"fortigate": "2025-06-01"})}
+    cur = {aw.finding_id("fgt.example.com", "fortigate"):
+           {"asset_id": "fgt.example.com", "key": "fortigate", "status": "open", "cve": ["CVE-2024-21762"]}}
+    (act,) = aw.plan(inv, {"fortigate": {a.cve_id: a}}, set(), cur, {})
+    assert act.kind == "close" and "firmware built 2025-06-01 is newer" in act.reason
+
+
+def test_published_after_keeps_unknown_dates():
+    a = aw.Advisory("CVE-X", None, None, False, "")
+    assert aw.published_after(a, "2024-01-31") is True
+    a.published = "2024-01-31T23:00:00.000"
+    assert aw.published_after(a, "2024-01-31") is False
+
+
+def test_fortiweb_now_reads_every_kev_entry_and_is_critical():
+    # the D4 widening, live on the four confirmed FortiWeb hosts
+    a = adv(asa_cve("CVE-2025-64446", cpe="a:fortinet:fortiweb", start="7.0.0", end="7.0.12"), kev=True)
+    (act,) = aw.plan(host({"fortiweb": None}, scanned=False, asset="api.example.com"),
+                     {"fortiweb": {a.cve_id: a}}, set(), {}, {})
+    assert act.fields["severity"] == "CRITICAL"
+    assert "Runs Fortinet FortiWeb, version not shown" in act.fields["title"]
+
+
+def test_run_asks_for_every_kev_entry_for_a_confirmed_security_device():
+    class ApplianceCur(Cur):
+        def fetchall(self):
+            if "httpx_tech" not in self.last and "vendor_product_confidence" in self.last:
+                return [{"asset_id": "vpn.example.com",
+                         "vendor_product": {"vendor": "Cisco", "product": "ASA"}}]
+            return super().fetchall()
+
+    class ApplianceConn(Conn):
+        def cursor(self):
+            return ApplianceCur(self.s)
+
+    get = FakeGet([])
+    aw.run(ApplianceConn([]), aw.Sources(get=get, sleep=lambda s: None, now=NOW),
+           dry_run=True, log=lambda *a: None, Json=lambda x: x)
+    asa = [u for u in get.urls if "adaptive_security_appliance_software" in u]
+    assert any("hasKev" in u and "kevStartDate" not in u for u in asa)
+    assert {("%3Ao%3Acisco" in u) or ("%3Aa%3Acisco" in u) for u in asa} == {True}

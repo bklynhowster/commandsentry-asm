@@ -68,6 +68,9 @@ _register("wpvulnerability", LIGHT, _light.check_wpvulnerability, ORDER_LIGHT)
 # 302 step 3. After httpx_tech (same ORDER_LIGHT band, ties keep declaration
 # order): it reads ctx.tech_versions, which httpx_tech sets.
 _register("library_flaws", LIGHT, _light.check_library_flaws, ORDER_LIGHT)
+# KB 12 job 3c: names a VPN gateway from its pre-login answers (3 GETs at most
+# per port, no credentials). Reads ctx.open_ports when the tier has it.
+_register("stack_fingerprint", LIGHT, _light.check_stack_fingerprint, ORDER_LIGHT)
 _register("behavioral_probes", LIGHT, _light.check_behavioral_probes, ORDER_LIGHT)
 
 # ── MEDIUM tier ─────────────────────────────────────────────────────────────

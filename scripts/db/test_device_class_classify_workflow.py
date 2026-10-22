@@ -71,28 +71,30 @@ def _run(event_name: str, inputs: dict):
     return r.returncode, r.stdout, r.stderr
 
 
-DISPATCH_DEFAULTS = {"mode": "dry-run", "soak_generation": "1"}
+# Soak generation 2 since 2026-10-22 (KB 12 job 3c: new VPN-gateway signals, 146 R2 reset;
+# Howie decision 3, handoff 004). Generation 1 ran 2026-07 -> 2026-10-22.
+DISPATCH_DEFAULTS = {"mode": "dry-run", "soak_generation": "2"}
 
 
 def test_schedule_runs_the_runner_in_write_mode():
     rc, out, err = _run("schedule", {})
     assert rc == 0, err
-    assert "RUNNER scripts/db/device_class_runner.py --soak-generation 1 --write\n" in out
-    assert "::notice::device_class_runner.py --soak-generation 1 --write  (event: schedule)" in out
+    assert "RUNNER scripts/db/device_class_runner.py --soak-generation 2 --write\n" in out
+    assert "::notice::device_class_runner.py --soak-generation 2 --write  (event: schedule)" in out
 
 
 def test_manual_dispatch_defaults_to_dry_run():
     """A human clicking Run workflow and changing nothing must NOT write."""
     rc, out, err = _run("workflow_dispatch", dict(DISPATCH_DEFAULTS))
     assert rc == 0, err
-    assert "RUNNER scripts/db/device_class_runner.py --soak-generation 1\n" in out
+    assert "RUNNER scripts/db/device_class_runner.py --soak-generation 2\n" in out
     assert "--write" not in out
 
 
 def test_manual_dispatch_mode_write_writes():
     rc, out, err = _run("workflow_dispatch", {**DISPATCH_DEFAULTS, "mode": "write"})
     assert rc == 0, err
-    assert "RUNNER scripts/db/device_class_runner.py --soak-generation 1 --write\n" in out
+    assert "RUNNER scripts/db/device_class_runner.py --soak-generation 2 --write\n" in out
 
 
 def test_soak_generation_input_is_passed_through():
@@ -113,7 +115,7 @@ def test_dispatch_input_declares_dry_run_as_the_default_and_only_the_two_modes()
     mode = on["workflow_dispatch"]["inputs"]["mode"]
     assert mode["default"] == "dry-run"
     assert mode["options"] == ["dry-run", "write"]
-    assert on["workflow_dispatch"]["inputs"]["soak_generation"]["default"] == "1"
+    assert on["workflow_dispatch"]["inputs"]["soak_generation"]["default"] == "2"
 
 
 def test_schedule_is_six_hourly_with_the_per_instance_offset():
