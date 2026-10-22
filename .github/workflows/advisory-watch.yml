@@ -1,0 +1,56 @@
+name: Advisory watch
+
+# KB 12 job 3d (2026-10-21). Once a day, before the 12:00 UTC digest: match new
+# advisories (NVD critical in the last 30 days, CISA known-exploited in the
+# last 90) against the products the scans have already seen on our hosts, and
+# write one finding per (asset, product). Version not shown -> "confirm it's
+# patched" (MODERATE; HIGH when on CISA's exploited list).
+#
+# Talks only to NVD, CISA and the database — never to a scanned host (D-056).
+# It reads the tech lists the scans already banked; it scans nothing.
+#
+# Needs the enum value from migration 20261021a. A public source being down is a
+# WARNING: that product changes nothing this run and the next run tries again.
+
+on:
+  schedule:
+    - cron: "23 10 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Read everything, write nothing"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: advisory-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'psycopg[binary]==3.3.4'
+
+      - name: Match new advisories to our hosts
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+        run: python scripts/scanner/advisory_watch.py
