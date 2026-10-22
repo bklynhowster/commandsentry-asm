@@ -161,6 +161,18 @@ jobs:
           echo "premerge-job3-alerter: rc=$rc"
           exit $rc
 
+      # KB 12 job 3l slice 2 — the Monday weekly's own reads (the week's scans by day,
+      # the open serious problems, the rebuild a week back), against the real database,
+      # before merge. --dry-run returns before the runs row and before any send.
+      - name: alerter --weekly --dry-run (read-only; returns before send and before any write)
+        run: |
+          set -uo pipefail
+          rc=0
+          out=$(PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/alerter/run_alerter.py --weekly --dry-run 2>&1) || rc=$?
+          echo "$out"
+          echo "premerge-job3-alerter-weekly: rc=$rc"
+          exit $rc
+
       - name: asset_liveness_probe --dry-run (read-only)
         run: |
           set -uo pipefail

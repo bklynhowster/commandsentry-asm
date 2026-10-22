@@ -170,10 +170,13 @@ def _image_parts(inline_images) -> list[tuple[str, bytes, str, str]]:
         try:
             cid, data, mime = item
             maintype, subtype = str(mime).split("/", 1)
+            # bytes-like only: bytes(5) would be five zero bytes, bytes("x") a TypeError
+            # (checker minor, 3l code review: the conversion sat outside this guard).
+            data = bytes(data) if isinstance(data, (bytes, bytearray, memoryview)) else None
         except (TypeError, ValueError):
             continue
         if cid and data:
-            out.append((str(cid), bytes(data), maintype, subtype))
+            out.append((str(cid), data, maintype, subtype))
     return out
 
 
