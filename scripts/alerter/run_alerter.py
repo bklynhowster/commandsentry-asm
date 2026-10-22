@@ -41,10 +41,20 @@ Optional env vars:
                            e.g. https://commandsentry-portal.netlify.app.
   ALERTER_DASHBOARD_URL    legacy Supabase dashboard link; used only when
                            ALERTER_PORTAL_URL is unset.
+  ALERTER_WEEKLY_NAME      default 'weekly_digest' — keys the weekly's runs rows
+  ALERTER_PREVIEW_TO       with --preview: send only to these (comma-separated).
+                           Each must already be on ALERTER_TO — a test send may
+                           narrow the list, never add to it.
 
 Usage:
   python3 run_alerter.py             # send email + record run
   python3 run_alerter.py --dry-run   # print body + skip Resend + skip DB write
+  python3 run_alerter.py --weekly    # the Monday weekly (the seven days before today)
+  python3 run_alerter.py --preview   # a TEST SEND: the last 24 hours (or, with
+                                     # --weekly, the last seven days), sent now,
+                                     # nothing written — the real schedule's
+                                     # window is untouched (KB 12 job 3l, Howie
+                                     # 2026-10-22 16:54)
 """
 
 from __future__ import annotations
@@ -63,6 +73,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import block_page_signatures as _bps  # noqa: E402 — Obsidian 312: the block-page library
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import digest_daily as _dd  # noqa: E402 — KB 12 job 3l: the daily list (buckets, bar, email-safe HTML)
+import digest_weekly as _dw  # noqa: E402 — KB 12 job 3l slice 2: the Monday weekly
 from datetime import datetime, timedelta, timezone
 from html import escape, unescape
 
@@ -899,6 +910,33 @@ SQL_FINDING_HINTS = """
 SELECT finding_id, remediation FROM public.findings WHERE finding_id = ANY(%s::text[])
 """
 
+# KB 12 job 3l slice 2 — the weekly's day columns: finished scans of owned hosts per
+# local day and intensity (deep = heavy; quick = light and medium).
+SQL_WEEK_SCANS = """
+SELECT (r.completed_at AT TIME ZONE %(tz)s)::date AS day, r.intensity::text, count(*)
+  FROM public.scan_run r
+  JOIN public.assets a ON a.asset_id = r.asset_id
+ WHERE a.ownership = 'owned'
+   AND r.status::text IN ('complete', 'degraded')
+   AND r.completed_at >= %(s)s
+   AND r.completed_at <  %(e)s
+ GROUP BY 1, 2
+"""
+
+# The weekly's "This week, do": every open serious problem, from v_fleet_open_reps — the
+# portal dashboard's rule (one row per problem, apex + www as one site, closed statuses
+# out), the same view the footer's "open right now" counts read (SQL_OPEN_POSTURE). Not
+# v_open_findings_dedup: that view keeps closed rows (its status is "detected" only when
+# a member is open) — the first draft of this query listed five false positives.
+SQL_OPEN_SERIOUS = """
+SELECT r.member_finding_ids[1], r.scope_id, r.title, r.severity::text,
+       'open', '', r.last_observed_at
+  FROM public.v_fleet_open_reps r
+ WHERE r.severity::text IN ('CRITICAL', 'HIGH', 'MODERATE-HIGH')
+ ORDER BY CASE r.severity::text WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 ELSE 3 END,
+          r.scope_id
+"""
+
 SQL_INSERT_RUN_START = """
 INSERT INTO meta_alerter_runs (alerter_name, window_start, window_end, status)
 VALUES (%s, %s, %s, 'started')
@@ -1408,6 +1446,118 @@ def send_via_sendgrid(
 
 
 # ---------------------------------------------------------------------------
+# KB 12 job 3l slice 2 — the test send and the weekly
+# ---------------------------------------------------------------------------
+
+WEEKLY_NAME_DEFAULT = "weekly_digest"
+PREVIEW_HOURS = 24
+PREVIEW_PREFIX = "Preview: "
+
+
+def preview_recipients(to_addrs: list[str], preview_raw: str | None) -> tuple[list[str], str]:
+    """Who a test send goes to. Empty ALERTER_PREVIEW_TO -> the instance's own list.
+    Otherwise ONLY NARROWING: every address must already be on ALERTER_TO, compared
+    case-insensitively — a test send cannot carry one company's posture to an address
+    the real digest would not reach. Returns (recipients, refusal); a refusal sends
+    nothing."""
+    want = [a.strip() for a in (preview_raw or "").split(",") if a.strip()]
+    if not want:
+        return list(to_addrs), ""
+    allowed = {a.lower() for a in to_addrs}
+    extra = [a for a in want if a.lower() not in allowed]
+    if extra:
+        return [], (f"ALERTER_PREVIEW_TO names {', '.join(extra)}, not on ALERTER_TO — "
+                    f"a test send may narrow the list, never add to it")
+    return want, ""
+
+
+def preview_subject(subject: str) -> str:
+    """'Preview: [COMMANDsentry] Command, Thursday: …' — a test send says so first."""
+    return PREVIEW_PREFIX + subject
+
+
+def _coverage_reads(cur) -> tuple[list, list, int, int]:
+    """Watchdog v1 — pipeline health checks (added 2026-06-07), shared by the daily and
+    the weekly. Returns (stale_assets, canary_violations, discovery_stale_hours,
+    deepscan_stale_hours).
+
+    Two clocks, two thresholds, single alarm if EITHER is stale:
+      ALERTER_DISCOVERY_STALE_HOURS (default 24h since 321; was 9h = 6h cron + 3h.
+        ns02.sciimage.com, listed by an outside source about 2 passes in 3 and
+        sometimes missed twice running, read as "lost sight" at 9h)
+      ALERTER_DEEPSCAN_STALE_HOURS  (default 192h = 8 days since 321; the weekly
+        sweep rescans just past 7 days, so 168h flagged hosts on schedule)
+    Per Howie 2026-06-07: a discovery-only check lets the
+    "discovery touched it but no deep scan ever ran" pattern
+    slip through silently (insite.sciimage.com — HIGH risk,
+    73d since last deep-scan, would have gone invisible after
+    the next discovery run touched it)."""
+    discovery_stale_hours = int(_env("ALERTER_DISCOVERY_STALE_HOURS", default="24") or "24")
+    deepscan_stale_hours  = int(_env("ALERTER_DEEPSCAN_STALE_HOURS",  default="192") or "192")
+    targets_yml = _env("ALERTER_TARGETS_YML", default="data/targets.yml") or "data/targets.yml"
+    scope_apexes = load_scope_verified_apexes(targets_yml)
+
+    stale_assets = []
+    if scope_apexes:
+        cur.execute(SQL_STALE_LIVE_ASSETS, {
+            "apexes": scope_apexes,
+            "disc_h": discovery_stale_hours,
+            "deep_h": deepscan_stale_hours,
+        })
+        stale_assets = cur.fetchall()
+
+    canary_hosts = load_canary_hosts(targets_yml)
+    canary_violations = []
+    if canary_hosts:
+        cur.execute(SQL_CANARY_VIOLATIONS, (canary_hosts,))
+        canary_violations = cur.fetchall()
+    return stale_assets, canary_violations, discovery_stale_hours, deepscan_stale_hours
+
+
+def _soft_read(conn, label, sql, params=None):
+    """A decoration read in its own savepoint: a failure costs that decoration only,
+    never the send."""
+    try:
+        with conn.transaction():
+            with conn.cursor() as c2:
+                c2.execute(sql, params)
+                return c2.fetchall()
+    except Exception as exc:                       # pragma: no cover - live only
+        print(f"  {label} read failed ({exc!r}) — digest renders without it")
+        return []
+
+
+def _weekly_model(conn, *, now, brand):
+    """Every read the weekly needs, then digest_weekly.build_weekly. The week is the seven
+    whole local days before today; `opened` / `closed` run on to now so a rating that
+    moved in Monday's early hours is still explained."""
+    window_start, window_end, days = _dw.week_window(now, brand)
+    with conn.cursor() as cur:
+        cur.execute(SQL_NEW_FINDINGS_IN_WINDOW, (window_start, now))
+        opened = cur.fetchall()
+        cur.execute(SQL_FIXED_IN_WINDOW, (window_start, now))
+        closed = cur.fetchall()
+        cur.execute(SQL_OPEN_POSTURE)
+        baseline = posture_from_rows(cur.fetchall())
+        stale_assets, canary_violations, disc_h, deep_h = _coverage_reads(cur)
+    tz = brand.get("tz") or "America/New_York"
+    sites = _soft_read(conn, "site ratings", SQL_SITE_RATINGS, {"t": window_start})
+    scans = _soft_read(conn, "scans by day", SQL_WEEK_SCANS, {"tz": tz, "s": window_start, "e": window_end})
+    certs = _soft_read(conn, "expiring certificates", SQL_CERTS_EXPIRING)
+    open_serious = _soft_read(conn, "open serious problems", SQL_OPEN_SERIOUS)
+    hint_ids = sorted({r[0] for r in open_serious if r[0]})
+    hints = dict(_soft_read(conn, "remediation hints", SQL_FINDING_HINTS, (hint_ids,))) if hint_ids else {}
+    return _dw.build_weekly(
+        now=now, window_start=window_start, window_end=window_end, days=days,
+        sites=sites, opened=opened, closed=closed, scans=scans, certs=certs,
+        open_serious=open_serious, hints=hints, stale_assets=stale_assets,
+        canary_violations=canary_violations, stale_words=stale_row_words,
+        stale_intro=STALE_INTRO, stale_note=stale_overdue_note(disc_h, deep_h),
+        baseline=baseline, brand=brand,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1417,6 +1567,11 @@ def main() -> int:
                     help="render email but skip Resend + DB writes")
     ap.add_argument("--html-out", default="",
                     help="with --dry-run: also write the full HTML here (to look at it)")
+    ap.add_argument("--weekly", action="store_true",
+                    help="the Monday weekly: the seven days before today (KB 12 job 3l)")
+    ap.add_argument("--preview", action="store_true",
+                    help="a test send: last 24 h (7 days with --weekly), sent now, nothing "
+                         "written; ALERTER_PREVIEW_TO may narrow the recipients")
     args = ap.parse_args()
 
     dsn          = _env("SUPABASE_DSN", required=True)
@@ -1452,8 +1607,18 @@ def main() -> int:
     from_name    = _env("ALERTER_FROM_NAME", default="")
     to_raw       = _env("ALERTER_TO", default="")
     to_addrs     = [a.strip() for a in (to_raw or "").split(",") if a.strip()]
+    if args.preview:
+        to_addrs, refusal = preview_recipients(to_addrs, _env("ALERTER_PREVIEW_TO", default=""))
+        if refusal:
+            print(f"::error::{refusal}", file=sys.stderr)
+            return 1
+    # A test send and a dry run write nothing: no runs row, so the real schedule's window
+    # (alerter_last_window_end) and the high-risk dedup set are exactly as they were.
+    record       = not (args.dry_run or args.preview)
     _mailer.warn_if_unconfigured(os.environ.get("INSTANCE_NAME", ""))  # 4.7 M5
     name         = _env("ALERTER_NAME", default="daily_digest") or "daily_digest"
+    if args.weekly:
+        name     = _env("ALERTER_WEEKLY_NAME", default=WEEKLY_NAME_DEFAULT) or WEEKLY_NAME_DEFAULT
     first_hours  = int(_env("ALERTER_FIRST_RUN_HOURS", default="24") or "24")
     dashboard_url= _env("ALERTER_DASHBOARD_URL", default="")
     # Note 307 — links go to the PORTAL (finding pages, the footer), not to the
@@ -1471,6 +1636,10 @@ def main() -> int:
         return 0
 
     with psycopg.connect(dsn, autocommit=False) as conn:
+        if args.weekly:
+            return _run_weekly(conn, args=args, record=record, name=name, to_addrs=to_addrs,
+                               api_key=api_key, from_addr=from_addr, from_name=from_name,
+                               portal_url=portal_url)
         with conn.cursor() as cur:
             # Resolve the window
             cur.execute(SQL_LAST_WINDOW_END, (name,))
@@ -1478,10 +1647,13 @@ def main() -> int:
             last_end: datetime | None = row[0] if row else None
             window_end = datetime.now(tz=timezone.utc)
             window_start = last_end or (window_end - timedelta(hours=first_hours))
+            if args.preview:
+                # A test send covers the last day, whatever the schedule last covered.
+                window_start = window_end - timedelta(hours=PREVIEW_HOURS)
 
             # Open the run row early so we can finalize it in any branch
             run_id: int | None = None
-            if not args.dry_run:
+            if record:
                 cur.execute(SQL_INSERT_RUN_START, (name, window_start, window_end))
                 run_id = cur.fetchone()[0]
                 conn.commit()
@@ -1537,37 +1709,10 @@ def main() -> int:
             cur.execute(SQL_MEASURED_BLOCKS_IN_WINDOW, (window_start, window_end))
             unrecognized_pages = unrecognized_block_pages(cur.fetchall())
 
-            # Watchdog v1 — pipeline health checks (added 2026-06-07).
-            # Two clocks, two thresholds, single alarm if EITHER is stale:
-            #   ALERTER_DISCOVERY_STALE_HOURS (default 24h since 321; was 9h = 6h cron + 3h.
-            #     ns02.sciimage.com, listed by an outside source about 2 passes in 3 and
-            #     sometimes missed twice running, read as "lost sight" at 9h)
-            #   ALERTER_DEEPSCAN_STALE_HOURS  (default 192h = 8 days since 321; the weekly
-            #     sweep rescans just past 7 days, so 168h flagged hosts on schedule)
-            # Per Howie 2026-06-07: a discovery-only check lets the
-            # "discovery touched it but no deep scan ever ran" pattern
-            # slip through silently (insite.sciimage.com — HIGH risk,
-            # 73d since last deep-scan, would have gone invisible after
-            # the next discovery run touched it).
-            discovery_stale_hours = int(_env("ALERTER_DISCOVERY_STALE_HOURS", default="24") or "24")
-            deepscan_stale_hours  = int(_env("ALERTER_DEEPSCAN_STALE_HOURS",  default="192") or "192")
-            targets_yml = _env("ALERTER_TARGETS_YML", default="data/targets.yml") or "data/targets.yml"
-            scope_apexes = load_scope_verified_apexes(targets_yml)
-
-            stale_assets = []
-            if scope_apexes:
-                cur.execute(SQL_STALE_LIVE_ASSETS, {
-                    "apexes": scope_apexes,
-                    "disc_h": discovery_stale_hours,
-                    "deep_h": deepscan_stale_hours,
-                })
-                stale_assets = cur.fetchall()
-
-            canary_hosts = load_canary_hosts(targets_yml)
-            canary_violations = []
-            if canary_hosts:
-                cur.execute(SQL_CANARY_VIOLATIONS, (canary_hosts,))
-                canary_violations = cur.fetchall()
+            # Watchdog v1 — pipeline health checks (added 2026-06-07); the two clocks
+            # and why they are what they are: _coverage_reads.
+            stale_assets, canary_violations, discovery_stale_hours, deepscan_stale_hours = \
+                _coverage_reads(cur)
 
             # D-031 — the per-asset device class, latest row per asset.
             # ⚠ FAILS SOFT, DELIBERATELY: a digest that does not send because a
@@ -1588,14 +1733,7 @@ def main() -> int:
         # failure costs that decoration only (the bar, the certificates, "first deep scan
         # since", the "Do:" line), never the send.
         def _soft(label, sql, params=None):
-            try:
-                with conn.transaction():
-                    with conn.cursor() as c2:
-                        c2.execute(sql, params)
-                        return c2.fetchall()
-            except Exception as exc:                       # pragma: no cover - live only
-                print(f"  {label} read failed ({exc!r}) — digest renders without it")
-                return []
+            return _soft_read(conn, label, sql, params)
         sites = _soft("site ratings", SQL_SITE_RATINGS, {"t": window_start})
         certs = _soft("expiring certificates", SQL_CERTS_EXPIRING)
         listed = sorted({r[1] for r in list(new_findings) + list(regressed) + list(confirmed)})
@@ -1619,6 +1757,8 @@ def main() -> int:
             discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours,
         )
         subject = _dd.subject(model, from_name)
+        if args.preview:
+            subject = preview_subject(subject)
         html = _dd.render_html(model, portal_url=portal_url, product_name=from_name)
         text = _dd.render_text(model, portal_url=portal_url, product_name=from_name)
 
@@ -1658,19 +1798,79 @@ def main() -> int:
             status = "error"
             err = str(e)[:1900]
 
-        with conn.cursor() as cur:
-            cur.execute(SQL_FINALIZE_RUN, (
-                len(confirmed), len(regressed), len(high_risk),
-                sent, status, err, current_high_risk_ids, run_id,
-            ))
-        conn.commit()
+        if run_id is not None:
+            with conn.cursor() as cur:
+                cur.execute(SQL_FINALIZE_RUN, (
+                    len(confirmed), len(regressed), len(high_risk),
+                    sent, status, err, current_high_risk_ids, run_id,
+                ))
+            conn.commit()
 
         if status == "error":
             print(f"alerter failed: {err}", file=sys.stderr)
             return 1
         print(f"alerter ok: new_problems={len(new_problems)} new_inventory={len(new_inventory)} fixed={len(fixed)} "
-              f"confirmed={len(confirmed)} regressed={len(regressed)} high_risk={len(high_risk)} sent={sent}")
+              f"confirmed={len(confirmed)} regressed={len(regressed)} high_risk={len(high_risk)} sent={sent}"
+              f"{' (test send, nothing recorded)' if args.preview else ''}")
         return 0
+
+
+def _run_weekly(conn, *, args, record, name, to_addrs, api_key, from_addr, from_name,
+                portal_url) -> int:
+    """KB 12 job 3l slice 2 — the Monday weekly. A real run records one runs row under
+    ALERTER_WEEKLY_NAME (its own name: the daily's window is never touched); a dry run
+    or a test send records nothing."""
+    brand = _dd.load_brand()
+    now = datetime.now(tz=timezone.utc)
+    model = _weekly_model(conn, now=now, brand=brand)
+    subject = _dw.weekly_subject(model, from_name)
+    if args.preview:
+        subject = preview_subject(subject)
+    html = _dw.render_weekly_html(model, portal_url=portal_url, product_name=from_name)
+    text = _dw.render_weekly_text(model, portal_url=portal_url, product_name=from_name)
+
+    if args.dry_run:
+        print(">> DRY RUN (weekly) — would send to:", ", ".join(to_addrs))
+        print(">> Subject:", subject)
+        print(">> From:", from_addr)
+        print()
+        print("===== PLAINTEXT =====")
+        print(text)
+        if args.html_out:
+            with open(args.html_out, "w", encoding="utf-8") as f:
+                f.write(html.replace(f"cid:{_dd.LOGO_CID}", "logo.png"))
+            print(f">> full HTML written to {args.html_out} (logo as logo.png beside it)")
+        return 0
+
+    run_id = None
+    if record:
+        with conn.cursor() as cur:
+            cur.execute(SQL_INSERT_RUN_START, (name, model["window_start"], model["window_end"]))
+            run_id = cur.fetchone()[0]
+        conn.commit()
+
+    status, err, sent = "success", None, False
+    try:
+        resp = send_via_sendgrid(
+            api_key=api_key, from_addr=from_addr, from_name=from_name, to_addrs=to_addrs,
+            subject=subject, html=html, text=text, inline_images=_dd.inline_images(brand),
+        )
+        sent = resp.get("status_code") == 202 or bool(resp.get("id"))
+    except Exception as e:
+        status, err = "error", str(e)[:1900]
+
+    if run_id is not None:
+        with conn.cursor() as cur:
+            cur.execute(SQL_FINALIZE_RUN, (0, 0, 0, sent, status, err, [], run_id))
+        conn.commit()
+
+    if status == "error":
+        print(f"weekly failed: {err}", file=sys.stderr)
+        return 1
+    print(f"weekly ok: sites={model['sites_total']} up={model['moves']['n_up']} "
+          f"down={model['moves']['n_down']} closed={model['n_closed']} sent={sent}"
+          f"{' (test send, nothing recorded)' if args.preview else ''}")
+    return 0
 
 
 if __name__ == "__main__":

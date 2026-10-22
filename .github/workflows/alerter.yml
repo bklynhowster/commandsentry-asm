@@ -11,15 +11,42 @@ name: Daily posture digest
 # period so the alerter's `SENDGRID_API_KEY or RESEND_API_KEY` fallback
 # in run_alerter.py keeps working if SENDGRID_API_KEY isn't set.
 
+#
+# KB 12 job 3l slice 2 (2026-10-22) — THE MONDAY WEEKLY rides in this same job, so
+# its identity is the daily's (one block of variables; the 318 pins cover both).
+# Howie, 14:59: "the weekly should definitely be Monday. If it's not Monday, it's
+# Friday, and frankly, on Friday, nobody pays attention." Its cron fires five
+# minutes after the daily's, so Monday brings the daily list and then the week.
+#
+# AND A TEST SEND (Howie, 16:54: "generate a daily and a weekly to send to me and
+# the other recipients"): run by hand with preview=true. It sends the last 24
+# hours (or, with kind=weekly, the last seven days) right away and WRITES NOTHING,
+# so the next scheduled digest covers exactly what it would have. preview_to may
+# narrow the recipients to some of ALERTER_TO; run_alerter.py refuses any address
+# that is not already on it.
+
 on:
   schedule:
-    - cron: "0 12 * * *"
+    - cron: "0 12 * * *"     # the daily list
+    - cron: "5 12 * * 1"     # the Monday weekly
   workflow_dispatch:
     inputs:
       dry_run:
         description: "Render but don't send / write"
         required: false
         default: "false"
+      kind:
+        description: "daily or weekly"
+        required: false
+        default: "daily"
+      preview:
+        description: "Test send: send now, record nothing (true/false)"
+        required: false
+        default: "false"
+      preview_to:
+        description: "Test send only: some of ALERTER_TO, comma-separated (blank = all)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -60,6 +87,14 @@ jobs:
           SMTP_USER:           ${{ vars.SMTP_USER }}
           SMTP_PASS:           ${{ secrets.SMTP_PASS }}
           INSTANCE_NAME:       ${{ github.event.repository.name }}
+          # Which digest, and whether it is a test send. Read as variables, never
+          # pasted into the script: a typed input cannot become a shell command.
+          EVENT_NAME:          ${{ github.event_name }}
+          EVENT_SCHEDULE:      ${{ github.event.schedule }}
+          IN_DRY_RUN:          ${{ github.event.inputs.dry_run }}
+          IN_KIND:             ${{ github.event.inputs.kind }}
+          IN_PREVIEW:          ${{ github.event.inputs.preview }}
+          ALERTER_PREVIEW_TO:  ${{ github.event.inputs.preview_to }}
           #
           # ⚠️ THE `||` FALLBACKS BELOW ARE COMMAND-ONLY AND MUST NOT BE COPIED
           # TO ANOTHER INSTANCE. run_alerter.py deliberately has NO defaults for
@@ -75,8 +110,13 @@ jobs:
           # Note 307 — links in the email go to the portal, not the raw database.
           ALERTER_PORTAL_URL:    ${{ vars.ALERTER_PORTAL_URL    || 'https://commandsentry-portal.netlify.app' }}
         run: |
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            python scripts/alerter/run_alerter.py --dry-run
+          args=()
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            if [ "$EVENT_SCHEDULE" = "5 12 * * 1" ]; then args+=(--weekly); fi
           else
-            python scripts/alerter/run_alerter.py
+            if [ "$IN_KIND" = "weekly" ]; then args+=(--weekly); fi
+            if [ "$IN_PREVIEW" = "true" ]; then args+=(--preview); fi
+            if [ "$IN_DRY_RUN" = "true" ]; then args+=(--dry-run); fi
           fi
+          echo "run_alerter.py ${args[*]}"
+          python scripts/alerter/run_alerter.py "${args[@]}"
