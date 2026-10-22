@@ -138,8 +138,13 @@ def load_assets(cur, path: Path) -> int:
             rec.get("organization") or "command_companies",
             rec.get("tags") or [],
             get(rec, "first_observed"),
-            rec.get("current_risk") or "UNKNOWN",
-            rec.get("current_risk_reason"),
+            # KB 12 job 3m (2026-10-22): the rating is the database's (one rule,
+            # recompute_asset_current_risk_for). A NEW row starts UNKNOWN; an
+            # existing row's rating is never overwritten from the JSONL (see the
+            # ON CONFLICT list) — the refresh at the end of the run sets it, and
+            # --no-refresh can no longer leave posture_rollup's verdict standing.
+            "UNKNOWN",
+            None,
             Json(rec.get("metadata") or {}),
         ))
     if not rows:
@@ -157,8 +162,6 @@ def load_assets(cur, path: Path) -> int:
             organization        = EXCLUDED.organization,
             tags                = EXCLUDED.tags,
             first_observed      = COALESCE(assets.first_observed, EXCLUDED.first_observed),
-            current_risk        = EXCLUDED.current_risk,
-            current_risk_reason = EXCLUDED.current_risk_reason,
             metadata            = EXCLUDED.metadata
         """,
         rows,
