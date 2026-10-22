@@ -1,0 +1,26 @@
+-- 20261021a_finding_source_advisory_watch.sql
+--
+-- KB 12 job 3d (2026-10-21). ADDS ONE ENUM VALUE, USES NOTHING.
+--
+-- The daily advisory watcher (scripts/scanner/advisory_watch.py, push 330)
+-- writes its findings with source = 'advisory_watch'. findings.source is the
+-- enum public.finding_source_t, not text, so the value must exist before the
+-- watcher's first run. Howie, 2026-10-21 (handoff 004, Decision 1): "Agreed." —
+-- a finding on the asset, after one small database change he runs first.
+--
+-- Nothing here moves, reads or writes a row. PostgreSQL 12+ allows ADD VALUE
+-- inside a transaction as long as the same transaction does not use the new
+-- value; this file only adds it (both live databases are PostgreSQL 17.6), so
+-- the runner's own transaction is safe. IF NOT EXISTS makes a re-run a no-op.
+-- An enum value cannot be removed in PostgreSQL; an unused one is harmless.
+--
+-- MIGRATION-META:
+-- idempotent: true
+-- transactional: true
+-- safe_auto_apply: true
+-- requires_backup: false
+-- estimated_duration_ms: 50
+-- notes: Adds enum value advisory_watch to public.finding_source_t (job 3d, Howie 2026-10-21 Decision 1). ADDS ONLY - references nothing, moves no rows. Transactional is safe on PostgreSQL 17 because nothing in this file uses the value. Byte-identical in both repos. Splitter-safe.
+-- END-META
+
+ALTER TYPE public.finding_source_t ADD VALUE IF NOT EXISTS 'advisory_watch';
