@@ -378,6 +378,20 @@ SELECT DISTINCT ON (sr.asset_id)
    AND a.ownership = 'owned'
  ORDER BY sr.asset_id, sra.created_at DESC
 """
+# Job 3o (2026-10-22): the WordPress core version run_light read from WordPress's own
+# files (artifact wpvulnerability_detection, run_light.check_wpvulnerability). Same
+# window and ownership as INVENTORY_SQL; the latest artifact per host decides.
+WP_CORE_SQL = """
+SELECT DISTINCT ON (sr.asset_id)
+       sr.asset_id, sra.content_jsonb ->> 'core_version' AS core_version, sra.created_at AS seen_at
+  FROM public.scan_run_artifacts sra
+  JOIN public.scan_run sr ON sr.scan_run_id = sra.scan_run_id
+  JOIN public.assets a    ON a.asset_id = sr.asset_id
+ WHERE sra.tool_name = 'wpvulnerability_detection'
+   AND sra.created_at > now() - make_interval(days => %(days)s)
+   AND a.ownership = 'owned'
+ ORDER BY sr.asset_id, sra.created_at DESC
+"""
 CONFIRMED_APPLIANCE_SQL = """
 SELECT asset_id, vendor_product
   FROM public.assets
@@ -437,11 +451,22 @@ def appliance_release_date(vendor_product) -> str | None:
     return d if isinstance(d, str) and DATE_RE.match(d) else None
 
 
-def build_inventory(tech_rows, appliance_rows) -> dict:
-    """{asset_id: Host}. PURE."""
+def build_inventory(tech_rows, appliance_rows, wp_core_rows=()) -> dict:
+    """{asset_id: Host}. PURE.
+    wp_core_rows (job 3o): {asset_id, core_version} from WP_CORE_SQL. A version fills
+    WordPress ONLY where httpx already named WordPress without a number: it never adds
+    WordPress to a host (the www. redirect twins), never overrides a version httpx
+    showed, and a None takes nothing away."""
     inv = {}
     for r in tech_rows:
         inv[r["asset_id"]] = Host(r["asset_id"], products_from_tech(r["tech"]), True)
+    for r in wp_core_rows:
+        h = inv.get(r.get("asset_id"))
+        v = r.get("core_version")
+        v = v.strip() if isinstance(v, str) else None
+        if (h and "wordpress" in h.products and h.products["wordpress"] is None
+                and v and VERSION_RE.match(v) and vtuple(v)):
+            h.products["wordpress"] = v
     for r in appliance_rows:
         ap = appliance_product(r["vendor_product"])
         if ap:
@@ -689,9 +714,11 @@ def run(conn, src: Sources, dry_run=False, log=print, Json=None) -> dict:
         tech = cur.fetchall()
         cur.execute(CONFIRMED_APPLIANCE_SQL)
         appl = cur.fetchall()
+        cur.execute(WP_CORE_SQL, {"days": INVENTORY_DAYS})
+        wp_core = cur.fetchall()
         cur.execute(EXISTING_SQL, {"source": SOURCE})
         rows = cur.fetchall()
-    inv = build_inventory(tech, appl)
+    inv = build_inventory(tech, appl, wp_core)
     existing = {r["finding_id"]: dict(asset_id=r["asset_id"], key=_key_of(r), status=r["status"],
                                       cve=list(r["cve"] or [])) for r in rows if _key_of(r)}
     log(f"inventory: {len(inv)} hosts, products {sorted({k for h in inv.values() for k in h.products})}; "

@@ -1852,36 +1852,82 @@ def _detect_wp_plugin_versions(html: str, hostname: str) -> dict[str, str]:
     return slug_versions
 
 
-def _detect_wp_core_version(ctx: ScanContext) -> str | None:
-    """Try several sources for the WordPress core version.
+# ── KB 12 job 3o (2026-10-22): the core version from WordPress's OWN files ──────────
+# Every core script / style registered without a version of its own is served with
+# ?ver=<core version>: wp-includes/script-loader.php sets
+# `$scripts->default_version = get_bloginfo( 'version' )` (and the same for styles), and
+# formatting.php builds the emoji loader URL with `'ver=' . get_bloginfo( 'version' )`.
+# Libraries bundled under wp-includes carry THEIR OWN numbers (jQuery 3.7.1,
+# mediaelement 4.2.17, wp-polyfill 3.15.0) and js/dist/* carry content hashes — so an
+# allow-list of core-registered files, never "any wp-includes file" (jQuery 3.7.1 read
+# as WordPress 3.7.1 would sit in the range of everything). Allow-list read from
+# WordPress 7.1.3's source; the checker re-read 6.9 and 6.8. Managed hosts (wp.cloud)
+# strip the meta generator and the feed generator but not these query strings.
+# Howie, 2026-10-22 13:33: "We'll build it into the light, and it will get inherited
+# by the heavy." No new request: it reads the homepage check_wpvulnerability fetched.
+_WP_CORE_VER_RE = re.compile(
+    r"wp-includes/((?:js/(?:comment-reply|wp-embed|wp-emoji-release|admin-bar)"
+    r"|css/(?:admin-bar|dashicons)|js/mediaelement/wp-mediaelement)(?:\.min)?\.(?:js|css))"
+    r"\?ver=([^\"'&\s<>\\]+)")
+_WP_CORE_VERSION_SHAPE = re.compile(r"^(\d{1,2})\.\d{1,2}(?:\.\d{1,3})?$")
 
-    Returns version string ('6.5.4') or None if undetectable. Pressable
-    and other managed-WP hosts often strip the meta generator tag and
-    readme.html headers, so this returns None more often than not — but
-    when it works, it works cheaply.
+
+def wp_core_version_from_assets(html: str | None) -> tuple[str | None, list[str]]:
+    """The WordPress core version from the ?ver= on WordPress's own files. PURE.
+
+    Returns (version, evidence): evidence is every allow-listed 'file=ver' seen
+    (sorted). Agreement or nothing: every plain version on those files must be the
+    same, else None (a stale cache or a filter rewrote one — never guess). Hashes,
+    epoch numbers and suffixed versions are not versions and are skipped. The emoji
+    loader's URL sits in inline JSON with escaped slashes, so '\\/' is read as '/'.
     """
+    if not html:
+        return None, []
+    seen: dict[str, set[str]] = {}
+    for path, ver in _WP_CORE_VER_RE.findall(html.replace("\\/", "/")):
+        m = _WP_CORE_VERSION_SHAPE.match(ver)
+        if not m or int(m.group(1)) < 3:
+            continue
+        seen.setdefault(path, set()).add(ver)
+    evidence = sorted(f"{f}={v}" for f, vs in seen.items() for v in vs)
+    versions = {v for vs in seen.values() for v in vs}
+    return (versions.pop() if len(versions) == 1 else None), evidence
+
+
+def _detect_wp_core_version(ctx: ScanContext, html: str) -> tuple[str | None, str | None, list[str]]:
+    """The WordPress core version, and where it came from: (version, source, evidence).
+
+    `html` is the homepage check_wpvulnerability already fetched — no second fetch
+    (job 3o, checker minor (a)). In order: WordPress's own files' ?ver= (job 3o); the
+    meta generator; an inline wp_version; then, only if all of those fail, /feed/'s
+    <generator>. Managed-WP hosts strip the generators, so the first is the one that
+    usually answers. source is 'core_asset_ver' | 'meta_generator' |
+    'inline_wp_version' | 'feed_generator' | None.
+    """
+    version, evidence = wp_core_version_from_assets(html)
+    if version:
+        return version, "core_asset_ver", evidence
+    if evidence:
+        log(f"  wpvulnerability: WordPress's own files disagree on the core version "
+            f"({', '.join(evidence)}) — not guessing")
+
     BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                   "AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
 
-    # Source 1: meta generator on the homepage
-    rc, html, _ = run_cmd(
-        ["curl", "-s", "-L", "--max-time", "12",
-         "-A", BROWSER_UA, f"https://{ctx.hostname}/"],
-        timeout=15,
-    )
-    if rc == 0 and html:
+    # Source 2: meta generator on the homepage
+    if html:
         m = re.search(
             r'<meta\s+name=["\']generator["\']\s+content=["\']WordPress\s+([0-9.]+)',
             html, re.IGNORECASE,
         )
         if m:
-            return m.group(1)
-        # Inline JS often references wp_version
+            return m.group(1), "meta_generator", evidence
+        # Source 3: inline JS often references wp_version
         m2 = re.search(r'wp_version["\']?\s*[:=]\s*["\']([0-9.]+)["\']', html)
         if m2:
-            return m2.group(1)
+            return m2.group(1), "inline_wp_version", evidence
 
-    # Source 2: /feed/ RSS sometimes leaks WordPress version
+    # Source 4: /feed/ RSS sometimes leaks WordPress version
     rc2, feed, _ = run_cmd(
         ["curl", "-s", "--max-time", "10",
          "-A", BROWSER_UA, f"https://{ctx.hostname}/feed/"],
@@ -1890,9 +1936,9 @@ def _detect_wp_core_version(ctx: ScanContext) -> str | None:
     if rc2 == 0 and feed:
         m = re.search(r'<generator>https?://wordpress\.org/\?v=([0-9.]+)</generator>', feed)
         if m:
-            return m.group(1)
+            return m.group(1), "feed_generator", evidence
 
-    return None
+    return None, None, evidence
 
 
 def check_wpvulnerability(ctx: ScanContext) -> None:
@@ -1945,8 +1991,9 @@ def check_wpvulnerability(ctx: ScanContext) -> None:
 
     # Step 3: detect plugin slugs + versions
     plugins = _detect_wp_plugin_versions(html, ctx.hostname)
-    core_version = _detect_wp_core_version(ctx)
-    log(f"  wpvulnerability: detected core={core_version or '<unknown>'}, "
+    core_version, core_source, core_evidence = _detect_wp_core_version(ctx, html)
+    log(f"  wpvulnerability: detected core={core_version or '<unknown>'}"
+        f"{f' (from {core_source})' if core_version else ''}, "
         f"{len(plugins)} plugin(s): {sorted(plugins.keys())}")
 
     if not plugins and not core_version:
@@ -1959,6 +2006,10 @@ def check_wpvulnerability(ctx: ScanContext) -> None:
     # Record the detection inventory as an artifact for audit
     ctx.artifacts.append(("wpvulnerability_detection", "json", json.dumps({
         "core_version": core_version,
+        # job 3o: where the number came from, and the files that agreed on it.
+        # advisory_watch.WP_CORE_SQL reads core_version from this artifact.
+        "core_version_source": core_source,
+        "core_version_evidence": core_evidence,
         "plugins": plugins,
     })))
 

@@ -285,6 +285,8 @@ class Cur:
             return self.s["tech"]
         if "vendor_product_confidence" in self.last:
             return []
+        if "wpvulnerability_detection" in self.last:
+            return self.s.get("wp", [])
         return self.s["existing"]
 
     def fetchone(self):
@@ -292,8 +294,8 @@ class Cur:
 
 
 class Conn:
-    def __init__(self, tech, existing=()):
-        self.s = {"tech": tech, "existing": list(existing), "calls": []}
+    def __init__(self, tech, existing=(), wp=()):
+        self.s = {"tech": tech, "existing": list(existing), "wp": list(wp), "calls": []}
 
     def cursor(self):
         return Cur(self.s)
