@@ -60,10 +60,9 @@ def test_no_percent_sign_in_the_sql_except_placeholders():
 
 def test_rendered_in_both_bodies_with_both_times():
     html, text = _render(came_back=[ROW])
-    assert "Assets back online" in html and "<strong>1</strong> back online" in html
-    assert "2026-10-05 01:37 UTC" in html and "2026-10-09 19:12 UTC" in html
-    assert "ASSETS BACK ONLINE (1):" in text
-    assert "reported dark 2026-10-05 01:37 UTC, answered again 2026-10-09 19:12 UTC" in text
+    line = "pm.unimacgraphics.com: stopped answering Oct 5, answering again Oct 9"
+    assert line in html and line in text
+    assert "1 host answering again" in html and "[x] 1 host answering again" in text
 
 
 def test_a_window_with_only_a_comeback_is_not_no_changes():
@@ -73,9 +72,14 @@ def test_a_window_with_only_a_comeback_is_not_no_changes():
 
 def test_nothing_back_changes_nothing():
     html, text = _render()
-    assert "back online" not in html and "BACK ONLINE" not in text
+    assert "answering again" not in html and "answering again" not in text
 
 
 def test_subject_counts_comebacks():
-    import inspect
-    assert 'subject_parts.append(f"{n} back")' in inspect.getsource(ra.main)
+    """A comeback is off your plate: it never makes the subject ask for work."""
+    import digest_daily as dd
+    m = ra._digest_model(window_start=W0, window_end=W1, new_findings=[], confirmed=[], regressed=[],
+                         high_risk=[], new_assets=[], dark_assets=[], stale_assets=[],
+                         canary_violations=[], baseline=BASE, came_back=[ROW])
+    assert dd.subject(m, "X").endswith(": nothing needs you")
+    assert m["done"][0]["kind"] == "back"

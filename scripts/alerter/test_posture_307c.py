@@ -92,38 +92,36 @@ def test_problems_and_inventory_are_split_by_severity():
 
 
 def test_headline_counts_problems_not_inventory_and_names_fixed():
+    """KB 12 job 3l: the old count headline became a to-do list. Still pinned: INFO never
+    counts as a problem (it lands on the quiet line), a fix is reported (Off your plate),
+    and the dead "status change(s)" counter stays dead."""
     html, text = _render(new_findings=[HIGH, LOW, INFO], fixed=[FIXED])
-    assert "<strong>2</strong> new problem(s)" in html
-    assert "<strong>1</strong> new inventory item(s)" in html
-    assert "<strong>1</strong> fixed" in html
-    assert "status change(s)" not in html
-    assert "2 new problem(s), 1 new inventory item(s), 1 fixed" in text
+    assert "Your list for today: one check." in html and "Your list for today: one check." in text
+    assert "Also new: 1 low and 1 informational item, listed in the portal." in html
+    assert "1 finding closed" in html and "1 finding closed" in text
+    assert "status change(s)" not in html and "status change(s)" not in text
 
 
 def test_a_window_with_only_a_fix_is_not_no_changes():
     html, text = _render(fixed=[FIXED])
-    assert "No changes" not in html and "No changes since last run" not in text
-    assert "Marked fixed in this window" in html and "MARKED FIXED IN THIS WINDOW (1)" in text
+    assert "came back with nothing new" not in html
+    assert "Off your plate" in html and "OFF YOUR PLATE" in text
     assert "Next.js Middleware Bypass" in html and "Next.js Middleware Bypass" in text
 
 
 def test_open_block_shows_portal_counts_inventory_and_stale_separately():
+    """The portal's counts (v_fleet_open_reps) stay, as the footer line; INFO is not a problem."""
     html, text = _render()
-    assert "HIGH: <strong>11</strong>" in html and "MODERATE: <strong>181</strong>" in html
-    assert "LOW: <strong>482</strong>" in html
-    assert "<strong>674</strong> open problem(s)" in html
-    assert "<strong>653</strong> informational" in html
-    assert "<strong>279</strong> of the open problems" in html and "30+ days" in html
-    assert "MOD-HIGH" not in html, "a zero legacy severity is not shown"
-    assert "HIGH=11  MODERATE=181  LOW=482  = 674 open problem(s)" in text
-    assert "+ 653 informational" in text
-    assert "279 of the open problems have not been seen by any scan in 30+ days" in text
+    import digest_daily as dd
+    name = dd.load_brand()["short_name"]          # this repo's brand: Command or Prodex
+    line = f"Open across {name} right now: 0 critical, 11 high, 181 moderate, 482 low; 279 not re-checked in 30+ days."
+    assert line in html and line in text
+    assert "informational" not in html.split("Open across")[1]
 
 
 def test_mod_high_shows_only_when_non_zero_and_stale_line_only_when_non_zero():
     b = ra.posture_from_rows([("MODERATE-HIGH", 2, 0), ("LOW", 1, 0)])
     html, text = _render(baseline=b)
-    assert "MOD-HIGH: <strong>2</strong>" in html and "MOD-HIGH=2" in text
     assert "30+ days" not in html and "30+ days" not in text
 
 
@@ -131,25 +129,23 @@ def test_old_five_key_baseline_still_renders():
     """The renderers must not KeyError on a baseline from an older caller/test."""
     b = {"critical_open": 0, "high_open": 1, "mod_high_open": 0, "moderate_open": 2, "low_open": 3}
     html, text = _render(baseline=b)
-    assert "<strong>6</strong> open problem(s)" in html and "= 6 open problem(s)" in text
+    assert "0 critical, 1 high, 2 moderate, 3 low." in html and "0 critical, 1 high, 2 moderate, 3 low." in text
 
 
 def test_links_and_footer_go_to_the_portal():
     html, _ = _render(new_findings=[HIGH, INFO])
     assert 'href="https://portal.example/findings/F-H"' in html
-    # the collapsed INFO line links to the asset page; /findings has no asset= filter
-    assert 'href="https://portal.example/assets/a.example"' in html
+    assert 'href="https://portal.example"' in html and "Open today's report" in html
     assert "findings?asset=" not in html
-    assert "Open the COMMANDsentry portal" in html
     assert "Supabase" not in html
     src = inspect.getsource(ra.main)
     assert '_env("ALERTER_PORTAL_URL"' in src, "the portal URL must be READ from the env, not just mentioned"
-    assert "dashboard_url=portal_url" in src
+    assert "portal_url=portal_url" in src
 
 
 def test_fixed_rows_are_labelled_fixed_not_new_and_scanner_sources_read_as_tiers():
     html, _ = _render(fixed=[FIXED])
-    assert "1 fixed</span>" in html and "1 new</span>" not in html
+    assert "1 finding closed" in html and "Do today" not in html
     assert ra.scan_tier_label("commandsentry_medium") == "medium scan"
     assert ra.scan_tier_label("commandsentry_light") == "light scan"
     assert ra.scan_tier_label("commandsentry_heavy") == "deep scan"
@@ -164,9 +160,14 @@ def test_the_device_class_line_is_gone_from_both_renderers():
 
 
 def test_subject_names_problems_inventory_fixed_regressed():
+    """KB 12 job 3l: the subject says what you will do. Built by digest_daily.subject."""
+    import digest_daily as dd
     src = inspect.getsource(ra.main)
-    for part in ('f"{n} new problem', 'f"{n} new info"', 'f"{n} fixed"', 'f"{n} regressed"'):
-        assert part in src, part
+    assert "subject = _dd.subject(model, from_name)" in src
+    m = ra._digest_model(window_start=W0, window_end=W1, new_findings=[HIGH, INFO], confirmed=[],
+                         regressed=[], high_risk=[], new_assets=[], dark_assets=[], stale_assets=[],
+                         canary_violations=[], baseline=ra.posture_from_rows(ROWS))
+    assert dd.subject(m, "COMMANDsentry").endswith(": 1 check")
     assert '{n} new find' not in src and '{n} chng' not in src
 
 

@@ -61,6 +61,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import mailer as _mailer  # noqa: E402 — shared provider-branching send path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "normalize"))
 import block_page_signatures as _bps  # noqa: E402 — Obsidian 312: the block-page library
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import digest_daily as _dd  # noqa: E402 — KB 12 job 3l: the daily list (buckets, bar, email-safe HTML)
 from datetime import datetime, timedelta, timezone
 from html import escape, unescape
 
@@ -815,6 +817,88 @@ def load_scope_verified_apexes(targets_yml_path: str = "data/targets.yml") -> li
             apexes.add(apex)
     return sorted(apexes)
 
+# ---------------------------------------------------------------------------
+# KB 12 job 3l (2026-10-22) — four small reads for the daily list. Each is read in
+# its own savepoint and FAILS SOFT: without it the email loses one decoration, never
+# the send. Same gate as every digest query: owned + confirmed_live.
+# ---------------------------------------------------------------------------
+
+# Every live site's rating now (assets.current_risk) and at the window's start, rebuilt
+# from findings: since job 3m a rating IS the worst open finding, so the past one is the
+# worst finding open at that moment, INFO ignored. Closed for good (no clock of its own,
+# so never counted): false_positive, wont_fix, accepted_risk, closed_reclassified,
+# detector_retired — the same closed set v_open_findings_dedup uses. Remediated ones count
+# until their remediated_at. Builder, 2026-10-22 16:15 ET, the rebuild at now() against
+# assets.current_risk: Command 51 of 51 equal, Prodex 29 of 29 (with false_positive alone
+# the four nameservers read MODERATE against UNKNOWN — the retired-detector rows).
+# ever_found splits "not rated": never scanned vs everything resolved.
+SQL_SITE_RATINGS = """
+SELECT a.asset_id,
+       a.current_risk::text,
+       EXISTS (SELECT 1 FROM public.findings f0 WHERE f0.asset_id = a.asset_id) AS ever_found,
+       (SELECT f.severity::text
+          FROM public.findings f
+         WHERE f.asset_id = a.asset_id
+           AND f.current_status::text NOT IN ('false_positive', 'wont_fix', 'accepted_risk',
+                                              'closed_reclassified', 'detector_retired')
+           AND NOT (f.current_status::text IN ('remediated', 'validated_remediated')
+                    AND f.remediated_at IS NULL)
+           AND f.severity::text <> 'INFO'
+           AND f.first_detected_at <= %(t)s
+           AND (f.remediated_at IS NULL OR f.remediated_at > %(t)s)
+         ORDER BY CASE f.severity::text WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
+                  WHEN 'MODERATE-HIGH' THEN 3 WHEN 'MODERATE' THEN 4 ELSE 5 END
+         LIMIT 1) AS rating_then
+  FROM public.assets a
+ WHERE a.ownership = 'owned'
+   AND a.discovery_status = 'confirmed_live'
+ ORDER BY a.asset_id
+"""
+
+# Certificates about to expire: the newest open "TLS certificate expiring soon — expires
+# < N days (k)" per host. The digest works out today's days-left from k and when the
+# check last looked. ⛔ ONLY WHILE THE LATEST DEEP SCAN STILL SEES IT: the certificate
+# check runs in the deep scan (testssl), and a renewed certificate leaves its old warning
+# open — commandcompanies.com's "< 30 days (28)" was last seen 2026-09-22 and four deep
+# scans since (Oct 3, 10, 14, 22) never repeated it; the first render of this digest
+# called it "expired". A deep scan finished after the warning's last sighting retires it
+# here (10 minutes of slack: the observing scan finishes when it writes the finding).
+SQL_CERTS_EXPIRING = """
+SELECT DISTINCT ON (f.asset_id) f.asset_id, f.title, f.last_observed_at
+  FROM public.findings f
+  JOIN public.assets a ON a.asset_id = f.asset_id
+ WHERE a.ownership = 'owned'
+   AND a.discovery_status = 'confirmed_live'
+   AND f.current_status::text IN ('detected', 'confirmed', 'open', 'regressed')
+   AND position('TLS certificate expiring soon' in f.title) = 1
+   AND f.last_observed_at IS NOT NULL
+   AND NOT EXISTS (
+         SELECT 1 FROM public.scan_run r
+          WHERE r.asset_id = f.asset_id
+            AND r.intensity::text = 'heavy'
+            AND r.status::text IN ('complete', 'degraded')
+            AND r.completed_at > f.last_observed_at + interval '10 minutes')
+ ORDER BY f.asset_id, f.last_observed_at DESC
+"""
+
+# Each listed host's previous finished deep scan before the window — for "its first deep
+# scan since Jul 23" (the 10-22 question: why do long-scanned boxes have "new" findings).
+SQL_PREV_DEEP_SCANS = """
+SELECT ids.asset_id,
+       (SELECT max(r.completed_at)
+          FROM public.scan_run r
+         WHERE r.asset_id = ids.asset_id
+           AND r.intensity::text = 'heavy'
+           AND r.status::text IN ('complete', 'degraded')
+           AND r.completed_at < %s) AS prev_deep
+  FROM unnest(%s::text[]) AS ids(asset_id)
+"""
+
+# The first remediation step of each listed finding, for the item's "Do:" line.
+SQL_FINDING_HINTS = """
+SELECT finding_id, remediation FROM public.findings WHERE finding_id = ANY(%s::text[])
+"""
+
 SQL_INSERT_RUN_START = """
 INSERT INTO meta_alerter_runs (alerter_name, window_start, window_end, status)
 VALUES (%s, %s, %s, 'started')
@@ -1177,6 +1261,28 @@ def stale_overdue_note(discovery_stale_hours, deepscan_stale_hours) -> str:
             f"{_span(deepscan_stale_hours)}, or never")
 
 
+def _digest_model(*, window_start, window_end, new_findings, confirmed, regressed,
+                  high_risk, new_assets, dark_assets, stale_assets, canary_violations,
+                  baseline, came_back=None, fixed=None, enforcement_flips=None,
+                  unrecognized_pages=None, sites=None, certs=None, prev_deep=None,
+                  hints=None, brand=None, discovery_stale_hours=24,
+                  deepscan_stale_hours=192) -> dict:
+    """KB 12 job 3l — every part of the old email, sorted into Do today / Worth a ticket /
+    Off your plate by digest_daily.build_model. The stale-host wording stays this file's
+    (stale_row_words, note 320)."""
+    return _dd.build_model(
+        window_start=window_start, window_end=window_end, new_findings=new_findings,
+        confirmed=confirmed, regressed=regressed, high_risk=high_risk,
+        new_assets=new_assets, dark_assets=dark_assets, stale_assets=stale_assets,
+        canary_violations=canary_violations, baseline=baseline, came_back=came_back,
+        fixed=fixed, enforcement_flips=enforcement_flips,
+        unrecognized_pages=unrecognized_pages, sites=sites, certs=certs,
+        prev_deep=prev_deep, hints=hints, brand=brand if brand is not None else _dd.load_brand(),
+        stale_words=stale_row_words, stale_intro=STALE_INTRO,
+        stale_note=stale_overdue_note(discovery_stale_hours, deepscan_stale_hours),
+    )
+
+
 def render_html(
     *,
     window_start: datetime,
@@ -1199,455 +1305,27 @@ def render_html(
     fixed: list[tuple] | None = None,
     enforcement_flips: list[tuple] | None = None,
     unrecognized_pages: list[tuple] | None = None,
+    sites: list[tuple] | None = None,
+    certs: list[tuple] | None = None,
+    prev_deep: dict | None = None,
+    hints: dict | None = None,
+    brand: dict | None = None,
 ) -> str:
-    came_back = came_back or []
-    fixed = fixed or []
-    enforcement_flips = enforcement_flips or []
-    unrecognized_pages = unrecognized_pages or []
-    today = window_end.strftime("%Y-%m-%d")
-    win = (
-        f"{window_start.strftime('%Y-%m-%d %H:%M UTC')} → "
-        f"{window_end.strftime('%Y-%m-%d %H:%M UTC')}"
-    )
-
-    def section(title: str, count: int, body: str) -> str:
-        if count == 0:
-            return ""
-        return (
-            f'<h2 style="margin:24px 0 8px;font-size:15px;color:#1a1a1a;">'
-            f"{escape(title)} <span style=\"color:#888;font-weight:400;\">"
-            f"({count})</span></h2>{body}"
-        )
-
-    def find_table(rows: list[tuple], noun: str = "new") -> str:
-        """P1-P4 + D-031: one block per asset, not one row per (asset, finding).
-
-        ⛔ P1 — bcbsma appeared SIXTEEN TIMES in digest #130 because the ASSET column
-        repeated on every row. The asset is now a heading; the column is gone.
-        ⛔ P2 — the FINDING ID column is gone from HTML and the TITLE carries the link
-        instead. Plaintext keeps the id, because plaintext is what gets grepped.
-        ⛔ P3 — per-port rows merge into one service-inventory line (render only).
-        ⛔ P4 — INFO collapses to one line per asset. The SUBJECT COUNT STILL COUNTS
-        THEM: a collapsed row must not change the number in the header.
-        """
-        if not rows:
-            return ""
-        blocks = group_by_asset(merge_service_inventory(rows))
-        out = []
-        for asset, worst, rs in blocks:
-            full, info = split_info(rs)
-            # Note 307: the D-031 device-class line ("unknown/unknown (dry-run
-            # classification)" on 428 of 467 assets) is gone from the digest.
-            # asset_class_line() stays for the day the classifier goes live.
-            head = (
-                f'<div style="margin:18px 0 6px;padding-top:10px;'
-                f'border-top:1px solid #eee;">'
-                f'<span style="font-family:monospace;font-size:13px;color:#1a1a1a;">'
-                f'{escape(asset)}</span> {_sev_pill(worst)} '
-                f'<span style="color:#888;font-size:12px;">{len(rs)} {escape(noun)}</span>'
-                + "</div>"
-            )
-            body = "".join(
-                f"<tr>"
-                f'<td style="padding:5px 12px 5px 0;">{_sev_pill(r[3])}</td>'
-                f'<td style="padding:5px 12px 5px 0;font-size:13px;">'
-                f'<a href="{escape(dashboard_url.rstrip("/"))}/findings/{escape(r[0])}" '
-                f'style="color:#1a1a1a;">{escape(r[2])}</a></td>'
-                f'<td style="padding:5px 0;font-size:11px;color:#888;">'
-                f'{escape(scan_tier_label(r[5] if len(r) > 5 else None))}</td>'
-                f"</tr>"
-                for r in full
-            )
-            if info:
-                body += (
-                    f"<tr><td colspan=\"3\" style=\"padding:5px 0;font-size:12px;color:#888;\">"
-                    f'+ {len(info)} informational (inventory, headers, tech) — '
-                    f'<a href="{escape(dashboard_url.rstrip("/"))}/assets/{escape(asset)}" '
-                    f'style="color:#888;">view</a></td></tr>'
-                )
-            out.append(head + f'<table style="border-collapse:collapse;width:100%;">'
-                              f"<tbody>{body}</tbody></table>")
-        return "".join(out)
-
-    def asset_table(rows: list[tuple]) -> str:
-        if not rows:
-            return ""
-        cells = "".join(
-            f"<tr>"
-            f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:12px;">{escape(r[0])}</td>'
-            f'<td style="padding:6px 12px 6px 0;">{_sev_pill(r[3])}</td>'
-            f'<td style="padding:6px 0;font-size:13px;color:#555;">{escape(unescape(r[4] or ""))}</td>'
-            f"</tr>"
-            for r in rows
-        )
-        return (
-            f'<table style="border-collapse:collapse;width:100%;">'
-            f'<thead><tr style="text-align:left;color:#666;font-size:11px;'
-            f'text-transform:uppercase;letter-spacing:0.6px;">'
-            f'<th style="padding:0 12px 8px 0;">Asset</th>'
-            f'<th style="padding:0 12px 8px 0;">Risk</th>'
-            f'<th style="padding:0 0 8px 0;">Reason</th>'
-            f"</tr></thead><tbody>{cells}</tbody></table>"
-        )
-
-    def surface_event_table(rows: list[tuple], dark: bool) -> str:
-        """Render the new_assets / dark_assets rows. For new assets we show
-        the current_risk pill; for dark assets we show when the asset last
-        responded (from prev_value.last_seen) so the recipient can tell
-        whether this is a fresh outage or a long-standing one."""
-        if not rows:
-            return ""
-        cells_parts = []
-        for r in rows:
-            aid = r[0]
-            display_name = r[1] or aid
-            org = r[2] or ""
-            observed = r[3]
-            extra = r[4]
-            if dark:
-                # extra is prev_value JSONB with last_seen / primary_ptr
-                last_seen_iso = (extra or {}).get("last_seen") if isinstance(extra, dict) else None
-                detail = f"last responded {last_seen_iso}" if last_seen_iso else "last_seen unknown"
-            else:
-                # extra is current_risk severity string
-                detail = _sev_pill(extra) if extra and extra != "NONE" else '<span style="color:#888;font-size:12px;">no risk yet</span>'
-            # Build org suffix outside the f-string — Python 3.10 f-strings
-            # can't contain backslashes in the expression part, and the
-            # inline conditional version needed escaped quotes.
-            if org and org != display_name:
-                org_suffix = f' <span style="color:#888;">({escape(org)})</span>'
-            else:
-                org_suffix = ""
-            observed_fmt = observed.strftime("%Y-%m-%d %H:%M UTC")
-            cells_parts.append(
-                f"<tr>"
-                f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:12px;">{escape(aid)}</td>'
-                f'<td style="padding:6px 12px 6px 0;font-size:13px;">{escape(display_name)}{org_suffix}</td>'
-                f'<td style="padding:6px 12px 6px 0;font-size:12px;color:#555;">{detail}</td>'
-                f'<td style="padding:6px 0;font-family:monospace;font-size:11px;color:#888;">{observed_fmt}</td>'
-                f"</tr>"
-            )
-        cells = "".join(cells_parts)
-        header_label = "Last seen" if dark else "Risk"
-        return (
-            f'<table style="border-collapse:collapse;width:100%;">'
-            f'<thead><tr style="text-align:left;color:#666;font-size:11px;'
-            f'text-transform:uppercase;letter-spacing:0.6px;">'
-            f'<th style="padding:0 12px 8px 0;">Asset ID</th>'
-            f'<th style="padding:0 12px 8px 0;">Name</th>'
-            f'<th style="padding:0 12px 8px 0;">{escape(header_label)}</th>'
-            f'<th style="padding:0 0 8px 0;">Observed</th>'
-            f"</tr></thead><tbody>{cells}</tbody></table>"
-        )
-
-    def came_back_table(rows: list[tuple]) -> str:
-        """Rows from SQL_CAME_BACK_IN_WINDOW: (asset_id, name, organization,
-        back_at, dark_at). Says when it was reported dark and when it first
-        answered again, so the reader can match it to the earlier email."""
-        if not rows:
-            return ""
-        cells_parts = []
-        for r in rows:
-            aid, display_name, org, back_at, dark_at = r[0], (r[1] or r[0]), (r[2] or ""), r[3], r[4]
-            if org and org != display_name:
-                org_suffix = f' <span style="color:#888;">({escape(org)})</span>'
-            else:
-                org_suffix = ""
-            cells_parts.append(
-                f"<tr>"
-                f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:12px;">{escape(aid)}</td>'
-                f'<td style="padding:6px 12px 6px 0;font-size:13px;">{escape(display_name)}{org_suffix}</td>'
-                f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:11px;color:#888;">{dark_at:%Y-%m-%d %H:%M UTC}</td>'
-                f'<td style="padding:6px 0;font-family:monospace;font-size:11px;color:#888;">{back_at:%Y-%m-%d %H:%M UTC}</td>'
-                f"</tr>"
-            )
-        return (
-            f'<table style="border-collapse:collapse;width:100%;">'
-            f'<thead><tr style="text-align:left;color:#666;font-size:11px;'
-            f'text-transform:uppercase;letter-spacing:0.6px;">'
-            f'<th style="padding:0 12px 8px 0;">Asset ID</th>'
-            f'<th style="padding:0 12px 8px 0;">Name</th>'
-            f'<th style="padding:0 12px 8px 0;">Reported dark</th>'
-            f'<th style="padding:0 0 8px 0;">Answered again</th>'
-            f"</tr></thead><tbody>{''.join(cells_parts)}</tbody></table>"
-        )
-
-    new_findings_section = section(
-        "New findings (first detected in this window)",
-        len(new_findings),
-        find_table(new_findings),
-    )
-    confirmed_section = section(
-        "Newly confirmed findings", len(confirmed), find_table(confirmed, "confirmed")
-    )
-    # "Marked": remediated_at is stamped by a person in the portal today (the
-    # stale-finding autocloser is blocked live by 20260902a). If that ever runs
-    # live, its closures will land here too, and the heading still reads true.
-    fixed_section = section(
-        "Marked fixed in this window", len(fixed), find_table(fixed, "fixed")
-    )
-    regressed_section = section(
-        "Regressed findings (was fixed, came back)", len(regressed), find_table(regressed, "regressed")
-    )
-    high_risk_section = section(
-        "Assets elevated to HIGH / CRITICAL", len(high_risk), asset_table(high_risk)
-    )
-    # P5 / D-031: "new" means DISCOVERED IN THIS WINDOW, not "new to you". Howie had
-    # been running some of these assets for weeks and the digest still called them new.
-    new_assets_section = section(
-        NEW_ASSETS_HEADING, len(new_assets), surface_event_table(new_assets, dark=False)
-    )
-    dark_assets_section = section(
-        "Assets that went dark", len(dark_assets), surface_event_table(dark_assets, dark=True)
-    )
-    came_back_section = section(
-        "Assets back online", len(came_back), came_back_table(came_back)
-    )
-
-    def enforcement_table(rows: list[tuple]) -> str:
-        """Rows from SQL_ENFORCEMENT_FLIPS_IN_WINDOW: (asset_id, name, organization,
-        measured_at, blocked, prev_blocked, prev_at, classes). One line per flip, in
-        the probe's own words: blocked or passed through, when, and what it was last."""
-        if not rows:
-            return ""
-        cells_parts = []
-        for r in rows:
-            aid, display_name, org = r[0], (r[1] or r[0]), (r[2] or "")
-            measured_at, blocked, prev_blocked, prev_at = r[3], r[4], r[5], r[6]
-            verdict, color = enforcement_words(blocked, prev_blocked)
-            prev_txt = (f"previous test {prev_at:%Y-%m-%d %H:%M UTC}: "
-                        f"{'blocked' if prev_blocked else 'passed through'}"
-                        if prev_at is not None else "first test")
-            org_suffix = (f' <span style="color:#888;">({escape(org)})</span>'
-                          if org and org != display_name else "")
-            cells_parts.append(
-                f"<tr>"
-                f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:12px;">{escape(aid)}</td>'
-                f'<td style="padding:6px 12px 6px 0;font-size:13px;">{escape(display_name)}{org_suffix}</td>'
-                f'<td style="padding:6px 12px 6px 0;font-size:12px;font-weight:bold;color:{color};">{escape(verdict)}</td>'
-                f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:11px;color:#888;">{measured_at:%Y-%m-%d %H:%M UTC}</td>'
-                f'<td style="padding:6px 0;font-size:11px;color:#888;">{escape(prev_txt)}</td>'
-                f"</tr>"
-            )
-        return (
-            f'<table style="border-collapse:collapse;width:100%;">'
-            f'<thead><tr style="text-align:left;font-size:11px;color:#888;">'
-            f'<th style="padding:0 12px 6px 0;">Asset</th><th style="padding:0 12px 6px 0;">Name</th>'
-            f'<th style="padding:0 12px 6px 0;">Attack payloads</th><th style="padding:0 12px 6px 0;">Measured</th>'
-            f'<th style="padding:0 0 6px 0;">Before</th>'
-            f"</tr></thead><tbody>{''.join(cells_parts)}</tbody></table>"
-            f'<p style="font-size:11px;color:#888;margin:8px 0 0 0;">Measured by the heavy scan\'s '
-            f'differential test: one harmless request, then three independent attack-style '
-            f'test strings on the same path. &ldquo;Blocked&rdquo; means a security device in '
-            f'front of the host denied them; it names no product.</p>'
-        )
-
-    enforcement_section = section(
-        "Security device enforcement", len(enforcement_flips), enforcement_table(enforcement_flips)
-    )
-
-    def unrecognized_table(rows: list[tuple]) -> str:
-        """Rows from unrecognized_block_pages: (asset_id, name, organization, measured_at,
-        denies). One line per measured block whose deny pages the library does not know."""
-        if not rows:
-            return ""
-        cells_parts = []
-        for r in rows:
-            aid, display_name, org, measured_at, denies = r[0], (r[1] or r[0]), (r[2] or ""), r[3], r[4]
-            org_suffix = (f' <span style="color:#888;">({escape(org)})</span>'
-                          if org and org != display_name else "")
-            cells_parts.append(
-                f"<tr>"
-                f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:12px;">{escape(aid)}</td>'
-                f'<td style="padding:6px 12px 6px 0;font-size:13px;">{escape(display_name)}{org_suffix}</td>'
-                f'<td style="padding:6px 12px 6px 0;font-family:monospace;font-size:11px;color:#888;">{measured_at:%Y-%m-%d %H:%M UTC}</td>'
-                f'<td style="padding:6px 0;font-size:11px;color:#888;">{escape(unrecognized_words(denies))}</td>'
-                f"</tr>"
-            )
-        return (
-            f'<table style="border-collapse:collapse;width:100%;">'
-            f'<thead><tr style="text-align:left;font-size:11px;color:#888;">'
-            f'<th style="padding:0 12px 6px 0;">Asset</th><th style="padding:0 12px 6px 0;">Name</th>'
-            f'<th style="padding:0 12px 6px 0;">Measured</th><th style="padding:0 0 6px 0;">Deny pages</th>'
-            f"</tr></thead><tbody>{''.join(cells_parts)}</tbody></table>"
-            f'<p style="font-size:11px;color:#888;margin:8px 0 0 0;">Something in front of these hosts '
-            f'blocked the attack-style test strings, and the page it answered with names no vendor the '
-            f'block-page library knows. The device is real; its make is not. The captured page is saved '
-            f'with the scan for review and for adding to the library, with a citation.</p>'
-        )
-
-    unrecognized_section = section(
-        "Block pages not recognized", len(unrecognized_pages), unrecognized_table(unrecognized_pages)
-    )
-
-    pipeline_degraded = bool(stale_assets or canary_violations)
-    has_changes = bool(
-        new_findings or confirmed or regressed or high_risk or new_assets or dark_assets
-        or came_back or fixed or enforcement_flips or unrecognized_pages
-    )
-    new_problems, new_inventory = split_problems_inventory(new_findings)
-
-    # Headline reflects pipeline health FIRST, then activity. Don't say
-    # "healthy" if the watchdog has anything to report — that was exactly
-    # the lie that hid the 2026-06-06 over-suppression.
-    if pipeline_degraded:
-        # 320 — say what it means: a coverage gap on OUR side, in words.
-        _parts = []
-        if stale_assets:
-            _parts.append(f"Sentry has lost sight of <strong>{len(stale_assets)}</strong> host(s)")
-        if canary_violations:
-            _parts.append(f"<strong>{len(canary_violations)}</strong> canary violation(s)")
-        headline = (
-            f'<strong style="color:#a51c30;">&#x26A0; COVERAGE GAP</strong> '
-            f"&mdash; {'; '.join(_parts)}. That is a gap in our own checking, "
-            f"not a problem on those hosts. See below."
-        )
-    elif has_changes:
-        # Note 307 — creation, closure and regression are SEPARATE quantities.
-        # Creation is split into problems (CRITICAL..LOW) and inventory (INFO).
-        # "fixed" is remediated_at inside the window. "status change(s)" is gone:
-        # it read a transition view the scanners never write to, so it was 0 on
-        # the day a CRITICAL was fixed. confirmed/regressed keep their sections;
-        # regressed is named in the headline because it is a real change.
-        _ov = _count_overlap(new_findings, confirmed, regressed)
-        _ov_note = (
-            f' <span style="color:#888;font-weight:400;">'
-            f"({_ov} finding(s) are both new and confirmed/regressed)"
-            f"</span>"
-        ) if _ov else ""
-        headline = (
-            f"<strong>{len(new_problems)}</strong> new problem(s), "
-            f"<strong>{len(new_inventory)}</strong> new inventory item(s), "
-            f"<strong>{len(fixed)}</strong> fixed, "
-            f"<strong>{len(regressed)}</strong> regressed"
-            f"{_ov_note}, "
-            f"<strong>{len(high_risk)}</strong> asset risk shift(s), "
-            f"<strong>{len(new_assets)}</strong> new asset(s), "
-            f"<strong>{len(dark_assets)}</strong> dark asset(s)"
-            + (f", <strong>{len(came_back)}</strong> back online" if came_back else "")
-            + (f", <strong>{len(enforcement_flips)}</strong> security device change(s)" if enforcement_flips else "")
-            + (f", <strong>{len(unrecognized_pages)}</strong> unrecognized block page(s)" if unrecognized_pages else "")
-            + " in this window."
-        )
-    else:
-        headline = "<strong>No changes</strong> since last run &mdash; pipeline healthy."
-
-    # Watchdog banner — only renders when something is wrong. Appears
-    # ABOVE the "currently open" baseline so it can't be missed.
-    watchdog_banner = ""
-    if pipeline_degraded:
-        canary_block = ""
-        if canary_violations:
-            canary_rows = "".join(
-                f"<tr>"
-                f'<td style="padding:4px 12px 4px 0;font-family:monospace;font-size:12px;">{escape(r[0])}</td>'
-                f'<td style="padding:4px 12px 4px 0;font-size:12px;color:#a51c30;">disc={escape(r[1])} own={escape(r[2])}</td>'
-                f"</tr>"
-                for r in canary_violations
-            )
-            canary_block = (
-                '<div style="margin-top:8px;font-size:12px;color:#1a1a1a;">'
-                '<div style="font-weight:600;margin-bottom:4px;">Canary violations '
-                f'(scope_verified apex/www that aren&rsquo;t confirmed_live + owned):</div>'
-                f'<table style="border-collapse:collapse;">{canary_rows}</table>'
-                '</div>'
-            )
-        stale_block = ""
-        if stale_assets:
-            stale_rows_parts = []
-            for r in stale_assets:
-                # 320 — words, not clocks. stale_row_words reads the SQL row (9-tuple).
-                aid, disc_words, deep_words = stale_row_words(r)
-                disc_stale, never_ds, deep_ds = r[5], r[6], r[7]
-                disc_style = "color:#a51c30;font-weight:600;" if disc_stale else "color:#666;"
-                deep_style = "color:#a51c30;font-weight:600;" if (never_ds or deep_ds) else "color:#666;"
-                stale_rows_parts.append(
-                    f"<tr>"
-                    f'<td style="padding:4px 12px 4px 0;font-family:monospace;font-size:12px;vertical-align:top;">{escape(aid)}</td>'
-                    f'<td style="padding:4px 12px 4px 0;font-size:12px;{disc_style}vertical-align:top;">{escape(disc_words)}</td>'
-                    f'<td style="padding:4px 0;font-size:12px;{deep_style}vertical-align:top;">{escape(deep_words)}</td>'
-                    f"</tr>"
-                )
-            stale_block = (
-                '<div style="margin-top:8px;font-size:12px;color:#1a1a1a;">'
-                f'<div style="font-weight:600;margin-bottom:4px;">We may have lost sight of these ({len(stale_assets)})</div>'
-                f'<div style="margin-bottom:6px;color:#444;">{escape(STALE_INTRO)}</div>'
-                f'<table style="border-collapse:collapse;">{"".join(stale_rows_parts)}</table>'
-                '<div style="margin-top:6px;color:#666;">Red = overdue '
-                f'({escape(stale_overdue_note(discovery_stale_hours, deepscan_stale_hours))}).</div>'
-                '</div>'
-            )
-        watchdog_banner = (
-            '<div style="background:#fde8eb;border:1px solid #a51c30;'
-            'border-radius:6px;padding:12px 16px;margin:0 0 16px;">'
-            '<div style="font-size:13px;font-weight:700;color:#a51c30;'
-            'text-transform:uppercase;letter-spacing:0.8px;">'
-            "Sentry's own health check</div>"
-            f'{canary_block}{stale_block}'
-            '</div>'
-        )
-
-    # Note 307 — the same numbers as the dashboard's chips (v_fleet_open_reps):
-    # problems by severity, inventory (INFO) on its own line, and how many of
-    # the problems no scan has seen in 30+ days. MOD-HIGH shows only when it is
-    # non-zero; it is a legacy severity nothing emits today.
-    _b = baseline
-    _mh = (f'<span style="margin-right:12px;">MOD-HIGH: <strong>{_b["mod_high_open"]}</strong></span>'
-           if _b.get("mod_high_open") else "")
-    _problems = _b.get("problems_open",
-                       _b["critical_open"] + _b["high_open"] + _b["mod_high_open"]
-                       + _b["moderate_open"] + _b["low_open"])
-    baseline_pill = (
-        f'<span style="margin-right:12px;">CRITICAL: <strong>{_b["critical_open"]}</strong></span>'
-        f'<span style="margin-right:12px;">HIGH: <strong>{_b["high_open"]}</strong></span>'
-        f'{_mh}'
-        f'<span style="margin-right:12px;">MODERATE: <strong>{_b["moderate_open"]}</strong></span>'
-        f'<span style="margin-right:12px;">LOW: <strong>{_b["low_open"]}</strong></span>'
-        f'<span style="color:#888;">= <strong>{_problems}</strong> open problem(s), counted as the portal counts them</span>'
-        f'<div style="margin-top:6px;color:#888;">'
-        f'+ <strong>{_b.get("info_open", 0)}</strong> informational (inventory: headers, technologies, paths)'
-        + (f' &middot; <strong>{_b["problems_stale_30d"]}</strong> of the open problems '
-           f'have not been seen by any scan in 30+ days'
-           if _b.get("problems_stale_30d") else "")
-        + '</div>'
-    )
-
-    return f"""<!DOCTYPE html>
-<html><body style="font-family:-apple-system,Segoe UI,sans-serif;background:#f6f6f6;margin:0;padding:24px;color:#1a1a1a;">
-<div style="max-width:780px;margin:0 auto;background:#fff;padding:32px;border-radius:8px;border:1px solid #e2e2e2;">
-  <div style="border-bottom:1px solid #e2e2e2;padding-bottom:16px;margin-bottom:24px;">
-    <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.2px;color:#888;">{product_name}</div>
-    <h1 style="margin:4px 0 0;font-size:22px;color:#1a1a1a;">Daily posture digest — {today}</h1>
-    <div style="margin-top:6px;font-size:12px;color:#888;">Window: {win}</div>
-  </div>
-
-  <p style="font-size:14px;color:#333;margin:0 0 16px;">{headline}</p>
-
-  {watchdog_banner}
-
-  <div style="background:#fafafa;padding:12px 16px;border-radius:6px;font-size:12px;color:#555;margin-bottom:8px;">
-    <div style="text-transform:uppercase;font-size:10px;letter-spacing:0.8px;color:#888;margin-bottom:4px;">Currently open across the fleet</div>
-    {baseline_pill}
-  </div>
-
-  {new_findings_section}
-  {fixed_section}
-  {confirmed_section}
-  {regressed_section}
-  {high_risk_section}
-  {new_assets_section}
-  {dark_assets_section}
-  {came_back_section}
-  {enforcement_section}
-  {unrecognized_section}
-
-  <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e2e2e2;font-size:11px;color:#888;">
-    <a href="{escape(dashboard_url)}" style="color:#888;">Open the {escape(product_name)} portal</a> ·
-    Generated {window_end.strftime("%Y-%m-%d %H:%M UTC")} ·
-    See <code>scripts/alerter/run_alerter.py</code> for source
-  </div>
-</div>
-</body></html>"""
+    """The daily digest as a to-do list (KB 12 job 3l, design D). Howie, 2026-10-22:
+    "This entire email needs to be simplified and redesigned" … "Let's have it be
+    colorful." Every part of the old email has a home (plan 2026-10-22 1530, D1); the
+    layout lives in digest_daily.py. `dashboard_url` is the portal link (main passes
+    ALERTER_PORTAL_URL, note 307)."""
+    model = _digest_model(
+        window_start=window_start, window_end=window_end, new_findings=new_findings,
+        confirmed=confirmed, regressed=regressed, high_risk=high_risk,
+        new_assets=new_assets, dark_assets=dark_assets, stale_assets=stale_assets,
+        canary_violations=canary_violations, baseline=baseline, came_back=came_back,
+        fixed=fixed, enforcement_flips=enforcement_flips,
+        unrecognized_pages=unrecognized_pages, sites=sites, certs=certs,
+        prev_deep=prev_deep, hints=hints, brand=brand,
+        discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours)
+    return _dd.render_html(model, portal_url=dashboard_url, product_name=product_name)
 
 
 def render_text(
@@ -1671,152 +1349,25 @@ def render_text(
     fixed: list[tuple] | None = None,
     enforcement_flips: list[tuple] | None = None,
     unrecognized_pages: list[tuple] | None = None,
+    sites: list[tuple] | None = None,
+    certs: list[tuple] | None = None,
+    prev_deep: dict | None = None,
+    hints: dict | None = None,
+    brand: dict | None = None,
+    portal_url: str = "",
 ) -> str:
-    came_back = came_back or []
-    fixed = fixed or []
-    enforcement_flips = enforcement_flips or []
-    unrecognized_pages = unrecognized_pages or []
-    lines: list[str] = []
-    lines.append(f"{product_name} — Daily posture digest — {window_end:%Y-%m-%d}")
-    lines.append(f"Window: {window_start:%Y-%m-%d %H:%M UTC} -> {window_end:%Y-%m-%d %H:%M UTC}")
-    lines.append("")
-
-    pipeline_degraded = bool(stale_assets or canary_violations)
-    if pipeline_degraded:
-        _gap = []
-        if stale_assets:
-            _gap.append(f"Sentry has lost sight of {len(stale_assets)} host(s)")
-        if canary_violations:
-            _gap.append(f"{len(canary_violations)} canary violation(s)")
-        lines.append(f"!!! COVERAGE GAP — {'; '.join(_gap)} !!!")
-        if canary_violations:
-            lines.append(f"  CANARY VIOLATIONS ({len(canary_violations)}) — scope_verified apex/www not confirmed_live+owned:")
-            for r in canary_violations:
-                aid, st, own, lo = r
-                lines.append(f"    {aid:<45} disc={st:<14} own={own}")
-        if stale_assets:
-            import textwrap as _tw
-            lines.extend(_tw.wrap(STALE_INTRO, width=88, initial_indent="  ", subsequent_indent="  "))
-            for r in stale_assets:
-                # 320 — words, not clocks; '!' marks the clock that tripped.
-                aid, disc_words, deep_words = stale_row_words(r)
-                disc_stale, never_ds, deep_ds = r[5], r[6], r[7]
-                dm = "!" if disc_stale else " "
-                sm = "!" if (never_ds or deep_ds) else " "
-                lines.append(f"    {aid}")
-                lines.append(f"      {dm} {disc_words}")
-                lines.append(f"      {sm} {deep_words}")
-        lines.append(
-            f"  ('!' = overdue: {stale_overdue_note(discovery_stale_hours, deepscan_stale_hours)}.)"
-        )
-        lines.append("")
-
-    _b = baseline
-    _problems = _b.get("problems_open",
-                       _b["critical_open"] + _b["high_open"] + _b["mod_high_open"]
-                       + _b["moderate_open"] + _b["low_open"])
-    lines.append(
-        f"Currently open (counted as the portal counts them): CRITICAL={_b['critical_open']}  "
-        f"HIGH={_b['high_open']}  "
-        + (f"MOD-HIGH={_b['mod_high_open']}  " if _b.get("mod_high_open") else "")
-        + f"MODERATE={_b['moderate_open']}  LOW={_b['low_open']}  = {_problems} open problem(s)"
-    )
-    lines.append(f"  + {_b.get('info_open', 0)} informational (inventory: headers, technologies, paths)")
-    if _b.get("problems_stale_30d"):
-        lines.append(f"  {_b['problems_stale_30d']} of the open problems have not been seen by any scan in 30+ days")
-    lines.append("")
-
-    new_problems, new_inventory = split_problems_inventory(new_findings)
-    if not (new_findings or confirmed or regressed or high_risk or new_assets or dark_assets
-            or came_back or fixed or enforcement_flips or unrecognized_pages):
-        if not pipeline_degraded:
-            lines.append("No changes since last run — pipeline healthy.")
-        return "\n".join(lines)
-
-    lines.append(
-        f"This window: {len(new_problems)} new problem(s), {len(new_inventory)} new inventory item(s), "
-        f"{len(fixed)} fixed, {len(regressed)} regressed, {len(high_risk)} asset risk shift(s), "
-        f"{len(new_assets)} new asset(s), {len(dark_assets)} dark, {len(came_back)} back online"
-        + (f", {len(enforcement_flips)} security device change(s)" if enforcement_flips else "")
-        + (f", {len(unrecognized_pages)} unrecognized block page(s)" if unrecognized_pages else "") + "."
-    )
-    _ov = _count_overlap(new_findings, confirmed, regressed)
-    if _ov:
-        lines.append(f"NOTE: {_ov} finding(s) are both new and confirmed/regressed in this window.")
-    lines.append("")
-
-    if new_findings:
-        # P1-P4 in plaintext too — same grouping, same merge, same INFO collapse.
-        # ⛔ P2's EXCEPTION: plaintext KEEPS the finding_id. The HTML drops it because
-        # the title is a link; the text version is what gets grepped and pasted into a
-        # ticket, and an id you cannot copy is an id you do not have.
-        lines.append(f"NEW FINDINGS — first detected in this window ({len(new_findings)}):")
-        for asset, worst, rs in group_by_asset(merge_service_inventory(new_findings)):
-            full, info = split_info(rs)
-            lines.append(f"  {asset}  [{worst}]  {len(rs)} new")
-            for r in full:
-                tier = scan_tier_label(r[5] if len(r) > 5 else None)
-                lines.append(f"    [{r[3]:<13}] {r[2][:70]}  ({r[0]}, {tier})")
-            if info:
-                lines.append(f"    + {len(info)} informational (inventory, headers, tech)")
-        lines.append("")
-
-    if fixed:
-        lines.append(f"MARKED FIXED IN THIS WINDOW ({len(fixed)}):")
-        for r in fixed:
-            lines.append(f"  [{r[3]:<13}] {r[1]:<32} {(r[2] or '')[:60]}  ({r[0]})")
-        lines.append("")
-    if confirmed:
-        lines.append(f"NEWLY CONFIRMED ({len(confirmed)}):")
-        for r in confirmed:
-            lines.append(f"  [{r[3]:<13}] {r[1]:<32} {r[2][:60]}  ({r[0]})")
-        lines.append("")
-    if regressed:
-        lines.append(f"REGRESSED ({len(regressed)}):")
-        for r in regressed:
-            lines.append(f"  [{r[3]:<13}] {r[1]:<32} {r[2][:60]}  ({r[0]})")
-        lines.append("")
-    if high_risk:
-        lines.append(f"ASSETS ELEVATED TO HIGH / CRITICAL ({len(high_risk)}):")
-        for r in high_risk:
-            reason = unescape(r[4] or "")
-            lines.append(f"  [{r[3]:<13}] {r[0]:<40}  {reason}")
-        lines.append("")
-    if new_assets:
-        lines.append(f"NEW ASSETS DISCOVERED ({len(new_assets)}):")
-        for r in new_assets:
-            risk = r[4] if r[4] and r[4] != "NONE" else "no-risk-yet"
-            lines.append(f"  [{risk:<13}] {r[0]:<40}  ({r[3]:%Y-%m-%d %H:%M UTC})")
-        lines.append("")
-    if dark_assets:
-        lines.append(f"ASSETS WENT DARK ({len(dark_assets)}):")
-        for r in dark_assets:
-            prev = r[4] if isinstance(r[4], dict) else {}
-            last_seen = prev.get("last_seen", "unknown")
-            lines.append(f"  {r[0]:<40}  last responded {last_seen}  (event {r[3]:%Y-%m-%d %H:%M UTC})")
-        lines.append("")
-    if came_back:
-        lines.append(f"ASSETS BACK ONLINE ({len(came_back)}):")
-        for r in came_back:
-            lines.append(f"  {r[0]:<40}  reported dark {r[4]:%Y-%m-%d %H:%M UTC}, "
-                         f"answered again {r[3]:%Y-%m-%d %H:%M UTC}")
-        lines.append("")
-    if enforcement_flips:
-        lines.append(f"SECURITY DEVICE ENFORCEMENT ({len(enforcement_flips)}):")
-        for r in enforcement_flips:
-            verdict, _ = enforcement_words(r[4], r[5])
-            prev_txt = (f"previous test {r[6]:%Y-%m-%d %H:%M UTC}: {'blocked' if r[5] else 'passed through'}"
-                        if r[6] is not None else "first test")
-            lines.append(f"  {r[0]:<40}  attack payloads {verdict} (measured {r[3]:%Y-%m-%d %H:%M UTC}; {prev_txt})")
-        lines.append("")
-    if unrecognized_pages:
-        lines.append(f"BLOCK PAGES NOT RECOGNIZED ({len(unrecognized_pages)}):")
-        for r in unrecognized_pages:
-            lines.append(f"  {r[0]:<40}  attack strings blocked (measured {r[3]:%Y-%m-%d %H:%M UTC}) by a device "
-                         f"whose block page the library does not know ({unrecognized_words(r[4])}); page saved with the scan")
-        lines.append("")
-
-    return "\n".join(lines)
+    """Plain-text twin of render_html: the same buckets, finding ids kept (plain text is
+    what gets grepped and pasted into a ticket, note 152 P2)."""
+    model = _digest_model(
+        window_start=window_start, window_end=window_end, new_findings=new_findings,
+        confirmed=confirmed, regressed=regressed, high_risk=high_risk,
+        new_assets=new_assets, dark_assets=dark_assets, stale_assets=stale_assets,
+        canary_violations=canary_violations, baseline=baseline, came_back=came_back,
+        fixed=fixed, enforcement_flips=enforcement_flips,
+        unrecognized_pages=unrecognized_pages, sites=sites, certs=certs,
+        prev_deep=prev_deep, hints=hints, brand=brand,
+        discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours)
+    return _dd.render_text(model, portal_url=portal_url, product_name=product_name)
 
 
 # ---------------------------------------------------------------------------
@@ -1836,6 +1387,7 @@ def send_via_sendgrid(
     subject: str,
     html: str,
     text: str,
+    inline_images: list | None = None,
 ) -> dict:
     """Delegates to scripts/common/mailer.py — provider chosen by MAIL_PROVIDER
     (4.7 M1, Obsidian 164).
@@ -1848,7 +1400,7 @@ def send_via_sendgrid(
     """
     ok, detail = _mailer.send_email(
         to_addrs=to_addrs, subject=subject, html=html, text=text,
-        from_addr=from_addr, from_name=from_name,
+        from_addr=from_addr, from_name=from_name, inline_images=inline_images,
     )
     if not ok:
         raise RuntimeError(f"mail send failed [{_mailer.describe_config()}]: {detail}")
@@ -1863,6 +1415,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dry-run", action="store_true",
                     help="render email but skip Resend + DB writes")
+    ap.add_argument("--html-out", default="",
+                    help="with --dry-run: also write the full HTML here (to look at it)")
     args = ap.parse_args()
 
     dsn          = _env("SUPABASE_DSN", required=True)
@@ -2030,81 +1584,43 @@ def main() -> int:
                 print(f"  device-class read failed ({exc!r}) — digest renders without class lines")
                 device_classes = {}
 
-        # Render — subject line builds non-zero counters only so a quiet
-        # night reads "(0 changes)" and a busy night reads
-        # "(3 chng, 1 asset, 2 new, 1 dark)" without padding. Watchdog
-        # hits (stale / canary) prepend "(!)" so the subject visibly
-        # alerts even in inbox preview, AND show their counts first so
-        # they're not buried.
-        subject_parts: list[str] = []
-        if (n := len(canary_violations)) > 0:
-            subject_parts.append(f"{n} canary")
-        if (n := len(stale_assets)) > 0:
-            subject_parts.append(f"{n} we lost sight of")
-        # Note 307 — the subject names problems, inventory, fixes and
-        # regressions separately. "N new find" counted inventory as findings and
-        # "chng" could never be non-zero.
+        # KB 12 job 3l — the daily list's four extra reads, each in its own savepoint so a
+        # failure costs that decoration only (the bar, the certificates, "first deep scan
+        # since", the "Do:" line), never the send.
+        def _soft(label, sql, params=None):
+            try:
+                with conn.transaction():
+                    with conn.cursor() as c2:
+                        c2.execute(sql, params)
+                        return c2.fetchall()
+            except Exception as exc:                       # pragma: no cover - live only
+                print(f"  {label} read failed ({exc!r}) — digest renders without it")
+                return []
+        sites = _soft("site ratings", SQL_SITE_RATINGS, {"t": window_start})
+        certs = _soft("expiring certificates", SQL_CERTS_EXPIRING)
+        listed = sorted({r[1] for r in list(new_findings) + list(regressed) + list(confirmed)})
+        prev_deep = dict(_soft("previous deep scans", SQL_PREV_DEEP_SCANS, (window_start, listed))) if listed else {}
+        hint_ids = sorted({r[0] for r in list(new_findings) + list(regressed) + list(confirmed)})
+        hints = dict(_soft("remediation hints", SQL_FINDING_HINTS, (hint_ids,))) if hint_ids else {}
+        brand = _dd.load_brand()
+
+        # Render — KB 12 job 3l: one model, two renderings, one subject. The subject says
+        # what you will do ("2 checks and 1 ticket"); "(!) Coverage gap." leads when Sentry
+        # has lost sight of hosts; the [name] prefix stays for mail filters.
         new_problems, new_inventory = split_problems_inventory(new_findings)
-        if (n := len(new_problems)) > 0:
-            subject_parts.append(f"{n} new problem{'s' if n != 1 else ''}")
-        if (n := len(new_inventory)) > 0:
-            subject_parts.append(f"{n} new info")
-        if (n := len(fixed)) > 0:
-            subject_parts.append(f"{n} fixed")
-        if (n := len(regressed)) > 0:
-            subject_parts.append(f"{n} regressed")
-        if (n := len(confirmed)) > 0:
-            subject_parts.append(f"{n} confirmed")
-        if (n := len(high_risk)) > 0:
-            subject_parts.append(f"{n} asset")
-        if (n := len(new_assets)) > 0:
-            subject_parts.append(f"{n} new")
-        if (n := len(dark_assets)) > 0:
-            subject_parts.append(f"{n} dark")
-        if (n := len(came_back)) > 0:
-            subject_parts.append(f"{n} back")
-        if (n := len(enforcement_flips)) > 0:
-            subject_parts.append(f"{n} security device")
-        if (n := len(unrecognized_pages)) > 0:
-            subject_parts.append(f"{n} unrecognized block page")
-        subject_tail = ", ".join(subject_parts) if subject_parts else "0 changes"
-        watchdog_prefix = "(!) " if (canary_violations or stale_assets) else ""
-        subject = (
-            f"[{from_name}] {watchdog_prefix}Daily posture digest — "
-            f"{window_end:%Y-%m-%d} ({subject_tail})"
-        )
-        html = render_html(
+        model = _digest_model(
             window_start=window_start, window_end=window_end,
-            new_findings=new_findings,
-            confirmed=confirmed, regressed=regressed, high_risk=high_risk,
-            new_assets=new_assets, dark_assets=dark_assets,
+            new_findings=new_findings, confirmed=confirmed, regressed=regressed,
+            high_risk=high_risk, new_assets=new_assets, dark_assets=dark_assets,
             stale_assets=stale_assets, canary_violations=canary_violations,
-            discovery_stale_hours=discovery_stale_hours,
-            deepscan_stale_hours=deepscan_stale_hours,
-            baseline=baseline, dashboard_url=portal_url,
-            product_name=from_name,
-            device_classes=device_classes,
-            came_back=came_back,
-            fixed=fixed,
-            enforcement_flips=enforcement_flips,
-            unrecognized_pages=unrecognized_pages,
+            baseline=baseline, came_back=came_back, fixed=fixed,
+            enforcement_flips=enforcement_flips, unrecognized_pages=unrecognized_pages,
+            sites=sites, certs=certs, prev_deep=prev_deep, hints=hints, brand=brand,
+            discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours,
         )
-        text = render_text(
-            window_start=window_start, window_end=window_end,
-            new_findings=new_findings,
-            confirmed=confirmed, regressed=regressed, high_risk=high_risk,
-            new_assets=new_assets, dark_assets=dark_assets,
-            stale_assets=stale_assets, canary_violations=canary_violations,
-            discovery_stale_hours=discovery_stale_hours,
-            deepscan_stale_hours=deepscan_stale_hours,
-            baseline=baseline,
-            product_name=from_name,
-            device_classes=device_classes,
-            came_back=came_back,
-            fixed=fixed,
-            enforcement_flips=enforcement_flips,
-            unrecognized_pages=unrecognized_pages,
-        )
+        subject = _dd.subject(model, from_name)
+        html = _dd.render_html(model, portal_url=portal_url, product_name=from_name)
+        text = _dd.render_text(model, portal_url=portal_url, product_name=from_name)
 
         if args.dry_run:
             print(">> DRY RUN — would send to:", ", ".join(to_addrs))
@@ -2117,6 +1633,10 @@ def main() -> int:
             print("===== HTML (first 800 chars) =====")
             print(html[:800])
             print("... (truncated)")
+            if args.html_out:
+                with open(args.html_out, "w", encoding="utf-8") as f:
+                    f.write(html.replace(f"cid:{_dd.LOGO_CID}", "logo.png"))
+                print(f">> full HTML written to {args.html_out} (logo as logo.png beside it)")
             return 0
 
         # Send + finalize
@@ -2128,6 +1648,7 @@ def main() -> int:
                 api_key=api_key, from_addr=from_addr, from_name=from_name,
                 to_addrs=to_addrs,
                 subject=subject, html=html, text=text,
+                inline_images=_dd.inline_images(brand),
             )
             # SendGrid returns 202 with X-Message-Id header. Treat HTTP 202
             # as the success signal — message-id can be empty in rare cases

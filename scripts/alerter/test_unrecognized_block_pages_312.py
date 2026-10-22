@@ -95,17 +95,12 @@ def test_the_words_describe_the_shape_and_name_nothing():
 def test_rendered_in_both_bodies_with_the_page_kept_and_no_vendor_guessed():
     rows = ra.unrecognized_block_pages([UAT_ROW])
     html, text = _render(unrecognized_pages=rows)
-    assert "Block pages not recognized" in html
-    assert "uat.prodexlabs.com" in html and "HTTP 403 x3, about 134 B" in html
-    assert "names no vendor the block-page library knows" in html
-    assert "captured page is saved with the scan" in html
-    assert "BLOCK PAGES NOT RECOGNIZED (1):" in text
-    assert "whose block page the library does not know (HTTP 403 x3, about 134 B); page saved with the scan" in text
     for body in (html, text):
+        assert "Something unrecognized is blocking in front of uat.prodexlabs.com" in body
+        assert "no vendor the block-page library knows (HTTP 403 x3)" in body
+        assert "The page is saved with the scan" in body
         assert "Google" not in body and "Armor" not in body, "no guess from hosting"
-    assert "1</strong> unrecognized block page(s)" in html
-    assert "1 unrecognized block page(s)." in text
-    assert "No changes" not in html and "No changes" not in text
+    assert "Worth a ticket" in html and "WORTH A TICKET" in text
 
 
 def test_nothing_unrecognized_changes_nothing():
@@ -146,7 +141,6 @@ def test_316_the_digest_job_installs_pyyaml():
 
 def test_subject_and_query_are_wired():
     src = open(ra.__file__, encoding="utf-8").read()
-    assert 'subject_parts.append(f"{n} unrecognized block page")' in src
     assert "cur.execute(SQL_MEASURED_BLOCKS_IN_WINDOW, (window_start, window_end))" in src
     assert "unrecognized_pages = unrecognized_block_pages(cur.fetchall())" in src
-    assert src.count("unrecognized_pages=unrecognized_pages,") == 2
+    assert src.count("unrecognized_pages=unrecognized_pages,") >= 3

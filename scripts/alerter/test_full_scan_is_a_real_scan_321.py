@@ -137,13 +137,7 @@ def test_321_both_renderers_mark_a_skipped_host_as_not_overdue_on_scans():
     flat = " ".join(text.split())
     for out in (html, flat):
         assert "not full-scanned on purpose (not a website)" in out
-        assert "not seen in a day, no full scan in 8 days, or never" in out
+        assert "not full-scanned on purpose (not a website) (overdue)" not in out
+        assert "last seen Oct 15 (35 hours ago) (overdue)" in out
+        assert "Overdue means: not seen in a day, no full scan in 8 days, or never." in out
         assert "gives each website a full scan about once a week" in out
-    # text mail: the seen line is marked overdue, the scan line is not
-    lines = text.splitlines()
-    i = next(n for n, ln in enumerate(lines) if "ns02.sciimage.com" in ln)
-    assert lines[i + 1].lstrip().startswith("! last seen Oct 15")
-    assert not lines[i + 2].lstrip().startswith("!") and "not full-scanned on purpose" in lines[i + 2]
-    # html mail: the scan cell is grey, not red
-    cell = re.search(r'<td[^>]*style="([^"]*)"[^>]*>[^<]*not full-scanned on purpose', html)
-    assert cell and "#a51c30" not in cell.group(1)

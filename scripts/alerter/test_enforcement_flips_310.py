@@ -80,38 +80,43 @@ def test_the_words_are_the_probes_words_and_name_no_product():
 
 def test_rendered_in_both_bodies_with_the_measurement_and_the_previous_test():
     html, text = _render(enforcement_flips=[UAT, STAGING_FIRST])
-    assert "Security device enforcement" in html
-    assert "uat.prodexlabs.com" in html and "NOW BLOCKED" in html
-    assert "2026-10-13 18:39 UTC" in html and "previous test 2026-10-12 20:10 UTC: passed through" in html
-    assert "staging.prodexlabs.com" in html and "first test" in html
-    assert "names no product" in html
-    assert "SECURITY DEVICE ENFORCEMENT (2):" in text
-    assert "uat.prodexlabs.com" in text and "attack payloads NOW BLOCKED (measured 2026-10-13 18:39 UTC; previous test 2026-10-12 20:10 UTC: passed through)" in text
     for body in (html, text):
+        assert "Something in front of uat.prodexlabs.com is blocking" in body
+        assert "(Oct 13; the test before, Oct 12, got through)" in body
+        assert "Something in front of staging.prodexlabs.com is blocking" in body
+        assert "(first test, Oct 12)" in body
+        assert "names no product" in body
         assert "Cloud Armor" not in body and "Google" not in body, "presence-only, like the probe"
 
 
 def test_the_reverse_flip_reads_as_passing_through():
     html, text = _render(enforcement_flips=[REVERSE])
-    assert "NOW PASSING THROUGH" in html and "previous test 2026-10-13 18:39 UTC: blocked" in html
-    assert "attack payloads NOW PASSING THROUGH" in text
+    for body in (html, text):
+        assert "Something in front of uat.prodexlabs.com stopped blocking" in body
+        assert "reached the site on Oct 15. The test before, Oct 13, was blocked." in body
+    assert "Do today" in html and "DO TODAY" in text
 
 
 def test_a_window_with_only_a_flip_is_not_no_changes():
     html, text = _render(enforcement_flips=[UAT])
-    assert "No changes" not in html and "No changes" not in text
-    assert "1</strong> security device change(s)" in html
-    assert "1 security device change(s)." in text
+    assert "came back with nothing new" not in html
+    assert "Off your plate" in html and "OFF YOUR PLATE" in text
 
 
 def test_nothing_flipped_changes_nothing():
     a = _render()
     b = _render(enforcement_flips=[])
     assert a == b
-    assert "Security device enforcement" not in a[0] and "SECURITY DEVICE ENFORCEMENT" not in a[1]
+    assert "Something in front of" not in a[0] and "Something in front of" not in a[1]
 
 
 def test_subject_counts_flips():
+    """A device that STOPPED blocking is work (Do today); one that started is not."""
+    import digest_daily as dd
     src = open(ra.__file__, encoding="utf-8").read()
-    assert 'subject_parts.append(f"{n} security device")' in src
     assert "cur.execute(SQL_ENFORCEMENT_FLIPS_IN_WINDOW, (window_start, window_end))" in src
+    kw = dict(window_start=W0, window_end=W1, new_findings=[], confirmed=[], regressed=[],
+              high_risk=[], new_assets=[], dark_assets=[], stale_assets=[], canary_violations=[],
+              baseline=BASE)
+    assert dd.subject(ra._digest_model(enforcement_flips=[REVERSE], **kw), "X").endswith(": 1 check")
+    assert dd.subject(ra._digest_model(enforcement_flips=[UAT], **kw), "X").endswith(": nothing needs you")

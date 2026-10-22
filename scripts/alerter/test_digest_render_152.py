@@ -170,17 +170,13 @@ def _render(**kw):
 
 
 def test_the_html_digest_groups_merges_collapses_and_links(monkeypatch):
+    """KB 12 job 3l keeps 152's lessons: the asset once, no FINDING ID column, the title is
+    the link, INFO and LOW are counted not listed, and no device-class decoder text."""
     html = A.render_html(dashboard_url="https://portal.example", **_render())
-    # P1: the asset is a heading, once
-    assert html.count("bcbsma.commandcommcentral.com") == 2      # heading + INFO link
-    # P2: no FINDING ID column; the title carries the link
+    assert html.count("bcbsma.commandcommcentral.com") == 1      # one chip under one problem
     assert "Finding ID" not in html
     assert 'href="https://portal.example/findings/f-csp"' in html
-    # P3 + P4
-    assert "Service inventory: 53/tcp" in html
-    assert "+ 1 informational" in html
-    # D-031 tier label stays; the device-class line is gone (note 307: it read
-    # "unknown/unknown (dry-run classification)" on 428 of 467 assets).
+    assert "Also new: 1 low and 3 informational items" in html
     assert "medium scan" in html
     assert "dry-run classification" not in html and "FortiWeb" not in html
 
@@ -188,9 +184,8 @@ def test_the_html_digest_groups_merges_collapses_and_links(monkeypatch):
 def test_the_plaintext_digest_KEEPS_the_finding_id():
     """⛔ P2's exception. Plaintext is what gets grepped and pasted into a ticket."""
     text = A.render_text(**_render())
-    assert "f-csp" in text
-    assert "Service inventory: 53/tcp" in text
-    assert "+ 1 informational" in text
+    assert "(f-csp)" in text
+    assert "Also new: 1 low and 3 informational items" in text
     assert "Google Cloud Armor" not in text and "dry-run classification" not in text
 
 
