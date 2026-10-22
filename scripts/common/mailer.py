@@ -133,11 +133,18 @@ def send_email(
     from_name: str = "",
     headers: dict[str, str] | None = None,
     timeout: int = 30,
+    inline_images: Sequence[tuple[str, bytes, str]] | None = None,
 ) -> tuple[bool, str]:
     """Send one message via the configured provider.
 
     Returns (ok, detail). Never raises — see module docstring.
     `headers` (List-Unsubscribe etc.) is honoured by both providers.
+
+    `inline_images` (KB 12 job 3l, 2026-10-22): [(content_id, bytes, "image/png"), ...]
+    that the HTML shows as <img src="cid:content_id">. They ride INSIDE the message
+    (SMTP: multipart/related; SendGrid: attachments with disposition "inline"), so the
+    company logo shows without Gmail's remote-image block and without a hosted copy.
+    Empty or None -> the message is built EXACTLY as before (pinned by tests).
     """
     to_addrs = [a for a in (to_addrs or []) if a]
     if not to_addrs:
@@ -148,20 +155,32 @@ def send_email(
     p = provider_name()
     if p == "smtp":
         return _send_smtp(to_addrs, subject, html, text, from_addr, from_name,
-                          headers or {}, timeout)
+                          headers or {}, timeout, inline_images)
     if p == "sendgrid":
         return _send_sendgrid(to_addrs, subject, html, text, from_addr, from_name,
-                              headers or {}, timeout)
+                              headers or {}, timeout, inline_images)
     return False, f"unknown MAIL_PROVIDER={p!r} (expected 'sendgrid' or 'smtp')"
 
 
-# ── SendGrid ──────────────────────────────────────────────────────────────
-def _send_sendgrid(to_addrs, subject, html, text, from_addr, from_name,
-                   headers, timeout) -> tuple[bool, str]:
-    api_key = os.environ.get("SENDGRID_API_KEY")
-    if not api_key:
-        return False, "SENDGRID_API_KEY not set"
+def _image_parts(inline_images) -> list[tuple[str, bytes, str, str]]:
+    """[(cid, data, maintype, subtype)] for the usable entries. A malformed entry is
+    skipped, never fatal: a logo is decoration and must not cost the send."""
+    out = []
+    for item in inline_images or ():
+        try:
+            cid, data, mime = item
+            maintype, subtype = str(mime).split("/", 1)
+        except (TypeError, ValueError):
+            continue
+        if cid and data:
+            out.append((str(cid), bytes(data), maintype, subtype))
+    return out
 
+
+# ── SendGrid ──────────────────────────────────────────────────────────────
+def build_sendgrid_payload(to_addrs, subject, html, text, from_addr, from_name,
+                           headers, inline_images=None) -> dict:
+    """The JSON body for /v3/mail/send. PURE (tested)."""
     content = []
     if text:
         # text/plain first so HTML-capable clients pick the html alternative.
@@ -176,6 +195,28 @@ def _send_sendgrid(to_addrs, subject, html, text, from_addr, from_name,
     }
     if headers:
         payload["headers"] = headers
+    images = _image_parts(inline_images)
+    if images:
+        import base64
+        payload["attachments"] = [
+            {"content": base64.b64encode(data).decode("ascii"),
+             "type": f"{maintype}/{subtype}",
+             "filename": f"{cid}.{subtype}",
+             "disposition": "inline",
+             "content_id": cid}
+            for cid, data, maintype, subtype in images
+        ]
+    return payload
+
+
+def _send_sendgrid(to_addrs, subject, html, text, from_addr, from_name,
+                   headers, timeout, inline_images=None) -> tuple[bool, str]:
+    api_key = os.environ.get("SENDGRID_API_KEY")
+    if not api_key:
+        return False, "SENDGRID_API_KEY not set"
+
+    payload = build_sendgrid_payload(to_addrs, subject, html, text, from_addr,
+                                     from_name, headers, inline_images)
 
     req = urllib.request.Request(
         url=_SENDGRID_URL,
@@ -198,16 +239,11 @@ def _send_sendgrid(to_addrs, subject, html, text, from_addr, from_name,
 
 
 # ── SMTP (iCloud et al.) ──────────────────────────────────────────────────
-def _send_smtp(to_addrs, subject, html, text, from_addr, from_name,
-               headers, timeout) -> tuple[bool, str]:
-    host = os.environ.get("SMTP_HOST")
-    port = int(os.environ.get("SMTP_PORT") or "587")
-    user = os.environ.get("SMTP_USER")
-    pw = os.environ.get("SMTP_PASS")
-    if not (host and user and pw):
-        # Same shape as the portal's warn-and-skip.
-        return False, "SMTP_HOST/USER/PASS not all set"
-
+def build_smtp_message(to_addrs, subject, html, text, from_addr, from_name,
+                       headers, inline_images=None) -> EmailMessage:
+    """The MIME message. PURE (tested). Without images: multipart/alternative
+    (text, html) exactly as before. With images: the html part becomes
+    multipart/related holding the html and each image under its Content-ID."""
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = f"{from_name} <{from_addr}>" if from_name else from_addr
@@ -217,6 +253,28 @@ def _send_smtp(to_addrs, subject, html, text, from_addr, from_name,
     # set_content = text/plain root; add_alternative promotes to multipart/alternative
     msg.set_content(text or "This message requires an HTML-capable client.")
     msg.add_alternative(html, subtype="html")
+    images = _image_parts(inline_images)
+    if images:
+        html_part = msg.get_payload()[-1]
+        for cid, data, maintype, subtype in images:
+            html_part.add_related(data, maintype=maintype, subtype=subtype,
+                                  cid=f"<{cid}>", disposition="inline",
+                                  filename=f"{cid}.{subtype}")
+    return msg
+
+
+def _send_smtp(to_addrs, subject, html, text, from_addr, from_name,
+               headers, timeout, inline_images=None) -> tuple[bool, str]:
+    host = os.environ.get("SMTP_HOST")
+    port = int(os.environ.get("SMTP_PORT") or "587")
+    user = os.environ.get("SMTP_USER")
+    pw = os.environ.get("SMTP_PASS")
+    if not (host and user and pw):
+        # Same shape as the portal's warn-and-skip.
+        return False, "SMTP_HOST/USER/PASS not all set"
+
+    msg = build_smtp_message(to_addrs, subject, html, text, from_addr, from_name,
+                             headers, inline_images)
 
     try:
         ctx = ssl.create_default_context()

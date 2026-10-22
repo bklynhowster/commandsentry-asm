@@ -129,72 +129,43 @@ def test_a_window_with_only_new_findings_is_not_reported_as_no_changes():
 
 
 def test_headline_names_new_problems_inventory_fixed_and_regressed_separately():
-    """The quantities must never be merged again. 'finding change(s)' over
-    len(confirmed)+len(regressed) is a transition count wearing a creation
-    count's name — that is exactly what printed 0 on a 65-finding day.
-
-    Note 307 (2026-10-13): "status change(s)" itself is gone. It read
-    v_alerter_changes, which the scanners never write to, so it printed 0 on
-    the day the Next.js CRITICAL was fixed. Creation is now split into problems
-    (CRITICAL..LOW) and inventory (INFO); "fixed" is remediated_at in the
-    window; "regressed" is named on its own.
-    """
+    """Creation, closure and regression stay SEPARATE quantities (note 307), now as
+    buckets (KB 12 job 3l): a regressed MODERATE is a ticket tagged "came back after being
+    fixed", a new one a plain ticket, INFO goes to the quiet line, a fix is off your plate.
+    The merged "finding change(s)" / dead "status change(s)" counts stay dead."""
     info = ("F-INFO", "a.example", "Detected technologies: nginx", "INFO", "detected", "light", W_END)
     fixed = ("F-FIX", "a.example", "Next.js middleware bypass", "CRITICAL", "remediated", "nuclei", W_END)
-    html, text = _render(new_findings=[FINDING, FINDING, info], confirmed=[FINDING], fixed=[fixed],
-                         regressed=[FINDING])
-    assert "<strong>2</strong> new problem(s)" in html
-    assert "<strong>1</strong> new inventory item(s)" in html
-    assert "<strong>1</strong> fixed" in html
-    assert "<strong>1</strong> regressed" in html
-    assert "status change(s)" not in html, "the dead transition counter must stay dead"
-    assert "finding change(s)" not in html, "the merged, misnamed count must stay dead"
-    assert "Marked fixed in this window" in html and "Next.js middleware bypass" in html
-    assert "2 new problem(s), 1 new inventory item(s), 1 fixed, 1 regressed" in text
-    assert "MARKED FIXED IN THIS WINDOW (1)" in text
+    other = ("F-0002", "b.example", "Missing SPF record", "MODERATE", "detected", "light", W_END)
+    html, text = _render(new_findings=[FINDING, other, info], fixed=[fixed], regressed=[FINDING])
+    assert "Came back after being fixed." in html and "Came back after being fixed." in text
+    assert "Missing SPF record" in html and "Missing DMARC record" in html
+    assert "1 informational item" in html
+    assert "1 finding closed" in html and "Next.js middleware bypass" in html
+    assert "status change(s)" not in html and "finding change(s)" not in html
+    assert "OFF YOUR PLATE" in text
 
 
 def test_adding_the_new_section_did_not_displace_the_existing_ones():
-    """⛔ CAUGHT A REAL DEFECT. Written after the fact, which is the point.
-
-    The Prodex port of this change spliced the NEW FINDINGS block in ahead of
-    NEWLY CONFIRMED and, in doing so, deleted the
-    `lines.append(f"NEWLY CONFIRMED ...")` header. The plaintext digest still
-    listed the confirmed findings — but with no heading above them, so they
-    read as a continuation of the NEW FINDINGS list. Every other test passed.
-
-    Inserting a section is exactly where a neighbouring section gets clipped,
-    so every section header is asserted here, together, in both renderers.
-    """
-    html, text = _render(
-        new_findings=[FINDING], confirmed=[FINDING], regressed=[FINDING],
-    )
-    for label in ("NEW FINDINGS", "NEWLY CONFIRMED", "REGRESSED"):
+    """⛔ The Prodex port of a past change clipped a neighbouring header. Every bucket is
+    asserted together, in both renderers, and in order."""
+    hot = ("F-HOT", "c.example", "Exposed admin panel", "HIGH", "detected", "light", W_END)
+    fixed = ("F-FIX", "a.example", "Old flaw", "MODERATE", "remediated", "light", W_END)
+    html, text = _render(new_findings=[hot, FINDING], fixed=[fixed])
+    for label in ("DO TODAY", "WORTH A TICKET", "OFF YOUR PLATE"):
         assert label in text, f"plaintext lost the {label} header"
-    for label in ("New findings", "Newly confirmed findings", "Regressed findings"):
+    for label in ("Do today", "Worth a ticket", "Off your plate"):
         assert label in html, f"HTML lost the {label} section"
-
-    # and each section's rows must actually be under it, not orphaned
-    order = [text.index(x) for x in ("NEW FINDINGS", "NEWLY CONFIRMED", "REGRESSED")]
+    order = [text.index(x) for x in ("DO TODAY", "WORTH A TICKET", "OFF YOUR PLATE")]
     assert order == sorted(order), "sections rendered out of order"
 
 
 def test_the_two_counts_overlap_and_the_digest_says_so():
-    """⛔ THE TWO NUMBERS ARE NOT ADDABLE, and the overlap is LARGE.
-
-    A finding is created 'detected'; if it settles to 'confirmed' before the
-    window closes it is both new AND a status change. Measured over the most
-    recent 1000 v_alerter_changes rows: 254 of 570 transition events (44.6%)
-    fired within 24h of their finding's creation — inside one typical window.
-    That is not a corner case, so the digest states the intersection rather
-    than disclaiming it, and the arithmetic reconciles.
-    """
-    shared = ("F-SHARED", "a.example", "Weak cipher", "LOW", "detected", "light", W_END)
-    only_new = ("F-NEW", "b.example", "Missing SPF", "LOW", "detected", "light", W_END)
-
-    html, text = _render(new_findings=[shared, only_new], confirmed=[shared])
-    assert "1 finding(s) are both new and confirmed/regressed" in html
-    assert "1 finding(s) are both new and confirmed/regressed" in text
+    """⛔ A finding both new and confirmed in one window (44.6% of transitions, 2026-09-14)
+    is ONE item in the list, not two (KB 12 job 3l replaces the stated intersection)."""
+    shared = ("F-SHARED", "a.example", "Weak cipher", "MODERATE", "detected", "light", W_END)
+    html, text = _render(new_findings=[shared], confirmed=[shared])
+    assert text.count("[ ] [Moderate] Weak cipher") == 1
+    assert "Confirmed by a second scan" not in text
 
 
 def test_no_overlap_note_when_the_sets_are_disjoint():
@@ -214,13 +185,11 @@ def test_overlap_helper_degrades_to_zero_on_a_column_reorder():
 
 
 def test_zero_new_findings_does_not_invent_a_section():
-    """A quiet night must still read as quiet — no empty panel, no false
-    'pipeline healthy' suppression of a real transition either."""
+    """A quiet night reads as quiet — no empty panel."""
     html, text = _render()
-    assert "New findings" not in html
-    assert "No changes" in html
-    assert "No changes since last run" in text
-
+    assert "Do today" not in html and "Worth a ticket" not in html
+    assert "Nothing needs you today." in html and "Nothing needs you today." in text
+    assert "came back with nothing new" in html
 
 # ---------------------------------------------------------------------------
 # (2) first-EVER vs first-per-producer

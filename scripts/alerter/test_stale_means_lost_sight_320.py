@@ -84,21 +84,23 @@ def test_320_both_renderers_say_it_in_words():
     stale = [_row("firewall.unimacgraphics.com", None, None, None, None, True, True, False),
              _row("www.commandcompanies.com", T(2026, 6, 6, 19, 41), T(2026, 10, 14, 0, 33), 3143.0, 42.0, True, False, False)]
     html, text = _render(stale)
-    for out in (html, " ".join(text.split())):   # the text mail wraps the explanation; read it flat
-        assert "lost sight of" in out.lower()
-        assert "a gap in our own checking, not a problem found on the hosts" in out
-        assert "never seen by our checks" in out and "never had a full scan" in out
-        assert "last seen Jun 6 (131 days ago)" in out
-        assert "last full scan Oct 14 (42 hours ago)" in out
-        assert "not seen in 9 hours, no full scan in 7 days, or never" in out
-        # the decoder ring is gone
+    for out in (html, " ".join(text.split())):
+        assert "lost sight of 2 hosts" in out
+        assert "This is a gap in our own checking, not a problem found on the hosts." in out
+        assert "never seen by our checks (overdue)" in out and "never had a full scan (overdue)" in out
+        assert "last seen Jun 6 (131 days ago) (overdue)" in out
+        assert "last full scan Oct 14 (42 hours ago)" in out and "42 hours ago) (overdue)" not in out
+        assert "Overdue means: not seen in 9 hours, no full scan in 7 days, or never." in out
         assert "disc=" not in out and "Clock note" not in out and "assets.last_observed" not in out
         assert "PIPELINE DEGRADED" not in out
-    assert "COVERAGE GAP" in html and "COVERAGE GAP" in text
-    assert "Sentry's own health check" in html and "pipeline integrity" not in html.lower()
 
 
 def test_320_the_subject_says_lost_sight_of():
+    import digest_daily as dd
+    stale = [_row("firewall.unimacgraphics.com", None, None, None, None, True, True, False)]
+    m = ra._digest_model(window_start=T(2026, 10, 15, 12), window_end=T(2026, 10, 16, 12), new_findings=[],
+                         confirmed=[], regressed=[], high_risk=[], new_assets=[], dark_assets=[],
+                         stale_assets=stale, canary_violations=[], baseline={})
+    assert "(!) Coverage gap." in dd.subject(m, "X")
     src = open(ra.__file__, encoding="utf-8").read()
-    assert 'subject_parts.append(f"{n} we lost sight of")' in src
     assert 'f"{n} stale"' not in src
