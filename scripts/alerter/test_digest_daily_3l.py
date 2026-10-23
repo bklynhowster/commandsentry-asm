@@ -3,7 +3,8 @@
 Howie, 08:50: "This entire email needs to be simplified and redesigned." 14:45: "Let's have it be
 colorful … instead of throwing together a bunch of data that is almost impossible to understand."
 15:12, on design D: "Happy, I'm thrilled." Plan: KB wrap-up 2026-10-22 1530 (reviewed by GLM-5.3,
-no must-fixes; nine minors taken in its Review response).
+no must-fixes; nine minors taken in its Review response). Reworked after Howie read the first
+test sends (19:08–19:57): no "ticket", plain words, no risk tally in the daily, guesses left out.
 
 Pinned here: the buckets (every part of the old email has a home), grouping by problem across
 sites, www. folded into its site, the health bar (with CRITICAL and MODERATE-HIGH bands and the
@@ -66,19 +67,29 @@ def test_a_site_takes_the_worst_of_its_hosts_and_the_bands_split_not_rated_hones
     assert dd.counts_words(c) == "1 critical, 1 moderate-high, 1 low, 1 all clear, 1 not scanned yet"
 
 
-def test_change_words_compare_rated_bands_only():
+def test_change_words_say_which_way_each_site_went():
+    """Howie, 10-22: "What the hell does up or down actually mean?" — riskier / safer, by site,
+    with the levels; a site rated for the first time is not a move."""
     same = {"critical": 0, "high": 2, "modhigh": 0, "moderate": 5, "low": 1, "clear": 1, "unscanned": 0}
-    assert dd.change_words(same, dict(same, clear=0, unscanned=1)) == "Same as yesterday."
-    assert dd.change_words(dict(same, critical=4, moderate=1), same) == \
-        "Since yesterday: critical 0 to 4, moderate 5 to 1."
+    assert dd.change_words(same, dict(same, clear=0, unscanned=1)) == "No site's risk level changed since yesterday."
+    now = {"a": "critical", "b": "critical", "c": "moderate", "d": "low"}
+    then = {"a": "moderate", "b": "moderate", "c": "high", "d": "unscanned"}
+    assert dd.change_words({}, {}, now, then) == \
+        "Since yesterday, two sites got riskier (Moderate to Critical); c got safer (High to Moderate)."
 
 
-def test_the_bar_draws_every_non_empty_band_in_order_and_says_the_change():
-    m = model(sites=[("a.example", "CRITICAL", True, "MODERATE"), ("b.example", "MODERATE", True, "MODERATE")])
+def test_the_daily_leads_with_the_job_and_carries_no_risk_tally():
+    """Howie, 10-22, on the risk boxes above "One thing for today": "What do I have to do with
+    this risk level? This needs to be completely redone." The daily says what to do; where every
+    site stands is the weekly's (its labeled boxes are pinned here)."""
+    m = model(sites=[("a.example", "CRITICAL", True, "MODERATE"), ("b.example", "MODERATE", True, "MODERATE")],
+              new_findings=[F("h", "a.example", "Exposed panel", "HIGH")])
     html = dd.render_html(m, portal_url="https://p.example", product_name="X")
-    assert "2 live sites:</span> 1 critical, 1 moderate." in html
-    assert "Since yesterday: critical 0 to 1, moderate 2 to 1." in html
-    assert html.index("#8B1A4A") < html.index("#FFD43B"), "worst band first"
+    assert "by risk level" not in html and "Open across" not in html
+    assert html.index("<h1") < html.index("Needs you today") < html.index("Sent by")
+    t = dd.tally({"critical": 1, "moderate": 1}, {"critical": 0, "moderate": 2}, "x")
+    assert ">Critical<" in t and ">Moderate<" in t and "was 0" in t and "was 2" in t
+    assert t.index("#8B1A4A") < t.index("#FFD43B"), "worst level first"
 
 
 def test_the_yesterday_rebuild_uses_the_one_rule_and_the_dedup_views_closed_set():
@@ -126,16 +137,40 @@ def test_every_part_of_the_old_email_has_a_home():
     assert kinds("ticket") == ["finding", "finding", "rating", "blockpage", "assets", "dark"]
     assert kinds("done") == ["fixed", "back", "blocking"]
     assert m["low"] == 1 and m["info"] == 1
-    assert m["degraded"] and m["headline"] == "Your list for today: five checks, six for a ticket."
+    assert m["degraded"] and m["headline"] == "Five things for today, six for this week."
+    assert m["minor"] == [("e.example", "Header missing")]
 
 
-def test_findings_group_by_problem_across_sites_worst_first():
-    rows = [F(f"fw{i}", h, FW, "CRITICAL", "advisory_watch") for i, h in
+WAF = "No enforcing WAF in front of live application"
+
+
+def test_findings_group_by_problem_across_sites_worst_first_in_plain_words():
+    rows = [F(f"w{i}", h, WAF, "CRITICAL", "commandsentry_heavy") for i, h in
             enumerate(["api.x.com", "www.x.com", "x.com", "e2.y.com"])] + [F("a", "q.com", "Exposed panel", "HIGH")]
     items = dd.group_problems(rows, {"api.x.com", "www.x.com", "x.com", "e2.y.com", "q.com"})
-    assert [i["title"] for i in items] == [FW, "Exposed panel"]
+    assert [i["title"] for i in items] == ["No web firewall in front of these sites", "Exposed panel"]
     assert items[0]["sites"] == ["api.x.com", "e2.y.com", "x.com"], "www. folded, sorted, once"
-    assert items[0]["why"] == "Found by the daily advisory check."
+    assert items[0]["body"].startswith("Our harmless test attacks walked straight in")
+    assert items[0]["do"].startswith("Put a web application firewall in front of these sites")
+    assert items[0]["who"] == "it" and items[0]["headline"] == "put a web firewall in front of api.x.com, e2.y.com and x.com"
+
+
+def test_a_guess_is_not_listed_counted_or_mentioned():
+    """Howie, 10-22: "There are risks and there are things that are known, that's all."
+    "Version not shown" is neither. The site's level comes from SQL_SITE_RATINGS, which
+    leaves guesses out (api.x.com: Moderate, not the portal's Critical)."""
+    m = model(new_findings=[F("fw", "api.x.com", FW, "CRITICAL", "advisory_watch")],
+              high_risk=[("api.x.com", "a", "o", "CRITICAL", f"1 open; top: {FW}", W1)],
+              fixed=[F("wp", "b.x.com", "Runs WordPress, version not shown", "HIGH", "advisory_watch")],
+              sites=[("api.x.com", "MODERATE", True, "MODERATE")])
+    assert m["do"] == [] and m["ticket"] == [] and m["done"] == []
+    assert "guesses" not in m and m["change"] == "No site's risk level changed since yesterday."
+    html = dd.render_html(m, portal_url="", product_name="X")
+    text = dd.render_text(m, portal_url="", product_name="X")
+    for out in (html, text):
+        assert "FortiWeb" not in out and "WordPress" not in out
+        assert "guess" not in out.lower() and "version" not in out.lower()
+    assert m["headline"] == "Nothing needs you today."
 
 
 def test_first_deep_scan_since_and_first_ever_and_unknown_says_nothing():
@@ -143,12 +178,12 @@ def test_first_deep_scan_since_and_first_ever_and_unknown_says_nothing():
     names = {"insite.s.com"}
     old = {"insite.s.com": datetime(2026, 7, 23, tzinfo=UTC)}
     assert dd.group_problems(rows, names, old, window_start=W0)[0]["why"] == \
-        "Found by the deep scan, its first deep scan since Jul 23."
+        "New because this was its first deep scan since Jul 23; it may have been there a while."
     assert dd.group_problems(rows, names, {"insite.s.com": None}, window_start=W0)[0]["why"] == \
-        "Found by the deep scan, its first deep scan ever."
+        "New because this was its first deep scan ever."
     recent = {"insite.s.com": W0 - timedelta(days=7)}
-    assert dd.group_problems(rows, names, recent, window_start=W0)[0]["why"] == "Found by the deep scan."
-    assert dd.group_problems(rows, names, {}, window_start=W0)[0]["why"] == "Found by the deep scan."
+    assert dd.group_problems(rows, names, recent, window_start=W0)[0]["why"] == ""
+    assert dd.group_problems(rows, names, {}, window_start=W0)[0]["why"] == ""
 
 
 def test_the_do_line_is_the_first_step_and_only_for_a_one_site_problem():
@@ -169,7 +204,7 @@ def test_ratings_that_went_up_skip_sites_today_already_explains():
     m = model(new_findings=[hot], high_risk=hi, sites=[("b.example", "HIGH", True, "MODERATE"),
                                                         ("www.b.example", "HIGH", True, "MODERATE")])
     (rating,) = [i for i in m["ticket"] if i["kind"] == "rating"]
-    assert rating["lines"] == ["b.example is now high: Other thing"]
+    assert rating["lines"] == ["b.example is now High, because of: Other thing"]
 
 
 # ── certificates ────────────────────────────────────────────────────────────────────
@@ -185,7 +220,8 @@ def test_a_cert_counts_only_inside_14_days_and_reads_the_day_it_expires():
     assert [i for i in model(certs=[mk(15)])["do"] if i["kind"] == "cert"] == []
     (c,) = [i for i in model(certs=[mk(3)])["do"] if i["kind"] == "cert"]
     assert c["title"] == "Renew the certificate on h.example" and c["severity"] == "HIGH"
-    assert "It expires in 3 days, Sunday, Oct 25, by the deep scan's count on Oct 22." in c["body"]
+    assert c["body"].startswith("It expires Sunday, Oct 25 (3 days).")
+    assert c["who"] == "it" and c["do"].startswith("Install a renewed certificate")
     (e,) = [i for i in model(certs=[("h.example", "TLS certificate expiring soon — expires < 30 days (2)",
                                      W1 - timedelta(days=5))])["do"] if i["kind"] == "cert"]
     assert e["body"].startswith("It expired ")
@@ -204,21 +240,28 @@ def test_a_cert_warning_a_later_deep_scan_did_not_repeat_is_not_read():
 
 # ── headline and subject ────────────────────────────────────────────────────────────
 def test_headline_words():
-    assert dd.headline(2, 1) == "Your list for today: two checks, one for a ticket."
-    assert dd.headline(1, 0) == "Your list for today: one check."
-    assert dd.headline(0, 3) == "Nothing urgent today. Three things for a ticket."
+    """Never "ticket" (Howie, 10-22: "We don't have any tickets"); one item names the job."""
+    assert dd.headline(2, 1) == "Two things for today, one for this week."
+    assert dd.headline(1, 0) == "One thing for today."
+    assert dd.headline(0, 3) == "Nothing urgent today. Three things for this week."
+    assert dd.headline(0, 1) == "Nothing urgent today. One thing for this week."
     assert dd.headline(0, 0) == "Nothing needs you today."
-    assert dd.headline(12, 0) == "Your list for today: 12 checks."
+    assert dd.headline(12, 0) == "12 things for today."
+    job = [{"title": "Renew the certificate on pm.u.com", "headline": ""}]
+    assert dd.headline(1, 0, job) == "Today: renew the certificate on pm.u.com."
+    assert dd.headline(1, 2, job) == "Today: renew the certificate on pm.u.com. Plus two for this week."
+    assert dd.headline(0, 1, [], [{"title": "X", "headline": "switch the web firewall on a.com to block mode"}]) == \
+        "Nothing urgent today. This week: switch the web firewall on a.com to block mode."
 
 
 def test_subject_keeps_the_filter_prefix_and_says_what_you_will_do():
     hot = F("h", "a.example", "Exposed panel", "HIGH")
     mod = F("m", "b.example", "Missing CSP", "MODERATE")
     assert dd.subject(model(new_findings=[hot, mod]), "COMMANDsentry") == \
-        "[COMMANDsentry] Command, Thursday: 1 check and 1 ticket"
+        "[COMMANDsentry] Command, Thursday: 1 for today, 1 this week"
     assert dd.subject(model(), "COMMANDsentry") == "[COMMANDsentry] Command, Thursday: nothing needs you"
     stale = [("lost.example", None, None, None, None, True, True, False)]
-    assert dd.subject(model(stale_assets=stale), "P").startswith("[P] (!) Coverage gap. Command, Thursday: 1 check")
+    assert dd.subject(model(stale_assets=stale), "P").startswith("[P] (!) Coverage gap. Command, Thursday: 1 for today")
 
 
 def test_the_date_is_local_time_from_the_brand():
@@ -240,7 +283,7 @@ def test_the_page_is_tables_inline_styles_and_one_style_block():
     assert "display:flex" not in styles and "display:grid" not in styles
     assert "<script" not in html and "<form" not in html
     assert html.count("<style>") == 1 and "prefers-reduced-motion" in html
-    assert 'role="presentation"' in html and 'width="680"' in html
+    assert 'role="presentation"' in html and "max-width:640px" in html and 'width="680"' not in html
     assert "fonts.googleapis.com/css2?family=Bricolage+Grotesque" in html
 
 

@@ -238,7 +238,13 @@ SQL_PRIOR_HIGH_RISK_SET = """
 SELECT alerter_prior_high_risk_set(%s)
 """
 
-SQL_OPEN_POSTURE = """
+# A finding we only GUESS at — "Runs X, version not shown" (digest_words.is_guess; the same
+# pattern in SQL) is not counted in the digests and does not set a site's level there
+# (Howie, 2026-10-22: "There are risks and there are things that are known, that's all").
+# Job 3r takes guesses out of the portal's counts and current_risk too.
+GUESS_TITLE_SQL = r"'^\s*Runs .+?, version not shown'"
+
+SQL_OPEN_POSTURE = f"""
 -- Note 307 (2026-10-13): "currently open" counts PROBLEMS the way the portal's
 -- dashboard does, not finding rows. Until push-307c this was COUNT(*) over
 -- findings on owned+confirmed_live assets, which printed HIGH 23 on a day the
@@ -254,10 +260,13 @@ SQL_OPEN_POSTURE = """
 -- "stale" = no scan has seen the problem for 30+ days. The dashboard softens
 -- those; the digest says how many there are so the headline number is read
 -- for what it is.
+--
+-- Guesses ("Runs X, version not shown") are left out: the digests count what is known.
 SELECT severity::text,
        count(*)                                                                 AS open_now,
        count(*) FILTER (WHERE last_observed_at < now() - interval '30 days')     AS stale_30d
 FROM public.v_fleet_open_reps
+WHERE title !~* {GUESS_TITLE_SQL}
 GROUP BY severity;
 """
 
@@ -843,11 +852,9 @@ def load_scope_verified_apexes(targets_yml_path: str = "data/targets.yml") -> li
 # assets.current_risk: Command 51 of 51 equal, Prodex 29 of 29 (with false_positive alone
 # the four nameservers read MODERATE against UNKNOWN — the retired-detector rows).
 # ever_found splits "not rated": never scanned vs everything resolved.
-SQL_SITE_RATINGS = """
-SELECT a.asset_id,
-       a.current_risk::text,
-       EXISTS (SELECT 1 FROM public.findings f0 WHERE f0.asset_id = a.asset_id) AS ever_found,
-       (SELECT f.severity::text
+def _worst_known_at(t: str) -> str:
+    """The one rule (job 3m) for a site's worst finding at time `t`, guesses left out."""
+    return f"""(SELECT f.severity::text
           FROM public.findings f
          WHERE f.asset_id = a.asset_id
            AND f.current_status::text NOT IN ('false_positive', 'wont_fix', 'accepted_risk',
@@ -855,11 +862,26 @@ SELECT a.asset_id,
            AND NOT (f.current_status::text IN ('remediated', 'validated_remediated')
                     AND f.remediated_at IS NULL)
            AND f.severity::text <> 'INFO'
-           AND f.first_detected_at <= %(t)s
-           AND (f.remediated_at IS NULL OR f.remediated_at > %(t)s)
+           AND f.title !~* {GUESS_TITLE_SQL}
+           AND f.first_detected_at <= {t}
+           AND (f.remediated_at IS NULL OR f.remediated_at > {t})
          ORDER BY CASE f.severity::text WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
                   WHEN 'MODERATE-HIGH' THEN 3 WHEN 'MODERATE' THEN 4 ELSE 5 END
-         LIMIT 1) AS rating_then
+         LIMIT 1)"""
+
+
+# A site with an open guess is rated by the same rule as the rebuild, at now(), from its
+# other findings; every other site keeps the portal's current_risk.
+SQL_SITE_RATINGS = f"""
+SELECT a.asset_id,
+       CASE WHEN EXISTS (SELECT 1 FROM public.findings g
+                          WHERE g.asset_id = a.asset_id
+                            AND g.current_status::text IN ('detected', 'confirmed', 'open', 'regressed')
+                            AND g.title ~* {GUESS_TITLE_SQL})
+            THEN {_worst_known_at("now()")}
+            ELSE a.current_risk::text END AS rating_now,
+       EXISTS (SELECT 1 FROM public.findings f0 WHERE f0.asset_id = a.asset_id) AS ever_found,
+       {_worst_known_at("%(t)s")} AS rating_then
   FROM public.assets a
  WHERE a.ownership = 'owned'
    AND a.discovery_status = 'confirmed_live'
@@ -875,7 +897,17 @@ SELECT a.asset_id,
 # called it "expired". A deep scan finished after the warning's last sighting retires it
 # here (10 minutes of slack: the observing scan finishes when it writes the finding).
 SQL_CERTS_EXPIRING = """
-SELECT DISTINCT ON (f.asset_id) f.asset_id, f.title, f.last_observed_at
+SELECT DISTINCT ON (f.asset_id) f.asset_id, f.title, f.last_observed_at,
+       (SELECT e->>'finding'
+          FROM public.scan_run r2
+          JOIN public.scan_run_artifacts a2 ON a2.scan_run_id = r2.scan_run_id
+          CROSS JOIN LATERAL jsonb_array_elements(
+                CASE WHEN jsonb_typeof(a2.content_jsonb) = 'array' THEN a2.content_jsonb ELSE '[]'::jsonb END) e
+         WHERE r2.asset_id = f.asset_id
+           AND a2.tool_name = 'testssl.sh'
+           AND e->>'id' = 'cert_notAfter'
+         ORDER BY r2.completed_at DESC NULLS LAST
+         LIMIT 1) AS not_after
   FROM public.findings f
   JOIN public.assets a ON a.asset_id = f.asset_id
  WHERE a.ownership = 'owned'
@@ -905,10 +937,21 @@ SELECT ids.asset_id,
   FROM unnest(%s::text[]) AS ids(asset_id)
 """
 
-# The first remediation step of each listed finding, for the item's "Do:" line.
+# Each listed finding's remediation (the fix line when no plain-words family covers it), its
+# description and CVEs (a WordPress plugin advisory is judged against its own affected range
+# and its risk is read from it — digest_words.advisory).
 SQL_FINDING_HINTS = """
-SELECT finding_id, remediation FROM public.findings WHERE finding_id = ANY(%s::text[])
+SELECT finding_id, remediation, description, cve FROM public.findings WHERE finding_id = ANY(%s::text[])
 """
+
+
+def hints_and_details(rows) -> tuple[dict, dict]:
+    """SQL_FINDING_HINTS rows -> ({id: remediation}, {id: (description, [cve])})."""
+    hints, details = {}, {}
+    for r in rows or []:
+        hints[r[0]] = r[1]
+        details[r[0]] = (r[2] if len(r) > 2 else "", list(r[3] or []) if len(r) > 3 else [])
+    return hints, details
 
 # KB 12 job 3l slice 2 — the weekly's day columns: finished scans of owned hosts per
 # local day and intensity (deep = heavy; quick = light and medium).
@@ -929,12 +972,15 @@ SELECT (r.completed_at AT TIME ZONE %(tz)s)::date AS day, r.intensity::text, cou
 # v_open_findings_dedup: that view keeps closed rows (its status is "detected" only when
 # a member is open) — the first draft of this query listed five false positives.
 SQL_OPEN_SERIOUS = """
-SELECT r.member_finding_ids[1], r.scope_id, r.title, r.severity::text,
-       'open', '', r.last_observed_at
+SELECT f.finding_id, r.scope_id, f.title, f.severity::text, f.current_status::text,
+       f.source::text, f.last_observed_at, f.description, f.cve
   FROM public.v_fleet_open_reps r
+ CROSS JOIN LATERAL unnest(r.member_finding_ids) AS m(fid)
+  JOIN public.findings f ON f.finding_id = m.fid
  WHERE r.severity::text IN ('CRITICAL', 'HIGH', 'MODERATE-HIGH')
- ORDER BY CASE r.severity::text WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 ELSE 3 END,
-          r.scope_id
+   AND f.severity::text IN ('CRITICAL', 'HIGH', 'MODERATE-HIGH')
+ ORDER BY CASE f.severity::text WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 ELSE 3 END,
+          r.scope_id, f.finding_id
 """
 
 SQL_INSERT_RUN_START = """
@@ -1304,7 +1350,7 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
                   baseline, came_back=None, fixed=None, enforcement_flips=None,
                   unrecognized_pages=None, sites=None, certs=None, prev_deep=None,
                   hints=None, brand=None, discovery_stale_hours=24,
-                  deepscan_stale_hours=192) -> dict:
+                  deepscan_stale_hours=192, details=None) -> dict:
     """KB 12 job 3l — every part of the old email, sorted into Do today / Worth a ticket /
     Off your plate by digest_daily.build_model. The stale-host wording stays this file's
     (stale_row_words, note 320)."""
@@ -1318,6 +1364,7 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
         prev_deep=prev_deep, hints=hints, brand=brand if brand is not None else _dd.load_brand(),
         stale_words=stale_row_words, stale_intro=STALE_INTRO,
         stale_note=stale_overdue_note(discovery_stale_hours, deepscan_stale_hours),
+        details=details,
     )
 
 
@@ -1546,11 +1593,13 @@ def _weekly_model(conn, *, now, brand):
     certs = _soft_read(conn, "expiring certificates", SQL_CERTS_EXPIRING)
     open_serious = _soft_read(conn, "open serious problems", SQL_OPEN_SERIOUS)
     hint_ids = sorted({r[0] for r in open_serious if r[0]})
-    hints = dict(_soft_read(conn, "remediation hints", SQL_FINDING_HINTS, (hint_ids,))) if hint_ids else {}
+    hints, _d = hints_and_details(_soft_read(conn, "remediation hints", SQL_FINDING_HINTS, (hint_ids,))) \
+        if hint_ids else ({}, {})
+    details = {r[0]: (r[7] if len(r) > 7 else "", list(r[8] or []) if len(r) > 8 else []) for r in open_serious}
     return _dw.build_weekly(
         now=now, window_start=window_start, window_end=window_end, days=days,
         sites=sites, opened=opened, closed=closed, scans=scans, certs=certs,
-        open_serious=open_serious, hints=hints, stale_assets=stale_assets,
+        open_serious=open_serious, hints=hints, details=details, stale_assets=stale_assets,
         canary_violations=canary_violations, stale_words=stale_row_words,
         stale_intro=STALE_INTRO, stale_note=stale_overdue_note(disc_h, deep_h),
         baseline=baseline, brand=brand,
@@ -1739,7 +1788,8 @@ def main() -> int:
         listed = sorted({r[1] for r in list(new_findings) + list(regressed) + list(confirmed)})
         prev_deep = dict(_soft("previous deep scans", SQL_PREV_DEEP_SCANS, (window_start, listed))) if listed else {}
         hint_ids = sorted({r[0] for r in list(new_findings) + list(regressed) + list(confirmed)})
-        hints = dict(_soft("remediation hints", SQL_FINDING_HINTS, (hint_ids,))) if hint_ids else {}
+        hints, details = hints_and_details(_soft("remediation hints", SQL_FINDING_HINTS, (hint_ids,))) \
+            if hint_ids else ({}, {})
         brand = _dd.load_brand()
 
         # Render — KB 12 job 3l: one model, two renderings, one subject. The subject says
@@ -1755,6 +1805,7 @@ def main() -> int:
             enforcement_flips=enforcement_flips, unrecognized_pages=unrecognized_pages,
             sites=sites, certs=certs, prev_deep=prev_deep, hints=hints, brand=brand,
             discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours,
+            details=details,
         )
         subject = _dd.subject(model, from_name)
         if args.preview:

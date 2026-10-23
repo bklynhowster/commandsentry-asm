@@ -173,11 +173,12 @@ def test_the_html_digest_groups_merges_collapses_and_links(monkeypatch):
     """KB 12 job 3l keeps 152's lessons: the asset once, no FINDING ID column, the title is
     the link, INFO and LOW are counted not listed, and no device-class decoder text."""
     html = A.render_html(dashboard_url="https://portal.example", **_render())
-    assert html.count("bcbsma.commandcommcentral.com") == 1      # one chip under one problem
+    assert html.count(">bcbsma.commandcommcentral.com</span>") == 1      # one chip under one problem
     assert "Finding ID" not in html
     assert 'href="https://portal.example/findings/f-csp"' in html
-    assert "Also new: 1 low and 3 informational items" in html
-    assert "medium scan" in html
+    # 3l rework (Howie, 10-22): a minor item is named in one plain line; INFO is not mentioned
+    assert "Also found today, minor, no action needed:" in html and "informational" not in html
+    assert "commandsentry_medium" not in html, "a scanner's raw label never reaches the reader"
     assert "dry-run classification" not in html and "FortiWeb" not in html
 
 
@@ -185,7 +186,7 @@ def test_the_plaintext_digest_KEEPS_the_finding_id():
     """⛔ P2's exception. Plaintext is what gets grepped and pasted into a ticket."""
     text = A.render_text(**_render())
     assert "(f-csp)" in text
-    assert "Also new: 1 low and 3 informational items" in text
+    assert "Also found today, minor, no action needed:" in text
     assert "Google Cloud Armor" not in text and "dry-run classification" not in text
 
 

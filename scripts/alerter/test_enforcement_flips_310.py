@@ -81,33 +81,32 @@ def test_the_words_are_the_probes_words_and_name_no_product():
 def test_rendered_in_both_bodies_with_the_measurement_and_the_previous_test():
     html, text = _render(enforcement_flips=[UAT, STAGING_FIRST])
     for body in (html, text):
-        assert "Something in front of uat.prodexlabs.com is blocking" in body
-        assert "(Oct 13; the test before, Oct 12, got through)" in body
-        assert "Something in front of staging.prodexlabs.com is blocking" in body
-        assert "(first test, Oct 12)" in body
-        assert "names no product" in body
+        assert "Web firewalls started blocking on two sites" in body
+        assert "uat.prodexlabs.com: turned our test attacks away on Oct 13; the test before, Oct 12, got through." in body
+        assert "staging.prodexlabs.com: turned our test attacks away on Oct 12, the first time we tested." in body
         assert "Cloud Armor" not in body and "Google" not in body, "presence-only, like the probe"
 
 
 def test_the_reverse_flip_reads_as_passing_through():
     html, text = _render(enforcement_flips=[REVERSE])
     for body in (html, text):
-        assert "Something in front of uat.prodexlabs.com stopped blocking" in body
-        assert "reached the site on Oct 15. The test before, Oct 13, was blocked." in body
-    assert "Do today" in html and "DO TODAY" in text
+        assert "The web firewall on uat.prodexlabs.com stopped blocking" in body
+        assert "Our harmless test attacks got through on Oct 15; the test before, Oct 13, was turned away." in body
+        assert "name a product" in body
+    assert "Needs you today" in html and "NEEDS YOU TODAY" in text
 
 
 def test_a_window_with_only_a_flip_is_not_no_changes():
     html, text = _render(enforcement_flips=[UAT])
-    assert "came back with nothing new" not in html
-    assert "Off your plate" in html and "OFF YOUR PLATE" in text
+    assert "came back with nothing that needs anyone" not in html
+    assert "Fixed since yesterday" in html and "FIXED SINCE YESTERDAY" in text
 
 
 def test_nothing_flipped_changes_nothing():
     a = _render()
     b = _render(enforcement_flips=[])
     assert a == b
-    assert "Something in front of" not in a[0] and "Something in front of" not in a[1]
+    assert "web firewall" not in a[0].lower() and "web firewall" not in a[1].lower()
 
 
 def test_subject_counts_flips():
@@ -118,5 +117,5 @@ def test_subject_counts_flips():
     kw = dict(window_start=W0, window_end=W1, new_findings=[], confirmed=[], regressed=[],
               high_risk=[], new_assets=[], dark_assets=[], stale_assets=[], canary_violations=[],
               baseline=BASE)
-    assert dd.subject(ra._digest_model(enforcement_flips=[REVERSE], **kw), "X").endswith(": 1 check")
+    assert dd.subject(ra._digest_model(enforcement_flips=[REVERSE], **kw), "X").endswith(": 1 for today")
     assert dd.subject(ra._digest_model(enforcement_flips=[UAT], **kw), "X").endswith(": nothing needs you")

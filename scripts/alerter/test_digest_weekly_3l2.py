@@ -112,15 +112,53 @@ def test_scans_by_day_deep_is_heavy_and_quick_is_light_or_medium():
     assert cols[0] == (5, 8) and cols[1] == (0, 2) and sum(a + b for a, b in cols) == 15, "today is outside the week"
 
 
-def test_day_events_pin_serious_openings_and_a_closures_line_per_day():
-    _s, _e, days = dw.week_window(NOW, BRAND)
-    opened = [_f("1", "a.x.com", WAF, "HIGH", "2026-10-16T01:00:00+00:00"),   # Oct 15 local
-              _f("2", "a.x.com", "Missing header", "MODERATE", "2026-10-16T12:00:00+00:00")]
-    closed = [_f("3", "c.x.com", WAF, "HIGH", "2026-10-18T12:00:00+00:00", "remediated"),
-              _f("4", "d.x.com", WAF, "HIGH", "2026-10-18T13:00:00+00:00", "remediated")]
-    ev = dw.day_events(opened, closed, {"a.x.com", "c.x.com", "d.x.com"}, days, BRAND)
-    assert [(e["day"], e["kind"]) for e in ev] == [(date(2026, 10, 15), "opened"), (date(2026, 10, 18), "closed")]
-    assert ev[1]["text"].startswith("2 findings closed: " + WAF)
+def test_what_changed_is_grouped_by_reason_not_by_where_each_site_landed():
+    """Howie, 10-22: "7 sites got safer … 1 site got safer. Why isn't it 8 sites got safer?" —
+    one card per reason; a site that landed elsewhere is said inside it."""
+    names = {"a.p.com", "b.p.com", "bitec.p.com", "s.p.com", "h.p.com"}
+    then = {"a.p.com": "high", "b.p.com": "high", "bitec.p.com": "high", "s.p.com": "moderate", "h.p.com": "moderate"}
+    now = {"a.p.com": "moderate", "b.p.com": "moderate", "bitec.p.com": "modhigh", "s.p.com": "high", "h.p.com": "modhigh"}
+    closed = [_f(f"c{x}", x, WAF, "HIGH", "2026-10-18T12:00:00+00:00", "remediated") for x in ("a.p.com", "b.p.com", "bitec.p.com")]
+    opened = [_f("o1", "bitec.p.com", "WAF detected but not blocking attacks", "MODERATE-HIGH", "2026-10-21T12:00:00+00:00"),
+              _f("o2", "s.p.com", WAF, "HIGH", "2026-10-19T12:00:00+00:00"),
+              _f("o3", "h.p.com", "WAF detected but not blocking attacks", "MODERATE-HIGH", "2026-10-20T12:00:00+00:00")]
+    ch = dw.changes(now, then, opened, closed, names)
+    safer = [g for g in ch if not g["riskier"]]
+    assert len(safer) == 1 and safer[0]["sites"] == ["a.p.com", "b.p.com", "bitec.p.com"]
+    assert (safer[0]["was"], safer[0]["now"]) == ("high", "moderate")
+    assert safer[0]["reason"] == "A web firewall is now in place."
+    assert safer[0]["asides"] == ["On bitec.p.com, though, the firewall only watches so far: our test attacks "
+                                  "still get through, so it's Moderate-high, not Moderate."]
+    riskier = [g for g in ch if g["riskier"]]
+    assert len(riskier) == 1 and riskier[0]["was"] is None, "two single sites, one card"
+    assert riskier[0]["asides"] == [
+        "h.p.com (Moderate to Moderate-high): new problem: a web firewall is there, but it's only watching.",
+        "s.p.com (Moderate to High): new problem: no web firewall in front of it."]
+
+
+def test_a_guess_is_not_listed_counted_or_mentioned():
+    """Howie, 10-22: "I'm really not into admitting a guess. There are risks and there are
+    things that are known, that's all." SQL_SITE_RATINGS rates api.x.com by its known findings
+    (Moderate, unchanged), so the guess moves nothing and is said nowhere."""
+    s, e, days = dw.week_window(NOW, BRAND)
+    m = dw.build_weekly(now=NOW, window_start=s, window_end=e, days=days, brand=BRAND, scans=[],
+                        closed=[_f("c", "w.x.com", "Runs PHP, version not shown", "MODERATE", "2026-10-19T12:00:00+00:00", "remediated")],
+                        sites=[("api.x.com", "MODERATE", True, "MODERATE"), ("w.x.com", "HIGH", True, "MODERATE")],
+                        opened=[_f("g", "api.x.com", FW + ", 4 advisories", "CRITICAL", "2026-10-20T12:00:00+00:00"),
+                                _f("w", "w.x.com", WAF, "HIGH", "2026-10-20T12:00:00+00:00")],
+                        open_serious=[_f("g", "api.x.com", FW + ", 4 advisories", "CRITICAL", "2026-10-20T12:00:00+00:00"),
+                                      _f("w", "w.x.com", WAF, "HIGH", "2026-10-20T12:00:00+00:00")])
+    assert m["moves"]["n_up"] == 1 and m["headline"] == "w.x.com got riskier this week."
+    assert [i["title"] for i in m["do"]] == ["No web firewall in front of this site"]
+    (r,) = m["changes"]
+    assert dw.change_title(r) == "1 site got riskier" and r["sites"] == ["w.x.com"]
+    assert m["n_opened"] == 1 and m["n_closed"] == 0, "a guess opening or closing is not counted"
+    assert "guesses" not in m
+    html = dw.render_weekly_html(m, portal_url="", product_name="X")
+    text = dw.render_weekly_text(m, portal_url="", product_name="X")
+    for out in (html, text):
+        assert "FortiWeb" not in out and "PHP" not in out
+        assert "guess" not in out.lower() and "version" not in out.lower()
 
 
 # ── the model, the words ─────────────────────────────────────────────────────
@@ -149,6 +187,7 @@ def test_this_week_do_lists_certificates_then_serious_problems_capped():
     serious = [_f(f"s{i}", f"h{i}.x.com", f"Problem {i}", "HIGH", "2026-10-20T00:00:00+00:00") for i in range(9)]
     m = _model(certs=certs, open_serious=serious)
     assert m["do"][0]["kind"] == "cert" and m["do"][0]["title"] == "Renew the certificate on ftp.x.com"
+    assert m["do"][0]["who"] == "it"
     assert m["n_certs"] == 1, "51 days out is not this week's job"
     assert len([i for i in m["do"] if i["kind"] == "finding"]) == dw.DO_MAX and m["more"] == 9 - dw.DO_MAX
 
@@ -157,18 +196,18 @@ def test_headline_leads_with_the_bigger_move():
     m = _model()
     m["moves"] = {"up": [{"sites": ["a"], "severity": "HIGH", "title": WAF}], "down": [{}] * 1,
                   "n_up": 2, "n_down": 8}
-    assert dw.weekly_headline(m) == "Eight sites came down this week, and two went up."
+    assert dw.weekly_headline(m) == "Eight sites got safer this week. Two got riskier."
     m["moves"].update(n_up=0, n_down=0)
     m["n_closed"] = 0
-    assert dw.weekly_headline(m) == "A quiet week: no rating changed."
+    assert dw.weekly_headline(m) == "A quiet week. No site changed risk level. We checked."
 
 
 def test_subject_names_the_week_and_the_bigger_move_first():
     m = _model()
-    assert dw.weekly_subject(m, "COMMANDsentry") == "[COMMANDsentry] Command, your week: 1 site went up"
+    assert dw.weekly_subject(m, "COMMANDsentry") == "[COMMANDsentry] Command, your week: 1 site riskier"
     m["moves"].update(n_up=2, n_down=8)
     m["n_closed"], m["n_certs"] = 8, 1
-    assert dw.weekly_subject(m, "P") == "[P] Command, your week: 8 sites came down, 2 went up, 8 findings closed, 1 certificate to renew"
+    assert dw.weekly_subject(m, "P") == "[P] Command, your week: 8 sites safer, 2 riskier, 8 problems fixed, 1 certificate to renew"
     m["degraded"] = True
     assert dw.weekly_subject(m, "P").startswith("[P] (!) Coverage gap. ")
 
@@ -185,10 +224,13 @@ def test_html_is_email_safe_and_shows_every_site():
     assert not re.search(r"display\s*:\s*(flex|grid)", html)
     assert "<script" not in html.lower() and "<form" not in html.lower()
     assert all(src.startswith("cid:") for src in re.findall(r'<img[^>]+src="([^"]+)"', html))
-    assert "Every live site today" in html and ">a<" in html and ">b<" in html
+    assert "Every site, by risk level" in html and ">a<" in html and ">b<" in html
+    assert "What changed" in html
+    assert "was 0" in html, "each box says what it was last week"
+    assert "ticket" not in html.lower()
     assert 'href="https://portal.example"' in html and "prefers-reduced-motion" in html
     text = dw.render_weekly_text(m, portal_url="https://portal.example", product_name="COMMANDsentry")
-    assert "EVERY LIVE SITE TODAY" in text and "x.com: a high *, b moderate" in text
+    assert "EVERY SITE, BY RISK LEVEL" in text and "x.com: a high *, b moderate" in text
 
 
 # ── run_alerter: the test send ───────────────────────────────────────────────

@@ -6,28 +6,38 @@ of effects. There has to be a way that we can convey the information in a clever
 well-designed way, instead of throwing together a bunch of data that is almost impossible
 to understand." 15:12, on design D ("your list"): "Happy, I'm thrilled."
 
+Reworked after Howie read the first test sends (2026-10-22 19:08–19:57): "We don't have any
+tickets"; "Too many of the items are complete repeats"; "What do I have to do with this risk
+level?"; "What was fixed? … I have no idea what actually happened here"; and the standard for
+every item: "identify it to the best of our knowledge, provide what the risk is, and provide
+what the remediation is" — for business owners and the Command / Unimac IT team, who "just
+need a quick glance".
+
 WHAT THIS IS. Pure functions, no database and no network. run_alerter.py reads the same
-rows it always read (plus four small reads: each live site's rating now and at the start
-of the window, certificates about to expire, each host's previous deep scan, and the
-first remediation step of the findings it lists) and hands them here. This module sorts
-every part of the old email into three buckets a reader acts on:
+rows it always read (plus each live site's rating now and at the window's start,
+certificates about to expire with their real end date, each host's previous deep scan, and
+each listed finding's remediation, description and CVEs) and hands them here. The daily:
 
-    Do today        coverage gaps, CRITICAL / HIGH / MODERATE-HIGH new or regressed
+    headline        the day's job ("Today: renew the certificate on pm.unimacgraphics.com.")
+    Needs you today coverage gaps, CRITICAL / HIGH / MODERATE-HIGH new or regressed
                     findings, a firewall that stopped blocking, certificates <= 14 days
-    Worth a ticket  MODERATE new or regressed findings, findings confirmed again,
-                    ratings that went up, unrecognized block pages, new assets,
-                    assets that went dark
-    Off your plate  fixed findings, assets back online, a firewall that started blocking
+    This week       MODERATE new or regressed findings, findings confirmed again, sites
+                    that got riskier unexplained, unrecognized block pages, new or dark hosts
+    Fixed since     each real fix, saying what and where
+    yesterday
+    one plain line  minor (LOW) items by name; INFO is never mentioned
 
-LOW and INFO are counted on one quiet line, never listed. Findings are grouped BY
-PROBLEM across sites (same title -> one item naming its sites), the www. twin of a site
-counts as that site, and the header carries one bar: every live site by its rating.
+Every finding item says what we found, what it means, and the fix and who does it, in
+digest_words' plain words; one problem across sites is one item (www. folded into its
+site). Only what is known: "version not shown" rows are never listed, counted or
+mentioned, and do not set a site's level (SQL_SITE_RATINGS). No risk tally: where every site
+stands is the Monday weekly's.
 
-EMAIL-SAFE BY CONSTRUCTION. Tables, inline styles, bgcolor; no flex, no grid, no script.
-One <style> block for the bar's grow-in (Apple Mail plays it; Gmail and Outlook show the
-same design still) and it respects prefers-reduced-motion. The logo is an inline image
-(cid:brandlogo) that mailer.py attaches; the brand (name, colors, logo) is a data file per
-repo, scripts/alerter/brand/brand.json, so this code is identical in both repos.
+EMAIL-SAFE BY CONSTRUCTION. Tables, inline styles, bgcolor; no flex, no grid, no script; a
+fluid 640 px column that never runs off a phone; site names that never break mid-word. The
+logo is an inline image (cid:brandlogo) that mailer.py attaches; the brand (name, colors,
+logo) is a data file per repo, scripts/alerter/brand/brand.json, so this code is identical
+in both repos.
 """
 from __future__ import annotations
 
@@ -36,6 +46,8 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from html import escape, unescape
+
+import digest_words as dw_words
 
 try:
     from zoneinfo import ZoneInfo
@@ -65,6 +77,9 @@ BANDS = (
     ("unscanned", "not scanned yet", "#D9DEE5", "#2B3747"),
 )
 BAND_RANK = {k: i for i, (k, *_r) in enumerate(BANDS)}
+BAND_FILL_TEXT = {k: (fill, text) for k, _w, fill, text in BANDS}
+BAND_TITLE = {"critical": "Critical", "high": "High", "modhigh": "Moderate-high", "moderate": "Moderate",
+              "low": "Low", "clear": "All clear", "unscanned": "Not scanned yet"}
 SEV_STYLE = {  # (pill fill, pill text, card tint)
     "CRITICAL": ("#8B1A4A", "#FFFFFF", "#F9E8EF"),
     "HIGH": ("#C2410C", "#FFFFFF", "#FFF1E8"),
@@ -193,15 +208,38 @@ def band_counts(bands: dict) -> dict:
 RATED = ("critical", "high", "modhigh", "moderate", "low")
 
 
-def change_words(now_counts: dict, then_counts: dict) -> str:
-    """'Same as yesterday.' or 'Since yesterday: high 12 to 13, moderate 29 to 28.'
-    Only the rated bands are compared; never-scanned vs all-clear is bookkeeping."""
-    diffs = [(k, then_counts.get(k, 0), now_counts.get(k, 0)) for k in RATED
-             if then_counts.get(k, 0) != now_counts.get(k, 0)]
-    if not diffs:
-        return "Same as yesterday."
-    words = dict((k, w) for k, w, *_r in BANDS)
-    return "Since yesterday: " + ", ".join(f"{words[k]} {a} to {b}" for k, a, b in diffs) + "."
+def site_moves(now_b: dict, then_b: dict) -> list[tuple[str, str, list]]:
+    """[(band then, band now, [sites])] for every rated site whose band changed, riskier
+    moves first. A site that had no rating before is new, not a move."""
+    moves: dict = {}
+    for s_, b in now_b.items():
+        a = then_b.get(s_)
+        if a is None or a == b or a not in RATED or b not in RATED + ("clear",):
+            continue
+        moves.setdefault((a, b), []).append(s_)
+    out = [(a, b, sorted(v)) for (a, b), v in moves.items()]
+    out.sort(key=lambda t: (BAND_RANK[t[1]] > BAND_RANK[t[0]], -len(t[2]), BAND_RANK[t[1]]))
+    return out
+
+
+def change_words(now_counts: dict, then_counts: dict, now_b=None, then_b=None,
+                 since: str = "yesterday") -> str:
+    """'Since yesterday, 2 sites got riskier (Moderate to Moderate-high).' or 'No site's
+    risk level changed since yesterday.' Said by site, not by tally: "moderate 18 to 16"
+    left Howie asking whether sites got worse, better, or went dark (10-22)."""
+    if now_b is None or then_b is None:
+        diffs = [k for k in RATED if then_counts.get(k, 0) != now_counts.get(k, 0)]
+        return f"No site's risk level changed since {since}." if not diffs else ""
+    mv = site_moves(now_b, then_b)
+    if not mv:
+        return f"No site's risk level changed since {since}."
+    parts = []
+    for a, b, sites in mv:
+        n = len(sites)
+        verb = "got riskier" if BAND_RANK[b] < BAND_RANK[a] else "got safer"
+        who = sites[0] if n == 1 else f"{_n(n)} sites"
+        parts.append(f"{who} {verb} ({BAND_TITLE[a]} to {BAND_TITLE[b]})")
+    return f"Since {since}, " + "; ".join(parts) + "."
 
 
 def counts_words(counts: dict) -> str:
@@ -253,22 +291,36 @@ def first_step(remediation: str | None, limit: int = 200) -> str:
     return t
 
 
-def group_problems(rows, names, prev_deep=None, hints=None, window_start=None, tag=""):
+WHO_WORDS = {"it": "your IT team", "wordpress": "the company that runs your WordPress sites"}
+
+
+def group_problems(rows, names, prev_deep=None, hints=None, window_start=None, tag="",
+                   details=None):
     """Finding rows (finding_id, asset_id, title, severity, status, source, ts) ->
-    [item], one per problem, worst first. Each item: severity, title, sites (folded,
-    sorted), finding_ids, why (which check found it, and 'first deep scan since …' when
-    the host had not had one in DEEP_SCAN_GAP_DAYS), do (the first remediation step,
-    only when the problem is on ONE site: a step written for one host is not advice for
-    three), tag ('came back after being fixed' / 'confirmed by a second scan')."""
+    [item], one per problem, worst first, each in digest_words' plain words: what we found
+    (title), what it means (body), the fix (do) and who does it (who). Grouped by family, so
+    every advisory about one WordPress plugin is one item. `details` {finding_id:
+    (description, [cve])} lets a plugin advisory be judged: one whose affected range excludes
+    the version we saw is dropped (10-22: four of five Slider Revolution advisories did not
+    cover 6.7.58), and the ones that apply say what an attacker could do. "Version not
+    shown" rows are not passed here at all."""
     prev_deep = prev_deep or {}
     hints = hints or {}
+    details = details or {}
     groups: dict = {}
     for r in rows or []:
         fid, aid, title, sev = r[0], r[1], r[2], (r[3] or "").upper()
         src = r[5] if len(r) > 5 else None
-        g = groups.setdefault(problem_key(title), {
-            "severity": sev, "title": unescape(title or "").strip(), "sites": set(),
-            "assets": set(), "finding_ids": [], "sources": set(), "tag": tag,
+        adv = None
+        if dw_words.plugin_of(title):
+            desc, cves = details.get(fid, ("", []))
+            adv = dw_words.advisory(title, desc)
+            if adv["applies"] is False:
+                continue          # its own range excludes the version we saw
+            adv["cves"] = sorted(set(adv["cves"]) | set(cves or []))
+        g = groups.setdefault(dw_words.family_key(title), {
+            "severity": sev, "raw": unescape(title or "").strip(), "sites": set(),
+            "assets": set(), "finding_ids": [], "sources": set(), "tag": tag, "advs": [],
         })
         if SEV_ORDER.get(sev, 9) < SEV_ORDER.get(g["severity"], 9):
             g["severity"] = sev
@@ -276,10 +328,13 @@ def group_problems(rows, names, prev_deep=None, hints=None, window_start=None, t
         g["assets"].add(aid)
         g["finding_ids"].append(fid)
         g["sources"].add(src)
+        if adv is not None:
+            adv["site"] = site_of(aid, names)
+            g["advs"].append(adv)
     items = []
     for g in groups.values():
-        srcs = sorted({source_words(s) for s in g["sources"]})
-        why = "Found by the " + " and the ".join(srcs) if srcs else ""
+        w = dw_words.words(g["raw"], len(g["sites"]))
+        note = ""
         if any(source_words(s) == "deep scan" for s in g["sources"]) and window_start is not None:
             gaps = []
             for a in g["assets"]:
@@ -291,23 +346,87 @@ def group_problems(rows, names, prev_deep=None, hints=None, window_start=None, t
                 elif window_start - p >= timedelta(days=DEEP_SCAN_GAP_DAYS):
                     gaps.append(p)
             if gaps:
-                why += (", its first deep scan ever" if None in gaps
-                        else f", its first deep scan since {_day(min(gaps))}")
-        do = ""
-        if len(g["sites"]) == 1:
-            do = first_step(hints.get(g["finding_ids"][0], ""))
+                note = ("New because this was its first deep scan ever." if None in gaps else
+                        f"New because this was its first deep scan since {_day(min(gaps))}; "
+                        f"it may have been there a while.")
+        body, do, forward = w["why"], w["do"], ""
+        if g["advs"]:
+            body, do, forward = _plugin_words(g["advs"], sorted(g["sites"]), dw_words.plugin_of(g["raw"]))
+        if not do:
+            steps = {first_step(hints.get(f, "")) for f in g["finding_ids"]}
+            if len(steps) == 1:
+                do = steps.pop()
         items.append({
-            "kind": "finding", "severity": g["severity"], "title": g["title"],
-            "sites": sorted(g["sites"]), "finding_ids": g["finding_ids"],
-            "why": why + ("." if why else ""), "do": do, "tag": g["tag"],
+            "kind": "finding", "severity": g["severity"], "title": w["title"], "family": w["key"],
+            "body": body, "sites": sorted(g["sites"]), "finding_ids": g["finding_ids"],
+            "why": note, "do": do, "who": w.get("who", "it"), "forward": forward,
+            "tag": g["tag"], "fixed_words": w["fixed"],
+            "headline": w.get("headline", "").replace("{where}", where_words(sorted(g["sites"]))),
         })
     items.sort(key=lambda i: (SEV_ORDER.get(i["severity"], 9), -len(i["sites"]), i["title"]))
     return items
 
 
+def where_words(sites: list) -> str:
+    """'pm.unimacgraphics.com' / 'bitec and highcom (prodexlabs.com)' / 'five sites' — short
+    enough for a headline."""
+    if len(sites) == 1:
+        return sites[0]
+    if len(sites) > 3:
+        return f"{_n(len(sites))} sites"
+    doms = {".".join(x.split(".")[-2:]) for x in sites}
+    if len(doms) == 1 and all(x.count(".") >= 2 for x in sites):
+        d = doms.pop()
+        short = [x[: -(len(d) + 1)] for x in sites]
+        return (" and ".join(short) if len(short) == 2 else f"{short[0]}, {short[1]} and {short[2]}") + f" ({d})"
+    return " and ".join(sites) if len(sites) == 2 else f"{sites[0]}, {sites[1]} and {sites[2]}"
+
+
+def _vkey(v: str) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", v or ""))
+
+
+def _plugin_words(advs: list, sites: list, plugin: dict) -> tuple[str, str, str]:
+    """(what it means, the fix, a paragraph to forward) for one WordPress plugin's advisories
+    that apply. The fix is the newest fixed version any of them names, or removal when one
+    has no fix at all."""
+    name = plugin["name"]
+    risks = []
+    for a in advs:
+        if a["risk"] and a["risk"] not in risks:
+            risks.append(a["risk"])
+    fixes = sorted({a["fixed_in"] for a in advs if a["fixed_in"]}, key=_vkey)
+    unfixed = any(a["fixed_in"] is None for a in advs)
+    cves = sorted({c for a in advs for c in a["cves"]})
+    seen = sorted({a["seen"] for a in advs if a["seen"]}, key=_vkey)
+    body = (" ".join(risks[:2]) if risks else
+            "It has a published security flaw, and nobody is fixing it: there is no patched version." if unfixed else
+            "It has a published security flaw, and a fixed version exists.")
+    if unfixed:
+        do = f"Remove {name}, or replace it with a maintained plugin. There is no fixed version to update to."
+    else:
+        do = f"Update {name} to version {fixes[-1]} or later."
+    where = ", ".join(sites)
+    ver = f" (version {' / '.join(seen)})" if seen else ""
+    forward = (f"Our security scanning found {name}{ver} on {where}. It has a published security flaw"
+               + (f" ({', '.join(cves)})" if cves else "") + ". "
+               + (risks[0] + " " if risks else "")
+               + ("There is no fixed version: please remove the plugin or replace it with a maintained one."
+                  if unfixed else f"Please update {name} to {fixes[-1]} or later and let us know when it's done."))
+    return body, do, forward
+
+
 def cert_expiry(row) -> datetime | None:
-    """SQL_CERTS_EXPIRING row (asset_id, title, last_observed_at) -> when it expires:
-    the '(N)' days the TLS check wrote, counted from when it last looked."""
+    """SQL_CERTS_EXPIRING row (asset_id, title, last_observed_at[, not_after]) -> when it
+    expires. The certificate's own end date when the deep scan recorded it ('2026-10-26
+    17:53', UTC); otherwise the '(N)' whole days the TLS check wrote, counted from when it
+    looked — which can land a day early (pm.unimacgraphics.com: "(9)" on Oct 16 read as
+    Sunday; the certificate ends Monday 1:53 PM)."""
+    if len(row) > 3 and row[3]:
+        try:
+            return datetime.strptime(str(row[3]).strip()[:16], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
     m = re.search(r"\((\d+)\)\s*$", (row[1] or "") if len(row) > 1 else "")
     if not m or len(row) < 3 or row[2] is None:
         return None
@@ -345,7 +464,7 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
                 baseline, came_back=None, fixed=None, enforcement_flips=None,
                 unrecognized_pages=None, sites=None, certs=None, prev_deep=None,
                 hints=None, brand=None, stale_words=None, stale_intro="",
-                stale_note="") -> dict:
+                stale_note="", details=None) -> dict:
     """Everything the two renderers need, decided once. PURE."""
     brand = brand or dict(DEFAULT_BRAND)
     came_back = came_back or []
@@ -362,6 +481,12 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
     changed = _dedupe(list(regressed or []), seen)          # came back first: their tag wins
     created = _dedupe(list(new_findings or []), seen)
     reconfirmed = _dedupe(list(confirmed or []), seen)
+
+    # Only what is known (Howie, 10-22: "There are risks and there are things that are
+    # known, that's all"): "Runs X, version not shown" is not listed, counted or mentioned.
+    changed = [r for r in changed if not dw_words.is_guess(r[2])]
+    created = [r for r in created if not dw_words.is_guess(r[2])]
+    reconfirmed = [r for r in reconfirmed if not dw_words.is_guess(r[2])]
 
     def pick(rows, sevs):
         return [r for r in rows if (r[3] or "").upper() in sevs]
@@ -394,59 +519,96 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
 
     # 2. findings that need you today
     do += group_problems(pick(changed, DO_TODAY_SEVERITIES), names, prev_deep, hints,
-                         window_start, tag="Came back after being fixed")
+                         window_start, tag="Came back after being fixed", details=details)
     do += group_problems(pick(created, DO_TODAY_SEVERITIES), names, prev_deep, hints,
-                         window_start)
+                         window_start, details=details)
 
-    # 3. a firewall that stopped blocking
+    # 3. a web firewall that stopped blocking — said once, for all its sites, and not at
+    # all for a site whose firewall finding is already on the list (the 10-22 Prodex test
+    # send said "not blocking" three times about two sites).
+    on_list = {x for i in do if str(i.get("family", "")).startswith("waf") for x in i.get("sites", [])}
+    stopped_rows = {}
     for r in enforcement_flips:
-        if not r[4]:
-            before = f" The test before, {_day(r[6])}, was blocked." if r[6] is not None else ""
-            do.append({"kind": "enforcement", "severity": "HIGH",
-                       "title": f"Something in front of {r[0]} stopped blocking",
-                       "body": f"The deep scan's harmless attack-style test strings reached the site "
-                               f"on {_day(r[3])}.{before} Sentry names no product here: it only "
-                               f"measures whether something turned the strings away.",
-                       "sites": [r[0]], "why": "", "do": "", "tag": ""})
+        if not r[4] and site_of(r[0], names) not in on_list:
+            stopped_rows.setdefault(site_of(r[0], names), r)
+    stopped = sorted(stopped_rows)
+    if stopped:
+        it = dw_words._it(len(stopped))
 
-    # 4. certificates about to expire
+        def went(r):
+            return (f"our harmless test attacks got through on {_day(r[3])}"
+                    + (f"; the test before, {_day(r[6])}, was turned away" if r[6] is not None else ""))
+        one = stopped_rows[stopped[0]]
+        do.append({"kind": "enforcement", "severity": "HIGH",
+                   "title": (f"The web firewall on {stopped[0]} stopped blocking" if len(stopped) == 1 else
+                             f"Web firewalls stopped blocking on {_n(len(stopped))} sites"),
+                   "body": ((went(one)[0].upper() + went(one)[1:] + ". ") if len(stopped) == 1 else "")
+                           + "Either it was switched off or someone told it to just watch. (We measure "
+                             "whether something turns our test attacks away; we don't name a product.)",
+                   "lines": [] if len(stopped) == 1 else [f"{x}: {went(stopped_rows[x])}" for x in stopped],
+                   "sites": stopped, "who": "it",
+                   "do": f"Check that the firewall in front of {it['it']} is on and set to block.",
+                   "why": "", "tag": "", "family": "waf-stopped",
+                   "headline": f"check the web firewall in front of {where_words(stopped)} is on and blocking"})
+
+    # 4. certificates about to expire — one item, however many (two near-identical cards
+    # for ftp. and pm. on 10-22 read as the same thing twice)
+    soon = []
     for r in certs or []:
         left = cert_days_left(r, window_end)
         if left is None or left > CERT_DAYS:
             continue
-        expires = local_time(cert_expiry(r), brand)
-        on = f"{expires:%A}, {_day(expires)}"
-        if left < 0:
-            body = (f"It expired {on}, by the deep scan's count on {_day(r[2])}. Anyone "
-                    f"connecting to it securely now gets a certificate error.")
+        soon.append((left, r[0], local_time(cert_expiry(r), brand)))
+    if soon:
+        soon.sort()
+        def when(left, exp):
+            on = f"{exp:%A}, {_day(exp)}"
+            return (f"expired {on}" if left < 0 else "expires today" if left == 0 else
+                    f"expires {on} ({left} day{'s' if left != 1 else ''})")
+        first = soon[0]
+        if len(soon) == 1:
+            title = f"Renew the certificate on {first[1]}"
+            body = (f"It {when(first[0], first[2])}. After that, every browser that visits gets a "
+                    f"full-page security warning, which is a great way to lose a customer.")
+            lines = []
         else:
-            when = "today" if left == 0 else f"in {left} day{'s' if left != 1 else ''}, {on}"
-            body = (f"It expires {when}, by the deep scan's count on {_day(r[2])}. After that, "
-                    f"anyone connecting to it securely gets a certificate error.")
-        do.append({"kind": "cert", "severity": "HIGH" if left <= 3 else "MODERATE-HIGH",
-                   "title": f"Renew the certificate on {r[0]}", "body": body,
-                   "sites": [r[0]], "why": "", "do": "", "tag": ""})
+            title = f"Renew {_n(len(soon))} certificates, the first by {first[2]:%A}"
+            body = ("After each one lapses, every browser that visits gets a full-page security "
+                    "warning. They don't renew themselves out of guilt.")
+            lines = [f"{h}: {when(l, e)}" for l, h, e in soon]
+        do.append({"kind": "cert", "severity": "HIGH" if first[0] <= 3 else "MODERATE-HIGH",
+                   "title": title, "body": body, "lines": lines, "who": "it",
+                   "do": ("Install a renewed certificate before it lapses. If the same certificate covers other "
+                          "servers (a *.yourdomain certificate usually does), install the new one on all of them."),
+                   "sites": [h for _l, h, _e in soon], "why": "", "tag": ""})
 
-    # Worth a ticket
+    # This week (was "Worth a ticket" — Howie, 10-22: "We don't have any tickets")
     ticket += group_problems(pick(changed, TICKET_SEVERITIES), names, prev_deep, hints,
-                             window_start, tag="Came back after being fixed")
+                             window_start, tag="Came back after being fixed", details=details)
     ticket += group_problems(pick(created, TICKET_SEVERITIES), names, prev_deep, hints,
-                             window_start)
+                             window_start, details=details)
     ticket += group_problems(pick(reconfirmed, DO_TODAY_SEVERITIES + TICKET_SEVERITIES),
                              names, prev_deep, hints, window_start,
-                             tag="Confirmed by a second scan")
+                             tag="Confirmed by a second scan", details=details)
     # Ratings that went up: only the sites today's list does not already explain (the
     # header bar says "critical 0 to 4"; repeating each site's reason under the item that
     # caused it is the noise this redesign removes).
     explained = {s for i in do for s in i.get("sites", [])}
-    rose = [r for r in high_risk or [] if site_of(r[0], names) not in explained]
+    def _top(r):
+        t = unescape(r[4] or "").split("top: ", 1)
+        return t[1] if len(t) == 2 else ""
+    rose = [r for r in high_risk or [] if site_of(r[0], names) not in explained
+            and not dw_words.is_guess(_top(r))]
     if rose:
         lines = []
         for r in rose:
             top = unescape(r[4] or "").split("top: ", 1)
-            lines.append(f"{site_of(r[0], names)} is now {SEV_WORD.get((r[3] or '').upper(), r[3]).lower()}"
-                         + (f": {top[1]}" if len(top) == 2 else ""))
-        ticket.append({"kind": "rating", "severity": "", "title": "Ratings that went up",
+            lines.append(f"{site_of(r[0], names)} is now {SEV_WORD.get((r[3] or '').upper(), r[3])}"
+                         + (f", because of: {dw_words.words(top[1])['title']}" if len(top) == 2 else ""))
+        ticket.append({"kind": "rating", "severity": "",
+                       "title": ("A site got riskier" if len(rose) == 1 else f"{_n(len(rose)).capitalize()} sites got riskier"),
+                       "body": "Its risk level is its worst open problem, and that got worse." if len(rose) == 1 else
+                               "A site's risk level is its worst open problem; on these, that got worse.",
                        "lines": lines, "sites": [], "why": "", "do": "", "tag": ""})
     for r in unrecognized_pages:
         ticket.append({"kind": "blockpage", "severity": "",
@@ -472,28 +634,39 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
                        "do": "", "tag": ""})
 
     # Off your plate
-    fixed_problems = [r for r in fixed if (r[3] or "").upper() != "INFO"]
-    if fixed_problems:
-        groups = group_problems(fixed_problems, names)
-        done.append({"kind": "fixed", "title": f"{len(fixed_problems)} finding"
-                     f"{'s' if len(fixed_problems) != 1 else ''} closed",
-                     "lines": [f"{g['title']} ({', '.join(g['sites'])})" for g in groups[:8]]
-                     + ([f"and {len(groups) - 8} more"] if len(groups) > 8 else [])})
+    # a guess that went away was never listed, so its going is not news either
+    fixed_problems = [r for r in fixed if (r[3] or "").upper() not in ("INFO", "LOW")
+                      and not dw_words.is_guess(r[2])]
+    for g in group_problems(fixed_problems, names)[:8]:
+        what = g["fixed_words"]
+        line = (f"{what[0].upper() + what[1:]} on {', '.join(g['sites'])}." if what != "fixed" else
+                f"Fixed on {', '.join(g['sites'])}: {g['title']}.")
+        done.append({"kind": "fixed", "title": line, "lines": []})
     if came_back:
         done.append({"kind": "back", "title": f"{len(came_back)} host{'s' if len(came_back) != 1 else ''} answering again",
                      "lines": [f"{r[0]}: stopped answering {_day(r[4])}, answering again {_day(r[3])}"
                                for r in came_back]})
+    started_rows = {}
     for r in enforcement_flips:
         if r[4]:
-            how = (f"first test, {_day(r[3])}" if r[5] is None else
-                   f"{_day(r[3])}; the test before, {_day(r[6])}, got through" if r[6] is not None else _day(r[3]))
-            done.append({"kind": "blocking", "title": f"Something in front of {r[0]} is blocking",
-                         "lines": [f"It turned away the attack-style test strings ({how}). "
-                                   f"Sentry names no product here."]})
+            started_rows.setdefault(site_of(r[0], names), r)
+    if started_rows:
+        def how(r):
+            if r[5] is None:
+                return f"turned our test attacks away on {_day(r[3])}, the first time we tested"
+            return (f"turned our test attacks away on {_day(r[3])}"
+                    + (f"; the test before, {_day(r[6])}, got through" if r[6] is not None else ""))
+        started = sorted(started_rows)
+        done.append({"kind": "blocking",
+                     "title": (f"A web firewall started blocking on {started[0]}" if len(started) == 1 else
+                               f"Web firewalls started blocking on {_n(len(started))} sites"),
+                     "lines": [f"{x}: {how(started_rows[x])}." for x in started]})
 
     # The quiet line
-    low = len(pick(created + changed, ("LOW",)))
+    low_rows = pick(created + changed, ("LOW",))
+    low = len(low_rows)
     info = len(pick(created + changed, ("INFO",)))
+    minor = [(site_of(r[1], names), dw_words.words(r[2])["title"]) for r in low_rows]
 
     # The bar
     now_b, then_b = site_bands(site_rows)
@@ -505,9 +678,11 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
         "local_end": local_time(window_end, brand),
         "do": do, "ticket": ticket, "done": done, "low": low, "info": info,
         "sites_total": len(now_b), "counts": now_c, "counts_then": then_c,
-        "change": change_words(now_c, then_c) if now_b else "",
+        "bands_now": now_b, "bands_then": then_b,
+        "change": change_words(now_c, then_c, now_b, then_b, "yesterday") if now_b else "",
         "degraded": bool(stale_assets or canary_violations),
-        "headline": headline(n_do, n_ticket),
+        "headline": headline(n_do, n_ticket, do, ticket),
+        "minor": minor,
         "baseline": baseline or {},
     }
 
@@ -519,31 +694,63 @@ def _n(n: int) -> str:
     return _WORDS[n] if 0 <= n < len(_WORDS) else str(n)
 
 
-def headline(n_do: int, n_ticket: int) -> str:
+def open_words(bl: dict) -> str:
+    """'4 critical, 16 high, 187 moderate, 406 low' — moderate-high only when there is one."""
+    parts = [f"{bl.get('critical_open', 0)} critical", f"{bl.get('high_open', 0)} high"]
+    if bl.get("mod_high_open"):
+        parts.append(f"{bl['mod_high_open']} moderate-high")
+    parts += [f"{bl.get('moderate_open', 0)} moderate", f"{bl.get('low_open', 0)} low"]
+    return ", ".join(parts)
+
+
+def minor_words(minor: list) -> str:
+    """'Also found today, no action needed: OCSP stapling not enabled (myorders.unimacgraphics.com).'"""
+    if not minor:
+        return ""
+    if len(minor) <= 3:
+        def one(s_, t):
+            if t.startswith("its "):
+                return f"{s_}'s {t[4:]}"
+            if t.startswith("it "):
+                return f"{s_} {t[3:]}"
+            return f"{s_}: {t}"
+        return "Also found today, minor, no action needed: " + "; ".join(one(s_, t) for s_, t in minor) + "."
+    return f"Also found today: {len(minor)} minor issues, no action needed. They're listed in the portal."
+
+
+def headline(n_do: int, n_ticket: int, do=None, ticket=None) -> str:
+    """The first thing read says what to do. One item: name it (Howie, 10-22, on "One thing
+    for today. That's it." above a block of numbers: "What do I have to do with this?")."""
+    def first(items):
+        t = (items[0].get("headline") or items[0]["title"]) if items else ""
+        return t[0].lower() + t[1:] if t and not t[1:2].isupper() else t
+    if n_do == 1 and do:
+        h = f"Today: {first(do)}."
+        return h + (f" Plus {_n(n_ticket)} for this week." if n_ticket else "")
     if n_do:
-        h = f"Your list for today: {_n(n_do)} check{'s' if n_do != 1 else ''}"
-        if n_ticket:
-            h += f", {_n(n_ticket)} for a ticket"
-        return h + "."
+        return (f"{_n(n_do).capitalize()} thing{'s' if n_do != 1 else ''} for today"
+                + (f", {_n(n_ticket)} for this week." if n_ticket else "."))
+    if n_ticket == 1 and ticket:
+        return f"Nothing urgent today. This week: {first(ticket)}."
     if n_ticket:
-        return (f"Nothing urgent today. {_n(n_ticket).capitalize()} "
-                f"thing{'s' if n_ticket != 1 else ''} for a ticket.")
+        return (f"Nothing urgent today. {_n(n_ticket).capitalize()} thing{'s' if n_ticket != 1 else ''} "
+                f"for this week.")
     return "Nothing needs you today."
 
 
 def subject(model: dict, product_name: str) -> str:
-    """'[COMMANDsentry] Command, Thursday: 2 checks and 1 ticket'. The [name] prefix is
-    kept so mail filters on it keep working; '(!)' and the coverage gap lead when Sentry
-    has lost sight of hosts."""
+    """'[PRODEXsentry] Prodex, Thursday: 1 for today, 2 this week'. The [name] prefix is
+    kept so mail filters on it keep working; '(!) Coverage gap.' leads when Sentry has
+    lost sight of hosts."""
     b = model["brand"]
     day = f"{model['local_end']:%A}"
     n_do, n_ticket = len(model["do"]), len(model["ticket"])
     if n_do and n_ticket:
-        what = f"{n_do} check{'s' if n_do != 1 else ''} and {n_ticket} ticket{'s' if n_ticket != 1 else ''}"
+        what = f"{n_do} for today, {n_ticket} this week"
     elif n_do:
-        what = f"{n_do} check{'s' if n_do != 1 else ''}"
+        what = f"{n_do} for today"
     elif n_ticket:
-        what = f"nothing urgent, {n_ticket} ticket{'s' if n_ticket != 1 else ''}"
+        what = f"nothing urgent, {n_ticket} this week"
     else:
         what = "nothing needs you"
     prefix = f"[{product_name}] " if product_name else ""
@@ -578,6 +785,52 @@ def _ring(color: str, filled: bool = False) -> str:
             f'border-radius:12px;border:2px solid {color};"></div></td>')
 
 
+def chips(sites, limit: int = 12) -> str:
+    """Site names as pills that wrap between names, never inside one (Howie, 10-22: it
+    'wraps around in the middle of words')."""
+    out = "".join(
+        f'<span style="display:inline-block;white-space:nowrap;margin:6px 6px 0 0;font-family:{FONT};font-size:13px;'
+        f'font-weight:600;color:{INK};background:#FFFFFF;border:1px solid #D6DEE8;border-radius:999px;'
+        f'padding:3px 10px;">{escape(s)}</span>' for s in list(sites)[:limit])
+    if len(sites) > limit:
+        out += f'<span style="font-family:{FONT};font-size:13px;color:{MUTED};"> and {len(sites) - limit} more</span>'
+    return f'<div style="margin-top:2px;">{out}</div>'
+
+
+def band_chip(band: str, size: int = 12) -> str:
+    fill, text = BAND_FILL_TEXT[band]
+    return (f'<span style="display:inline-block;white-space:nowrap;background:{fill};color:{text};font-family:{FONT};'
+            f'font-size:{size}px;font-weight:700;line-height:18px;padding:1px 8px;border-radius:4px;">'
+            f'{escape(BAND_TITLE[band])}</span>')
+
+
+def tally(counts: dict, then: dict | None = None, since: str = "", on_dark: bool = True,
+          brand: dict | None = None) -> str:
+    """Every live site, counted by risk level, each box labeled (Howie, 10-22, on the bar:
+    "there's no legend. I have no idea what it means"). With `then`, each box also says
+    what it was. Boxes are table cells: they shrink on a phone, never spill off it."""
+    cells = []
+    for k, _w, fill, text in BANDS:
+        n, was = counts.get(k, 0), (then or {}).get(k, 0)
+        if not n and not was:
+            continue
+        sub = ""
+        if then is not None:
+            sub = (f'<div style="font-size:11px;line-height:14px;opacity:.85;white-space:nowrap;">'
+                   f'{"no change" if n == was else f"was {was}"}</div>')
+        cells.append(
+            f'<td valign="top" style="padding:0 3px 0 0;"><div style="background:{fill};color:{text};border-radius:8px;'
+            f'padding:8px 6px 7px;text-align:center;font-family:{FONT};">'
+            f'<div style="font-family:{DISPLAY};font-size:24px;line-height:26px;font-weight:800;">{n}</div>'
+            f'<div style="font-size:12px;line-height:15px;font-weight:700;">{escape(BAND_TITLE[k])}</div>{sub}</div></td>')
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+            f'style="table-layout:fixed;"><tr>{"".join(cells)}</tr></table>')
+
+
+RISK_LEVEL_WORDS = ("Each site's risk level is the worst problem we can see on it right now. "
+                    "Riskier means that worst problem got worse; safer means it got better or went away.")
+
+
 def _card(item: dict, portal: str) -> str:
     sev = item.get("severity") or ""
     fill, _t, tint = SEV_STYLE.get(sev, ("#0A4595", "#FFFFFF", "#EEF3FA"))
@@ -593,23 +846,33 @@ def _card(item: dict, portal: str) -> str:
     if item.get("tag"):
         parts.append(_p(escape(item["tag"]) + ".", MUTED, 13, "font-weight:600;"))
     if item.get("body"):
-        parts.append(_p(escape(item["body"]), "#2B3747"))
-    if item.get("sites") and item.get("kind") == "finding":
-        chips = "".join(
-            f'<span style="display:inline-block;margin:6px 6px 0 0;font-family:{FONT};font-size:13px;'
-            f'font-weight:600;color:{INK};background:#FFFFFF;border:1px solid #D6DEE8;border-radius:999px;'
-            f'padding:4px 11px;">{escape(s)}</span>' for s in item["sites"][:12])
-        more = (f'<span style="font-family:{FONT};font-size:13px;color:{MUTED};"> and '
-                f'{len(item["sites"]) - 12} more</span>' if len(item["sites"]) > 12 else "")
-        parts.append(f'<div style="margin-top:4px;">{chips}{more}</div>')
+        lead = '<span style="font-weight:700;">What it means:</span> ' if item.get("kind") == "finding" else ""
+        parts.append(_p(lead + escape(item["body"]), "#2B3747"))
+    if item.get("sites") and item.get("kind") in ("finding", "enforcement"):
+        parts.append(chips(item["sites"]))
+    for label, sites in item.get("groups", []):
+        parts.append(_p(f'<span style="font-weight:700;">{escape(label)}</span>', INK, 14, "margin-top:10px;")
+                     + chips(sites))
     if item.get("lines"):
-        parts.append("".join(_p(escape(l), "#2B3747", 14, "margin-top:4px;") for l in item["lines"][:12]))
+        def _line(l):
+            head, sep, rest = l.partition(": ")
+            return (f'<span style="font-weight:700;">{escape(head)}</span>: {escape(rest)}' if sep and " " not in head
+                    else escape(l))
+        parts.append("".join(_p(_line(l), "#2B3747", 14, "margin-top:4px;") for l in item["lines"][:12]))
         if len(item["lines"]) > 12:
             parts.append(_p(f"and {len(item['lines']) - 12} more", MUTED, 13))
     if item.get("note"):
         parts.append(_p(escape(item["note"]), MUTED, 13))
     if item.get("do"):
-        parts.append(_p(f'<span style="font-weight:700;">Do:</span> {escape(item["do"])}'))
+        who = WHO_WORDS.get(item.get("who") or "", "")
+        label = f"The fix, for {who}:" if who and item.get("kind") in ("finding", "cert", "enforcement") else "The fix:"
+        parts.append(_p(f'<span style="font-weight:700;">{escape(label)}</span> {escape(item["do"])}', INK, 15,
+                        "margin-top:10px;"))
+    if item.get("forward"):
+        parts.append(f'<div style="margin-top:10px;padding:10px 12px;background:#FFFFFF;border:1px dashed #C9D3E0;'
+                     f'border-radius:8px;font-family:{FONT};font-size:13px;line-height:1.5;color:#2B3747;">'
+                     f'<div style="font-weight:700;color:{INK};margin-bottom:2px;">Ready to forward to them:</div>'
+                     f'{escape(item["forward"])}</div>')
     if item.get("why"):
         parts.append(_p(escape(item["why"]), MUTED, 13))
     return (f'<tr><td class="px" style="padding:0 32px 12px;"><table role="presentation" width="100%" cellpadding="0" '
@@ -625,28 +888,6 @@ def _done_row(item: dict) -> str:
             f'cellspacing="0" border="0"><tr>{_ring(GOOD, filled=True)}<td valign="top" style="padding-left:12px;">'
             f'<div style="font-family:{FONT};font-size:15px;line-height:1.5;font-weight:700;color:{INK};">'
             f'{escape(item["title"])}</div>{lines}</td></tr></table></td></tr>')
-
-
-def _bar(model: dict) -> str:
-    c, total, b = model["counts"], model["sites_total"], model["brand"]
-    if not total:
-        return ""
-    cells, delay = [], 0.1
-    for k, _w, fill, _t in BANDS:
-        n = c.get(k, 0)
-        if not n:
-            continue
-        pct = max(1, round(100 * n / total))
-        cells.append(f'<td width="{pct}%" style="padding:0 1px 0 0;"><div class="seg" style="height:22px;'
-                     f'background:{fill};border-radius:4px;animation-delay:{delay:.2f}s;"></div></td>')
-        delay += 0.12
-    legend = (f'<span style="color:{b["band_text"]};font-weight:700;">{total} live '
-              f'site{"s" if total != 1 else ""}:</span> {escape(counts_words(c))}. '
-              f'{escape(model["change"])}')
-    return (f'<tr><td colspan="2" class="px" style="padding:0 32px 26px;"><table role="presentation" width="100%" cellpadding="0" '
-            f'cellspacing="0" border="0"><tr>{"".join(cells)}</tr></table>'
-            f'<div style="margin-top:8px;font-family:{FONT};font-size:13px;line-height:1.5;color:{b["band_muted"]};">'
-            f'{legend}</div></td></tr>')
 
 
 def render_html(model: dict, *, portal_url: str = "", product_name: str = "") -> str:
@@ -669,22 +910,21 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
         f'<tr><td colspan="2" class="px" style="padding:20px 32px 22px;"><h1 style="margin:0;font-family:{DISPLAY};'
         f'font-size:36px;line-height:1.06;font-weight:800;letter-spacing:-0.02em;color:{b["band_text"]};">'
         f'{escape(model["headline"])}</h1></td></tr>'
-        f'{_bar(model)}</table></td></tr>')
+        f'</table></td></tr>')
     if model["do"]:
-        rows.append(_h2("Do today"))
+        rows.append(_h2("Needs you today"))
         rows += [_card(i, portal) for i in model["do"]]
     if model["ticket"]:
-        rows.append(_h2("Worth a ticket"))
+        rows.append(_h2("This week"))
         rows += [_card(i, portal) for i in model["ticket"]]
     if model["done"]:
-        rows.append(_h2("Off your plate"))
+        rows.append(_h2("Fixed since yesterday"))
         rows += [_done_row(i) for i in model["done"]]
     quiet = []
-    if model["low"] or model["info"]:
-        quiet.append(f'Also new: {model["low"]} low and {model["info"]} informational '
-                     f'item{"s" if model["info"] != 1 else ""}, listed in the portal.')
+    if model.get("minor"):
+        quiet.append(minor_words(model["minor"]))
     if not (model["do"] or model["ticket"] or model["done"]):
-        quiet.append("Every scan since yesterday came back with nothing new.")
+        quiet.append("Every scan since yesterday came back with nothing that needs anyone.")
     if quiet:
         rows.append(f'<tr><td class="px" style="padding:18px 32px 0;">{"".join(_p(escape(q), MUTED, 14) for q in quiet)}</td></tr>')
     if portal:
@@ -694,15 +934,8 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
             f'<a href="{escape(portal)}" style="display:inline-block;padding:12px 18px;font-family:{FONT};'
             f'font-size:15px;font-weight:600;color:#FFFFFF;text-decoration:none;">Open today\'s report</a>'
             f'</td></tr></table></td></tr>')
-    bl = model["baseline"]
-    footer = f"Sent by {escape(product_name or b['short_name'])} at {_clock(end)}."
-    if bl:
-        stale = bl.get("problems_stale_30d") or 0
-        footer = (f"Open across {escape(b['short_name'])} right now: {bl.get('critical_open', 0)} critical, "
-                  f"{bl.get('high_open', 0)} high, {bl.get('moderate_open', 0)} moderate, "
-                  f"{bl.get('low_open', 0)} low"
-                  + (f"; {stale} not re-checked in 30+ days" if stale else "")
-                  + ". " + footer)
+    footer = (f"Sent by {escape(product_name or b['short_name'])} at {_clock(end)}. "
+              f"Where every site stands, and why, comes in the weekly review on Monday.")
     rows.append(f'<tr><td bgcolor="#F4F7FB" class="px" style="background:#F4F7FB;border-radius:0 0 14px 14px;padding:14px 32px;'
                 f'font-family:{FONT};font-size:12px;line-height:1.5;color:{MUTED};">{footer}</td></tr>')
 
@@ -718,8 +951,8 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
 </style></head>
 <body style="margin:0;padding:0;background:{PAGE};">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{PAGE}" style="background:{PAGE};">
-<tr><td align="center" style="padding:24px 12px 32px;">
-<table role="presentation" width="680" cellpadding="0" cellspacing="0" border="0" bgcolor="#FFFFFF" style="width:100%;max-width:680px;background:#FFFFFF;border-radius:14px;">
+<tr><td align="center" style="padding:20px 8px 28px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#FFFFFF" style="width:100%;max-width:640px;background:#FFFFFF;border-radius:14px;">
 {"".join(rows)}
 </table>
 </td></tr></table>
@@ -730,10 +963,7 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
 def render_text(model: dict, *, portal_url: str = "", product_name: str = "") -> str:
     b, end = model["brand"], model["local_end"]
     out = [f"{product_name or b['short_name']} — {b['short_name']}, {end:%A} {end:%B} {end.day}, {_clock(end)}", "",
-           model["headline"]]
-    if model["sites_total"]:
-        out.append(f"{model['sites_total']} live sites: {counts_words(model['counts'])}. {model['change']}")
-    out.append("")
+           model["headline"], ""]
 
     def block(title, items):
         if not items:
@@ -745,39 +975,41 @@ def render_text(model: dict, *, portal_url: str = "", product_name: str = "") ->
             if i.get("tag"):
                 out.append(f"      {i['tag']}.")
             if i.get("body"):
-                out.append(f"      {i['body']}")
-            if i.get("sites") and i.get("kind") == "finding":
+                out.append(f"      {'What it means: ' if i.get('kind') == 'finding' else ''}{i['body']}")
+            if i.get("sites") and i.get("kind") in ("finding", "enforcement"):
                 out.append(f"      Sites: {', '.join(i['sites'])}")
+            for label, sites in i.get("groups", []):
+                out.append(f"      - {label}: {', '.join(sites)}")
             for l in i.get("lines", [])[:20]:
                 out.append(f"      - {l}")
             if i.get("note"):
                 out.append(f"      {i['note']}")
             if i.get("do"):
-                out.append(f"      Do: {i['do']}")
+                who = WHO_WORDS.get(i.get("who") or "", "")
+                out.append(f"      The fix{', for ' + who if who and i.get('kind') in ('finding', 'cert', 'enforcement') else ''}: {i['do']}")
+            if i.get("forward"):
+                out.append(f"      Ready to forward: {i['forward']}")
             if i.get("why"):
                 out.append(f"      {i['why']}")
-            if i.get("finding_ids"):
+            if i.get("finding_ids"):     # plaintext keeps the ids: it is what gets grepped (152 P2)
                 out.append(f"      ({', '.join(i['finding_ids'][:6])}"
                            f"{', …' if len(i['finding_ids']) > 6 else ''})")
         out.append("")
 
-    block("Do today", model["do"])
-    block("Worth a ticket", model["ticket"])
+    block("Needs you today", model["do"])
+    block("This week", model["ticket"])
     if model["done"]:
-        out.append("OFF YOUR PLATE")
+        out.append("FIXED SINCE YESTERDAY")
         for i in model["done"]:
             out.append(f"  [x] {i['title']}")
             for l in i.get("lines", [])[:10]:
                 out.append(f"      - {l}")
         out.append("")
-    if model["low"] or model["info"]:
-        out.append(f"Also new: {model['low']} low and {model['info']} informational items, listed in the portal.")
-    bl = model["baseline"]
-    if bl:
-        out.append(f"Open across {b['short_name']} right now: {bl.get('critical_open', 0)} critical, "
-                   f"{bl.get('high_open', 0)} high, {bl.get('moderate_open', 0)} moderate, {bl.get('low_open', 0)} low"
-                   + (f"; {bl['problems_stale_30d']} not re-checked in 30+ days" if bl.get("problems_stale_30d") else "")
-                   + ".")
+    if model.get("minor"):
+        out.append(minor_words(model["minor"]))
+    if not (model["do"] or model["ticket"] or model["done"]):
+        out.append("Every scan since yesterday came back with nothing that needs anyone.")
     if portal_url:
         out.append(f"Open today's report: {portal_url.rstrip('/')}")
+    out.append(f"Sent at {_clock(end)}. Where every site stands, and why, comes in the weekly review on Monday.")
     return "\n".join(out)
