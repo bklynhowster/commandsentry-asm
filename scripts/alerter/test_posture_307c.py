@@ -140,7 +140,7 @@ def test_old_five_key_baseline_still_renders():
 def test_links_and_footer_go_to_the_portal():
     html, _ = _render(new_findings=[HIGH, INFO])
     assert 'href="https://portal.example/findings/F-H"' in html
-    assert 'href="https://portal.example"' in html and "Open today's report" in html
+    assert 'href="https://portal.example"' in html and "Open the portal" in html and "Open today's report" not in html  # job 3s: it opens the portal
     assert "findings?asset=" not in html
     assert "Supabase" not in html
     src = inspect.getsource(ra.main)

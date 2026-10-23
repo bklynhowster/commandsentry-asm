@@ -48,6 +48,7 @@ from datetime import datetime, timedelta, timezone
 from html import escape, unescape
 
 import digest_words as dw_words
+import told as told_rule
 
 try:
     from zoneinfo import ZoneInfo
@@ -464,8 +465,15 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
                 baseline, came_back=None, fixed=None, enforcement_flips=None,
                 unrecognized_pages=None, sites=None, certs=None, prev_deep=None,
                 hints=None, brand=None, stale_words=None, stale_intro="",
-                stale_note="", details=None) -> dict:
-    """Everything the two renderers need, decided once. PURE."""
+                stale_note="", details=None, told=None) -> dict:
+    """Everything the two renderers need, decided once. PURE.
+
+    Job 3s ("say it once"): `told` is the record of what was told ({finding_id: row});
+    None = no record (table missing or unreadable) = today's email, unfiltered. With a
+    record, a problem is listed only when it is NEW, got WORSE or CAME BACK; anything told
+    before and unchanged waits for the weekly ("Still open, no change", or its reminder).
+    `told_full` lists the findings behind every problem card shown, for run_alerter to
+    record after the send."""
     brand = brand or dict(DEFAULT_BRAND)
     came_back = came_back or []
     fixed = fixed or []
@@ -490,6 +498,30 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
 
     def pick(rows, sevs):
         return [r for r in rows if (r[3] or "").upper() in sevs]
+
+    member_sev = {r[0]: (r[3] or "").upper() for r in changed + created + reconfirmed}
+    shown: list = []
+
+    def rule(items, came_back_event=False):
+        """Job 3s: keep NEW / WORSE / CAME BACK; drop what was told and has not changed (a
+        reminder that is due belongs to the weekly). A REGRESSED event is a came-back by
+        definition, even if no run saw the finding closed in between."""
+        if told is None:
+            shown.extend(items)
+            return items
+        keep = []
+        for g in items:
+            if came_back_event:
+                verdict, reason = "full", "back"
+            else:
+                verdict, reason = told_rule.decide(g, told, window_end, member_sev, "serious")
+            if verdict != "full" or reason == "due":
+                continue
+            if reason == "worse" or (reason == "back" and not g.get("tag")):
+                g["tag"] = told_rule.tag_for(reason, g, told, "serious", _day)
+            keep.append(g)
+        shown.extend(keep)
+        return keep
 
     do, ticket, done = [], [], []
 
@@ -518,10 +550,10 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
         })
 
     # 2. findings that need you today
-    do += group_problems(pick(changed, DO_TODAY_SEVERITIES), names, prev_deep, hints,
-                         window_start, tag="Came back after being fixed", details=details)
-    do += group_problems(pick(created, DO_TODAY_SEVERITIES), names, prev_deep, hints,
-                         window_start, details=details)
+    do += rule(group_problems(pick(changed, DO_TODAY_SEVERITIES), names, prev_deep, hints,
+                              window_start, tag="Came back after being fixed", details=details), True)
+    do += rule(group_problems(pick(created, DO_TODAY_SEVERITIES), names, prev_deep, hints,
+                              window_start, details=details))
 
     # 3. a web firewall that stopped blocking — said once, for all its sites, and not at
     # all for a site whose firewall finding is already on the list (the 10-22 Prodex test
@@ -583,13 +615,13 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
                    "sites": [h for _l, h, _e in soon], "why": "", "tag": ""})
 
     # This week (was "Worth a ticket" — Howie, 10-22: "We don't have any tickets")
-    ticket += group_problems(pick(changed, TICKET_SEVERITIES), names, prev_deep, hints,
-                             window_start, tag="Came back after being fixed", details=details)
-    ticket += group_problems(pick(created, TICKET_SEVERITIES), names, prev_deep, hints,
-                             window_start, details=details)
-    ticket += group_problems(pick(reconfirmed, DO_TODAY_SEVERITIES + TICKET_SEVERITIES),
-                             names, prev_deep, hints, window_start,
-                             tag="Confirmed by a second scan", details=details)
+    ticket += rule(group_problems(pick(changed, TICKET_SEVERITIES), names, prev_deep, hints,
+                                  window_start, tag="Came back after being fixed", details=details), True)
+    ticket += rule(group_problems(pick(created, TICKET_SEVERITIES), names, prev_deep, hints,
+                                  window_start, details=details))
+    ticket += rule(group_problems(pick(reconfirmed, DO_TODAY_SEVERITIES + TICKET_SEVERITIES),
+                                  names, prev_deep, hints, window_start,
+                                  tag="Confirmed by a second scan", details=details))
     # Ratings that went up: only the sites today's list does not already explain (the
     # header bar says "critical 0 to 4"; repeating each site's reason under the item that
     # caused it is the noise this redesign removes).
@@ -684,6 +716,7 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
         "headline": headline(n_do, n_ticket, do, ticket),
         "minor": minor,
         "baseline": baseline or {},
+        "told_full": told_rule.records(shown, member_sev, "daily"),
     }
 
 
@@ -998,7 +1031,7 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
             f'<tr><td class="px" style="padding:22px 32px 28px;"><table role="presentation" cellpadding="0" cellspacing="0" '
             f'border="0"><tr><td bgcolor="{b["button"]}" style="background:{b["button"]};border-radius:8px;">'
             f'<a href="{escape(portal)}" style="display:inline-block;padding:12px 18px;font-family:{FONT};'
-            f'font-size:15px;font-weight:600;color:#FFFFFF;text-decoration:none;">Open today\'s report</a>'
+            f'font-size:15px;font-weight:600;color:#FFFFFF;text-decoration:none;">Open the portal</a>'
             f'</td></tr></table></td></tr>')
     footer = (f"Sent by {escape(product_name or b['short_name'])} at {_clock(end)}. "
               f"Where every site stands, and why, comes in the weekly review on Monday.")
@@ -1076,6 +1109,6 @@ def render_text(model: dict, *, portal_url: str = "", product_name: str = "") ->
     if not (model["do"] or model["ticket"] or model["done"]):
         out.append("Every scan since yesterday came back with nothing that needs anyone.")
     if portal_url:
-        out.append(f"Open today's report: {portal_url.rstrip('/')}")
+        out.append(f"Open the portal: {portal_url.rstrip('/')}")
     out.append(f"Sent at {_clock(end)}. Where every site stands, and why, comes in the weekly review on Monday.")
     return "\n".join(out)

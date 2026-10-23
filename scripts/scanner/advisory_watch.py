@@ -772,8 +772,12 @@ def run(conn, src: Sources, dry_run=False, log=print, Json=None) -> dict:
     try:
         kev = src.kev_ids()
     except SourceError as e:
-        log(f"::warning::CISA KEV unreadable ({e}); HIGH comes from NVD's KEV data only this run")
-        kev = set()
+        # job 3s: the KEV list already held in cve_enrichments, so a CISA outage cannot
+        # compute MODERATE here and lower a MODERATE-HIGH row (this upsert sets severity
+        # outright)
+        kev = evidence.kev_fallback()
+        log(f"::warning::CISA KEV unreadable ({e}); using the {len(kev)} KEV CVEs already held "
+            f"in cve_enrichments this run")
     found, failed = {}, set()
     for key in needs_lookup(inv):
         try:
@@ -816,6 +820,7 @@ def main(argv=None) -> int:
     if not dsn:
         print("::error::advisory-watch: SUPABASE_DSN is not set", file=sys.stderr)
         return 2
+    evidence.set_kev_fallback(evidence.db_kev_reader(dsn))   # job 3s
     import psycopg
     from psycopg.rows import dict_row
     from psycopg.types.json import Json

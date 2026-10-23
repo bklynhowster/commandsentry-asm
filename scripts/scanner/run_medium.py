@@ -6558,6 +6558,8 @@ def run(descriptor_path: str, dsn: str) -> int:
                 pass
 
 
+import evidence  # noqa: E402  (job 3s: the KEV fallback, set in main)
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Phase 4a Medium tier scanner with mid-scan VPN rotation.",
@@ -6567,6 +6569,11 @@ def main() -> None:
     parser.add_argument("--dsn", default=os.environ.get("SUPABASE_DSN"),
                         help="Postgres DSN (or set SUPABASE_DSN)")
     args = parser.parse_args()
+    # KB 12 job 3s: the KEV list already held in cve_enrichments, for when CISA's
+    # download fails — installed once here, where the real DSN is (phases run through
+    # legacy_adapter see ctx.dsn = None).
+    if args.dsn:
+        evidence.set_kev_fallback(evidence.db_kev_reader(args.dsn))
 
     if not args.dsn:
         print("error: --dsn or SUPABASE_DSN required", file=sys.stderr)

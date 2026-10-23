@@ -22,7 +22,9 @@ keeps the advisory. The writer trusts a two-ended operator over the sentence
 (`operator_has_both_bounds`). The alerter's digest_words reads the same phrases with a copy
 of `stated_ranges` (a test checks the two agree, sentence by sentence).
 
-PURE except `kev_ids()`, which reads CISA's catalog once per process and never raises.
+PURE except `kev_ids()`, which reads CISA's catalog once per process and never raises, and
+falls back to the KEV list in cve_enrichments through the reader an entry point installs
+(`set_kev_fallback`, `db_kev_reader`; job 3s).
 """
 from __future__ import annotations
 
@@ -105,11 +107,47 @@ def operator_has_both_bounds(operator_summary: str | None) -> bool:
 
 
 _KEV_CACHE: set | None = None
+_KEV_FALLBACK = None
 
 
-def kev_ids(get=None) -> set:
+def set_kev_fallback(reader) -> None:
+    """KB 12 job 3s (plan re-check MF1, 2026-10-23). Installed ONCE per process by each entry
+    point that holds the real DSN (run_light, run_medium, run_heavy and advisory_watch mains):
+    a callable returning the KEV CVE ids already held in public.cve_enrichments. Phases run
+    through legacy_adapter see ctx.dsn = None (phase_contract._LegacyRecorder), so the reader
+    must not depend on a phase's context. Without it, a scan run while CISA's download fails
+    computes MODERATE and the upsert LOWERS a MODERATE-HIGH row cve_scoring raised."""
+    global _KEV_FALLBACK
+    _KEV_FALLBACK = reader
+
+
+def kev_fallback() -> set:
+    """The installed reader's answer, or an empty set (no reader, or the reader failed)."""
+    if _KEV_FALLBACK is None:
+        return set()
+    try:
+        return {c for c in (_KEV_FALLBACK() or ()) if c}
+    except Exception:            # the database being away must never sink a scan either
+        return set()
+
+
+def db_kev_reader(dsn: str):
+    """A reader for set_kev_fallback: the KEV-listed CVE ids in public.cve_enrichments
+    (kept every two hours by cve-scoring.yml). One short read-only connection."""
+    def read() -> set:
+        import psycopg      # lazy: this module stays importable without a driver
+        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as c, c.cursor() as cur:
+            cur.execute("SELECT cve_id FROM public.cve_enrichments WHERE kev_listed")
+            return {r[0] for r in cur.fetchall() if r and r[0]}
+    return read
+
+
+def kev_ids(get=None, fallback=None) -> set:
     """CVE ids on CISA's known-exploited catalog, read once per process. A failed or
-    short download gives an empty set: the rung stays MODERATE (never guessed up)."""
+    short download falls back to the list already held in cve_enrichments (job 3s; the
+    reader passed here, else the one set_kev_fallback installed), so a CISA outage can never
+    make a writer compute MODERATE and lower a raised row; with no reader, an empty set (the
+    rung stays MODERATE, never guessed up)."""
     global _KEV_CACHE
     if _KEV_CACHE is not None:
         return _KEV_CACHE
@@ -123,7 +161,16 @@ def kev_ids(get=None) -> set:
         vulns = (d or {}).get("vulnerabilities")
         ids = {x.get("cveID") for x in vulns if isinstance(x, dict) and x.get("cveID")} \
             if isinstance(vulns, list) else set()
-        _KEV_CACHE = ids if len(ids) >= KEV_MIN_ENTRIES else set()
+        if len(ids) >= KEV_MIN_ENTRIES:
+            _KEV_CACHE = ids
+            return _KEV_CACHE
     except Exception:            # network, JSON, anything: never sink a scan over a flag
-        _KEV_CACHE = set()
+        pass
+    if fallback is not None:
+        try:
+            _KEV_CACHE = {c for c in (fallback() or ()) if c}
+        except Exception:
+            _KEV_CACHE = set()
+    else:
+        _KEV_CACHE = kev_fallback()
     return _KEV_CACHE

@@ -22,8 +22,11 @@ In order, the email carries:
     what changed       every site whose level changed, grouped by the REASON (one card for
                        eight sites that got safer for one reason; a site that landed
                        elsewhere is said inside it)
-    worth your time    certificates within 14 days, then open serious problems: what we
-                       found, what it means, the fix and who does it (six at most)
+    worth your time    certificates within 14 days, then problems told in full: what we
+                       found, what it means, the fix and who does it (six at most) — job 3s:
+                       only what is NEW, WORSE, CAME BACK or DUE a reminder (told.py)
+    overdue            out-of-date problems with a known fix, 30+ days, in full when due
+    still open         every other open problem told before: one line each (job 3s)
     how hard we looked seven day-columns of deep and quick scans
     every site         one tile per site by registered domain, alphabetical, colored by
                        level, outlined when it changed this week, with a legend
@@ -45,6 +48,7 @@ from html import escape, unescape
 
 import digest_daily as dd
 import digest_words as words
+import told as told_rule
 from digest_daily import (BANDS, BAND_RANK, DISPLAY, FONT, INK, MUTED, PAGE, RULE,
                           SEV_ORDER, SEV_WORD, LOGO_CID)
 
@@ -307,11 +311,20 @@ def changes(now_bands: dict, then_bands: dict, opened, closed, names) -> list[di
 def build_weekly(*, now, window_start, window_end, days, sites, opened, closed, scans,
                  certs=None, open_serious=None, hints=None, stale_assets=None,
                  canary_violations=None, stale_words=None, stale_intro="", stale_note="",
-                 baseline=None, brand=None, details=None, overdue=None) -> dict:
+                 baseline=None, brand=None, details=None, overdue=None, gaps=None,
+                 told=None, fleet_has_waf=True) -> dict:
     """Everything the two weekly renderers need, decided once. PURE. `sites` are
     SQL_SITE_RATINGS rows with the rebuild taken at window_start. `overdue` are
     SQL_OPEN_OUT_OF_DATE rows (job 3r): out-of-date findings with a known fix, open
-    more than OVERDUE_DAYS — their own section, never also in "Worth your time"."""
+    more than OVERDUE_DAYS — their own section, never also in "Worth your time".
+
+    Job 3s: `gaps` are SQL_OPEN_FIREWALL_GAPS rows (the MODERATE firewall gaps the serious
+    list leaves out); `told` is the record of what was told ({finding_id: row}, empty or None =
+    nothing told yet: everything is new). Serious, overdue and gap rows go through ONE
+    group_problems call, so a problem is one item; told.decide splits the items into full
+    cards (new / worse / came back / reminder due) and quiet lines ("Still open, no change").
+    `told_full` lists the findings behind every card actually rendered in full, for
+    run_alerter to record after the send."""
     brand = brand or dict(dd.DEFAULT_BRAND)
     site_rows = list(sites or [])
     # only what is known: a version we could not see is not a finding, opened or closed
@@ -320,8 +333,11 @@ def build_weekly(*, now, window_start, window_end, days, sites, opened, closed, 
     overdue = [r for r in overdue or [] if words.is_out_of_date(r[0], r[2]) and not words.is_guess(r[2])]
     od_ids = {r[0] for r in overdue}
     open_serious = [r for r in open_serious or [] if not words.is_guess(r[2]) and r[0] not in od_ids]
+    _taken = od_ids | {r[0] for r in open_serious}
+    gaps = [r for r in gaps or [] if not words.is_guess(r[2]) and r[0] not in _taken]
     names = {r[0] for r in site_rows} | {r[1] for r in (opened or [])} | \
-            {r[1] for r in (closed or [])} | {r[1] for r in (open_serious or [])} | {r[1] for r in overdue}
+            {r[1] for r in (closed or [])} | {r[1] for r in (open_serious or [])} | \
+            {r[1] for r in overdue} | {r[1] for r in gaps}
     now_b, then_b = dd.site_bands(site_rows)
     now_c, then_c = dd.band_counts(now_b), dd.band_counts(then_b)
     mv = moves(now_b, then_b, opened, closed, names)
@@ -336,22 +352,46 @@ def build_weekly(*, now, window_start, window_end, days, sites, opened, closed, 
         stale_intro=stale_intro, stale_note=stale_note)
     do = [i for i in daily["do"] if i["kind"] in ("coverage", "cert")]
     n_certs = sum(len(i.get("sites", [])) for i in do if i["kind"] == "cert")
-    serious = dd.group_problems(open_serious, names, hints=hints, details=details)
-    for g in serious:
-        g["why"] = ""
-    do += serious[:DO_MAX]
-    more = max(0, len(serious) - DO_MAX)
-    # Job 3r (Howie 2026-10-23 07:21–07:25): MODERATE, "but … some kind of indication that
-    # there is still some action required": known since <first sighting>, calm violet.
+    # Job 3s (plan re-check MF2): ONE grouping over every open problem the week considers,
+    # so a family with a young serious member and old overdue ones is one item, printed once.
+    rows_all = list(open_serious) + list(overdue) + list(gaps)
+    member_sev = {r[0]: (r[3] or "").upper() for r in rows_all}
     first_seen = {r[0]: r[6] for r in overdue if len(r) > 6 and r[6] is not None}
-    od_details = {r[0]: (r[7] if len(r) > 7 else "", list(r[8] or []) if len(r) > 8 else []) for r in overdue}
-    late = dd.group_problems(overdue, names, details=od_details)
-    for g in late:
+    for r in list(open_serious) + list(gaps):
+        if len(r) > 9 and r[9] is not None:
+            first_seen.setdefault(r[0], r[9])
+    merged = dict(details or {})
+    for r in list(overdue) + list(gaps):
+        merged.setdefault(r[0], (r[7] if len(r) > 7 else "", list(r[8] or []) if len(r) > 8 else []))
+    told = told or {}
+    full, late, quiet = [], [], []
+    for g in dd.group_problems(rows_all, names, hints=hints, details=merged):
         g["why"] = ""
+        kind = told_rule.kind_of(g, od_ids, fleet_has_waf)
+        verdict, reason = told_rule.decide(g, told, now, member_sev, kind)
         seen = [first_seen[f] for f in g["finding_ids"] if f in first_seen]
-        g["overdue_since"] = min(seen) if seen else None
-    late = [g for g in late if g["overdue_since"] is not None]
+        g["since"] = min(seen) if seen else told_rule.first_told(g, told)
+        g["told_kind"] = kind
+        if verdict == "quiet":
+            quiet.append(g)
+            continue
+        tag = told_rule.tag_for(reason, g, told, kind, dd._day)
+        if tag:
+            g["tag"] = tag
+        if kind == "overdue":
+            # Job 3r (Howie 2026-10-23 07:21–07:25): MODERATE, "but … some kind of indication
+            # that there is still some action required": known since <first sighting>, violet.
+            g["overdue_since"] = min(seen) if seen else None
+            if g["overdue_since"] is not None:
+                late.append(g)
+        else:
+            full.append(g)
+    do += full[:DO_MAX]
+    also = full[DO_MAX:]          # listed one line each, NOT recorded: told in full next time
+    more = len(also)
     late.sort(key=lambda g: (g["overdue_since"], g["title"]))
+    quiet.sort(key=lambda g: (SEV_ORDER.get(g["severity"], 9),
+                              g["since"] or datetime.max.replace(tzinfo=timezone.utc), g["title"]))
     seen_who: dict = {}
     for g in late:
         g["as_of"] = now
@@ -376,6 +416,8 @@ def build_weekly(*, now, window_start, window_end, days, sites, opened, closed, 
         "moves": mv, "changes": changes(now_b, then_b, opened, closed, names),
         "scans": scan_cols, "n_scans": sum(a + b for a, b in scan_cols),
         "groups": site_groups(now_b, then_b), "do": do, "more": more, "overdue": late,
+        "also": also, "quiet": quiet,
+        "told_full": told_rule.records(full[:DO_MAX] + late, member_sev, "weekly"),
         "n_closed": n_closed, "n_opened": n_opened, "n_certs": n_certs,
         "degraded": bool(stale_assets or canary_violations), "baseline": baseline or {},
     }
@@ -563,6 +605,29 @@ def _tiles(m: dict) -> list[str]:
     return rows
 
 
+def quiet_line(i: dict) -> str:
+    """One line for a problem told before: "Overdue: Slider Revolution … on 3 sites (since May
+    23)". Job 3s, Howie 2026-10-22: 'Still open, no change: … (since Oct 15)'."""
+    sites = i.get("sites") or []
+    where = (f" on {sites[0]}" if len(sites) == 1 else f" on {len(sites)} sites" if sites else "")
+    title = i["title"]
+    if any(s in title for s in sites):
+        where = ""
+    pre = "Overdue: " if i.get("told_kind") == "overdue" else ""
+    since = f" (since {dd._day(i['since'])})" if i.get("since") is not None else ""
+    return f"{pre}{title}{where}{since}"
+
+
+def _quiet_row(i: dict) -> str:
+    fill = (dd.OVERDUE_FILL if i.get("told_kind") == "overdue"
+            else dd.SEV_STYLE.get(i.get("severity") or "", ("#D9DEE5", INK, ""))[0])
+    dot = (f'<span style="display:inline-block;width:9px;height:9px;border-radius:5px;background:{fill};'
+           f'margin-right:8px;"></span>')
+    return (f'<tr><td class="px" style="padding:0 32px;"><div style="font-family:{FONT};font-size:14px;'
+            f'line-height:1.5;color:#2B3747;padding:7px 0;border-bottom:1px solid #EDF1F6;">{dot}'
+            f'{escape(quiet_line(i))}</div></td></tr>')
+
+
 def render_weekly_html(m: dict, *, portal_url: str = "", product_name: str = "") -> str:
     b = m["brand"]
     portal = (portal_url or "").rstrip("/")
@@ -572,14 +637,20 @@ def render_weekly_html(m: dict, *, portal_url: str = "", product_name: str = "")
         rows.append(_section("Worth your time this week",
                              intro="Worth working on this week, worst first. Each says what we found, what it means, and the fix."))
         rows += [dd._card(i, portal) for i in m["do"]]
-        if m["more"]:
+        if m.get("also"):
             rows.append('<tr><td class="px" style="padding:0 32px;">'
-                        + dd._p(f"And {m['more']} more, waiting patiently in the portal.", MUTED, 14) + '</td></tr>')
+                        + dd._p('<span style="font-weight:700;">Also this week:</span>', INK, 14)
+                        + "".join(dd._p(escape(quiet_line(i)), "#2B3747", 14, "margin-top:3px;") for i in m["also"])
+                        + dd._p("Each gets its full card next week.", MUTED, 13) + '</td></tr>')
     if m.get("overdue"):
         rows.append(_section("Overdue",
                              intro=f"Known problems with a known fix, open more than {dd.OVERDUE_DAYS} days. "
                                    f"Not urgent; still waiting on someone."))
         rows += [dd._card(i, portal) for i in m["overdue"]]
+    if m.get("quiet"):
+        rows.append(_section("Still open, no change",
+                             intro="Told before and still open. Each comes back as a full reminder when it is due."))
+        rows += [_quiet_row(i) for i in m["quiet"]]
     rows += _week(m)
     rows += _tiles(m)
     if portal:
@@ -664,13 +735,18 @@ def render_weekly_text(m: dict, *, portal_url: str = "", product_name: str = "")
         out.append("WORTH YOUR TIME THIS WEEK (worst first)")
         for i in m["do"]:
             item_lines(i)
-        if m["more"]:
-            out.append(f"  And {m['more']} more, in the portal.")
+        for i in m.get("also", []):
+            out.append(f"  Also this week: {quiet_line(i)}")
         out.append("")
     if m.get("overdue"):
         out.append(f"OVERDUE (known, with a fix, open more than {dd.OVERDUE_DAYS} days)")
         for i in m["overdue"]:
             item_lines(i)
+        out.append("")
+    if m.get("quiet"):
+        out.append("STILL OPEN, NO CHANGE (told before; a full reminder comes when it is due)")
+        for i in m["quiet"]:
+            out.append(f"  - {quiet_line(i)}")
         out.append("")
     out.append(f"HOW HARD WE LOOKED: {m['n_scans']} scans, {days[0]:%a %b} {days[0].day} to {days[-1]:%a %b} {days[-1].day}")
     out.append("  " + "  ".join(f"{d:%a} {deep} deep/{quick} quick" for d, (deep, quick) in zip(days, m["scans"])))

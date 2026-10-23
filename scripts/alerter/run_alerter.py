@@ -973,7 +973,7 @@ SELECT (r.completed_at AT TIME ZONE %(tz)s)::date AS day, r.intensity::text, cou
 # a member is open) — the first draft of this query listed five false positives.
 SQL_OPEN_SERIOUS = """
 SELECT f.finding_id, r.scope_id, f.title, f.severity::text, f.current_status::text,
-       f.source::text, f.last_observed_at, f.description, f.cve
+       f.source::text, f.last_observed_at, f.description, f.cve, f.first_detected_at
   FROM public.v_fleet_open_reps r
  CROSS JOIN LATERAL unnest(r.member_finding_ids) AS m(fid)
   JOIN public.findings f ON f.finding_id = m.fid
@@ -999,6 +999,58 @@ SELECT f.finding_id, r.scope_id, f.title, f.severity::text, f.current_status::te
    AND f.source::text IN ('commandsentry_light', 'advisory_watch', 'wpscan', 'manual_named')
    AND f.first_detected_at < now() - interval '30 days'
  ORDER BY f.first_detected_at, r.scope_id, f.finding_id
+"""
+
+# Job 3s — the weekly's firewall gaps: open members of v_fleet_open_reps whose identity is a
+# heavy-scan WAF finding (no firewall in front, not blocking, partial), MODERATE or worse.
+# SQL_OPEN_SERIOUS leaves the MODERATE ones out; the weekly tells each once, then reminds.
+# Same 10 columns as SQL_OPEN_SERIOUS (first_detected_at last). No parameters.
+SQL_OPEN_FIREWALL_GAPS = """
+SELECT f.finding_id, r.scope_id, f.title, f.severity::text, f.current_status::text,
+       f.source::text, f.last_observed_at, f.description, f.cve, f.first_detected_at
+  FROM public.v_fleet_open_reps r
+ CROSS JOIN LATERAL unnest(r.member_finding_ids) AS m(fid)
+  JOIN public.findings f ON f.finding_id = m.fid
+ WHERE position(':commandsentry_heavy:waf-' in f.finding_id) > 0
+   AND f.severity::text IN ('CRITICAL', 'HIGH', 'MODERATE-HIGH', 'MODERATE')
+ ORDER BY f.first_detected_at, r.scope_id, f.finding_id
+"""
+
+# Job 3s (plan v3 Design 6) — firewall case 1 when the fleet has at least one CONFIRMED web
+# firewall (Howie, D1: "it's all the same companies"). Read fails → treated as case 1.
+SQL_FLEET_HAS_WAF = """
+SELECT EXISTS (SELECT 1 FROM public.assets
+                WHERE device_class::text = 'waf' AND device_class_confidence::text = 'confirmed')
+"""
+
+# Job 3s — the record of what was told (migration 20261023c, public.digest_told).
+SQL_TOLD_READ = """
+SELECT finding_id, first_told_at, last_full_at, last_full_severity, last_full_in,
+       reminders, closed_seen_at
+  FROM public.digest_told
+"""
+
+# Every non-dry, non-preview run, sent or not: a told finding that is closed now is marked
+# seen-closed (once per telling), so its return is a CAME BACK card. The four open statuses
+# are the ones v_fleet_open_reps admits.
+SQL_TOLD_MARK_CLOSED = """
+UPDATE public.digest_told t
+   SET closed_seen_at = now(), updated_at = now()
+  FROM public.findings f
+ WHERE f.finding_id = t.finding_id
+   AND f.current_status::text NOT IN ('detected', 'confirmed', 'open', 'regressed')
+   AND (t.closed_seen_at IS NULL OR t.closed_seen_at <= t.last_full_at)
+"""
+
+# After a send that worked, one row per finding behind a card rendered in full. A finding
+# told again keeps its first_told_at; `reminders` counts the full tellings after the first.
+SQL_TOLD_RECORD = """
+INSERT INTO public.digest_told AS t
+       (finding_id, first_told_at, last_full_at, last_full_severity, last_full_in, reminders, updated_at)
+VALUES (%s, now(), now(), %s, %s, 0, now())
+ON CONFLICT (finding_id) DO UPDATE
+   SET last_full_at = now(), last_full_severity = EXCLUDED.last_full_severity,
+       last_full_in = EXCLUDED.last_full_in, reminders = t.reminders + 1, updated_at = now()
 """
 
 SQL_INSERT_RUN_START = """
@@ -1368,7 +1420,7 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
                   baseline, came_back=None, fixed=None, enforcement_flips=None,
                   unrecognized_pages=None, sites=None, certs=None, prev_deep=None,
                   hints=None, brand=None, discovery_stale_hours=24,
-                  deepscan_stale_hours=192, details=None) -> dict:
+                  deepscan_stale_hours=192, details=None, told=None) -> dict:
     """KB 12 job 3l — every part of the old email, sorted into Do today / Worth a ticket /
     Off your plate by digest_daily.build_model. The stale-host wording stays this file's
     (stale_row_words, note 320)."""
@@ -1382,7 +1434,7 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
         prev_deep=prev_deep, hints=hints, brand=brand if brand is not None else _dd.load_brand(),
         stale_words=stale_row_words, stale_intro=STALE_INTRO,
         stale_note=stale_overdue_note(discovery_stale_hours, deepscan_stale_hours),
-        details=details,
+        details=details, told=told,
     )
 
 
@@ -1592,6 +1644,51 @@ def _soft_read(conn, label, sql, params=None):
         return []
 
 
+def _read_told(conn):
+    """{finding_id: row} from public.digest_told, or None when it cannot be read (the table
+    missing before migration 20261023c, or any error): None means today's email, unfiltered."""
+    cols = ("finding_id", "first_told_at", "last_full_at", "last_full_severity",
+            "last_full_in", "reminders", "closed_seen_at")
+    try:
+        with conn.transaction():
+            with conn.cursor() as c2:
+                c2.execute(SQL_TOLD_READ)
+                return {r[0]: dict(zip(cols, r)) for r in c2.fetchall()}
+    except Exception as exc:                       # pragma: no cover - live only
+        print(f"  told record read failed ({exc!r}) — digest tells everything, as before 3s")
+        return None
+
+
+def _told_mark_closed(conn) -> int:
+    """Mark told findings that are closed now. Own savepoint, then commit; never fatal."""
+    try:
+        with conn.transaction():
+            with conn.cursor() as c2:
+                c2.execute(SQL_TOLD_MARK_CLOSED)
+                n = c2.rowcount
+        conn.commit()
+        return n if n and n > 0 else 0
+    except Exception as exc:                       # pragma: no cover - live only
+        print(f"  told record mark-closed failed ({exc!r}) — carrying on")
+        return 0
+
+
+def _told_record(conn, records) -> int:
+    """Record (finding_id, severity, where) for every card told in full. Call ONLY after a
+    send that worked, never on a test send or a dry run. Own savepoint; never fatal."""
+    if not records:
+        return 0
+    try:
+        with conn.transaction():
+            with conn.cursor() as c2:
+                c2.executemany(SQL_TOLD_RECORD, [(f, sev or "", where) for f, sev, where in records])
+        conn.commit()
+        return len(records)
+    except Exception as exc:                       # pragma: no cover - live only
+        print(f"  told record write failed ({exc!r}) — these will be told again next time")
+        return 0
+
+
 def _weekly_model(conn, *, now, brand):
     """Every read the weekly needs, then digest_weekly.build_weekly. The week is the seven
     whole local days before today; `opened` / `closed` run on to now so a rating that
@@ -1610,7 +1707,11 @@ def _weekly_model(conn, *, now, brand):
     scans = _soft_read(conn, "scans by day", SQL_WEEK_SCANS, {"tz": tz, "s": window_start, "e": window_end})
     certs = _soft_read(conn, "expiring certificates", SQL_CERTS_EXPIRING)
     open_serious = _soft_read(conn, "open serious problems", SQL_OPEN_SERIOUS)
-    hint_ids = sorted({r[0] for r in open_serious if r[0]})
+    gaps = _soft_read(conn, "open firewall gaps", SQL_OPEN_FIREWALL_GAPS)
+    waf = _soft_read(conn, "fleet firewall", SQL_FLEET_HAS_WAF)
+    fleet_has_waf = bool(waf[0][0]) if waf else True
+    told = _read_told(conn)
+    hint_ids = sorted({r[0] for r in list(open_serious) + list(gaps) if r[0]})
     hints, _d = hints_and_details(_soft_read(conn, "remediation hints", SQL_FINDING_HINTS, (hint_ids,))) \
         if hint_ids else ({}, {})
     details = {r[0]: (r[7] if len(r) > 7 else "", list(r[8] or []) if len(r) > 8 else []) for r in open_serious}
@@ -1621,7 +1722,8 @@ def _weekly_model(conn, *, now, brand):
         open_serious=open_serious, hints=hints, details=details, stale_assets=stale_assets,
         canary_violations=canary_violations, stale_words=stale_row_words,
         stale_intro=STALE_INTRO, stale_note=stale_overdue_note(disc_h, deep_h),
-        baseline=baseline, brand=brand, overdue=overdue,
+        baseline=baseline, brand=brand, overdue=overdue, gaps=gaps, told=told,
+        fleet_has_waf=fleet_has_waf,
     )
 
 
@@ -1810,6 +1912,11 @@ def main() -> int:
         hints, details = hints_and_details(_soft("remediation hints", SQL_FINDING_HINTS, (hint_ids,))) \
             if hint_ids else ({}, {})
         brand = _dd.load_brand()
+        # Job 3s — say it once: mark told findings now closed (real runs only, sent or not),
+        # then read the record; None (no table yet) = today's email.
+        if record:
+            _told_mark_closed(conn)
+        told = _read_told(conn)
 
         # Render — KB 12 job 3l: one model, two renderings, one subject. The subject says
         # what you will do ("2 checks and 1 ticket"); "(!) Coverage gap." leads when Sentry
@@ -1824,7 +1931,7 @@ def main() -> int:
             enforcement_flips=enforcement_flips, unrecognized_pages=unrecognized_pages,
             sites=sites, certs=certs, prev_deep=prev_deep, hints=hints, brand=brand,
             discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours,
-            details=details,
+            details=details, told=told,
         )
         subject = _dd.subject(model, from_name)
         if args.preview:
@@ -1875,6 +1982,9 @@ def main() -> int:
                     sent, status, err, current_high_risk_ids, run_id,
                 ))
             conn.commit()
+        # Job 3s — only what was actually sent in full, only on a real run.
+        if record and sent:
+            _told_record(conn, model.get("told_full") or [])
 
         if status == "error":
             print(f"alerter failed: {err}", file=sys.stderr)
@@ -1892,6 +2002,8 @@ def _run_weekly(conn, *, args, record, name, to_addrs, api_key, from_addr, from_
     or a test send records nothing."""
     brand = _dd.load_brand()
     now = datetime.now(tz=timezone.utc)
+    if record:                                     # job 3s: real runs only, sent or not
+        _told_mark_closed(conn)
     model = _weekly_model(conn, now=now, brand=brand)
     subject = _dw.weekly_subject(model, from_name)
     if args.preview:
@@ -1933,6 +2045,8 @@ def _run_weekly(conn, *, args, record, name, to_addrs, api_key, from_addr, from_
         with conn.cursor() as cur:
             cur.execute(SQL_FINALIZE_RUN, (0, 0, 0, sent, status, err, [], run_id))
         conn.commit()
+    if record and sent:                            # job 3s: only what was sent in full
+        _told_record(conn, model.get("told_full") or [])
 
     if status == "error":
         print(f"weekly failed: {err}", file=sys.stderr)
