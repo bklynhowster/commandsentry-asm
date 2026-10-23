@@ -517,3 +517,22 @@ def test_run_asks_for_every_kev_entry_for_a_confirmed_security_device():
     asa = [u for u in get.urls if "adaptive_security_appliance_software" in u]
     assert any("hasKev" in u and "kevStartDate" not in u for u in asa)
     assert {("%3Ao%3Acisco" in u) or ("%3Aa%3Acisco" in u) for u in asa} == {True}
+
+
+# ── job 3s: a CISA outage uses the KEV list already held (never lowers a KEV row) ─────
+def test_a_cisa_outage_keeps_a_kev_listed_row_moderate_high(monkeypatch):
+    import evidence
+    monkeypatch.setattr(evidence, "_KEV_FALLBACK", lambda: {"CVE-2026-109618"})
+    get = FakeGet([("php%3Aphp&noRejected&pubStartDate", {"totalResults": 1, "vulnerabilities": [{"cve": php2shell()}]}),
+                   ("known_exploited", aw.SourceError("HTTPError: 403"))])
+    conn = Conn([{"asset_id": "w.example.com", "tech": {"tech": ["PHP:8.3.10"]}}])
+    logs = []
+    aw.run(conn, aw.Sources(get=get, sleep=lambda s: None, now=NOW), log=logs.append, Json=lambda x: x)
+    (ins,) = [p for c, p in conn.s["calls"] if c.startswith("INSERT INTO public.findings")]
+    assert ins["severity"] == "MODERATE-HIGH"
+    assert any("CISA KEV unreadable" in m and "1 KEV CVEs already held" in m for m in logs)
+    monkeypatch.setattr(evidence, "_KEV_FALLBACK", None)
+    conn = Conn([{"asset_id": "w.example.com", "tech": {"tech": ["PHP:8.3.10"]}}])
+    aw.run(conn, aw.Sources(get=get, sleep=lambda s: None, now=NOW), log=lambda *a: None, Json=lambda x: x)
+    (ins,) = [p for c, p in conn.s["calls"] if c.startswith("INSERT INTO public.findings")]
+    assert ins["severity"] == "MODERATE", "no fallback: the plain rung, as before"

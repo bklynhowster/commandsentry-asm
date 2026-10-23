@@ -14,12 +14,21 @@ Results are cached per CVE in cve_enrichments and rolled up onto each finding
 cvss_score / cvss_vector when the finding has none). The portal already marks
 a KEV-listed finding loudly (red CISA KEV chip, red impact panel).
 
-It NEVER changes a finding's severity. A severity floor for KEV findings was
-built and taken out before shipping: the scan writers let a re-scan set the
-scanner's own severity again, so a raise would be undone on the next scan and
-flip back every two hours, and it would override a severity an operator had
-lowered on purpose. Putting KEV findings at the top belongs in the writers'
-severity rule or in the portal's ordering, as its own change.
+It changes a finding's severity in ONE case only (KB 12 job 3s, 2026-10-23): an OPEN
+version-based finding — a version Sentry saw, older than the fix (job 3r's "out of
+date" rung: light WordPress advisories ':light:wpvuln-', JavaScript library advisories
+':light:libflaw-', the advisory watch's ':advisory_watch:out-of-date:') — still at
+MODERATE when one of its CVEs is on CISA's known-exploited list goes to MODERATE-HIGH,
+the ladder's rung for it (KEV_RAISE_SQL; one audit row each, action 'job_3s_kev_raise').
+Kimi's catch (3r plan second check): a row written before its CVE joined the list
+otherwise stayed MODERATE, because the upserts never raise. It never lowers, never
+touches a person's row or a hand-imported one (':wpvulnerability:wpvuln:' — a re-import
+would lower it again), and never anything else.
+Why the old objection no longer holds: a severity floor was built and removed in 2026-10
+because the writers re-set severity on every pass. Since job 3r the writers themselves
+compute MODERATE-HIGH for a KEV-listed flaw, and since job 3s a writer whose CISA
+download fails falls back to the list held here (evidence.kev_ids / set_kev_fallback),
+so a scan computes the same value this raise sets and cannot flip it back.
 
 It talks only to those three public services and to the database. Nothing is
 sent to any scanned target.
@@ -415,6 +424,35 @@ FINDING_COLUMNS = ("epss_score", "epss_percentile", "kev_listed", "kev_due_date"
                    "cvss_score", "cvss_vector")
 
 
+# KB 12 job 3s — the one severity change (see the module docstring). Families by identity;
+# MODERATE only; open only; one audit row per raised finding, in the same statement.
+KEV_RAISE_SQL = """
+WITH changed AS (
+  UPDATE public.findings f
+     SET severity = 'MODERATE-HIGH'::severity_t, updated_at = now()
+   WHERE f.kev_listed
+     AND f.severity::text = 'MODERATE'
+     AND f.current_status::text IN ('detected', 'confirmed', 'open', 'regressed')
+     AND (f.finding_id LIKE '%:light:wpvuln-%'
+          OR f.finding_id LIKE '%:light:libflaw-%'
+          OR f.finding_id LIKE '%:advisory_watch:out-of-date:%')
+  RETURNING f.finding_id, f.asset_id, f.title, f.cve
+)
+INSERT INTO public.admin_audit_log
+  (actor_user_id, action, target_user_id, target_email, before_state, after_state, details)
+SELECT NULL, 'job_3s_kev_raise', NULL, NULL,
+       jsonb_build_object('severity', 'MODERATE'),
+       jsonb_build_object('severity', 'MODERATE-HIGH'),
+       jsonb_build_object('finding_id', c.finding_id, 'asset_id', c.asset_id, 'title', c.title,
+                          'cve', c.cve,
+                          'reason', 'out of date, and a CVE it names is on the CISA known-exploited '
+                                    'list: the 3r ladder rates that MODERATE-HIGH',
+                          'tool', 'cve_scoring.py', 'rule', 'job_3s')
+  FROM changed c
+RETURNING (details->>'finding_id') AS finding_id
+"""
+
+
 def update_finding_sql(cols) -> str:
     """One-row UPDATE for exactly these columns (names from FINDING_COLUMNS
     only — severity, status and everything else are refused)."""
@@ -449,7 +487,7 @@ def run(conn, get=http_get_json, sleep=time.sleep, log=print, dry_run=False, now
     now = now or datetime.now(timezone.utc)
     s = {"cves": 0, "kev_loaded": False, "kev_source": None, "kev_entries": 0, "epss": 0,
          "nvd_read": 0, "nvd_missing": 0, "cache_rows_failed": 0, "findings_updated": 0,
-         "busy_skipped": 0, "source_errors": []}
+         "busy_skipped": 0, "source_errors": [], "kev_raised": 0}
 
     cves = normalize_cves(r["cve"] for r in conn.execute(SELECT_FINDING_CVES_SQL))
     s["cves"] = len(cves)
@@ -514,9 +552,19 @@ def run(conn, get=http_get_json, sleep=time.sleep, log=print, dry_run=False, now
             s["busy_skipped"] += 1         # a scan holds it; next run catches up
             continue
         s["findings_updated"] += bool(cur.rowcount)
+    # job 3s: out-of-date rows whose CVE is on the KEV list -> MODERATE-HIGH (after the roll-up,
+    # so this run's kev_listed counts). A busy row is left for the next run.
+    try:
+        with conn.transaction():
+            s["kev_raised"] = len(conn.execute(KEV_RAISE_SQL).fetchall())
+    except (psycopg.errors.LockNotAvailable, psycopg.errors.DeadlockDetected):
+        s["busy_skipped"] += 1
+    except psycopg.Error as e:
+        _warn(log, f"KEV raise skipped ({type(e).__name__}: {str(e)[:120]})")
     log("cve-scoring: {cves} CVEs; KEV {kl} ({kev_entries} in catalog); EPSS {epss}; "
         "NVD read {nvd_read} (not in NVD {nvd_missing}); cache rows failed {cache_rows_failed}; "
-        "findings updated {findings_updated}, busy-skipped {busy_skipped}; source problems {ne}".format(
+        "findings updated {findings_updated}, raised to MODERATE-HIGH (KEV) {kev_raised}, "
+        "busy-skipped {busy_skipped}; source problems {ne}".format(
             kl=f"from {s['kev_source']}" if s["kev_loaded"] else "NOT loaded", ne=len(s["source_errors"]), **s))
     return s
 

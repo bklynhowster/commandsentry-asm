@@ -313,8 +313,8 @@ def test_leaving_the_list_clears_flag_and_date():
 
 @pytest.mark.parametrize("sev", ["INFO", "LOW", "MODERATE", "MODERATE-HIGH"])
 def test_severity_is_never_touched(sev):
-    """The scan writers set severity again on every pass, so a raise here
-    would be undone and flip back every two hours."""
+    """The roll-up never touches severity. The ONE severity change is KEV_RAISE_SQL (job 3s,
+    test_the_kev_raise_is_narrow): out-of-date rows only, MODERATE -> MODERATE-HIGH."""
     out = S.plan_finding_update(_row(severity=sev, current_status="open", r_kev_listed=True,
                                      r_epss_score=D("0.9"), r_epss_percentile=D("0.99"), r_cvss_score=D("9.8")))
     assert "severity" not in out and set(out) <= set(S.FINDING_COLUMNS)
@@ -441,7 +441,7 @@ def test_one_bad_cache_row_does_not_block_the_others():
     msgs = []
     conn = _Conn(["CVE-2021-44228", "CVE-2022-31160"], bad_cve="CVE-2021-44228")
     s = S.run(conn, get=_source(), sleep=lambda x: None, log=msgs.append)
-    assert s["cache_rows_failed"] == 1 and conn.tx == 2                  # one transaction per CVE
+    assert s["cache_rows_failed"] == 1 and conn.tx == 3   # one transaction per CVE, then the job 3s KEV raise
     assert any("CVE-2021-44228: cache row not saved" in m for m in msgs)
     assert [p["cve_id"] for p in conn.wrote("UPDATE public.cve_enrichments SET\n    kev_listed")] == ["CVE-2022-31160"]
 
@@ -524,3 +524,27 @@ def test_workflow_runs_the_job_every_two_hours_with_read_only_repo_access():
     assert run["env"]["SUPABASE_DSN"] == "${{ secrets.SUPABASE_DSN }}"
     text = open(WORKFLOW).read()
     assert text.count("secrets.") == 1          # the database, nothing else
+
+
+def test_the_kev_raise_is_narrow():
+    """KB 12 job 3s (Kimi, 3r plan second check): an out-of-date row written MODERATE before its
+    CVE joined CISA's list rises to MODERATE-HIGH. Only the three version-based families the
+    writers keep (never a hand import, never a person's row), MODERATE only, open only, never
+    lowers, one audit row each in the same statement."""
+    q = " ".join(S.KEV_RAISE_SQL.split())
+    assert "SET severity = 'MODERATE-HIGH'::severity_t" in q and "f.severity::text = 'MODERATE'" in q
+    assert "WHERE f.kev_listed" in q
+    assert "f.current_status::text IN ('detected', 'confirmed', 'open', 'regressed')" in q
+    for fam in (":light:wpvuln-%", ":light:libflaw-%", ":advisory_watch:out-of-date:%"):
+        assert fam in q, fam
+    for never in (":wpvulnerability:wpvuln:", ":manual:", "'MODERATE-HIGH' THEN", "'LOW'", "'HIGH'"):
+        assert never not in q, never
+    assert "INSERT INTO public.admin_audit_log" in q and "'job_3s_kev_raise'" in q
+    assert q.count("UPDATE public.findings") == 1
+
+
+def test_the_raise_runs_after_the_rollup_and_never_in_a_dry_run():
+    import inspect
+    src = inspect.getsource(S.run)
+    assert src.index("ROLLUP_SQL") < src.index("KEV_RAISE_SQL")
+    assert src.index("if dry_run:") < src.index("KEV_RAISE_SQL")

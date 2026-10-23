@@ -188,3 +188,77 @@ def test_the_alerter_reads_the_same_ranges():
             if a["applies"] is None:
                 continue
             assert a["applies"] is not evidence.range_excludes(seen, text), (cve, seen)
+
+
+# ── job 3s: the KEV fallback (Kimi's second check of plan 3r: a CISA outage must never
+# lower a KEV-listed out-of-date finding back to MODERATE) ─────────────────────────────
+def _boom(url):
+    raise OSError("cisa.gov unreachable")
+
+
+def test_a_failed_cisa_read_falls_back_to_the_kev_list_already_held(monkeypatch):
+    monkeypatch.setattr(evidence, "_KEV_CACHE", None)
+    monkeypatch.setattr(evidence, "_KEV_FALLBACK", None)
+    assert evidence.kev_ids(_boom, fallback=lambda: ["CVE-2026-6728", None, ""]) == {"CVE-2026-6728"}
+    monkeypatch.setattr(evidence, "_KEV_CACHE", None)
+    short = lambda u: {"vulnerabilities": [{"cveID": "CVE-1"}]}  # noqa: E731
+    assert evidence.kev_ids(short, fallback=lambda: {"CVE-2"}) == {"CVE-2"}, "a short read is a failed read"
+    monkeypatch.setattr(evidence, "_KEV_CACHE", None)
+    evidence.set_kev_fallback(lambda: {"CVE-3"})
+    assert evidence.kev_ids(_boom) == {"CVE-3"}, "the reader the entry point installed"
+    monkeypatch.setattr(evidence, "_KEV_CACHE", None)
+    good = lambda u: {"vulnerabilities": [{"cveID": f"CVE-2020-{i}"} for i in range(1500)]}  # noqa: E731
+    assert "CVE-3" not in evidence.kev_ids(good), "a good CISA read is the catalog, not the fallback"
+
+
+def test_no_fallback_or_a_broken_one_is_empty_and_never_raises(monkeypatch):
+    monkeypatch.setattr(evidence, "_KEV_CACHE", None)
+    monkeypatch.setattr(evidence, "_KEV_FALLBACK", None)
+    assert evidence.kev_fallback() == set() and evidence.kev_ids(_boom) == set()
+
+    def broken():
+        raise RuntimeError("db down")
+    monkeypatch.setattr(evidence, "_KEV_CACHE", None)
+    assert evidence.kev_ids(_boom, fallback=broken) == set()
+    monkeypatch.setattr(evidence, "_KEV_FALLBACK", broken)
+    assert evidence.kev_fallback() == set()
+
+
+def test_the_db_reader_reads_only_kev_rows_and_connects_lazily():
+    import inspect
+    src = inspect.getsource(evidence.db_kev_reader)
+    assert "SELECT cve_id FROM public.cve_enrichments WHERE kev_listed" in src
+    reader = evidence.db_kev_reader("postgresql://unused")       # nothing connects until called
+    assert callable(reader)
+
+
+def test_every_entry_point_that_holds_the_dsn_installs_the_fallback():
+    here = os.path.dirname(os.path.abspath(__file__))
+    for f in ("run_light.py", "run_medium.py", "run_heavy.py", "advisory_watch.py"):
+        src = open(os.path.join(here, f), encoding="utf-8").read()
+        assert "evidence.set_kev_fallback(evidence.db_kev_reader(" in src, f
+
+
+def test_a_light_phase_inside_a_medium_or_heavy_run_keeps_kev_with_cisa_down(monkeypatch):
+    """Plan v3 re-check MF1: wpvulnerability runs as a LIGHT phase inside medium/heavy through
+    legacy_adapter, whose recorder sets dsn = None. The fallback is installed per process, so
+    the phase needs no DSN: a KEV row already in cve_enrichments keeps it MODERATE-HIGH."""
+    import pathlib
+    import phase_contract as pc
+    from phase_source import LIGHT
+    import wpvulnerability_client as wpc
+    monkeypatch.setattr(evidence, "_KEV_CACHE", None)
+    monkeypatch.setattr(evidence.urllib.request, "urlopen", lambda *a, **k: _boom(""))
+    monkeypatch.setattr(evidence, "_KEV_FALLBACK", lambda: {"CVE-2026-6728"})
+    seen = {}
+
+    def legacy(rec):
+        seen["dsn"] = rec.dsn
+        run_light._wpvuln_emit_finding(rec, _v("CVE-2026-6728"), wpc)
+        seen["sev"] = [f.severity for f in rec.findings]
+        rec.tools_run.append("wpvulnerability")
+        rec.tool_status["wpvulnerability"] = {"ok": True}
+    ctx = _ctx()
+    ctx.dsn = "postgresql://the-real-one"
+    pc.legacy_adapter(legacy, LIGHT)(ctx, pathlib.Path("/tmp"))
+    assert seen == {"dsn": None, "sev": ["MODERATE-HIGH"]}

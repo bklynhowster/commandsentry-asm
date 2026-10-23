@@ -51,6 +51,16 @@ on:
 permissions:
   contents: read
 
+# KB 12 job 3s (2026-10-23) — Monday order. The scheduled daily (12:00) and weekly (12:05)
+# share group `alerter`, so the daily finishes and records what it told before the weekly
+# reads the record. A test send (preview=true) has its own group, so it can never take the
+# one pending slot of a scheduled run. Nothing is ever cancelled. The group is
+# "alerter-test-send-false" for the schedule and any real run, "alerter-test-send-true" for a
+# test send (written without `|| 'literal'`, which the 318 identity guard reserves).
+concurrency:
+  group: alerter-test-send-${{ github.event.inputs.preview == 'true' }}
+  cancel-in-progress: false
+
 jobs:
   digest:
     runs-on: ubuntu-latest
