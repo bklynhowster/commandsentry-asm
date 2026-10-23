@@ -60,6 +60,14 @@ FAMILIES = (
      "do": "Turn on the firewall's rules for the kind of attack that got through.",
      "fixed": "the web firewall now blocks every kind of test attack",
      "headline": "turn on the missing firewall rules for {where}"},
+    # job 3r: the advisory watch's out-of-date rows ("Runs PHP 8.1.2: out of date — …; update it")
+    {"key": "out-of-date", "match": r"^Runs (.+?)(?: \d[\w.]*)?(?:, firmware built \w+ \d{4})?: out of date", "who": "it",
+     "title": "{x} is out of date",
+     "why": "Later versions fix published flaws in it. Nobody has proved {it} can be attacked this way; "
+            "it's simply older than the fix.",
+     "do": "Update {x} on {it} to a current version.",
+     "fixed": "{x} is up to date",
+     "headline": "update {x} on {where}"},
     {"key": "version-unknown", "match": r"^Runs (.+?), version not shown", "who": "it", "guess": True,
      "title": "Runs {x}; we can't see which version",
      "why": "", "do": "", "fixed": "we can now see it's on a patched version"},
@@ -140,10 +148,40 @@ def _vt(v: str) -> tuple:
 
 
 _SEEN = re.compile(r"(?:at version|version \*\*|installed v|version)\s*\**\s*v?(\d+(?:\.\d+)+)", re.I)
-_RANGE = (re.compile(r"in versions? (\d[\d.]*) (?:to|-|through) (\d[\d.]*)", re.I),
-          re.compile(r"from (\d[\d.]*) through (\d[\d.]*)", re.I),
-          re.compile(r"versions (\d[\d.]*)\s*-\s*(\d[\d.]*)", re.I))
-_UPTO = re.compile(r"(?:up to,? and including,?|versions up to) (\d[\d.]*)", re.I)
+# A copy of scripts/scanner/evidence.stated_ranges (job 3r): the alerter does not import
+# scanner code. scripts/scanner/test_evidence_3r.py checks the two agree, sentence by sentence.
+_N = r"\d+(?:\.\d+)*"
+_ANCHOR = re.compile(r"\bversions?\b|\baffects [^.:]{0,80}:", re.I)
+_CLAUSE_END = re.compile(r"\.\s+[A-Z]|\.\s*$|\s(?:via|due to|because|allows|which|This)\b")
+_PAIR = re.compile(rf"(?:from\s+)?(n/?a|{_N})\s*(?:-|–|to|through)\s*({_N})", re.I)
+_UPTO_INCL = re.compile(rf"\bup to,?(?: and including,?)?\s+(?:version\s+)?({_N})", re.I)
+_BEFORE = re.compile(rf"\b(?:prior to|before|below|less than)\s+(?:version\s+)?({_N})", re.I)
+
+
+def stated_ranges(text: str | None) -> list:
+    """[(lo or None, hi, hi_inclusive)] — every affected range the advisory's words state."""
+    t = text or ""
+    out = []
+    for a in _ANCHOR.finditer(t):
+        window = t[a.end():a.end() + 200]
+        e = _CLAUSE_END.search(window)
+        clause = window[:e.start()] if e else window
+        for m in _PAIR.finditer(clause):
+            lo = None if m.group(1).lower().replace("/", "") == "na" else m.group(1)
+            out.append((lo, m.group(2), True))
+        for m in _UPTO_INCL.finditer(clause):
+            out.append((None, m.group(1), True))
+        for m in _BEFORE.finditer(clause):
+            out.append((None, m.group(1), False))
+    return list(dict.fromkeys(out))
+
+
+def _inside(v: tuple, rng) -> bool:
+    lo, hi, incl = rng
+    if lo and _vt(lo) and v < _vt(lo):
+        return False
+    h = _vt(hi)
+    return not h or v < h or (incl and v == h)
 _RISK = re.compile(r"This makes it possible for (.+?)(?:\.\s|\.$)", re.S)
 _ONLY = re.compile(r"(This only affects [^.]+\.)")
 _CVE = re.compile(r"CVE-\d{4}-\d{4,}")
@@ -176,19 +214,10 @@ def advisory(title: str | None, description: str | None) -> dict:
     p = plugin_of(t) or {}
     m = _SEEN.search(d)
     seen = p.get("seen") or (m.group(1) if m else None)
-    lo = hi = None
-    for rx in _RANGE:
-        r = rx.search(d)
-        if r:
-            lo, hi = r.group(1), r.group(2)
-            break
-    if not hi:
-        u = _UPTO.search(d)
-        if u:
-            hi = u.group(1)
+    rs = stated_ranges(d)
     applies = None
-    if seen and (lo or hi):
-        applies = not ((lo and _vt(seen) < _vt(lo)) or (hi and _vt(seen) > _vt(hi)))
+    if seen and _vt(seen) and rs:
+        applies = any(_inside(_vt(seen), r) for r in rs)
     risk = ""
     r = _RISK.search(d)
     if r:
@@ -243,7 +272,7 @@ def words(title: str | None, n_sites: int = 1) -> dict:
         return {"key": f"plugin:{p['slug']}", "title": f"{p['name']}, a WordPress plugin, has a published security flaw",
                 "why": "", "who": "wordpress",
                 "do": (f"Update {p['name']} to version {p['fixed_in']} or later." if p["fixed_in"] else
-                       f"Remove {p['name']} or replace it with a maintained plugin; there is no fixed version."),
+                       f"Replace {p['name']} with a maintained plugin, or remove it. No update is coming."),
                 "fixed": f"{p['name']} is updated",
                 "headline": f"ask your WordPress company to {'update' if p['fixed_in'] else 'remove'} {p['name']} on {{where}}"}
     f, m = family_of(raw)
@@ -253,6 +282,16 @@ def words(title: str | None, n_sites: int = 1) -> dict:
     out["who"] = f.get("who", "it")
     out["headline"] = _fill(f.get("headline", ""), n_sites, m, raw)
     return out
+
+
+def is_out_of_date(finding_id: str | None, title: str | None) -> bool:
+    """Job 3r: a finding on the OUT OF DATE rung — a WordPress plugin / core / theme
+    advisory (by its title, any writer: the heavy writer stores no tags), a JavaScript
+    library advisory (light 'libflaw-' identity), or an advisory-watch out-of-date row."""
+    fid = finding_id or ""
+    return bool(plugin_of(title) or ":light:wpvuln-" in fid or ":light:libflaw-" in fid
+                or ":advisory_watch:out-of-date:" in fid
+                or (family_of(title)[0] or {}).get("key") == "out-of-date")
 
 
 def family_key(title: str | None) -> str:

@@ -17,6 +17,11 @@ Rules (plan 302 step 4, applied from the start):
   * only libraries in PACKAGES, a reviewed list; an unknown name is never guessed
   * withdrawn advisories and anything that is neither a GitHub advisory nor
     carries a CVE number are ignored
+
+Job 3r (2026-10-23): a library version on an advisory's list is OUT OF DATE, not proven —
+MODERATE, MODERATE-HIGH when one of its CVEs is on CISA's exploited list
+(evidence.version_based_severity). The advisory's own severity is kept in the
+description and raw excerpt, so nothing it says is lost.
 """
 from __future__ import annotations
 
@@ -27,6 +32,8 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+
+import evidence
 
 OSV_QUERY = "https://api.osv.dev/v1/query"
 USER_AGENT = "Sentry-ASM library-flaws/1.0 (public advisory lookups)"
@@ -182,30 +189,34 @@ def advisories_from_osv(vulns, package, version) -> list[Advisory]:
     return sorted(out.values(), key=lambda a: (a.cves or (a.id,)))
 
 
-def finding_fields(obs, package, adv: Advisory, hostname: str) -> dict:
-    """LightFinding keyword arguments for one matched advisory. PURE."""
+def finding_fields(obs, package, adv: Advisory, hostname: str, kev_ids=frozenset()) -> dict:
+    """LightFinding keyword arguments for one matched advisory. PURE.
+    kev_ids: CVE ids on CISA's exploited list (job 3r: the out-of-date rung)."""
     key = adv.id.lower()            # one advisory, one finding: never two sharing an id
     ids = adv.id + (f" ({', '.join(adv.cves)})" if adv.cves and adv.cves != (adv.id,) else "")
     fixed = f"fixed in {adv.fixed}" if adv.fixed else "no fixed version listed"
     head = adv.summary or f"in the affected range of {adv.id}"
     lines = [
         f"{obs.product} {obs.version} was seen on {hostname} (at {obs.url or 'the site'}). "
-        f"That version is in the affected range of {ids}; {fixed}.",
-        "Version-based: matched from the version number the site reports, not confirmed by "
+        f"That version is older than the fix for {ids}; {fixed}.",
+        "Out of date: matched from the version number the site reports, not confirmed by "
         "testing. A site can patch a library without changing its number.",
     ]
-    if not adv.severity_stated:
-        lines.append(f"The advisory states no severity; {DEFAULT_SEVERITY} is assumed.")
+    kev = any(c in kev_ids for c in adv.cves)
+    lines.append(f"The advisory rates it {adv.severity}." if adv.severity_stated else
+                 "The advisory states no severity.")
+    if kev:
+        lines.append("One of its CVEs is on CISA's known-exploited list.")
     lines.append(f"Source: OSV.dev, npm package {package}.")
     refs = [f"https://osv.dev/vulnerability/{adv.id}"] + list(adv.references) \
         + [f"https://nvd.nist.gov/vuln/detail/{c}" for c in adv.cves]
     return dict(
         check_name=f"libflaw-{package}-{key}",
         title=f"{obs.product} {obs.version}: {head}"[:200],
-        severity=adv.severity,
+        severity=evidence.version_based_severity(kev),
         category="supply_chain",
         description="\n\n".join(lines),
-        tags=["version-cve", "osv", "javascript-library", package],
+        tags=["version-cve", "out-of-date", "osv", "javascript-library", package] + (["cisa-kev"] if kev else []),
         cwe=list(adv.cwe) or [1395],     # CWE-1395 Dependency on Vulnerable Third-Party Component
         cve=list(adv.cves),
         references=list(dict.fromkeys(refs)),

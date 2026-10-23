@@ -55,6 +55,22 @@ EVERY advisory on CISA's exploited list for its product, not just the last 90 da
     an affected range -> HIGH; otherwise MODERATE.
 A CVE scored only by its reporting vendor (no NVD "Primary" score) now reads that
 "Secondary" score instead of none (folded into 3c from the 330 read-back).
+
+PROVEN / OUT OF DATE / GUESS (KB 12 job 3r, Howie 2026-10-22 15:58–16:05 and 20:34:
+"There are risks and there are things that are known, that's all."), superseding the
+severities above and 3c's D4:
+  * version NOT shown and no firmware build date -> a guess: NO finding. Logged each
+    run as background ("not written: …"); NVD is not even asked about a product no
+    host shows a version or build date for. The guess rows earlier runs wrote (the
+    'advisory:<key>' identity) are no longer this watcher's: it neither updates nor
+    closes them — the one-time cleanup Howie runs retires them (migration 20260902b's
+    contract: retirement is a human-run, audited batch).
+  * version shown, or a firmware build date -> OUT OF DATE, under its own identity
+    'out-of-date:<key>' (so a retired guess row can never block it — 3r plan review,
+    must-fix 2): "Runs X 8.1.2: out of date — N published flaws fixed in later
+    versions; update it". Severity evidence.version_based_severity(kev): MODERATE, or
+    MODERATE-HIGH with a flaw on CISA's exploited list — security devices included
+    (D4's CRITICAL / HIGH are gone). Never "vulnerable".
 """
 from __future__ import annotations
 
@@ -71,6 +87,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+
+import evidence
 
 SOURCE = "advisory_watch"                       # findings.source (migration 20261021a)
 USER_AGENT = "Sentry-ASM advisory-watch/1.0 (public advisory lookups)"
@@ -133,11 +151,20 @@ class SourceError(Exception):
 # ── identity ─────────────────────────────────────────────────────────────────
 
 def finding_id(asset_id: str, key: str) -> str:
-    """One finding per (asset, product). Same formula as
-    cs_parsers.common.stable_finding_id(asset, SOURCE, 'advisory:<key>', asset)
-    (pinned by a test), kept here so the workflow needs no PYTHONPATH."""
+    """The identity runs before job 3r wrote: one row per (asset, product). Every such
+    row is a guess (no version shown); this watcher no longer writes or touches them.
+    Same formula as cs_parsers.common.stable_finding_id(asset, SOURCE, 'advisory:<key>',
+    asset) (pinned by a test), kept here so the workflow needs no PYTHONPATH."""
     h = hashlib.sha256(asset_id.encode("utf-8")).hexdigest()[:7]
     return f"{asset_id}:{SOURCE}:advisory:{key}:{h}"
+
+
+def ood_finding_id(asset_id: str, key: str) -> str:
+    """Job 3r: one OUT-OF-DATE row per (asset, product), its own identity, so a retired
+    guess row on the old identity can never block it. stable_finding_id(asset, SOURCE,
+    'out-of-date:<key>', asset)."""
+    h = hashlib.sha256(asset_id.encode("utf-8")).hexdigest()[:7]
+    return f"{asset_id}:{SOURCE}:out-of-date:{key}:{h}"
 
 
 # ── versions ─────────────────────────────────────────────────────────────────
@@ -512,12 +539,11 @@ MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", 
 
 
 def severity_for(key, version, kev) -> str:
-    """Job 3c D4: on an edge security device a CISA-KEV CVE is CRITICAL, a shown
-    version in an affected range HIGH, otherwise MODERATE. Everything else as 3d:
-    HIGH when on CISA's list, else MODERATE. PURE."""
-    if key in SECURITY_DEVICES:
-        return "CRITICAL" if kev else ("HIGH" if version else "MODERATE")
-    return "HIGH" if kev else "MODERATE"
+    """Job 3r: an out-of-date finding is MODERATE, MODERATE-HIGH with a flaw on CISA's
+    exploited list — every product, security devices included (3c's D4 superseded).
+    Only a proven finding rates HIGH or CRITICAL, and a version match proves nothing.
+    PURE."""
+    return evidence.version_based_severity(kev)
 
 
 def finding_fields(asset_id, key, version, advs, release_date=None) -> dict:
@@ -528,27 +554,26 @@ def finding_fields(asset_id, key, version, advs, release_date=None) -> dict:
     n_kev = sum(1 for a in advs if a.kev)
     device = key in SECURITY_DEVICES
     n = len(advs)
-    what = f"{n} advisor{'y' if n == 1 else 'ies'}"
     how = ("Nothing was sent to the site to check: this comes from public advisories only."
            if not device else
            "No attack was sent to check: the device was named from what it shows anyone "
            "before login, and the match comes from public advisories.")
+    flaws = f"{n} published flaw{'' if n == 1 else 's'}"
+    on_kev = f", {n_kev} on CISA’s exploited list" if kev else ""
     if version:
-        title = f"{disp} {version} is in the affected range of {what}{' on CISA’s exploited list' if kev else ''}"
-        head = (f"{asset_id} shows {disp} {version}. That version is in the affected range of "
-                f"the advisories below. Version-based: matched from the version the site shows, "
-                f"not confirmed by testing — a vendor can patch without changing the number.")
+        title = f"Runs {disp} {version}: out of date — {flaws} fixed in later versions{on_kev}; update it"
+        head = (f"{asset_id} shows {disp} {version}. Later versions fix the published flaws below. "
+                f"Out of date: matched from the version the site shows, not confirmed by testing "
+                f"— a vendor can patch without changing the number.")
     elif release_date:
         y, m = release_date[:4], MONTHS[int(release_date[5:7]) - 1]
-        title = (f"{disp} firmware built {m} {y} — {what} published since"
-                 f"{f', {n_kev} on CISA’s exploited list' if kev else ''}: confirm it’s patched")
+        title = f"Runs {disp}, firmware built {m} {y}: out of date — {flaws} published since{on_kev}; update it"
         head = (f"{asset_id} shows {disp} but not its version. Its login page gives away the "
-                f"firmware's build date, {release_date}. The advisories below were published "
-                f"after that build, so it may not have their fixes. Confirm it is patched. {how}")
+                f"firmware's build date, {release_date}. The flaws below were published after "
+                f"that build, so it may not have their fixes. Out of date: not confirmed by testing. {how}")
     else:
-        title = f"Runs {disp}, version not shown — {what}{' on CISA’s exploited list' if kev else ''}: confirm it’s patched"
-        head = (f"The scans see {disp} on {asset_id} but not its version, so Sentry cannot tell "
-                f"whether the fixes below are applied. Confirm it is patched. {how}")
+        # Job 3r: a version we did not see is a guess, not a finding. plan() never asks.
+        raise ValueError(f"{asset_id} {key}: no version and no build date is a guess, not a finding")
     lines = [head, ""]
     for a in advs[:20]:
         tag = " — on CISA’s known-exploited list" if a.kev else ""
@@ -564,13 +589,28 @@ def finding_fields(asset_id, key, version, advs, release_date=None) -> dict:
         description="\n".join(lines),
         cve=[a.cve_id for a in advs],
         references=[f"https://nvd.nist.gov/vuln/detail/{a.cve_id}" for a in advs[:20]],
-        tags=["advisory-watch", "version-shown" if version else "version-not-shown", key]
-             + (["firmware-build-date"] if (release_date and not version) else [])
+        tags=["advisory-watch", "out-of-date", "version-shown" if version else "firmware-build-date", key]
              + (["security-device"] if device else [])
              + (["cisa-kev"] if kev else []),
         affected_component=disp,
         affected_component_version=version,
     )
+
+
+def guesses(inventory: dict) -> list:
+    """Job 3r: what the watcher does NOT write — products a host runs whose version (and
+    firmware build date) we did not see. Background for the run log only. PURE."""
+    return [f"not written: Runs {cpes_for(key)[0]} on {asset_id}, version not shown"
+            for asset_id, host in sorted(inventory.items())
+            for key, version in sorted(host.products.items())
+            if version is None and not host.release_dates.get(key)]
+
+
+def needs_lookup(inventory: dict) -> list:
+    """Products some host shows a version or a firmware build date for — the only ones
+    worth asking NVD about (job 3r: a guess is never matched). PURE."""
+    return sorted({key for host in inventory.values() for key, version in host.products.items()
+                   if version is not None or host.release_dates.get(key)})
 
 
 def plan(inventory: dict, found: dict, failed: set, existing: dict, recheck: dict,
@@ -583,7 +623,10 @@ def plan(inventory: dict, found: dict, failed: set, existing: dict, recheck: dic
     acts, seen_ids = [], set()
     for asset_id, host in sorted(inventory.items()):
         for key, version in sorted(host.products.items()):
-            fid = finding_id(asset_id, key)
+            built = None if version else host.release_dates.get(key)
+            if version is None and built is None:
+                continue                                   # job 3r: a guess is not a finding
+            fid = ood_finding_id(asset_id, key)
             seen_ids.add(fid)
             cur = existing.get(fid)
             if cur and cur["status"] not in ACTIVE + WATCHER_CLOSED:
@@ -591,7 +634,6 @@ def plan(inventory: dict, found: dict, failed: set, existing: dict, recheck: dic
             if key in failed:
                 continue                                   # a failed lookup changes nothing
             _, cpes = cpes_for(key)
-            built = None if version else host.release_dates.get(key)
             new = {c: a for c, a in found.get(key, {}).items()
                    if affects(a.record, cpes, version) and (built is None or published_after(a, built))}
             keep = dict(new)
@@ -688,7 +730,7 @@ def apply(conn, acts, Json, log=print) -> dict:
                     cur.execute(AUDIT_SQL, {"action": "advisory_watch_reopen",
                                             "before": Json({"finding_id": a.finding_id, "current_status": "remediated"}),
                                             "after": Json({"finding_id": a.finding_id, "current_status": "regressed"}),
-                                            "details": Json({"rule": "job_3d_advisory_watch", "cve": a.fields.get("cve")})})
+                                            "details": Json({"rule": "job_3r_advisory_watch", "cve": a.fields.get("cve")})})
             else:
                 cur.execute(CLOSE_SQL, {"finding_id": a.finding_id, "source": SOURCE})
                 row = cur.fetchone()
@@ -697,13 +739,15 @@ def apply(conn, acts, Json, log=print) -> dict:
                     cur.execute(AUDIT_SQL, {"action": "advisory_watch_close",
                                             "before": Json({"finding_id": a.finding_id, "current_status": "open_family"}),
                                             "after": Json({"finding_id": a.finding_id, "current_status": "remediated"}),
-                                            "details": Json({"rule": "job_3d_advisory_watch", "reason": a.reason})})
+                                            "details": Json({"rule": "job_3r_advisory_watch", "reason": a.reason})})
         log(f"  {a.kind}{' (reopen)' if a.reopen else ''}: {a.finding_id} {a.reason or a.fields.get('title', '')}")
     return n
 
 
 def _key_of(row) -> str | None:
-    m = re.search(rf":{SOURCE}:advisory:([^:]+):[0-9a-f]{{7}}$", row["finding_id"])
+    """The product key of an OUT-OF-DATE row (job 3r identity). The pre-3r
+    'advisory:<key>' rows (all guesses) give None: not this watcher's any more."""
+    m = re.search(rf":{SOURCE}:out-of-date:([^:]+):[0-9a-f]{{7}}$", row["finding_id"])
     return m.group(1) if m else None
 
 
@@ -722,14 +766,16 @@ def run(conn, src: Sources, dry_run=False, log=print, Json=None) -> dict:
     existing = {r["finding_id"]: dict(asset_id=r["asset_id"], key=_key_of(r), status=r["status"],
                                       cve=list(r["cve"] or [])) for r in rows if _key_of(r)}
     log(f"inventory: {len(inv)} hosts, products {sorted({k for h in inv.values() for k in h.products})}; "
-        f"existing {SOURCE} rows: {len(existing)}")
+        f"existing out-of-date rows: {len(existing)}")
+    for line in guesses(inv):
+        log(f"  {line}")
     try:
         kev = src.kev_ids()
     except SourceError as e:
         log(f"::warning::CISA KEV unreadable ({e}); HIGH comes from NVD's KEV data only this run")
         kev = set()
     found, failed = {}, set()
-    for key in sorted({k for h in inv.values() for k in h.products}):
+    for key in needs_lookup(inv):
         try:
             found[key] = advisories_for(src, cpes_for(key)[1], kev, all_kev=key in SECURITY_DEVICES)
             log(f"  {key}: {len(found[key])} advisories")

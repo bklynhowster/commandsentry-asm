@@ -110,7 +110,7 @@ def test_a_plugin_item_drops_what_does_not_apply_and_goes_to_the_wordpress_compa
     (i,) = items
     assert i["who"] == "wordpress" and dd.WHO_WORDS[i["who"]] == "the company that runs your WordPress sites"
     assert i["body"].startswith("Anyone on the internet, without logging in,")
-    assert i["do"] == "Remove Mega Main Menu, or replace it with a maintained plugin. There is no fixed version to update to."
+    assert i["do"] == "Replace Mega Main Menu with a maintained plugin, or remove it. No update is coming."
     assert "Mega Main Menu (version 2.2.1) on cmi.com" in i["forward"] and "CVE-2023-1575" in i["forward"]
     assert "remove the plugin" in i["forward"] and "Please update" not in i["forward"]
     assert i["headline"] == "ask your WordPress company to remove Mega Main Menu on cmi.com"

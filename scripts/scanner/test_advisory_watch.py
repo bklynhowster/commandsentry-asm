@@ -4,6 +4,10 @@ Howie's rulings (handoff 004): a finding on the asset; MODERATE "confirm it's pa
 HIGH when on CISA's exploited list; NVD critical (30 d) + KEV (90 d); sources pluggable.
 Core rule: proved by a harmless reaction — nothing is sent to a host; no version, no
 "vulnerable" claim.
+
+Job 3r (2026-10-23): a version we did not see is a guess and is not written at all; a
+version (or firmware build date) we saw is OUT OF DATE — MODERATE, MODERATE-HIGH with a
+flaw on CISA's exploited list, security devices included — under its own identity.
 """
 from datetime import datetime, timezone
 
@@ -43,6 +47,16 @@ def test_finding_id_is_the_standard_formula():
     from cs_parsers.common import stable_finding_id
     assert aw.finding_id("a.example.com", "php") == \
         stable_finding_id("a.example.com", aw.SOURCE, "advisory:php", "a.example.com")
+    assert aw.ood_finding_id("a.example.com", "php") == \
+        stable_finding_id("a.example.com", aw.SOURCE, "out-of-date:php", "a.example.com")
+    assert aw.ood_finding_id("a.example.com", "php") != aw.finding_id("a.example.com", "php"), \
+        "a retired guess row can never block the out-of-date row (3r review must-fix 2)"
+
+
+def test_only_out_of_date_rows_are_this_watchers():
+    assert aw._key_of({"finding_id": aw.ood_finding_id("a.example.com", "php")}) == "php"
+    assert aw._key_of({"finding_id": aw.finding_id("a.example.com", "php")}) is None, \
+        "pre-3r guess rows: neither updated nor closed here; the cleanup Howie runs retires them"
 
 
 def test_products_keep_names_without_a_version():
@@ -169,34 +183,49 @@ def host(products, scanned=True, asset="w.example.com"):
     return {asset: aw.Host(asset, products, scanned)}
 
 
-def test_version_not_shown_is_moderate_confirm_its_patched():
-    a = adv(php2shell())
-    (act,) = aw.plan(host({"php": None}), {"php": {a.cve_id: a}}, set(), {}, {})
-    assert act.kind == "upsert" and act.fields["severity"] == "MODERATE"
-    assert "version not shown" in act.fields["title"] and "confirm it’s patched" in act.fields["title"]
-    assert act.fields["cve"] == ["CVE-2026-109618"] and act.fields["category"] == "supply_chain"
-    assert "Nothing was sent to the site" in act.fields["description"]
-
-
-def test_on_cisas_exploited_list_is_high():
+def test_a_version_not_shown_is_a_guess_and_writes_nothing():
+    # Howie 2026-10-22 20:34: "There are risks and there are things that are known, that's all."
     a = adv(php2shell(), kev=True)
-    (act,) = aw.plan(host({"php": None}), {"php": {a.cve_id: a}}, set(), {}, {})
-    assert act.fields["severity"] == "HIGH" and "cisa-kev" in act.fields["tags"]
+    assert aw.plan(host({"php": None}), {"php": {a.cve_id: a}}, set(), {}, {}) == []
+    assert aw.guesses(host({"php": None, "nginx": "1.31.6"})) == \
+        ["not written: Runs PHP on w.example.com, version not shown"]
+    assert aw.needs_lookup(host({"php": None, "nginx": "1.31.6"})) == ["nginx"], "NVD is not asked about a guess"
+    with pytest.raises(ValueError):
+        aw.finding_fields("w.example.com", "php", None, [a])
+
+
+def test_a_shown_version_in_range_is_out_of_date_moderate():
+    a = adv(php2shell())
+    (act,) = aw.plan(host({"php": "8.3.10"}), {"php": {a.cve_id: a}}, set(), {}, {})
+    assert act.kind == "upsert" and act.fields["severity"] == "MODERATE"
+    assert act.finding_id == aw.ood_finding_id("w.example.com", "php")
+    assert act.fields["title"] == "Runs PHP 8.3.10: out of date — 1 published flaw fixed in later versions; update it"
+    assert "vulnerable" not in (act.fields["title"] + act.fields["description"]).lower()
+    assert act.fields["cve"] == ["CVE-2026-109618"] and act.fields["category"] == "supply_chain"
+    assert "Out of date: matched from the version the site shows, not confirmed by testing" in act.fields["description"]
+    assert "out-of-date" in act.fields["tags"] and "version-shown" in act.fields["tags"]
+
+
+def test_on_cisas_exploited_list_is_moderate_high_never_high():
+    a = adv(php2shell(), kev=True)
+    (act,) = aw.plan(host({"php": "8.3.10"}), {"php": {a.cve_id: a}}, set(), {}, {})
+    assert act.fields["severity"] == "MODERATE-HIGH" and "cisa-kev" in act.fields["tags"]
+    assert act.fields["title"].endswith("fixed in later versions, 1 on CISA’s exploited list; update it")
 
 
 def test_a_version_outside_every_range_raises_nothing_inside_says_so():
     a = adv(php2shell())
     assert aw.plan(host({"php": "8.3.36"}), {"php": {a.cve_id: a}}, set(), {}, {}) == []
     (act,) = aw.plan(host({"php": "8.3.10"}), {"php": {a.cve_id: a}}, set(), {}, {})
-    assert act.fields["title"].startswith("PHP 8.3.10 is in the affected range")
+    assert act.fields["title"].startswith("Runs PHP 8.3.10: out of date")
 
 
 def _existing(status="open", cve=("CVE-2026-109618",), key="php", asset="w.example.com"):
-    return {aw.finding_id(asset, key): dict(asset_id=asset, key=key, status=status, cve=list(cve))}
+    return {aw.ood_finding_id(asset, key): dict(asset_id=asset, key=key, status=status, cve=list(cve))}
 
 
 def test_a_failed_lookup_changes_nothing():
-    assert aw.plan(host({"php": None}), {}, {"php"}, _existing(), {}) == []
+    assert aw.plan(host({"php": "8.3.10"}), {}, {"php"}, _existing(), {}) == []
 
 
 def test_product_gone_from_a_scanned_host_closes_unscanned_host_does_not():
@@ -209,21 +238,21 @@ def test_product_gone_from_a_scanned_host_closes_unscanned_host_does_not():
 def test_a_person_closed_row_is_never_touched():
     a = adv(php2shell())
     for st in ("false_positive", "wont_fix", "accepted_risk", "closed_reclassified", "detector_retired"):
-        assert aw.plan(host({"php": None}), {"php": {a.cve_id: a}}, set(), _existing(st), {}) == [], st
+        assert aw.plan(host({"php": "8.3.10"}), {"php": {a.cve_id: a}}, set(), _existing(st), {}) == [], st
         assert aw.plan(host({}), {}, set(), _existing(st), {}) == [], st
 
 
 def test_watcher_closed_reopens_only_on_a_new_match():
     a = adv(php2shell())
-    (act,) = aw.plan(host({"php": None}), {"php": {a.cve_id: a}}, set(), _existing("remediated"), {})
+    (act,) = aw.plan(host({"php": "8.3.10"}), {"php": {a.cve_id: a}}, set(), _existing("remediated"), {})
     assert act.kind == "upsert" and act.reopen
-    assert aw.plan(host({"php": None}), {"php": {}}, set(), _existing("remediated"), {}) == []
+    assert aw.plan(host({"php": "8.3.10"}), {"php": {}}, set(), _existing("remediated"), {a.cve_id: a}) == []
 
 
 def test_listed_cves_stay_after_the_window_and_keep_their_kev_flag():
-    (act,) = aw.plan(host({"php": None}), {"php": {}}, set(), _existing(cve=("CVE-2024-4577",)), {},
+    (act,) = aw.plan(host({"php": "8.3.10"}), {"php": {}}, set(), _existing(cve=("CVE-2024-4577",)), {},
                      kev_ids={"CVE-2024-4577"})
-    assert act.fields["cve"] == ["CVE-2024-4577"] and act.fields["severity"] == "HIGH"
+    assert act.fields["cve"] == ["CVE-2024-4577"] and act.fields["severity"] == "MODERATE-HIGH"
     assert "outside today's look-back window" in act.fields["description"]
 
 
@@ -242,7 +271,7 @@ def test_an_in_window_cve_the_shown_version_rules_out_is_dropped_not_kept():
     a = adv(php2shell())
     acts = aw.plan(host({"php": "8.3.36"}), {"php": {a.cve_id: a}}, set(), _existing(), {})
     assert [x.kind for x in acts] == ["close"]
-    assert not any("is in the affected range" in (x.fields.get("title") or "") for x in acts)
+    assert not any("out of date" in (x.fields.get("title") or "") for x in acts)
 
 
 def test_the_fortiweb_cpe_is_the_application_entry():
@@ -252,7 +281,7 @@ def test_the_fortiweb_cpe_is_the_application_entry():
 
 def test_kev_listed_is_left_to_cve_scoring():
     a = adv(php2shell(), kev=True)
-    (act,) = aw.plan(host({"php": None}), {"php": {a.cve_id: a}}, set(), {}, {})
+    (act,) = aw.plan(host({"php": "8.3.10"}), {"php": {a.cve_id: a}}, set(), {}, {})
     assert "kev_listed" not in act.fields and "kev_listed" not in aw.UPSERT_SQL
 
 
@@ -308,18 +337,30 @@ def _src():
 
 
 def test_run_dry_run_writes_nothing():
-    conn = Conn([{"asset_id": "w.example.com", "tech": {"tech": ["PHP", "WordPress"]}}])
-    n = aw.run(conn, _src(), dry_run=True, log=lambda *a: None, Json=lambda x: x)
+    conn = Conn([{"asset_id": "w.example.com", "tech": {"tech": ["PHP:8.3.10", "WordPress"]}}])
+    logs = []
+    n = aw.run(conn, _src(), dry_run=True, log=logs.append, Json=lambda x: x)
     assert n["planned"] == 1
+    assert "  not written: Runs WordPress on w.example.com, version not shown" in logs
     assert not [c for c, _ in conn.s["calls"] if c.startswith("INSERT") or c.startswith("UPDATE")]
 
 
 def test_run_writes_one_finding_per_asset_and_product():
-    conn = Conn([{"asset_id": "w.example.com", "tech": {"tech": ["PHP"]}}])
+    conn = Conn([{"asset_id": "w.example.com", "tech": {"tech": ["PHP:8.3.10"]}}])
     n = aw.run(conn, _src(), log=lambda *a: None, Json=lambda x: x)
     assert n["upsert"] == 1 and n["close"] == 0
     (ins,) = [p for c, p in conn.s["calls"] if c.startswith("INSERT INTO public.findings")]
-    assert ins["finding_id"] == aw.finding_id("w.example.com", "php") and ins["source"] == "advisory_watch"
+    assert ins["finding_id"] == aw.ood_finding_id("w.example.com", "php") and ins["source"] == "advisory_watch"
+
+
+def test_run_leaves_the_pre_3r_guess_rows_alone():
+    """The cleanup Howie runs retires them (20260902b: a human-run, audited batch)."""
+    guess = {"finding_id": aw.finding_id("w.example.com", "php"), "asset_id": "w.example.com",
+             "status": "open", "cve": ["CVE-2026-109618"], "tags": ["version-not-shown"]}
+    conn = Conn([{"asset_id": "w.example.com", "tech": {"tech": ["PHP"]}}], existing=[guess])
+    n = aw.run(conn, _src(), log=lambda *a: None, Json=lambda x: x)
+    assert n["upsert"] == 0 and n["close"] == 0
+    assert not [c for c, _ in conn.s["calls"] if c.startswith("INSERT") or c.startswith("UPDATE")]
 
 
 def test_the_watcher_contacts_only_nvd_and_cisa():
@@ -383,32 +424,32 @@ def test_security_devices_ask_for_every_kev_entry_others_the_90_day_window():
     assert not any("hasKev" in u for u in php) and any("kevStartDate" in u for u in php)
 
 
-def test_kev_on_a_security_device_is_critical_even_without_a_version():
+def test_a_security_device_without_a_version_or_build_date_writes_nothing():
+    """Job 3r supersedes 3c's D4: the four FortiWeb CRITICALs of 2026-10-22 were guesses."""
     a = adv(asa_cve(), kev=True)
-    (act,) = aw.plan(host({"cisco_asa": None}, scanned=False, asset="vpn.example.com"),
-                     {"cisco_asa": {a.cve_id: a}}, set(), {}, {})
-    assert act.fields["severity"] == "CRITICAL"
-    assert "security-device" in act.fields["tags"] and "cisa-kev" in act.fields["tags"]
-    assert "No attack was sent" in act.fields["description"]
-    assert "Nothing was sent to the site" not in act.fields["description"]
+    assert aw.plan(host({"cisco_asa": None}, scanned=False, asset="vpn.example.com"),
+                   {"cisco_asa": {a.cve_id: a}}, set(), {}, {}) == []
 
 
-def test_a_shown_asa_version_in_range_is_high_without_kev_and_out_of_range_is_nothing():
+def test_a_shown_asa_version_in_range_is_out_of_date_and_out_of_range_is_nothing():
     a = adv(asa_cve(kev=False), kev=False)
     inv = host({"cisco_asa": "9.16.4.48"}, scanned=False, asset="vpn.example.com")
     (act,) = aw.plan(inv, {"cisco_asa": {a.cve_id: a}}, set(), {}, {})
-    assert act.fields["severity"] == "HIGH" and "9.16.4.48 is in the affected range" in act.fields["title"]
+    assert act.fields["severity"] == "MODERATE" and act.fields["title"].startswith("Runs Cisco ASA 9.16.4.48: out of date")
+    assert "security-device" in act.fields["tags"]
+    k = adv(asa_cve(kev=True), kev=True)
+    (actk,) = aw.plan(inv, {"cisco_asa": {k.cve_id: k}}, set(), {}, {})
+    assert actk.fields["severity"] == "MODERATE-HIGH", "D4's CRITICAL is gone: a version match proves nothing"
     patched = host({"cisco_asa": "9.16.4.85"}, scanned=False, asset="vpn.example.com")
     assert aw.plan(patched, {"cisco_asa": {a.cve_id: a}}, set(), {}, {}) == []
 
 
 def test_severity_ladder():
-    assert aw.severity_for("cisco_asa", None, True) == "CRITICAL"
-    assert aw.severity_for("fortiweb", None, True) == "CRITICAL"          # the D4 widening
-    assert aw.severity_for("fortigate", "7.2.1", False) == "HIGH"
-    assert aw.severity_for("fortigate", None, False) == "MODERATE"
-    assert aw.severity_for("php", None, True) == "HIGH"                   # 3d unchanged
-    assert aw.severity_for("php", "8.3.10", False) == "MODERATE"
+    """Job 3r: one rung for every product — out of date is MODERATE, MODERATE-HIGH on
+    CISA's exploited list. 3c's D4 (device + KEV -> CRITICAL, shown version -> HIGH) is gone."""
+    for key in ("cisco_asa", "fortiweb", "fortigate", "php"):
+        assert aw.severity_for(key, "1.0", True) == "MODERATE-HIGH", key
+        assert aw.severity_for(key, "1.0", False) == "MODERATE", key
 
 
 def test_build_date_keeps_only_advisories_published_after_it():
@@ -424,9 +465,9 @@ def test_build_date_keeps_only_advisories_published_after_it():
     (act,) = aw.plan(inv, found, set(), {}, {})
     assert act.fields["cve"] == ["CVE-2024-21762", "CVE-2025-1"]
     t = act.fields["title"]
-    assert t.startswith("Fortinet FortiGate (FortiOS) firmware built Jan 2024 — 2 advisories published since")
-    assert "1 on CISA’s exploited list" in t and t.endswith("confirm it’s patched")
-    assert act.fields["severity"] == "CRITICAL" and "firmware-build-date" in act.fields["tags"]
+    assert t == ("Runs Fortinet FortiGate (FortiOS), firmware built Jan 2024: out of date — "
+                 "2 published flaws published since, 1 on CISA’s exploited list; update it")
+    assert act.fields["severity"] == "MODERATE-HIGH" and "firmware-build-date" in act.fields["tags"]
     assert "2024-01-31" in act.fields["description"]
 
 
@@ -435,7 +476,7 @@ def test_a_newer_build_drops_listed_advisories_published_before_it():
                     cpe="o:fortinet:fortios", start="7.2.0", end="7.2.7"), kev=True)
     inv = {"fgt.example.com": aw.Host("fgt.example.com", {"fortigate": None}, False,
                                       {"fortigate": "2025-06-01"})}
-    cur = {aw.finding_id("fgt.example.com", "fortigate"):
+    cur = {aw.ood_finding_id("fgt.example.com", "fortigate"):
            {"asset_id": "fgt.example.com", "key": "fortigate", "status": "open", "cve": ["CVE-2024-21762"]}}
     (act,) = aw.plan(inv, {"fortigate": {a.cve_id: a}}, set(), cur, {})
     assert act.kind == "close" and "firmware built 2025-06-01 is newer" in act.reason
@@ -448,13 +489,14 @@ def test_published_after_keeps_unknown_dates():
     assert aw.published_after(a, "2024-01-31") is False
 
 
-def test_fortiweb_now_reads_every_kev_entry_and_is_critical():
-    # the D4 widening, live on the four confirmed FortiWeb hosts
+def test_the_four_fortiweb_hosts_of_2026_10_22_write_nothing():
+    # 3c's D4 widening rated them CRITICAL on "version not shown"; job 3r: a guess
     a = adv(asa_cve("CVE-2025-64446", cpe="a:fortinet:fortiweb", start="7.0.0", end="7.0.12"), kev=True)
-    (act,) = aw.plan(host({"fortiweb": None}, scanned=False, asset="api.example.com"),
-                     {"fortiweb": {a.cve_id: a}}, set(), {}, {})
-    assert act.fields["severity"] == "CRITICAL"
-    assert "Runs Fortinet FortiWeb, version not shown" in act.fields["title"]
+    assert aw.plan(host({"fortiweb": None}, scanned=False, asset="api.example.com"),
+                   {"fortiweb": {a.cve_id: a}}, set(), {}, {}) == []
+    v = host({"fortiweb": "7.0.11"}, scanned=False, asset="api.example.com")
+    (act,) = aw.plan(v, {"fortiweb": {a.cve_id: a}}, set(), {}, {})
+    assert act.fields["severity"] == "MODERATE-HIGH" and act.fields["title"].startswith("Runs Fortinet FortiWeb 7.0.11: out of date")
 
 
 def test_run_asks_for_every_kev_entry_for_a_confirmed_security_device():
@@ -462,7 +504,7 @@ def test_run_asks_for_every_kev_entry_for_a_confirmed_security_device():
         def fetchall(self):
             if "httpx_tech" not in self.last and "vendor_product_confidence" in self.last:
                 return [{"asset_id": "vpn.example.com",
-                         "vendor_product": {"vendor": "Cisco", "product": "ASA"}}]
+                         "vendor_product": {"vendor": "Cisco", "product": "ASA", "version": "9.16.4.48"}}]
             return super().fetchall()
 
     class ApplianceConn(Conn):

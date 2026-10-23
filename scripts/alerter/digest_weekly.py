@@ -307,17 +307,21 @@ def changes(now_bands: dict, then_bands: dict, opened, closed, names) -> list[di
 def build_weekly(*, now, window_start, window_end, days, sites, opened, closed, scans,
                  certs=None, open_serious=None, hints=None, stale_assets=None,
                  canary_violations=None, stale_words=None, stale_intro="", stale_note="",
-                 baseline=None, brand=None, details=None) -> dict:
+                 baseline=None, brand=None, details=None, overdue=None) -> dict:
     """Everything the two weekly renderers need, decided once. PURE. `sites` are
-    SQL_SITE_RATINGS rows with the rebuild taken at window_start."""
+    SQL_SITE_RATINGS rows with the rebuild taken at window_start. `overdue` are
+    SQL_OPEN_OUT_OF_DATE rows (job 3r): out-of-date findings with a known fix, open
+    more than OVERDUE_DAYS — their own section, never also in "Worth your time"."""
     brand = brand or dict(dd.DEFAULT_BRAND)
     site_rows = list(sites or [])
     # only what is known: a version we could not see is not a finding, opened or closed
     opened = [r for r in opened or [] if not words.is_guess(r[2])]
     closed = [r for r in closed or [] if not words.is_guess(r[2])]
-    open_serious = [r for r in open_serious or [] if not words.is_guess(r[2])]
+    overdue = [r for r in overdue or [] if words.is_out_of_date(r[0], r[2]) and not words.is_guess(r[2])]
+    od_ids = {r[0] for r in overdue}
+    open_serious = [r for r in open_serious or [] if not words.is_guess(r[2]) and r[0] not in od_ids]
     names = {r[0] for r in site_rows} | {r[1] for r in (opened or [])} | \
-            {r[1] for r in (closed or [])} | {r[1] for r in (open_serious or [])}
+            {r[1] for r in (closed or [])} | {r[1] for r in (open_serious or [])} | {r[1] for r in overdue}
     now_b, then_b = dd.site_bands(site_rows)
     now_c, then_c = dd.band_counts(now_b), dd.band_counts(then_b)
     mv = moves(now_b, then_b, opened, closed, names)
@@ -337,6 +341,23 @@ def build_weekly(*, now, window_start, window_end, days, sites, opened, closed, 
         g["why"] = ""
     do += serious[:DO_MAX]
     more = max(0, len(serious) - DO_MAX)
+    # Job 3r (Howie 2026-10-23 07:21–07:25): MODERATE, "but … some kind of indication that
+    # there is still some action required": known since <first sighting>, calm violet.
+    first_seen = {r[0]: r[6] for r in overdue if len(r) > 6 and r[6] is not None}
+    od_details = {r[0]: (r[7] if len(r) > 7 else "", list(r[8] or []) if len(r) > 8 else []) for r in overdue}
+    late = dd.group_problems(overdue, names, details=od_details)
+    for g in late:
+        g["why"] = ""
+        seen = [first_seen[f] for f in g["finding_ids"] if f in first_seen]
+        g["overdue_since"] = min(seen) if seen else None
+    late = [g for g in late if g["overdue_since"] is not None]
+    late.sort(key=lambda g: (g["overdue_since"], g["title"]))
+    seen_who: dict = {}
+    for g in late:
+        g["as_of"] = now
+        k = seen_who.get(g.get("who") or "it", 0)
+        seen_who[g.get("who") or "it"] = k + 1
+        g["nudge"] = dd.overdue_nudge(g, k)        # a different line for each item, per audience
 
     scan_cols = scans_by_day(scans, days)
     # The counts are the seven days; `opened` / `closed` may run on to now (Monday's early
@@ -354,7 +375,7 @@ def build_weekly(*, now, window_start, window_end, days, sites, opened, closed, 
         "sites_total": len(now_b), "counts": now_c, "counts_then": then_c,
         "moves": mv, "changes": changes(now_b, then_b, opened, closed, names),
         "scans": scan_cols, "n_scans": sum(a + b for a, b in scan_cols),
-        "groups": site_groups(now_b, then_b), "do": do, "more": more,
+        "groups": site_groups(now_b, then_b), "do": do, "more": more, "overdue": late,
         "n_closed": n_closed, "n_opened": n_opened, "n_certs": n_certs,
         "degraded": bool(stale_assets or canary_violations), "baseline": baseline or {},
     }
@@ -554,6 +575,11 @@ def render_weekly_html(m: dict, *, portal_url: str = "", product_name: str = "")
         if m["more"]:
             rows.append('<tr><td class="px" style="padding:0 32px;">'
                         + dd._p(f"And {m['more']} more, waiting patiently in the portal.", MUTED, 14) + '</td></tr>')
+    if m.get("overdue"):
+        rows.append(_section("Overdue",
+                             intro=f"Known problems with a known fix, open more than {dd.OVERDUE_DAYS} days. "
+                                   f"Not urgent; still waiting on someone."))
+        rows += [dd._card(i, portal) for i in m["overdue"]]
     rows += _week(m)
     rows += _tiles(m)
     if portal:
@@ -612,26 +638,39 @@ def render_weekly_text(m: dict, *, portal_url: str = "", product_name: str = "")
             out.append(f"      {x}")
         out.append(f"      {', '.join(g['sites'])}")
     out.append("")
+    def item_lines(i):
+        sev = SEV_WORD.get(i.get("severity") or "", "")
+        tag = "[Overdue] " if i.get("overdue_since") else (f"[{sev}] " if sev else "")
+        out.append(f"  [ ] {tag}{i['title']}")
+        if i.get("overdue_since"):
+            out.append(f"      {dd.overdue_words(i)}")
+            if i.get("nudge"):
+                out.append(f"      {i['nudge']}")
+        if i.get("body"):
+            out.append(f"      {i['body']}")
+        if i.get("sites") and i.get("kind") == "finding":
+            out.append(f"      Sites: {', '.join(i['sites'])}")
+        for label, sites in i.get("groups", []):
+            out.append(f"      - {label}: {', '.join(sites)}")
+        for l in i.get("lines", [])[:20]:
+            out.append(f"      - {l}")
+        if i.get("do"):
+            who = dd.WHO_WORDS.get(i.get("who") or "", "")
+            out.append(f"      The fix{', for ' + who if who and i.get('kind') == 'finding' else ''}: {i['do']}")
+        if i.get("forward"):
+            out.append(f"      Ready to forward: {i['forward']}")
+
     if m["do"]:
         out.append("WORTH YOUR TIME THIS WEEK (worst first)")
         for i in m["do"]:
-            sev = SEV_WORD.get(i.get("severity") or "", "")
-            out.append(f"  [ ] {('[' + sev + '] ') if sev else ''}{i['title']}")
-            if i.get("body"):
-                out.append(f"      {i['body']}")
-            if i.get("sites") and i.get("kind") == "finding":
-                out.append(f"      Sites: {', '.join(i['sites'])}")
-            for label, sites in i.get("groups", []):
-                out.append(f"      - {label}: {', '.join(sites)}")
-            for l in i.get("lines", [])[:20]:
-                out.append(f"      - {l}")
-            if i.get("do"):
-                who = dd.WHO_WORDS.get(i.get("who") or "", "")
-                out.append(f"      The fix{', for ' + who if who and i.get('kind') == 'finding' else ''}: {i['do']}")
-            if i.get("forward"):
-                out.append(f"      Ready to forward: {i['forward']}")
+            item_lines(i)
         if m["more"]:
             out.append(f"  And {m['more']} more, in the portal.")
+        out.append("")
+    if m.get("overdue"):
+        out.append(f"OVERDUE (known, with a fix, open more than {dd.OVERDUE_DAYS} days)")
+        for i in m["overdue"]:
+            item_lines(i)
         out.append("")
     out.append(f"HOW HARD WE LOOKED: {m['n_scans']} scans, {days[0]:%a %b} {days[0].day} to {days[-1]:%a %b} {days[-1].day}")
     out.append("  " + "  ".join(f"{d:%a} {deep} deep/{quick} quick" for d, (deep, quick) in zip(days, m["scans"])))
