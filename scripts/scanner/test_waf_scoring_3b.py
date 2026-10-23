@@ -3,9 +3,10 @@
   * a proven absence is MODERATE, not HIGH (a missing control, not a hole);
   * a CONFIRMED waf that blocked nothing is its own MODERATE-HIGH finding; a SUSPECTED waf
     class is NOT presence (note 266: the GFE "Cloud Armor" false positive) -> plain absence;
-  * absence + open CVE-listed findings (MODERATE or worse) -> its own HIGH 'exposed' finding,
+  * absence + open CVE-listed findings (MODERATE or worse) -> its own 'exposed' finding,
     emitted through ctx.findings so the normal upsert writes and reopens it; a failed read
-    emits nothing and closes nothing;
+    emits nothing and closes nothing; HIGH only behind a HIGH/CRITICAL (proven) finding,
+    MODERATE-HIGH behind out-of-date ones (3r, 2026-10-23 - test_waf_exposure_3r.py);
   * not a WAF candidate (mail / ftp kind, CONFIRMED edge_firewall) -> no finding at all;
   * the close-out settles the family: block closes, redirect retracts, kinds supersede each
     other and reopen themselves, exposed closes only on a successful read.
@@ -92,8 +93,10 @@ def test_the_partial_finding_honours_the_same_candidacy():
 
 
 def test_absence_plus_open_cve_findings_adds_a_separate_high(monkeypatch):
-    rows = [{"finding_id": "app.example.com:lib:jq:1", "title": "jQuery UI 1.12.1: XSS",
-             "severity": "MODERATE", "cve": ["CVE-2021-41184"]}]
+    # 3r (2026-10-23): HIGH needs a proven (HIGH/CRITICAL) finding behind the gap; an
+    # out-of-date-only gap is MODERATE-HIGH (test_waf_exposure_3r.py).
+    rows = [{"finding_id": "app.example.com:manual:F-02", "title": "Struts RCE confirmed by test",
+             "severity": "HIGH", "cve": ["CVE-2021-41184"]}]
     _no_exposure(monkeypatch, ok=True, rows=rows)
     ctx = _ctx()
     h._maybe_emit_no_waf_finding(ctx, SERVED, ABSENT)

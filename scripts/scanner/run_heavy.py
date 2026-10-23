@@ -2639,6 +2639,8 @@ def _no_waf_proven(baseline: dict, verdict: dict) -> bool:
 #     end, not a WAF (rule 4b).
 #   - absence (either kind) PLUS an open finding with a published flaw (CVE), MODERATE or
 #     worse                                 -> HIGH, its own finding id naming those flaws
+#     (3r, Howie 2026-10-23 11:50 "Cap it below High": MODERATE-HIGH unless one of those
+#     findings is itself HIGH/CRITICAL, i.e. proven - see _maybe_emit_exposed_finding)
 #     (D2; re-read every heavy, so it follows the facts). Its own id because the upsert's
 #     downgrade protection (import_jsonl.py, run_light "Severity downgrade protection")
 #     never raises a stored row — a separate identity both escalates and says why.
@@ -2752,7 +2754,8 @@ def _maybe_emit_no_waf_finding(ctx: HeavyScanContext, baseline: dict, verdict: d
                 "application. That is a missing compensating control (PCI DSS 6.4.2; NIST SP "
                 "800-53 SC-7), not a vulnerability on its own: it matters most where the "
                 "application has a weakness a WAF would block, which Sentry reports as a "
-                "separate HIGH finding when it sees one. Presence-only method: this asserts the "
+                "separate finding when it sees one (HIGH behind a proven problem, MODERATE-HIGH "
+                "behind out-of-date components). Presence-only method: this asserts the "
                 "ABSENCE of blocking and names no product.")
     ctx.findings.append(FindingEvent(
         finding_id=stable_finding_id(ctx.asset_id, "commandsentry_heavy", check_id, ctx.hostname),
@@ -2766,32 +2769,51 @@ def _maybe_emit_no_waf_finding(ctx: HeavyScanContext, baseline: dict, verdict: d
 
 
 def _maybe_emit_exposed_finding(ctx: HeavyScanContext, now_iso: str) -> None:
-    """3b D2: absence proven this run + open CVE-listed findings on the asset -> HIGH
-    'exposed' finding naming them. Its own id (see the block comment)."""
+    """3b D2: absence proven this run + open CVE-listed findings on the asset -> the
+    'exposed' finding naming them. Its own id (see the block comment).
+
+    KB 12 job 3r, Howie 2026-10-23 11:50 ("Cap it below High"): since 3r only a PROVEN
+    finding may be HIGH or CRITICAL; a version Sentry saw that is older than a fix is "out
+    of date" (MODERATE, MODERATE-HIGH on CISA's exploited list). So the WAF gap in front of
+    out-of-date flaws only is MODERATE-HIGH; it is HIGH only when at least one of the
+    findings it stands in front of is itself HIGH or CRITICAL - which the ladder now
+    reserves for proven problems. One rule, read from the severities the writers already
+    gave; no list of identities."""
     ok, rows = _read_waf_exposure(ctx)
     ctx.waf_exposure_read_ok = ok
     if not ok or not rows:
         return
+    proven = any((r.get("severity") or "") in ("CRITICAL", "HIGH") for r in rows)
+    sev = "HIGH" if proven else "MODERATE-HIGH"
     named = "; ".join(
         f"{r.get('title')} [{r.get('severity')}; {', '.join((r.get('cve') or [])[:3])}]"
         for r in rows[:5])
     more = f" (+{len(rows) - 5} more)" if len(rows) > 5 else ""
+    if proven:
+        title = f"Known-vulnerable component with no enforcing WAF in front ({len(rows)} open)"
+        tail = ("Either half alone is less; together, with a proven problem behind the gap, "
+                "they are the actionable risk.")
+    else:
+        title = f"Out-of-date component with no enforcing WAF in front ({len(rows)} open)"
+        tail = ("Those findings are out of date (a version older than a fix, not proven by "
+                "testing), so together they are MODERATE-HIGH, not HIGH: update the "
+                "components, or put an enforcing WAF in front.")
     ctx.findings.append(FindingEvent(
         finding_id=stable_finding_id(ctx.asset_id, "commandsentry_heavy",
                                      WAF_EXPOSED_CHECK_ID, ctx.hostname),
         asset_id=ctx.asset_id, scan_id=ctx.scan_run_id, source="commandsentry_heavy",
-        title=f"Known-vulnerable component with no enforcing WAF in front ({len(rows)} open)",
-        severity="HIGH", category="config", observed_at=now_iso, matched_at=ctx.hostname,
+        title=title,
+        severity=sev, category="config", observed_at=now_iso, matched_at=ctx.hostname,
         description=(
             "Nothing in front of this application blocked the differential probe's attack "
             "classes, and the application has open findings with published flaws (CVE) that a "
-            f"WAF would stand in front of: {named}{more}. Either half alone is MODERATE; "
-            "together they are the actionable risk. Closes when either half stops holding."),
+            f"WAF would stand in front of: {named}{more}. {tail} "
+            "Closes when either half stops holding."),
         subdomain=ctx.hostname, port=TESTSSL_PORT, protocol="https",
     ))
     ctx.waf_exposed_emitted = True
     log(f"  waf_differential probe: {len(rows)} open CVE-listed finding(s) + no enforcing WAF "
-        f"-> HIGH '{WAF_EXPOSED_CHECK_ID}' (3b D2)")
+        f"-> {sev} '{WAF_EXPOSED_CHECK_ID}' (3b D2; 3r cap: HIGH only behind a proven finding)")
 
 
 # ── 314 (2026-10-14): THE BLOCK WAS PARTIAL, AND THE FINDING SAYS WHICH CLASS GOT IN ────
