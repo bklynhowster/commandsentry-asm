@@ -92,44 +92,49 @@ def test_problems_and_inventory_are_split_by_severity():
 
 
 def test_headline_counts_problems_not_inventory_and_names_fixed():
-    """KB 12 job 3l: the old count headline became a to-do list. Still pinned: INFO never
-    counts as a problem (it lands on the quiet line), a fix is reported (Off your plate),
+    """KB 12 job 3l: the old count headline became the day's job. Still pinned: INFO never
+    counts as a problem (it is not even mentioned), a fix is reported (Fixed since yesterday),
     and the dead "status change(s)" counter stays dead."""
     html, text = _render(new_findings=[HIGH, LOW, INFO], fixed=[FIXED])
-    assert "Your list for today: one check." in html and "Your list for today: one check." in text
-    assert "Also new: 1 low and 1 informational item, listed in the portal." in html
-    assert "1 finding closed" in html and "1 finding closed" in text
+    head = "Today: install the missing intermediate certificate on ftp.sciimage.com."
+    assert head in html and head in text
+    assert "Also found today, minor, no action needed: a.example: Missing security header." in html
+    assert "informational" not in html and "Detected technologies" not in html
+    fix = "Fixed on commandsentry-portal.netlify.app: Next.js Middleware Bypass (CVE-2025-29927)."
+    assert fix in html and fix in text
     assert "status change(s)" not in html and "status change(s)" not in text
 
 
 def test_a_window_with_only_a_fix_is_not_no_changes():
     html, text = _render(fixed=[FIXED])
-    assert "came back with nothing new" not in html
-    assert "Off your plate" in html and "OFF YOUR PLATE" in text
+    assert "came back with nothing that needs anyone" not in html
+    assert "Fixed since yesterday" in html and "FIXED SINCE YESTERDAY" in text
     assert "Next.js Middleware Bypass" in html and "Next.js Middleware Bypass" in text
 
 
-def test_open_block_shows_portal_counts_inventory_and_stale_separately():
-    """The portal's counts (v_fleet_open_reps) stay, as the footer line; INFO is not a problem."""
-    html, text = _render()
+def test_the_portal_counts_are_the_weeklys_and_the_daily_carries_none():
+    """The portal's counts (v_fleet_open_reps) stay — in the Monday weekly's footer. The daily
+    says what to do and nothing else (Howie, 10-22: "What do I have to do with this risk level?")."""
     import digest_daily as dd
-    name = dd.load_brand()["short_name"]          # this repo's brand: Command or Prodex
-    line = f"Open across {name} right now: 0 critical, 11 high, 181 moderate, 482 low; 279 not re-checked in 30+ days."
-    assert line in html and line in text
-    assert "informational" not in html.split("Open across")[1]
+    html, text = _render()
+    assert "Open across" not in html and "Open across" not in text
+    b = ra.posture_from_rows(ROWS)
+    assert dd.open_words(b) == "0 critical, 11 high, 181 moderate, 482 low"
+    assert "informational" not in dd.open_words(b)
 
 
-def test_mod_high_shows_only_when_non_zero_and_stale_line_only_when_non_zero():
-    b = ra.posture_from_rows([("MODERATE-HIGH", 2, 0), ("LOW", 1, 0)])
-    html, text = _render(baseline=b)
-    assert "30+ days" not in html and "30+ days" not in text
+def test_mod_high_shows_only_when_non_zero():
+    import digest_daily as dd
+    assert dd.open_words(ra.posture_from_rows([("MODERATE-HIGH", 2, 0), ("LOW", 1, 0)])) == \
+        "0 critical, 0 high, 2 moderate-high, 0 moderate, 1 low"
 
 
 def test_old_five_key_baseline_still_renders():
     """The renderers must not KeyError on a baseline from an older caller/test."""
+    import digest_daily as dd
     b = {"critical_open": 0, "high_open": 1, "mod_high_open": 0, "moderate_open": 2, "low_open": 3}
     html, text = _render(baseline=b)
-    assert "0 critical, 1 high, 2 moderate, 3 low." in html and "0 critical, 1 high, 2 moderate, 3 low." in text
+    assert "Sent by" in html and dd.open_words(b) == "0 critical, 1 high, 2 moderate, 3 low"
 
 
 def test_links_and_footer_go_to_the_portal():
@@ -145,7 +150,7 @@ def test_links_and_footer_go_to_the_portal():
 
 def test_fixed_rows_are_labelled_fixed_not_new_and_scanner_sources_read_as_tiers():
     html, _ = _render(fixed=[FIXED])
-    assert "1 finding closed" in html and "Do today" not in html
+    assert "Fixed on commandsentry-portal.netlify.app" in html and "Needs you today" not in html
     assert ra.scan_tier_label("commandsentry_medium") == "medium scan"
     assert ra.scan_tier_label("commandsentry_light") == "light scan"
     assert ra.scan_tier_label("commandsentry_heavy") == "deep scan"
@@ -167,7 +172,7 @@ def test_subject_names_problems_inventory_fixed_regressed():
     m = ra._digest_model(window_start=W0, window_end=W1, new_findings=[HIGH, INFO], confirmed=[],
                          regressed=[], high_risk=[], new_assets=[], dark_assets=[], stale_assets=[],
                          canary_violations=[], baseline=ra.posture_from_rows(ROWS))
-    assert dd.subject(m, "COMMANDsentry").endswith(": 1 check")
+    assert dd.subject(m, "COMMANDsentry").endswith(": 1 for today")
     assert '{n} new find' not in src and '{n} chng' not in src
 
 

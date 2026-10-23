@@ -6,24 +6,34 @@ should definitely be Monday. If it's not Monday, it's Friday, and frankly, on Fr
 nobody pays attention." 15:12: "Happy, I'm thrilled." Canvas board "Weekly, Monday 8 AM
 (B + C)" (claude.ai artifact PKowwaTmCM9rWHAdkiFmzb).
 
-WHAT THIS IS. Pure functions, no database and no network, beside digest_daily.py and
-built from its pieces (the brand, the bands, www. folding, grouping by problem). The week
-is the seven whole local days before today (Monday's send covers Monday to Sunday). In
-order, the email carries:
+Reworked the same evening after Howie read the first test sends (19:08–19:57): "What the
+hell does up or down actually mean?"; "there's no legend"; "This week, do — what?"; "Why isn't
+it 8 sites got safer?"
 
-    the headline       the week's biggest change, in one sentence
-    two bars           every live site by rating a week ago and today (a past rating is
-                       rebuilt from findings: rating = worst open finding, job 3m)
-    why it moved       the finding behind each site that went up or came down
-    the week           seven day-columns of deep and quick scans, then the days' events
-                       (serious findings opened, findings closed)
-    every live site    one tile per site, grouped by its registered domain, alphabetical,
-                       colored by rating, outlined when its rating changed this week
-    this week, do      certificates expiring within 14 days, then the open serious
-                       problems grouped (six at most; the rest are in the portal)
+WHAT THIS IS. Pure functions, no database and no network, beside digest_daily.py and
+built from its pieces (the brand, the bands, www. folding, digest_words' plain words). The
+week is the seven whole local days before today (Monday's send covers Monday to Sunday).
+In order, the email carries:
+
+    the headline       the week's biggest change: "got riskier" / "got safer", never up/down
+    the boxes          every live site counted by risk level, each box labeled, with last
+                       week's count (a past level is rebuilt from findings, job 3m), and one
+                       sentence saying what a risk level is
+    what changed       every site whose level changed, grouped by the REASON (one card for
+                       eight sites that got safer for one reason; a site that landed
+                       elsewhere is said inside it)
+    worth your time    certificates within 14 days, then open serious problems: what we
+                       found, what it means, the fix and who does it (six at most)
+    how hard we looked seven day-columns of deep and quick scans
+    every site         one tile per site by registered domain, alphabetical, colored by
+                       level, outlined when it changed this week, with a legend
+
+Only what is known (Howie, 10-22: "There are risks and there are things that are known,
+that's all"): a "Runs X, version not shown" row is not listed, not counted, and does not set
+a site's level here — SQL_SITE_RATINGS rates such a site by its other findings.
 
 EMAIL-SAFE BY CONSTRUCTION, as the daily: tables, inline styles, bgcolor; the day columns
-are table cells with pixel heights; one <style> block for the grow-in and the outline
+are table cells with pixel heights; one <style> block for the rise-in and the outline
 pulse (Apple Mail plays them; Gmail and Outlook show the same design still), respecting
 prefers-reduced-motion.
 """
@@ -34,15 +44,15 @@ from datetime import datetime, timedelta, timezone
 from html import escape, unescape
 
 import digest_daily as dd
-from digest_daily import (BANDS, BAND_RANK, DISPLAY, FONT, GOOD, INK, MUTED, PAGE, RULE,
-                          SEV_ORDER, SEV_STYLE, SEV_WORD, LOGO_CID)
+import digest_words as words
+from digest_daily import (BANDS, BAND_RANK, DISPLAY, FONT, INK, MUTED, PAGE, RULE,
+                          SEV_ORDER, SEV_WORD, LOGO_CID)
 
 try:
     from zoneinfo import ZoneInfo
 except ImportError:  # pragma: no cover - Python < 3.9
     ZoneInfo = None  # type: ignore
 
-SERIOUS = ("CRITICAL", "HIGH", "MODERATE-HIGH")
 DO_MAX = 6            # open serious problems listed under "This week, do"; the rest: portal
 COLUMN_PX = 110       # the tallest day column, in pixels
 NO_NAME = "Addresses with no name"
@@ -207,75 +217,124 @@ def scans_by_day(rows, days) -> list[tuple[int, int]]:
     return [tuple(x) for x in out]
 
 
-def _local_date(ts: datetime, brand: dict):
-    return ts.astimezone(_zone(brand)).date()
-
-
-def day_events(opened, closed, names, days, brand) -> list[dict]:
-    """Pinned events, in day order: serious findings opened (grouped by problem per day)
-    and findings closed (one line per day, naming the biggest problem closed)."""
-    events = []
-    for d in days:
-        o = [r for r in opened or [] if (r[3] or "").upper() in SERIOUS and _local_date(r[6], brand) == d]
-        for g in dd.group_problems(o, names):
-            events.append({"day": d, "kind": "opened", "severity": g["severity"],
-                           "text": f"{g['title']}: {', '.join(g['sites'][:6])}"
-                                   + (f" and {len(g['sites']) - 6} more" if len(g["sites"]) > 6 else "")})
-        c = [r for r in closed or [] if (r[3] or "").upper() != "INFO" and _local_date(r[6], brand) == d]
-        if c:
-            gs = dd.group_problems(c, names)
-            top = gs[0]
-            text = f"{len(c)} finding{'s' if len(c) != 1 else ''} closed"
-            text += (f": {top['title']}" if len(gs) == 1 else f", the biggest: {top['title']}")
-            text += f" ({', '.join(top['sites'][:4])}{', …' if len(top['sites']) > 4 else ''})"
-            events.append({"day": d, "kind": "closed", "severity": "", "text": text})
-    return events
-
-
 # ── the model ─────────────────────────────────────────────────────────────────
+def changes(now_bands: dict, then_bands: dict, opened, closed, names) -> list[dict]:
+    """Every site whose risk level changed this week, grouped by (was, is, reason):
+    [{was, now, riskier, reason, sites}], riskier first. The reason is in plain words: for a
+    site that got riskier, the worst problem that appeared on it; for one that got safer,
+    what went away ("a web firewall now blocks our test attacks"). Nothing this week to
+    explain it says so (Howie, 10-22: "What the hell does up or down actually mean?")."""
+    by_open: dict = {}
+    for r in opened or []:
+        if (r[3] or "").upper() != "INFO":
+            by_open.setdefault(dd.site_of(r[1], names), []).append(r)
+    by_closed: dict = {}
+    for r in closed or []:
+        if (r[3] or "").upper() != "INFO":
+            by_closed.setdefault(dd.site_of(r[1], names), []).append(r)
+    def lower1(t):
+        return t if len(t) > 1 and t[1].isupper() else t[0].lower() + t[1:]
+
+    # Grouped by the REASON, not by the exact levels: eight Prodex sites got safer for one
+    # reason on 10-22, and splitting them 7 + 1 by where they landed read as two stories
+    # (Howie: "Why isn't it 8 sites got safer?"). A site that landed somewhere else, or still
+    # has something open, is said inside its group.
+    groups: dict = {}
+    for was, now, sites in dd.site_moves(now_bands, then_bands):
+        riskier = BAND_RANK[now] < BAND_RANK[was]
+        for s_ in sites:
+            w = _worst((by_open if riskier else by_closed).get(s_, []))
+            still = ""
+            if w is None:
+                key = (riskier, "none", "")
+            elif riskier:
+                key = (riskier, "new", words.words(w[2])["title"].replace("this site", "it"))
+            else:
+                fw = words.words(w[2])["fixed"]
+                key = (riskier, "fixed", fw) if fw != "fixed" else (riskier, "fixed-raw", unescape(w[2]).strip())
+                if BAND_RANK[now] <= BAND_RANK["modhigh"]:
+                    top = [r for r in by_open.get(s_, []) if dd.band_of(r[3], True) == now]
+                    if top:
+                        still = words.words(top[0][2])["key"] or words.words(top[0][2])["title"]
+            groups.setdefault(key, []).append((s_, was, now, still))
+
+    def reason(kind, text, n):
+        if kind == "none":
+            return "Nothing we saw this week explains it; the portal shows the history."
+        if kind == "new":
+            return ("New problem: " if n == 1 else "New problem on each: ") + lower1(text) + "."
+        return (text[0].upper() + text[1:] + ".") if kind == "fixed" else f"Fixed: {text}."
+
+    def aside(s_, was, now, still, common_now):
+        if still == "waf-not-blocking":
+            return (f"On {s_}, though, the firewall only watches so far: our test attacks still get "
+                    f"through, so it's {dd.BAND_TITLE[now]}, not {dd.BAND_TITLE[common_now]}.")
+        if still:
+            t = words.FAMILY_BY_KEY[still]["title"] if still in words.FAMILY_BY_KEY else still
+            return f"On {s_} one problem is still open ({lower1(t)}), so it's {dd.BAND_TITLE[now]}."
+        return f"{s_} went from {dd.BAND_TITLE[was]} to {dd.BAND_TITLE[now]}."
+
+    out = []
+    for (riskier, kind, text), rows in groups.items():
+        pairs: dict = {}
+        for _s, was, now, still in rows:
+            if not still:
+                pairs[(was, now)] = pairs.get((was, now), 0) + 1
+        common = max(pairs, key=pairs.get) if pairs else (rows[0][1], rows[0][2])
+        asides = [aside(s_, was, now, still, common[1]) for s_, was, now, still in sorted(rows)
+                  if still or (was, now) != common]
+        out.append({"was": common[0], "now": common[1], "riskier": riskier,
+                    "reason": reason(kind, text, len(rows)), "asides": asides,
+                    "sites": sorted(r[0] for r in rows)})
+    # single sites moving the same way for different reasons are one card, not "1 site got
+    # riskier" twice in a row
+    for riskier in (True, False):
+        singles = [g for g in out if g["riskier"] == riskier and len(g["sites"]) == 1 and not g["asides"]
+                   ]
+        if len(singles) < 2:
+            continue
+        for g in singles:
+            out.remove(g)
+        out.append({"was": None, "now": None, "riskier": riskier, "reason": "",
+                    "asides": [f"{g['sites'][0]} ({dd.BAND_TITLE[g['was']]} to {dd.BAND_TITLE[g['now']]}): "
+                               f"{g['reason'][0].lower() + g['reason'][1:] if not g['reason'][1:2].isupper() else g['reason']}"
+                               for g in sorted(singles, key=lambda g: g["sites"][0])],
+                    "sites": sorted(g["sites"][0] for g in singles)})
+    out.sort(key=lambda g: (not g["riskier"], -len(g["sites"]), BAND_RANK[g["now"]] if g["now"] else 0))
+    return out
+
+
 def build_weekly(*, now, window_start, window_end, days, sites, opened, closed, scans,
                  certs=None, open_serious=None, hints=None, stale_assets=None,
                  canary_violations=None, stale_words=None, stale_intro="", stale_note="",
-                 baseline=None, brand=None) -> dict:
+                 baseline=None, brand=None, details=None) -> dict:
     """Everything the two weekly renderers need, decided once. PURE. `sites` are
     SQL_SITE_RATINGS rows with the rebuild taken at window_start."""
     brand = brand or dict(dd.DEFAULT_BRAND)
     site_rows = list(sites or [])
+    # only what is known: a version we could not see is not a finding, opened or closed
+    opened = [r for r in opened or [] if not words.is_guess(r[2])]
+    closed = [r for r in closed or [] if not words.is_guess(r[2])]
+    open_serious = [r for r in open_serious or [] if not words.is_guess(r[2])]
     names = {r[0] for r in site_rows} | {r[1] for r in (opened or [])} | \
             {r[1] for r in (closed or [])} | {r[1] for r in (open_serious or [])}
     now_b, then_b = dd.site_bands(site_rows)
     now_c, then_c = dd.band_counts(now_b), dd.band_counts(then_b)
     mv = moves(now_b, then_b, opened, closed, names)
 
-    do = []
-    if stale_assets or canary_violations:
-        # the daily's coverage card, the same words: a gap in our own checking leads
-        daily = dd.build_model(
-            window_start=window_start, window_end=window_end, new_findings=[], confirmed=[],
-            regressed=[], high_risk=[], new_assets=[], dark_assets=[],
-            stale_assets=stale_assets or [], canary_violations=canary_violations or [],
-            baseline={}, brand=brand, stale_words=stale_words, stale_intro=stale_intro,
-            stale_note=stale_note)
-        do += [i for i in daily["do"] if i["kind"] == "coverage"]
-    n_certs = 0
-    for r in certs or []:
-        left = dd.cert_days_left(r, now)
-        if left is None or left > dd.CERT_DAYS:
-            continue
-        n_certs += 1
-        exp = dd.local_time(dd.cert_expiry(r), brand)
-        on = f"{exp:%A}, {dd._day(exp)}"
-        if left < 0:
-            body = f"It expired {on}. Anyone connecting to it securely now gets a certificate error."
-        else:
-            when = "today" if left == 0 else f"in {left} day{'s' if left != 1 else ''}, {on}"
-            body = f"It expires {when}. After that, anyone connecting to it securely gets a certificate error."
-        do.append({"kind": "cert", "severity": "HIGH" if left <= 3 else "MODERATE-HIGH",
-                   "title": f"Renew the certificate on {r[0]}", "body": body,
-                   "sites": [r[0]], "why": "", "do": "", "tag": ""})
-    serious = dd.group_problems(open_serious or [], names, hints=hints)
+    # the daily's own cards for the two things the week shares with it: a gap in our own
+    # checking (it leads) and certificates within 14 days (one card, however many)
+    daily = dd.build_model(
+        window_start=window_start, window_end=now, new_findings=[], confirmed=[],
+        regressed=[], high_risk=[], new_assets=[], dark_assets=[],
+        stale_assets=stale_assets or [], canary_violations=canary_violations or [],
+        baseline={}, brand=brand, certs=certs, stale_words=stale_words,
+        stale_intro=stale_intro, stale_note=stale_note)
+    do = [i for i in daily["do"] if i["kind"] in ("coverage", "cert")]
+    n_certs = sum(len(i.get("sites", [])) for i in do if i["kind"] == "cert")
+    serious = dd.group_problems(open_serious, names, hints=hints, details=details)
     for g in serious:
-        g["why"] = ""          # "found by" is the daily's question; the week asks what's open
+        g["why"] = ""
     do += serious[:DO_MAX]
     more = max(0, len(serious) - DO_MAX)
 
@@ -287,12 +346,14 @@ def build_weekly(*, now, window_start, window_end, days, sites, opened, closed, 
         return ts is not None and window_start <= ts < window_end
     n_closed = sum(1 for r in closed or [] if (r[3] or "").upper() != "INFO" and _in_week(r))
     n_opened = sum(1 for r in opened or [] if (r[3] or "").upper() != "INFO" and _in_week(r))
+    ws = dd.local_time(window_start, brand)
     model = {
         "brand": brand, "now": now, "local_now": dd.local_time(now, brand),
         "window_start": window_start, "window_end": window_end, "days": days,
+        "since": f"last {ws:%a}", "since_long": f"last {ws:%A}, {dd._day(ws)}",
         "sites_total": len(now_b), "counts": now_c, "counts_then": then_c,
-        "moves": mv, "scans": scan_cols, "n_scans": sum(a + b for a, b in scan_cols),
-        "events": day_events(opened, closed, names, days, brand),
+        "moves": mv, "changes": changes(now_b, then_b, opened, closed, names),
+        "scans": scan_cols, "n_scans": sum(a + b for a, b in scan_cols),
         "groups": site_groups(now_b, then_b), "do": do, "more": more,
         "n_closed": n_closed, "n_opened": n_opened, "n_certs": n_certs,
         "degraded": bool(stale_assets or canary_violations), "baseline": baseline or {},
@@ -302,7 +363,8 @@ def build_weekly(*, now, window_start, window_end, days, sites, opened, closed, 
 
 
 def weekly_headline(m: dict) -> str:
-    """The week's biggest change in one sentence: the larger of the two moves leads."""
+    """The week's biggest change in one sentence, in words that say which way is good:
+    riskier / safer, never up / down (Howie, 10-22)."""
     mv = m["moves"]
     up, down = mv["n_up"], mv["n_down"]
 
@@ -311,36 +373,31 @@ def weekly_headline(m: dict) -> str:
 
     if up and down:
         if down > up:
-            return f"{sites(down, 'came down')} this week, and {dd._n(up)} went up."
-        return f"{sites(up, 'went up')} this week, and {dd._n(down)} came down."
-    if up == 1:
-        return f"{mv['up'][0]['sites'][0]} went up this week."
+            return f"{sites(down, 'got safer')} this week. {dd._n(up).capitalize()} got riskier."
+        return f"{sites(up, 'got riskier')} this week. {dd._n(down).capitalize()} got safer."
     if up:
-        same = len(mv["up"]) == 1 and mv["up"][0]["severity"]
-        return f"{sites(up, 'went up')} this week" + (", all for the same reason." if same else ".")
-    if down == 1:
-        return f"{mv['down'][0]['sites'][0]} came down this week."
+        return f"{sites(up, 'got riskier')} this week." if up > 1 else \
+               f"{mv['up'][0]['sites'][0]} got riskier this week."
     if down:
-        same = len(mv["down"]) == 1 and mv["down"][0]["severity"]
-        return f"{sites(down, 'came down')} this week" + (", all for the same reason." if same else ".")
+        return f"{sites(down, 'got safer')} this week. Nothing got riskier." if down > 1 else \
+               f"{mv['down'][0]['sites'][0]} got safer this week. Nothing got riskier."
     if m["n_closed"]:
-        return f"A steady week: no rating changed, and {m['n_closed']} finding{'s' if m['n_closed'] != 1 else ''} closed."
-    return "A quiet week: no rating changed."
+        return f"A steady week: no site changed risk level, and {m['n_closed']} problem{'s' if m['n_closed'] != 1 else ''} got fixed."
+    return "A quiet week. No site changed risk level. We checked."
 
 
 def weekly_subject(m: dict, product_name: str) -> str:
-    """'[COMMANDsentry] Command, your week: 6 sites went up, 28 findings closed, 1
-    certificate to renew'."""
+    """'[PRODEXsentry] Prodex, your week: 8 sites safer, 2 riskier, 8 problems fixed'."""
     b, mv = m["brand"], m["moves"]
-    parts = []
     up, down = mv["n_up"], mv["n_down"]
-    moves_ = [(up, "went up"), (down, "came down")]
+    moves_ = [(up, "riskier"), (down, "safer")]
     if down > up:
         moves_.reverse()
-    for i, (n, verb) in enumerate(x for x in moves_ if x[0]):
-        parts.append(f"{n} site{'s' if n != 1 else ''} {verb}" if i == 0 else f"{n} {verb}")
+    parts = []
+    for i, (n, word) in enumerate(x for x in moves_ if x[0]):
+        parts.append(f"{n} site{'s' if n != 1 else ''} {word}" if i == 0 else f"{n} {word}")
     if m["n_closed"]:
-        parts.append(f"{m['n_closed']} finding{'s' if m['n_closed'] != 1 else ''} closed")
+        parts.append(f"{m['n_closed']} problem{'s' if m['n_closed'] != 1 else ''} fixed")
     if m["n_certs"]:
         parts.append(f"{m['n_certs']} certificate{'s' if m['n_certs'] != 1 else ''} to renew")
     what = ", ".join(parts) if parts else "a quiet week"
@@ -349,82 +406,75 @@ def weekly_subject(m: dict, product_name: str) -> str:
     return f"{prefix}{gap}{b.get('short_name', 'Sentry')}, your week: {what}"
 
 
-def change_line(m: dict) -> str:
-    """'High 6 to 12, moderate 39 to 33, out of 47 live sites.' / 'No rating changed …'"""
-    words = {k: w for k, w, *_r in BANDS}
-    diffs = [(k, m["counts_then"].get(k, 0), m["counts"].get(k, 0)) for k in dd.RATED
-             if m["counts_then"].get(k, 0) != m["counts"].get(k, 0)]
-    total = m["sites_total"]
-    if not diffs:
-        return f"No rating changed. {total} live site{'s' if total != 1 else ''}: {dd.counts_words(m['counts'])}."
-    s = ", ".join(f"{words[k]} {a} to {b}" for k, a, b in diffs)
-    return s[0].upper() + s[1:] + f", out of {total} live site{'s' if total != 1 else ''}."
-
-
-def open_words(bl: dict) -> str:
-    """'4 critical, 16 high, 187 moderate, 406 low' — moderate-high only when there is one."""
-    parts = [f"{bl.get('critical_open', 0)} critical", f"{bl.get('high_open', 0)} high"]
-    if bl.get("mod_high_open"):
-        parts.append(f"{bl['mod_high_open']} moderate-high")
-    parts += [f"{bl.get('moderate_open', 0)} moderate", f"{bl.get('low_open', 0)} low"]
-    return ", ".join(parts)
+open_words = dd.open_words
 
 
 # ── HTML ──────────────────────────────────────────────────────────────────────
-def _seg_bar(counts: dict, total: int, delay0: float) -> str:
-    cells, delay = [], delay0
-    for k, _w, fill, _t in BANDS:
-        n = counts.get(k, 0)
-        if not n:
-            continue
-        pct = max(1, round(100 * n / total))
-        cells.append(f'<td width="{pct}%" style="padding:0 1px 0 0;"><div class="seg" style="height:20px;'
-                     f'background:{fill};border-radius:4px;animation-delay:{delay:.2f}s;"></div></td>')
-        delay += 0.1
-    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
-            f'<tr>{"".join(cells)}</tr></table>')
+def _section(title: str, aside: str = "", intro: str = "") -> str:
+    head = (f'<tr><td class="px" style="padding:28px 32px 6px;"><table role="presentation" width="100%" cellpadding="0" '
+            f'cellspacing="0" border="0"><tr><td><h2 style="margin:0;font-family:{DISPLAY};font-size:22px;line-height:1.2;'
+            f'font-weight:700;color:{INK};">{escape(title)}</h2></td>'
+            + (f'<td align="right" style="font-family:{FONT};font-size:13px;color:{MUTED};white-space:nowrap;">{escape(aside)}</td>'
+               if aside else "") + '</tr></table>'
+            + (dd._p(escape(intro), MUTED, 14, "margin-top:4px;") if intro else "") + '</td></tr>')
+    return head
 
 
-def _bars(m: dict) -> str:
-    b, total = m["brand"], m["sites_total"]
-    if not total:
-        return ""
-    ws = dd.local_time(m["window_start"], b)
-    lab = f'font-family:{FONT};font-size:13px;line-height:20px;white-space:nowrap;'
-    return (f'<tr><td colspan="2" class="px" style="padding:0 32px 26px;">'
+def _header(m: dict) -> str:
+    b = m["brand"]
+    now = m["local_now"]
+    logo = (f'<img src="cid:{LOGO_CID}" width="{int(b.get("logo_width") or 160)}" alt="{escape(b.get("logo_alt") or b["short_name"])}" '
+            f'style="display:block;border:0;height:auto;max-width:{int(b.get("logo_width") or 160)}px;">'
+            if b.get("logo_bytes") else
+            f'<span style="font-family:{DISPLAY};font-size:22px;font-weight:800;color:{b["band_text"]};">'
+            f'{escape(b["short_name"])}</span>')
+    border = f'border-bottom:1px solid {b["band_border"]};' if b.get("band_border") else ""
+    tally = ""
+    if m["sites_total"]:
+        tally = (f'<tr><td colspan="2" class="px" style="padding:0 32px 24px;">'
+                 f'<div style="font-family:{FONT};font-size:13px;line-height:1.5;margin-bottom:8px;color:{b["band_text"]};font-weight:700;">'
+                 f'Your {m["sites_total"]} live sites, by risk level, compared with {escape(m["since_long"])}</div>'
+                 f'{dd.tally(m["counts"], m["counts_then"], m["since"])}'
+                 f'<div style="margin-top:10px;font-family:{FONT};font-size:12px;line-height:1.5;color:{b["band_muted"]};">'
+                 f'{escape(dd.RISK_LEVEL_WORDS)}</div></td></tr>')
+    return (f'<tr><td bgcolor="{b["band_bg"]}" style="background:{b["band_bg"]};{border}border-radius:14px 14px 0 0;">'
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
-            f'<tr><td width="96" style="{lab}color:{b["band_muted"]};padding:0 12px 8px 0;">{ws:%a}, {ws:%b} {ws.day}</td>'
-            f'<td style="padding:0 0 8px;">{_seg_bar(m["counts_then"], total, 0.1)}</td></tr>'
-            f'<tr><td width="96" style="{lab}color:{b["band_text"]};font-weight:700;padding:0 12px 0 0;">Today</td>'
-            f'<td>{_seg_bar(m["counts"], total, 0.5)}</td></tr>'
-            f'<tr><td></td><td style="padding-top:8px;font-family:{FONT};font-size:13px;line-height:1.5;'
-            f'color:{b["band_muted"]};">{escape(change_line(m))}</td></tr></table></td></tr>')
+            f'<tr><td class="px" style="padding:22px 32px 0;" valign="middle">{logo}</td>'
+            f'<td class="px" style="padding:22px 32px 0;font-family:{FONT};font-size:13px;line-height:1.4;color:{b["band_muted"]};white-space:nowrap;" '
+            f'align="right" valign="middle">Your week<br>{now:%a}, {now:%b} {now.day}</td></tr>'
+            f'<tr><td colspan="2" class="px" style="padding:20px 32px 20px;"><h1 style="margin:0;font-family:{DISPLAY};'
+            f'font-size:32px;line-height:1.1;font-weight:800;letter-spacing:-0.015em;color:{b["band_text"]};">'
+            f'{escape(m["headline"])}</h1></td></tr>{tally}</table></td></tr>')
 
 
-def _dot(color: str) -> str:
-    return (f'<span style="display:inline-block;width:10px;height:10px;border-radius:5px;background:{color};'
-            f'margin-right:8px;vertical-align:middle;"></span>')
+def change_title(g: dict) -> str:
+    """ "Two sites got riskier" / "1 site got safer"."""
+    n = len(g["sites"])
+    verb = "got riskier" if g["riskier"] else "got safer"
+    return f"{dd._n(n).capitalize()} sites {verb}" if n > 1 else f"1 site {verb}"
 
 
-def _moved(m: dict) -> list[str]:
-    mv = m["moves"]
-    if not (mv["up"] or mv["down"]):
-        return []
-    rows = []
-    for title, lines, color in (("Why ratings went up", mv["up"], "#C2410C"),
-                                ("Why ratings came down", mv["down"], GOOD)):
-        if not lines:
-            continue
-        rows.append(dd._h2(title))
-        for ln in lines:
-            sev = ln["severity"]
-            dot = SEV_STYLE.get(sev, (color,))[0] if color != GOOD else GOOD
-            rows.append(
-                f'<tr><td class="px" style="padding:0 32px 10px;">'
-                f'<div style="font-family:{FONT};font-size:15px;line-height:1.55;color:{INK};">{_dot(dot)}'
-                f'<span style="font-weight:700;">{escape(ln["title"])}</span></div>'
-                f'<div style="font-family:{FONT};font-size:14px;line-height:1.55;color:#2B3747;padding-left:18px;">'
-                f'{escape(", ".join(ln["sites"]))}</div></td></tr>')
+def _changed(m: dict) -> list[str]:
+    ch = m["changes"]
+    if not ch:
+        return [_section("What changed"),
+                '<tr><td class="px" style="padding:0 32px;">'
+                + dd._p("No site changed risk level this week.", MUTED, 14) + '</td></tr>']
+    rows = [_section("What changed", intro=f"Every site whose risk level is different from {m['since_long']}.")]
+    for g in ch:
+        who = change_title(g)
+        tint = "#FDF1EA" if g["riskier"] else "#EAF6EF"
+        rows.append(
+            f'<tr><td class="px" style="padding:0 32px 10px;"><table role="presentation" width="100%" cellpadding="0" '
+            f'cellspacing="0" border="0" bgcolor="{tint}" style="background:{tint};border-radius:12px;"><tr>'
+            f'<td class="card" style="padding:14px 18px;">'
+            f'<div style="font-family:{FONT};font-size:16px;line-height:1.4;font-weight:700;color:{INK};">'
+            f'{escape(who)}'
+            + (f'&nbsp; {dd.band_chip(g["was"])} <span style="color:{MUTED};">&rarr;</span> {dd.band_chip(g["now"])}'
+               if g["was"] else "") + '</div>'
+            + (dd._p(escape(g["reason"]), "#2B3747", 14, "margin-top:6px;") if g["reason"] else "")
+            + "".join(dd._p(escape(x), "#2B3747", 14, "margin-top:4px;") for x in g.get("asides", []))
+            + dd.chips(g["sites"]) + '</td></tr></table></td></tr>')
     return rows
 
 
@@ -447,103 +497,68 @@ def _week(m: dict) -> list[str]:
         if hd:
             parts.append(f'<tr><td height="{hd}" bgcolor="{deep_c}" class="col" style="height:{hd}px;background:{deep_c};'
                          f'{"" if hq else "border-radius:4px 4px 0 0;"}font-size:0;line-height:0;animation-delay:{delay:.2f}s;">&nbsp;</td></tr>')
-        cells.append(f'<td width="14%" valign="bottom" style="padding:0 4px;" title="{deep} deep, {quick} quick">'
+        cells.append(f'<td valign="bottom" style="padding:0 3px;">'
                      f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{"".join(parts)}</table></td>')
-    labels = "".join(f'<td width="14%" align="center" style="padding:6px 2px 0;font-family:{FONT};font-size:12px;'
-                     f'color:{MUTED};white-space:nowrap;">{d:%a} {d.day}</td>' for d in days)
-    key = (f'<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{deep_c};margin-right:6px;"></span>Deep scans'
+    labels = "".join(f'<td align="center" style="padding:6px 0 0;font-family:{FONT};font-size:12px;'
+                     f'color:{MUTED};">{d:%a}</td>' for d in days)
+    key = (f'<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{deep_c};margin-right:6px;"></span>Deep scans (the full workout)'
            f'<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#A9BCD8;margin:0 6px 0 16px;"></span>Quick scans')
-    rows = [
-        f'<tr><td class="px" style="padding:26px 32px 12px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
-        f'<td><h2 style="margin:0;font-family:{DISPLAY};font-size:22px;line-height:1.2;font-weight:700;color:{INK};">The week</h2></td>'
-        f'<td align="right" style="font-family:{FONT};font-size:13px;color:{MUTED};white-space:nowrap;">'
-        f'{m["n_scans"]} scan{"s" if m["n_scans"] != 1 else ""}, {days[0]:%a} to {days[-1]:%a}</td></tr></table></td></tr>',
-        f'<tr><td class="px" style="padding:0 32px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        f'border="0" style="border-bottom:2px solid #D6DEE8;"><tr>{"".join(cells)}</tr></table>'
-        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>{labels}</tr></table>'
+    return [
+        _section("How hard we looked", aside=f"{m['n_scans']} scans"),
+        f'<tr><td class="px" style="padding:6px 32px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'border="0" style="table-layout:fixed;border-bottom:2px solid #D6DEE8;"><tr>{"".join(cells)}</tr></table>'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="table-layout:fixed;"><tr>{labels}</tr></table>'
         f'<div style="margin-top:10px;font-family:{FONT};font-size:12px;color:{MUTED};">{key}</div></td></tr>',
     ]
-    if m["events"]:
-        ev = []
-        for e in m["events"]:
-            color = GOOD if e["kind"] == "closed" else SEV_STYLE.get(e["severity"], ("#C2410C",))[0]
-            ev.append(f'<tr><td width="64" valign="top" style="padding:0 10px 10px 0;font-family:{FONT};font-size:14px;'
-                      f'line-height:1.5;font-weight:700;color:{MUTED};white-space:nowrap;">{e["day"]:%a} {e["day"].day}</td>'
-                      f'<td valign="top" style="padding:0 0 10px;font-family:{FONT};font-size:14px;line-height:1.5;color:{INK};">'
-                      f'{_dot(color)}{escape(e["text"])}</td></tr>')
-        rows.append(f'<tr><td class="px" style="padding:14px 32px 0;"><table role="presentation" width="100%" cellpadding="0" '
-                    f'cellspacing="0" border="0">{"".join(ev)}</table></td></tr>')
-    else:
-        rows.append('<tr><td class="px" style="padding:14px 32px 0;">'
-                    + dd._p("No serious finding opened and none closed this week.", MUTED, 14) + '</td></tr>')
-    return rows
 
 
 def _tiles(m: dict) -> list[str]:
     if not m["groups"]:
         return []
-    rows = [
-        f'<tr><td class="px" style="padding:26px 32px 12px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
-        f'<td><h2 style="margin:0;font-family:{DISPLAY};font-size:22px;line-height:1.2;font-weight:700;color:{INK};">Every live site today</h2></td>'
-        f'<td align="right" style="font-family:{FONT};font-size:13px;color:{MUTED};white-space:nowrap;">Outlined: changed this week</td>'
-        f'</tr></table></td></tr>']
+    legend = "".join(
+        f'<span style="display:inline-block;white-space:nowrap;margin:0 12px 6px 0;font-family:{FONT};font-size:12px;color:{INK};">'
+        f'<span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:{fill};margin-right:5px;vertical-align:-1px;"></span>'
+        f'{escape(dd.BAND_TITLE[k])}</span>' for k, _w, fill, _t in BANDS if m["counts"].get(k))
+    rows = [_section("Every site, by risk level", intro="A box with a dark outline changed this week."),
+            f'<tr><td class="px" style="padding:4px 32px 4px;">{legend}</td></tr>']
+    one = len(m["groups"]) == 1
     body = []
     for g in m["groups"]:
         tiles = []
         for t in g["tiles"]:
-            fill, text, words = BAND_FILL[t["band"]]
+            fill, text, words_ = BAND_FILL[t["band"]]
             edge = INK if t["changed"] else fill
             tiles.append(
-                f'<span class="{"isnew" if t["changed"] else ""}" title="{escape(t["site"])}: {escape(words)}'
-                f'{", changed this week" if t["changed"] else ""}" style="display:inline-block;margin:0 6px 6px 0;'
-                f'padding:7px 10px;min-width:26px;text-align:center;border-radius:6px;border:2px solid {edge};'
-                f'background:{fill};color:{text};font-family:{FONT};font-size:12px;font-weight:600;line-height:16px;'
-                f'white-space:nowrap;">{escape(t["label"])}</span>')
-        body.append(f'<tr><td class="dom" width="225" valign="top" style="padding:12px 12px 6px 0;font-family:{FONT};font-size:13px;'
-                    f'font-weight:600;line-height:20px;color:{INK};border-bottom:1px solid {RULE};overflow-wrap:anywhere;">{escape(g["name"])}</td>'
-                    f'<td class="tl" valign="top" style="padding:10px 0 4px;border-bottom:1px solid {RULE};">{"".join(tiles)}</td></tr>')
-    rows.append(f'<tr><td class="px" style="padding:0 32px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-                f'border="0" style="border-top:1px solid {RULE};">{"".join(body)}</table>'
-                f'<div style="margin-top:10px;font-family:{FONT};font-size:12px;color:{MUTED};">'
-                + "".join(f'<span style="display:inline-block;margin:0 14px 4px 0;"><span style="display:inline-block;width:10px;'
-                          f'height:10px;border-radius:2px;background:{fill};margin-right:6px;"></span>{escape(w.capitalize())}</span>'
-                          for k, w, fill, _t in BANDS if m["counts"].get(k))
-                + '</div></td></tr>')
+                f'<span class="{"isnew" if t["changed"] else ""}" title="{escape(t["site"])}: {escape(words_)}'
+                f'{", changed this week" if t["changed"] else ""}" style="display:inline-block;white-space:nowrap;margin:0 6px 6px 0;'
+                f'padding:6px 9px;border-radius:6px;border:2px solid {edge};'
+                f'background:{fill};color:{text};font-family:{FONT};font-size:12px;font-weight:600;line-height:16px;">'
+                f'{escape("main site" if t["label"] == "site" and not one else g["name"] if t["label"] == "site" else t["label"])}</span>')
+        name = (f'<div style="font-family:{FONT};font-size:13px;font-weight:700;line-height:20px;color:{INK};'
+                f'padding:0 0 6px;white-space:nowrap;">{escape(g["name"])}</div>')
+        body.append(f'<tr><td style="padding:10px 0 4px;border-top:1px solid {RULE};">{name}{"".join(tiles)}</td></tr>')
+    rows.append(f'<tr><td class="px" style="padding:0 32px;"><table role="presentation" width="100%" cellpadding="0" '
+                f'cellspacing="0" border="0">{"".join(body)}</table></td></tr>')
     return rows
 
 
 def render_weekly_html(m: dict, *, portal_url: str = "", product_name: str = "") -> str:
     b = m["brand"]
-    now = m["local_now"]
     portal = (portal_url or "").rstrip("/")
-    logo = (f'<img src="cid:{LOGO_CID}" width="{int(b.get("logo_width") or 160)}" alt="{escape(b.get("logo_alt") or b["short_name"])}" '
-            f'style="display:block;border:0;height:auto;max-width:{int(b.get("logo_width") or 160)}px;">'
-            if b.get("logo_bytes") else
-            f'<span style="font-family:{DISPLAY};font-size:22px;font-weight:800;color:{b["band_text"]};">'
-            f'{escape(b["short_name"])}</span>')
-    border = f'border-bottom:1px solid {b["band_border"]};' if b.get("band_border") else ""
-    rows = [
-        f'<tr><td bgcolor="{b["band_bg"]}" style="background:{b["band_bg"]};{border}border-radius:14px 14px 0 0;">'
-        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
-        f'<tr><td class="px" style="padding:22px 32px 0;" valign="middle">{logo}</td>'
-        f'<td class="px" style="padding:22px 32px 0;font-family:{FONT};font-size:13px;line-height:1.4;color:{b["band_muted"]};white-space:nowrap;" '
-        f'align="right" valign="middle">Weekly review<br>{now:%A}, {now:%b} {now.day}</td></tr>'
-        f'<tr><td colspan="2" class="px" style="padding:20px 32px 22px;"><h1 style="margin:0;font-family:{DISPLAY};'
-        f'font-size:34px;line-height:1.08;font-weight:800;letter-spacing:-0.015em;color:{b["band_text"]};">'
-        f'{escape(m["headline"])}</h1></td></tr>{_bars(m)}</table></td></tr>']
-    rows += _moved(m)
-    rows += _week(m)
-    rows += _tiles(m)
+    rows = [_header(m)]
+    rows += _changed(m)
     if m["do"]:
-        rows.append(dd._h2("This week, do"))
+        rows.append(_section("Worth your time this week",
+                             intro="Worth working on this week, worst first. Each says what we found, what it means, and the fix."))
         rows += [dd._card(i, portal) for i in m["do"]]
         if m["more"]:
             rows.append('<tr><td class="px" style="padding:0 32px;">'
-                        + dd._p(f"And {m['more']} more serious problem{'s' if m['more'] != 1 else ''}, listed in the portal.", MUTED, 14)
-                        + '</td></tr>')
+                        + dd._p(f"And {m['more']} more, waiting patiently in the portal.", MUTED, 14) + '</td></tr>')
+    rows += _week(m)
+    rows += _tiles(m)
     if portal:
         rows.append(
-            f'<tr><td class="px" style="padding:22px 32px 28px;"><table role="presentation" cellpadding="0" cellspacing="0" '
+            f'<tr><td class="px" style="padding:24px 32px 28px;"><table role="presentation" cellpadding="0" cellspacing="0" '
             f'border="0"><tr><td bgcolor="{b["button"]}" style="background:{b["button"]};border-radius:8px;">'
             f'<a href="{escape(portal)}" style="display:inline-block;padding:12px 18px;font-family:{FONT};'
             f'font-size:15px;font-weight:600;color:#FFFFFF;text-decoration:none;">Open the portal</a>'
@@ -560,19 +575,17 @@ def render_weekly_html(m: dict, *, portal_url: str = "", product_name: str = "")
 <meta name="color-scheme" content="light"><title>{escape(m["headline"])}</title>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&amp;display=swap" rel="stylesheet">
 <style>
-@keyframes grow{{from{{transform:scaleX(0)}}to{{transform:scaleX(1)}}}}
 @keyframes rise{{from{{transform:scaleY(0)}}to{{transform:scaleY(1)}}}}
 @keyframes ping{{0%{{box-shadow:0 0 0 0 rgba(15,27,45,.45)}}70%{{box-shadow:0 0 0 8px rgba(15,27,45,0)}}100%{{box-shadow:0 0 0 8px rgba(15,27,45,0)}}}}
-.seg{{transform-origin:left center;animation:grow .9s cubic-bezier(.3,.7,.2,1) both}}
 .col{{transform-origin:bottom center;animation:rise .8s cubic-bezier(.3,.7,.2,1) both}}
 .isnew{{animation:ping 2.2s ease-out 3}}
-@media (prefers-reduced-motion:reduce){{.seg,.col,.isnew{{animation:none}}}}
-@media (max-width:620px){{h1{{font-size:28px !important}} .px{{padding-left:18px !important;padding-right:18px !important}} .card{{padding:16px 14px !important}} .dom{{display:block !important;width:auto !important;border-bottom:0 !important;padding:12px 0 2px !important}} .tl{{display:block !important}}}}
+@media (prefers-reduced-motion:reduce){{.col,.isnew{{animation:none}}}}
+@media (max-width:620px){{h1{{font-size:27px !important}} .px{{padding-left:16px !important;padding-right:16px !important}} .card{{padding:14px 14px !important}}}}
 </style></head>
 <body style="margin:0;padding:0;background:{PAGE};">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{PAGE}" style="background:{PAGE};">
-<tr><td align="center" style="padding:24px 12px 32px;">
-<table role="presentation" width="680" cellpadding="0" cellspacing="0" border="0" bgcolor="#FFFFFF" style="width:100%;max-width:680px;background:#FFFFFF;border-radius:14px;">
+<tr><td align="center" style="padding:20px 8px 28px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#FFFFFF" style="width:100%;max-width:640px;background:#FFFFFF;border-radius:14px;">
 {"".join(rows)}
 </table>
 </td></tr></table>
@@ -582,31 +595,25 @@ def render_weekly_html(m: dict, *, portal_url: str = "", product_name: str = "")
 # ── plain text ────────────────────────────────────────────────────────────────
 def render_weekly_text(m: dict, *, portal_url: str = "", product_name: str = "") -> str:
     b, now, days = m["brand"], m["local_now"], m["days"]
-    out = [f"{product_name or b['short_name']} — {b['short_name']}, weekly review, {now:%A} {now:%B} {now.day}", "",
+    out = [f"{product_name or b['short_name']} — {b['short_name']}, your week, {now:%A} {now:%B} {now.day}", "",
            m["headline"]]
     if m["sites_total"]:
-        out.append(change_line(m))
+        out.append(f"Your {m['sites_total']} live sites, by risk level: {dd.counts_words(m['counts'])} "
+                   f"({m['since']}: {dd.counts_words(m['counts_then'])}).")
+        out.append(dd.RISK_LEVEL_WORDS)
     out.append("")
-    mv = m["moves"]
-    for title, lines in (("WHY RATINGS WENT UP", mv["up"]), ("WHY RATINGS CAME DOWN", mv["down"])):
-        if lines:
-            out.append(title)
-            for ln in lines:
-                out.append(f"  - {ln['title']}: {', '.join(ln['sites'])}")
-            out.append("")
-    out.append(f"THE WEEK ({m['n_scans']} scans, {days[0]:%a %b} {days[0].day} to {days[-1]:%a %b} {days[-1].day})")
-    out.append("  " + "  ".join(f"{d:%a} {deep}d/{quick}q" for d, (deep, quick) in zip(days, m["scans"])))
-    for e in m["events"]:
-        out.append(f"  {e['day']:%a} {e['day'].day}: {e['text']}")
-    out.append("")
-    out.append("EVERY LIVE SITE TODAY (* changed this week)")
-    words = {k: w for k, w, *_r in BANDS}
-    for g in m["groups"]:
-        out.append(f"  {g['name']}: " + ", ".join(
-            f"{t['label']} {words[t['band']]}{' *' if t['changed'] else ''}" for t in g["tiles"]))
+    out.append("WHAT CHANGED")
+    if not m["changes"]:
+        out.append("  No site changed risk level this week.")
+    for g in m["changes"]:
+        span = f" ({dd.BAND_TITLE[g['was']]} to {dd.BAND_TITLE[g['now']]})" if g["was"] else ""
+        out.append(f"  {change_title(g)}{span}{': ' + g['reason'] if g['reason'] else ''}")
+        for x in g.get("asides", []):
+            out.append(f"      {x}")
+        out.append(f"      {', '.join(g['sites'])}")
     out.append("")
     if m["do"]:
-        out.append("THIS WEEK, DO")
+        out.append("WORTH YOUR TIME THIS WEEK (worst first)")
         for i in m["do"]:
             sev = SEV_WORD.get(i.get("severity") or "", "")
             out.append(f"  [ ] {('[' + sev + '] ') if sev else ''}{i['title']}")
@@ -614,13 +621,26 @@ def render_weekly_text(m: dict, *, portal_url: str = "", product_name: str = "")
                 out.append(f"      {i['body']}")
             if i.get("sites") and i.get("kind") == "finding":
                 out.append(f"      Sites: {', '.join(i['sites'])}")
+            for label, sites in i.get("groups", []):
+                out.append(f"      - {label}: {', '.join(sites)}")
             for l in i.get("lines", [])[:20]:
                 out.append(f"      - {l}")
             if i.get("do"):
-                out.append(f"      Do: {i['do']}")
+                who = dd.WHO_WORDS.get(i.get("who") or "", "")
+                out.append(f"      The fix{', for ' + who if who and i.get('kind') == 'finding' else ''}: {i['do']}")
+            if i.get("forward"):
+                out.append(f"      Ready to forward: {i['forward']}")
         if m["more"]:
-            out.append(f"  And {m['more']} more serious problems, listed in the portal.")
+            out.append(f"  And {m['more']} more, in the portal.")
         out.append("")
+    out.append(f"HOW HARD WE LOOKED: {m['n_scans']} scans, {days[0]:%a %b} {days[0].day} to {days[-1]:%a %b} {days[-1].day}")
+    out.append("  " + "  ".join(f"{d:%a} {deep} deep/{quick} quick" for d, (deep, quick) in zip(days, m["scans"])))
+    out.append("")
+    out.append("EVERY SITE, BY RISK LEVEL (* changed this week)")
+    for g in m["groups"]:
+        out.append(f"  {g['name']}: " + ", ".join(
+            f"{t['label']} {dd.BAND_TITLE[t['band']].lower()}{' *' if t['changed'] else ''}" for t in g["tiles"]))
+    out.append("")
     bl = m["baseline"]
     if bl:
         out.append(f"Open across {b['short_name']} right now: {open_words(bl)}.")

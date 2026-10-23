@@ -130,8 +130,8 @@ def test_a_window_with_only_new_findings_is_not_reported_as_no_changes():
 
 def test_headline_names_new_problems_inventory_fixed_and_regressed_separately():
     """Creation, closure and regression stay SEPARATE quantities (note 307), now as
-    buckets (KB 12 job 3l): a regressed MODERATE is a ticket tagged "came back after being
-    fixed", a new one a plain ticket, INFO goes to the quiet line, a fix is off your plate.
+    buckets (KB 12 job 3l): a regressed MODERATE is a this-week item tagged "came back after
+    being fixed", a new one a plain this-week item, INFO is not mentioned, a fix is reported.
     The merged "finding change(s)" / dead "status change(s)" counts stay dead."""
     info = ("F-INFO", "a.example", "Detected technologies: nginx", "INFO", "detected", "light", W_END)
     fixed = ("F-FIX", "a.example", "Next.js middleware bypass", "CRITICAL", "remediated", "nuclei", W_END)
@@ -139,10 +139,10 @@ def test_headline_names_new_problems_inventory_fixed_and_regressed_separately():
     html, text = _render(new_findings=[FINDING, other, info], fixed=[fixed], regressed=[FINDING])
     assert "Came back after being fixed." in html and "Came back after being fixed." in text
     assert "Missing SPF record" in html and "Missing DMARC record" in html
-    assert "1 informational item" in html
-    assert "1 finding closed" in html and "Next.js middleware bypass" in html
+    assert "informational" not in html and "Detected technologies" not in html
+    assert "Fixed on a.example: Next.js middleware bypass." in html
     assert "status change(s)" not in html and "finding change(s)" not in html
-    assert "OFF YOUR PLATE" in text
+    assert "FIXED SINCE YESTERDAY" in text
 
 
 def test_adding_the_new_section_did_not_displace_the_existing_ones():
@@ -151,11 +151,12 @@ def test_adding_the_new_section_did_not_displace_the_existing_ones():
     hot = ("F-HOT", "c.example", "Exposed admin panel", "HIGH", "detected", "light", W_END)
     fixed = ("F-FIX", "a.example", "Old flaw", "MODERATE", "remediated", "light", W_END)
     html, text = _render(new_findings=[hot, FINDING], fixed=[fixed])
-    for label in ("DO TODAY", "WORTH A TICKET", "OFF YOUR PLATE"):
+    for label in ("NEEDS YOU TODAY", "THIS WEEK", "FIXED SINCE YESTERDAY"):
         assert label in text, f"plaintext lost the {label} header"
-    for label in ("Do today", "Worth a ticket", "Off your plate"):
+    for label in ("Needs you today", "This week", "Fixed since yesterday"):
         assert label in html, f"HTML lost the {label} section"
-    order = [text.index(x) for x in ("DO TODAY", "WORTH A TICKET", "OFF YOUR PLATE")]
+    assert "ticket" not in html.lower() and "ticket" not in text.lower(), "Howie, 10-22: no tickets here"
+    order = [text.index(x) for x in ("NEEDS YOU TODAY", "THIS WEEK", "FIXED SINCE YESTERDAY")]
     assert order == sorted(order), "sections rendered out of order"
 
 
@@ -187,9 +188,9 @@ def test_overlap_helper_degrades_to_zero_on_a_column_reorder():
 def test_zero_new_findings_does_not_invent_a_section():
     """A quiet night reads as quiet — no empty panel."""
     html, text = _render()
-    assert "Do today" not in html and "Worth a ticket" not in html
+    assert "Needs you today" not in html and "This week<" not in html
     assert "Nothing needs you today." in html and "Nothing needs you today." in text
-    assert "came back with nothing new" in html
+    assert "came back with nothing that needs anyone" in html
 
 # ---------------------------------------------------------------------------
 # (2) first-EVER vs first-per-producer

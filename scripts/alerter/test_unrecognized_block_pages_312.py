@@ -100,7 +100,7 @@ def test_rendered_in_both_bodies_with_the_page_kept_and_no_vendor_guessed():
         assert "no vendor the block-page library knows (HTTP 403 x3)" in body
         assert "The page is saved with the scan" in body
         assert "Google" not in body and "Armor" not in body, "no guess from hosting"
-    assert "Worth a ticket" in html and "WORTH A TICKET" in text
+    assert "This week" in html and "THIS WEEK" in text
 
 
 def test_nothing_unrecognized_changes_nothing():
