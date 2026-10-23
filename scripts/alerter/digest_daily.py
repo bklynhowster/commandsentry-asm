@@ -403,7 +403,7 @@ def _plugin_words(advs: list, sites: list, plugin: dict) -> tuple[str, str, str]
             "It has a published security flaw, and nobody is fixing it: there is no patched version." if unfixed else
             "It has a published security flaw, and a fixed version exists.")
     if unfixed:
-        do = f"Remove {name}, or replace it with a maintained plugin. There is no fixed version to update to."
+        do = f"Replace {name} with a maintained plugin, or remove it. No update is coming."
     else:
         do = f"Update {name} to version {fixes[-1]} or later."
     where = ", ".join(sites)
@@ -759,6 +759,65 @@ def subject(model: dict, product_name: str) -> str:
 
 
 # ── HTML ──────────────────────────────────────────────────────────────────────
+# Job 3r (Howie 2026-10-23 07:21–07:25): an out-of-date finding with a known fix, open more
+# than 30 days, is MODERATE but "shouldn't be the same as another moderate … some kind of
+# indication that there is still some action required". Its own calm color: not an alarm.
+OVERDUE_DAYS = 30
+OVERDUE_FILL, OVERDUE_TINT = "#6E56A6", "#F3F0FA"
+
+
+def overdue_pill() -> str:
+    return (f'<span style="display:inline-block;background:{OVERDUE_FILL};color:#FFFFFF;font-size:12px;'
+            f'font-weight:700;line-height:18px;padding:2px 9px;border-radius:999px;">Overdue</span>')
+
+
+# Howie, 2026-10-23 07:58: "inject a little bit of my cynicism and sarcasm into this … something
+# funny like that that will get the IT team's attention." One line per Overdue item, never the
+# same line twice in one email (the 10-22 rule: no copy-paste sameness). Never in the paragraph
+# that gets forwarded to the WordPress company: that one stays polite.
+# Howie, 08:01: "give the reader a little bit more in terms of what they should do or who they
+# should contact … is there nobody maintaining the WordPress site, or who maintains this?" So
+# each line asks the question AND says the next step, addressed by who does the fix.
+OVERDUE_NUDGES = {
+    "wordpress": (
+        "Is anyone actually maintaining this WordPress site? Whoever it is, send them the paragraph "
+        "below. If nobody here knows who that is, that's the bigger problem.",
+        "Could somebody please get in touch with whoever maintains this damn site? Forward them the "
+        "paragraph below. They're clearly not doing their jobs.",
+        "What are we spending our money on? Send the paragraph below to the company that runs the "
+        "site and ask them for a date.",
+        "Sitting here since {since}. It's an afternoon's work for whoever runs the site. Forward the "
+        "paragraph below and ask when it'll be done.",
+        "We'd say this is a gentle reminder, but it stopped being gentle around {since}. The "
+        "paragraph below is ready to send.",
+    ),
+    "it": (
+        "Who on the IT team owns this? Whoever it is: the fix is below, and it's been waiting since {since}.",
+        "Is anyone responsible for this server? The fix is below. It's been {age}.",
+        "Still here. Still waiting. If this belongs to someone outside IT, tell them; the fix is below.",
+        "Sitting here since {since}. The fix below is routine. Who's picking it up?",
+    ),
+}
+
+
+def overdue_nudge(item: dict, i: int) -> str:
+    """The i-th Overdue line for whoever does the fix (Howie's voice): the question, then the
+    next step. PURE."""
+    since = item["overdue_since"]
+    end = item.get("as_of") or since
+    days = max(0, (end - since).days)
+    age = f"{days // 30} months" if days >= 60 else f"{days} days"
+    lines = OVERDUE_NUDGES.get(item.get("who") or "it", OVERDUE_NUDGES["it"])
+    return lines[i % len(lines)].format(since=_day(since), age=age)
+
+
+def overdue_words(item: dict) -> str:
+    """'Moderate. Known since Jun 2; still needs someone to act.'"""
+    sev = SEV_WORD.get(item.get("severity") or "", "")
+    return (f"{sev + '. ' if sev else ''}Known since {_day(item['overdue_since'])}; "
+            f"still needs someone to act.")
+
+
 def _pill(sev: str) -> str:
     fill, text, _tint = SEV_STYLE.get(sev, ("#D9DEE5", INK, "#F4F7FB"))
     return (f'<span style="display:inline-block;background:{fill};color:{text};font-size:12px;'
@@ -837,12 +896,19 @@ def _card(item: dict, portal: str) -> str:
     ring = fill if sev else "#0A4595"
     if item.get("kind") == "coverage":      # our own blind spot: berry, no severity pill
         ring, tint = "#8B1A4A", "#F9E8EF"
+    if item.get("overdue_since"):           # job 3r: known, has a fix, sitting — calm violet
+        ring, tint = OVERDUE_FILL, OVERDUE_TINT
     head = escape(item["title"])
     if item.get("kind") == "finding" and item.get("finding_ids") and portal:
         head = (f'<a href="{escape(portal)}/findings/{escape(item["finding_ids"][0])}" '
                 f'style="color:{INK};text-decoration:none;">{head}</a>')
+    pill = (overdue_pill() if item.get("overdue_since") else _pill(sev) if sev in SEV_STYLE else "")
     parts = [f'<div style="font-family:{FONT};font-size:17px;line-height:1.35;font-weight:700;color:{INK};">'
-             + (f'{_pill(sev)}&nbsp; ' if sev in SEV_STYLE else "") + head + "</div>"]
+             + (f'{pill}&nbsp; ' if pill else "") + head + "</div>"]
+    if item.get("overdue_since"):
+        parts.append(_p(escape(overdue_words(item)), OVERDUE_FILL, 13, "font-weight:700;"))
+        if item.get("nudge"):
+            parts.append(_p(escape(item["nudge"]), OVERDUE_FILL, 14, "font-style:italic;margin-top:4px;"))
     if item.get("tag"):
         parts.append(_p(escape(item["tag"]) + ".", MUTED, 13, "font-weight:600;"))
     if item.get("body"):

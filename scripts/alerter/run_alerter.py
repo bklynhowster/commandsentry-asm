@@ -983,6 +983,24 @@ SELECT f.finding_id, r.scope_id, f.title, f.severity::text, f.current_status::te
           r.scope_id, f.finding_id
 """
 
+# Job 3r — the weekly's "Overdue": OUT-OF-DATE findings (a version we saw, older than the fix
+# for a published flaw: WordPress advisories, JavaScript library advisories, the advisory
+# watch's out-of-date rows, a hand assessment's outdated plugin) on the MODERATE rung, first
+# seen more than 30 days ago and still open. Same set as the dashboard (members of
+# v_fleet_open_reps); digest_words.is_out_of_date picks the out-of-date ones by identity and
+# title (the heavy writer stores no tags), so this reads only the sources that write them.
+SQL_OPEN_OUT_OF_DATE = """
+SELECT f.finding_id, r.scope_id, f.title, f.severity::text, f.current_status::text,
+       f.source::text, f.first_detected_at, f.description, f.cve
+  FROM public.v_fleet_open_reps r
+ CROSS JOIN LATERAL unnest(r.member_finding_ids) AS m(fid)
+  JOIN public.findings f ON f.finding_id = m.fid
+ WHERE f.severity::text IN ('MODERATE', 'MODERATE-HIGH')
+   AND f.source::text IN ('commandsentry_light', 'advisory_watch', 'wpscan', 'manual_named')
+   AND f.first_detected_at < now() - interval '30 days'
+ ORDER BY f.first_detected_at, r.scope_id, f.finding_id
+"""
+
 SQL_INSERT_RUN_START = """
 INSERT INTO meta_alerter_runs (alerter_name, window_start, window_end, status)
 VALUES (%s, %s, %s, 'started')
@@ -1596,13 +1614,14 @@ def _weekly_model(conn, *, now, brand):
     hints, _d = hints_and_details(_soft_read(conn, "remediation hints", SQL_FINDING_HINTS, (hint_ids,))) \
         if hint_ids else ({}, {})
     details = {r[0]: (r[7] if len(r) > 7 else "", list(r[8] or []) if len(r) > 8 else []) for r in open_serious}
+    overdue = _soft_read(conn, "overdue out-of-date findings", SQL_OPEN_OUT_OF_DATE)
     return _dw.build_weekly(
         now=now, window_start=window_start, window_end=window_end, days=days,
         sites=sites, opened=opened, closed=closed, scans=scans, certs=certs,
         open_serious=open_serious, hints=hints, details=details, stale_assets=stale_assets,
         canary_violations=canary_violations, stale_words=stale_row_words,
         stale_intro=STALE_INTRO, stale_note=stale_overdue_note(disc_h, deep_h),
-        baseline=baseline, brand=brand,
+        baseline=baseline, brand=brand, overdue=overdue,
     )
 
 

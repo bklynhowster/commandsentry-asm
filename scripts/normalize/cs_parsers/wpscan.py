@@ -27,10 +27,11 @@ WPScan emits ANSI-colored multi-line sections. Key patterns we extract:
         | Latest Version: 1.1.2 (up to date)
        (If "up to date", skip; if outdated, emit finding)
 
-Severity heuristics:
-- CVE entries: pulled from severity hints in the body if present, else
-  default MODERATE. CVE entries marked "(critical)" or with CVSS hints
-  are escalated.
+Severity:
+- CVE entries: never written here (skipped since 2026-05-24; wpvuln_json owns plugin
+  advisories). The keyword severity guesser that once rated them
+  (`_severity_for_cve_block`) was removed in KB 12 job 3r (2026-10-23, second check):
+  a version on an advisory's list is out of date, never rated by its words.
 - Outdated plugin (1+ major version behind): LOW
 - XML-RPC enabled: INFO (common but worth flagging)
 - Readme exposed: INFO
@@ -90,20 +91,6 @@ def _category_for_finding(desc: str) -> str:
     if "outdated" in d or "out of date" in d: return "supply_chain"
     if "vulnerability" in d or "vulnerable" in d: return "supply_chain"
     return "config"
-
-
-def _severity_for_cve_block(body: str, baseline: str = "MODERATE") -> str:
-    """Pull a severity hint from CVE block body if present."""
-    b = body.lower()
-    if "critical" in b: return "CRITICAL"
-    if "high" in b and "cvss" in b: return "HIGH"
-    if "rce" in b or "remote code execution" in b or "sql injection" in b:
-        return "HIGH"
-    if "authentication bypass" in b: return "HIGH"
-    if "privilege escalation" in b: return "HIGH"
-    if "stored xss" in b: return "MODERATE"
-    if "reflected xss" in b or "csrf" in b: return "LOW"
-    return baseline
 
 
 def parse_wpscan_file(

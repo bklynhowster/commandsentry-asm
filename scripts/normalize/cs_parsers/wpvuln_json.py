@@ -36,10 +36,12 @@ WPScan's raw output for the 2026-05-23 commandmarketinginnovations scan
 listed 17 CVEs, but only 5 actually apply (3 on Mega Main Menu, 2 on
 Slider Revolution).
 
-Severity is conservative: VULNERABLE → MODERATE unless the CVE list
-hints at higher (XSS keywords → MODERATE-HIGH, RCE/SQLi → HIGH). The
-CVE enricher in the post-ingest chain will overwrite this with the real
-CVSS-derived severity once it queries NVD.
+Severity (KB 12 job 3r, 2026-10-23): a plugin version on an advisory's list is OUT OF
+DATE, not proven — MODERATE, never raised by keywords in the advisory's name (the old
+XSS → MODERATE-HIGH, RCE/SQLi → HIGH hints are gone). These files come from hand-run
+scans with no CISA catalog at hand, so the MODERATE-HIGH rung (a flaw on CISA's
+exploited list) is left to the scanner's own writers and the 3r cleanup. Never
+"vulnerable" in what it writes.
 
 Category is always "wordpress_plugin_vulnerability". Source is
 "wpvulnerability.net".
@@ -65,21 +67,8 @@ from .common import (
 # Statuses we treat as "this currently applies to the installed version"
 ACTIONABLE_STATUSES = {"VULNERABLE", "UNFIXED"}
 
-# Words in vuln names that hint at higher-than-default severity
-RCE_HINTS = re.compile(r"\b(RCE|remote code execution|deserialization|file upload|LFI|SQL injection|SQLi)\b", re.IGNORECASE)
-XSS_HINTS = re.compile(r"\b(XSS|cross[- ]site scripting|stored XSS|reflected XSS)\b", re.IGNORECASE)
-AUTH_BYPASS = re.compile(r"\b(authentication bypass|auth bypass|unauthenticated|missing authorization|privilege escalation)\b", re.IGNORECASE)
-
-
-def _hint_severity(name: str, default: str = "MODERATE") -> str:
-    """Best-effort severity hint from the vulnerability name."""
-    if RCE_HINTS.search(name):
-        return "HIGH"
-    if AUTH_BYPASS.search(name):
-        return "MODERATE-HIGH"
-    if XSS_HINTS.search(name):
-        return "MODERATE-HIGH"
-    return default
+# Job 3r: out of date, not proven (scripts/scanner/evidence.py has the rung).
+OUT_OF_DATE = "MODERATE"
 
 
 def _vuln_title(slug: str, installed_v: str, name: str, cves: list[str]) -> str:
@@ -130,7 +119,7 @@ def parse_wpvuln_file(
         fixed_in = v.get("fixed_in") or ""
 
         title = _vuln_title(slug, installed, name, cves)
-        severity = _hint_severity(name)
+        severity = OUT_OF_DATE
 
         # Build a stable, deterministic finding id. Template id encodes the
         # slug + first CVE (or "no-cve") + fixed_in version, so two scans
@@ -140,7 +129,8 @@ def parse_wpvuln_file(
         matched_at = f"{asset_id}/{slug}@{installed}"
 
         description_lines = [
-            f"Plugin **{slug}** version **{installed}** is currently vulnerable.",
+            f"Plugin **{slug}** version **{installed}** is out of date: it is older than the fix "
+            f"for this published flaw (matched from the version the site shows, not confirmed by testing).",
             f"Vulnerability: {name}",
         ]
         if fixed_in:
@@ -156,7 +146,7 @@ def parse_wpvuln_file(
             )
         description_lines.append(
             f"Source: wpvulnerability.net cross-reference against installed v{installed} "
-            f"(status: {status})."
+            f"(status: {'affected' if status == 'VULNERABLE' else status.lower()})."
         )
         description = "\n\n".join(description_lines)
 

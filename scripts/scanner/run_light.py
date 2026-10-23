@@ -331,6 +331,7 @@ from stack_passive import (  # noqa: E402
 )
 import software_inventory  # noqa: E402  (302 step 1)
 import library_flaws  # noqa: E402  (302 step 3)
+import evidence  # noqa: E402  (KB 12 job 3r: proven / out of date / guess)
 import stack_fingerprint  # noqa: E402  (job 3c — security-stack fingerprints)
 from tech_detect import (  # noqa: E402  (4.7 ⑭′ — shared with run_medium)
     merge_tech_detection,
@@ -2020,8 +2021,7 @@ def check_wpvulnerability(ctx: ScanContext) -> None:
         try:
             core_vulns = wpc.lookup_core(core_version)
             for v in core_vulns:
-                _wpvuln_emit_finding(ctx, v, wpc)
-                findings_added += 1
+                findings_added += _wpvuln_emit_finding(ctx, v, wpc)
         except Exception as e:
             log(f"  wpvulnerability: core lookup failed: {e!r}")
 
@@ -2029,8 +2029,7 @@ def check_wpvulnerability(ctx: ScanContext) -> None:
         try:
             plugin_vulns = wpc.lookup_plugin(slug, version)
             for v in plugin_vulns:
-                _wpvuln_emit_finding(ctx, v, wpc)
-                findings_added += 1
+                findings_added += _wpvuln_emit_finding(ctx, v, wpc)
         except Exception as e:
             log(f"  wpvulnerability: plugin {slug} lookup failed: {e!r}")
 
@@ -2039,13 +2038,31 @@ def check_wpvulnerability(ctx: ScanContext) -> None:
     mark_tool_ok(ctx, "wpvulnerability")
 
 
-def _wpvuln_emit_finding(ctx: ScanContext, v, wpc) -> None:
-    """Convert a WpVulnerability into a LightFinding and append to ctx.
+def _wpvuln_emit_finding(ctx: ScanContext, v, wpc) -> int:
+    """Convert a WpVulnerability into a LightFinding and append to ctx. Returns 1 if
+    a finding was added, 0 if not.
 
     Separated out so the loop in check_wpvulnerability stays tidy and
     so each finding-emission failure is isolated.
+
+    KB 12 job 3r (2026-10-23): a matched advisory is OUT OF DATE, not proven —
+      * dropped when the advisory's OWN text states ranges that all leave the version
+        out (wpvulnerability.net's operator often carries only "< 7.0.11" while the
+        text says "in versions 7.0.0 to 7.0.10": on 2026-10-22 four of five Slider
+        Revolution advisories matched 6.7.5x only that way) — but a two-ended operator
+        ('>= 7.0.0 and < 7.0.11') is trusted over the sentence;
+      * severity evidence.version_based_severity: MODERATE, MODERATE-HIGH when the
+        CVE is on CISA's exploited list — no more keyword guessing
+        (wpvulnerability_client.severity_from_cve_metadata is gone);
+      * never "vulnerable" in what it writes.
     """
-    severity = wpc.severity_from_cve_metadata(v.cve_id, v.description)
+    if (not evidence.operator_has_both_bounds(v.operator_summary)
+            and evidence.range_excludes(v.affected_version, v.description)):
+        log(f"  wpvulnerability: {v.cve_id or v.uuid or v.title}: its own text excludes "
+            f"{v.affected_version} — not written")
+        return 0
+    kev = bool(v.cve_id) and v.cve_id in evidence.kev_ids()
+    severity = evidence.version_based_severity(kev)
     # Stable check_name keyed on CVE ID (preferred) or UUID (fallback for
     # vulnerabilities without a CVE assignment). This lets the dedup
     # engine recognize the same vuln across multiple scans + sources.
@@ -2079,15 +2096,17 @@ def _wpvuln_emit_finding(ctx: ScanContext, v, wpc) -> None:
 
     description_lines = [
         f"{v.affected_target.replace(':', ' ').title()} detected on {ctx.hostname} "
-        f"at version {v.affected_version} matches the vulnerable range {v.operator_summary}."
+        f"at version {v.affected_version} is older than the fix for this published flaw "
+        f"(affected: {v.operator_summary}). Out of date: matched from the version the site "
+        f"shows, not confirmed by testing."
     ]
     if v.description:
         description_lines.append(v.description.strip()[:600])
     if v.unfixed:
         description_lines.append(
             "NOTE: wpvulnerability.net flags this as UNFIXED — no patched "
-            "version is currently available. Mitigation requires WAF rules, "
-            "configuration changes, or plugin removal."
+            "version is currently available. The fix is to replace the plugin "
+            "with a maintained one (or remove it)."
         )
     description_lines.append(
         "Detection: wpvulnerability.net CVE-by-fingerprint API lookup. "
@@ -2101,8 +2120,8 @@ def _wpvuln_emit_finding(ctx: ScanContext, v, wpc) -> None:
         severity=severity,
         category="config",  # wp-plugin-cve isn't a finding_category_t value
         description="\n\n".join(description_lines),
-        tags=["wordpress", "wpvulnerability", "version-cve",
-              v.affected_target.split(":")[0]],
+        tags=["wordpress", "wpvulnerability", "version-cve", "out-of-date",
+              v.affected_target.split(":")[0]] + (["cisa-kev"] if kev else []),
         cwe=[1395],  # CWE-1395 Dependency on Vulnerable Third-Party Component
         # CVE ID(s) when present — enables portal groupBySharedCve render-
         # time dedup so cloud (commandsentry_light) merges with wpscan-
@@ -2113,12 +2132,13 @@ def _wpvuln_emit_finding(ctx: ScanContext, v, wpc) -> None:
         raw_excerpt=(
             f"Target: {v.affected_target}\n"
             f"Detected version: {v.affected_version}\n"
-            f"Vulnerable range: {v.operator_summary}\n"
+            f"Affected range: {v.operator_summary}\n"
             f"CVE: {v.cve_id or '(no CVE assigned)'}\n"
             f"wpvulnerability.net UUID: {v.uuid or '(none)'}\n"
             f"Unfixed: {v.unfixed}"
         )[:2000],
     ))
+    return 1
 
 
 # ─── Published flaws in JavaScript libraries via OSV.dev (302 step 3) ───────
@@ -2152,7 +2172,8 @@ def check_library_flaws(ctx: ScanContext) -> None:
             try:
                 vulns = library_flaws.query_osv(pkg, obs.version)
                 advs = library_flaws.advisories_from_osv(vulns, pkg, obs.version)
-                rows = [library_flaws.finding_fields(obs, pkg, adv, ctx.hostname) for adv in advs]
+                rows = [library_flaws.finding_fields(obs, pkg, adv, ctx.hostname, evidence.kev_ids())
+                        for adv in advs]
             except Exception as e:  # noqa: BLE001 — LookupFailed or anything unexpected
                 log(f"  library_flaws: {pkg} {obs.version} lookup failed: {type(e).__name__}: {str(e)[:160]}")
                 failed += [f"{p}@{o.version}" for o, p in todo[i:]]

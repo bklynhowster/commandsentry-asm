@@ -220,29 +220,27 @@ def wp_cve(cve_id="CVE-2026-87902", kev=True):
     return rec
 
 
-def _existing_wp(asset="cc.example.com"):
-    return {aw.finding_id(asset, "wordpress"): dict(asset_id=asset, key="wordpress", status="open",
-                                                    cve=["CVE-2026-87902"])}
-
-
-@pytest.mark.parametrize("version,closes", [("7.1.3", True), ("7.1.2", True), ("7.1.1", False),
-                                            ("7.0.6", True), ("7.0.5", False)])
-def test_the_read_version_decides_the_open_wordpress_row(version, closes):
+@pytest.mark.parametrize("version,writes", [("7.1.3", False), ("7.1.2", False), ("7.1.1", True),
+                                             ("7.0.6", False), ("7.0.5", True)])
+def test_the_read_version_decides_whether_an_out_of_date_row_is_written(version, writes):
+    """Job 3r: the pre-3r WordPress row is a guess and no longer this watcher's (the
+    cleanup Howie runs retires it). A read version inside the range writes an OUT-OF-DATE
+    row under its own identity; a patched one writes nothing."""
     inv = aw.build_inventory([_tech("cc.example.com", "WordPress")], [],
                              [{"asset_id": "cc.example.com", "core_version": version}])
     a = aw._advisory(wp_cve(), {"CVE-2026-87902"})
-    acts = aw.plan(inv, {"wordpress": {"CVE-2026-87902": a}}, set(), _existing_wp(), {},
+    acts = aw.plan(inv, {"wordpress": {"CVE-2026-87902": a}}, set(), {}, {},
                    kev_ids={"CVE-2026-87902"})
+    if not writes:
+        assert acts == []
+        return
     (act,) = acts
-    if closes:
-        assert act.kind == "close" and f"WordPress {version} is outside every listed advisory" in act.reason
-    else:
-        assert act.kind == "upsert"
-        assert act.fields["title"].startswith(f"WordPress {version} is in the affected range of 1 advisory")
-        assert act.fields["affected_component_version"] == version
+    assert act.kind == "upsert" and act.finding_id == aw.ood_finding_id("cc.example.com", "wordpress")
+    assert act.fields["title"].startswith(f"Runs WordPress {version}: out of date — 1 published flaw")
+    assert act.fields["severity"] == "MODERATE-HIGH" and act.fields["affected_component_version"] == version
 
 
-def test_run_reads_the_artifact_and_closes_the_row(monkeypatch):
+def test_run_reads_the_artifact_and_leaves_the_pre_3r_row_alone(monkeypatch):
     from test_advisory_watch import Conn, FakeGet, NOW
     get = FakeGet([("wordpress%3Awordpress&noRejected&pubStartDate", {"totalResults": 0, "vulnerabilities": []}),
                    ("wordpress%3Awordpress&noRejected&kevStartDate", {"totalResults": 1, "vulnerabilities": [{"cve": wp_cve()}]}),
@@ -253,6 +251,6 @@ def test_run_reads_the_artifact_and_closes_the_row(monkeypatch):
     conn = Conn([_tech("cc.example.com", "WordPress")], existing,
                 wp=[{"asset_id": "cc.example.com", "core_version": "7.1.3"}])
     n = aw.run(conn, src, log=lambda *a: None, Json=lambda x: x)
-    assert n["close"] == 1 and n["upsert"] == 0
+    assert n["close"] == 0 and n["upsert"] == 0, "7.1.3 is patched: nothing written; the guess row is the cleanup's"
     # two latest-per-host reads: the httpx tech list and the WordPress core read
     assert sum(c.startswith("SELECT DISTINCT ON (sr.asset_id)") for c, _ in conn.s["calls"]) == 2

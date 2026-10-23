@@ -227,7 +227,8 @@ def test_finding_is_labelled_version_based_and_grouped_per_library():
     assert f["normalized_key_override"] == "jslib-jquery-ui"
     assert f["title"] == "jQuery UI 1.12.1: jQuery UI XSS when refreshing a checkboxradio"
     assert f["severity"] == "MODERATE" and f["category"] == "supply_chain" and f["cve"] == ["CVE-2022-31160"]
-    assert "Version-based" in f["description"] and "not confirmed by testing" in f["description"]
+    assert "Out of date" in f["description"] and "not confirmed by testing" in f["description"]
+    assert "vulnerable" not in f["description"].lower() and "The advisory rates it MODERATE." in f["description"]
     assert "fixed in 1.13.2" in f["description"] and "uoltest.unimacgraphics.com" in f["description"]
     assert f["references"][0] == "https://osv.dev/vulnerability/GHSA-h6gj-6jjq-h8g9"
     assert "https://nvd.nist.gov/vuln/detail/CVE-2022-31160" in f["references"]
@@ -454,3 +455,14 @@ def test_heavy_keeps_the_supply_chain_category():
     import inspect
     import run_heavy as H
     assert '"supply_chain",' in inspect.getsource(H.write_event_findings_and_artifacts)
+
+
+def test_job_3r_out_of_date_is_moderate_whatever_the_advisory_says_kev_is_moderate_high():
+    """KB 12 job 3r: a version on an advisory's list is out of date, not proven."""
+    adv = LF.Advisory(id="GHSA-hhhh-hhhh-hhhh", cves=("CVE-2099-1",), summary="bad", severity="CRITICAL",
+                      severity_stated=True, fixed="9.9.9", cwe=(), references=())
+    f = LF.finding_fields(OBS, "jquery-ui", adv, "x.example.com")
+    assert f["severity"] == "MODERATE" and "The advisory rates it CRITICAL." in f["description"]
+    k = LF.finding_fields(OBS, "jquery-ui", adv, "x.example.com", kev_ids={"CVE-2099-1"})
+    assert k["severity"] == "MODERATE-HIGH" and "cisa-kev" in k["tags"]
+    assert "known-exploited" in k["description"]
