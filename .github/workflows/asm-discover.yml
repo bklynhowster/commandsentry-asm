@@ -520,6 +520,26 @@ jobs:
           # DRY-RUN: --write-enable intentionally omitted. Logs only; no asset writes.
           python3 scripts/db/demotion_writer.py --run-tag "${GITHUB_RUN_ID}"
 
+      - name: One site, not two — www/plain evidence (job 4; nothing reads it yet)
+        # KB 12 job 4 (Howie 2026-10-25 08:46, D1). For every in-scope pair www.X / X, reads both
+        # names once (addresses, the leaf certificate's fingerprint, one GET / with curl and no -L)
+        # plus one made-up name per zone (wildcard test), and writes ONLY public.site_members
+        # (migration 20261025a). Never changes an asset, a finding or a scan. A failed check is
+        # 'unknown' and changes nothing; a verdict flips only after two runs in a row disagree.
+        # Nothing reads the table until migration B + push B, after the rows are read back.
+        # Last of the database steps and continue-on-error, so it can never hold up the steps above.
+        if: success() && steps.targets.outputs.mode != 'skipped'
+        continue-on-error: true
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          if [[ -z "${SUPABASE_DSN}" ]]; then
+            echo "::warning::SUPABASE_DSN secret not set — skipping the site_members check."
+            exit 0
+          fi
+          python3 -m pip install --break-system-packages --quiet 'psycopg[binary]==3.3.4'
+          python3 scripts/db/site_members.py --run-tag "${GITHUB_RUN_ID}"
+
       # ⛔ THE MANUAL DEPLOY CHAIN IS GONE, AND DELETING IT IS PART OF THE FIX.
       #   It existed because a GITHUB_TOKEN push does NOT trigger `push` workflows
       #   (GitHub's anti-recursion rule), so deploy-netlify.yml never fired on its
