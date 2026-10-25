@@ -42,8 +42,15 @@ from degradation import (  # noqa: E402
     cap_aware_append_healthcheck_failure,
     delta_close_eligible,
     egress_failure_reason,
+    scan_unreached_reason,
     healthcheck_with_retry,
     is_tool_output_degraded,
+    SCAN_UNREACHED,
+    PROBE_HTTP,
+    PROBE_REFUSED,
+    PROBE_RESET,
+    PROBE_TIMEOUT,
+    SCAN_UNREACHED,
 )
 
 
@@ -1580,7 +1587,7 @@ def test_nikto_parser_stable_check_name_slug_for_finding_id_continuity():
 
 def _seq_healthcheck(results):
     """Return a healthcheck_fn that yields canned results in order.
-    Each call pops the next (healthy, code) tuple. RuntimeError on
+    Each call pops the next (healthy, code, disposition) tuple. RuntimeError on
     overrun — tests should explicitly size results to match the
     expected attempts."""
     iter_results = iter(results)
@@ -1610,13 +1617,13 @@ def test_healthcheck_with_retry_first_attempt_healthy_returns_immediately():
     return (True, code) with ZERO sleeps. Tests the pre-rotate retry
     helper doesn't waste time when the first probe succeeds."""
     sleeper = _CountingSleep()
-    healthy, code = healthcheck_with_retry(
-        _seq_healthcheck([(True, 200)]),
+    healthy, code, disposition = healthcheck_with_retry(
+        _seq_healthcheck([(True, 200, PROBE_HTTP)]),
         attempts=3,
         delay_s=2,
         sleep_fn=sleeper,
     )
-    assert (healthy, code) == (True, 200)
+    assert (healthy, code, disposition) == (True, 200, PROBE_HTTP)
     assert sleeper.calls == []  # no sleeps on first-attempt success
 
 
@@ -1626,13 +1633,13 @@ def test_healthcheck_with_retry_recovers_from_transient_blip():
     retry the scanner would have rotated; with retry it recovers
     cleanly. Asserts: (True, 200) returned, ONE sleep between probes."""
     sleeper = _CountingSleep()
-    healthy, code = healthcheck_with_retry(
-        _seq_healthcheck([(False, 0), (True, 200)]),
+    healthy, code, disposition = healthcheck_with_retry(
+        _seq_healthcheck([(False, 0, PROBE_TIMEOUT), (True, 200, PROBE_HTTP)]),
         attempts=3,
         delay_s=2,
         sleep_fn=sleeper,
     )
-    assert (healthy, code) == (True, 200)
+    assert (healthy, code, disposition) == (True, 200, PROBE_HTTP)
     assert sleeper.calls == [2]  # one sleep between attempt 1 and 2
 
 
@@ -1642,13 +1649,17 @@ def test_healthcheck_with_retry_all_attempts_unhealthy_returns_last():
     legitimately triggers rotation (no false positives on rotation
     pressure either — three consecutive failures IS a real signal)."""
     sleeper = _CountingSleep()
-    healthy, code = healthcheck_with_retry(
-        _seq_healthcheck([(False, 0), (False, 0), (False, 503)]),
+    healthy, code, disposition = healthcheck_with_retry(
+        _seq_healthcheck([
+            (False, 0, PROBE_TIMEOUT),
+            (False, 0, PROBE_REFUSED),
+            (False, 503, PROBE_HTTP),
+        ]),
         attempts=3,
         delay_s=2,
         sleep_fn=sleeper,
     )
-    assert (healthy, code) == (False, 503)
+    assert (healthy, code, disposition) == (False, 503, PROBE_HTTP)
     # 3 attempts → 2 sleeps between them
     assert sleeper.calls == [2, 2]
 
@@ -1657,13 +1668,13 @@ def test_healthcheck_with_retry_attempts_1_means_no_retry():
     """Single-attempt mode (used for validate-mode 'pristine-or-nothing'
     semantics) → equivalent to one direct healthcheck. ZERO sleeps."""
     sleeper = _CountingSleep()
-    healthy, code = healthcheck_with_retry(
-        _seq_healthcheck([(False, 0)]),
+    healthy, code, disposition = healthcheck_with_retry(
+        _seq_healthcheck([(False, 0, PROBE_REFUSED)]),
         attempts=1,
         delay_s=2,
         sleep_fn=sleeper,
     )
-    assert (healthy, code) == (False, 0)
+    assert (healthy, code, disposition) == (False, 0, PROBE_REFUSED)
     assert sleeper.calls == []
 
 
@@ -1672,13 +1683,17 @@ def test_healthcheck_with_retry_recovers_on_last_attempt():
     catches recovery at the boundary (no off-by-one that would skip
     the last probe)."""
     sleeper = _CountingSleep()
-    healthy, code = healthcheck_with_retry(
-        _seq_healthcheck([(False, 0), (False, 0), (True, 200)]),
+    healthy, code, disposition = healthcheck_with_retry(
+        _seq_healthcheck([
+            (False, 0, PROBE_TIMEOUT),
+            (False, 0, PROBE_RESET),
+            (True, 200, PROBE_HTTP),
+        ]),
         attempts=3,
         delay_s=2,
         sleep_fn=sleeper,
     )
-    assert (healthy, code) == (True, 200)
+    assert (healthy, code, disposition) == (True, 200, PROBE_HTTP)
     # 2 sleeps before attempts 2 + 3; recovery on attempt 3 returns
     # before a 3rd sleep would happen
     assert sleeper.calls == [2, 2]
@@ -1751,6 +1766,90 @@ def test_egress_failure_reason_mixed_with_real_http_classifies_as_target():
     'code > 0' rule.)"""
     assert egress_failure_reason([0, 200]) == "skipped_target_unreachable"
     assert egress_failure_reason([0, 301]) == "skipped_target_unreachable"
+
+
+# ─── job 4c — scan-unreached classification (2026-10-25) ─────────────
+# The engine could not tell "the box is down" from "the box blocks our exit"
+# until the probe recorded its TCP disposition and a cnn.com control probe
+# separated a dead exit from a target that won't answer this exit. Pin the
+# five new branches: refused, reset, timeout, HTTP status code, cnn fails.
+
+
+def test_scan_unreached_reason_refused():
+    """RST on connect → the host answered TCP, so the probe reached it."""
+    assert scan_unreached_reason(PROBE_REFUSED, 0) == SCAN_UNREACHED
+
+
+def test_scan_unreached_reason_reset():
+    """TCP answered then reset (TLS/HTTP) → the probe reached the host."""
+    assert scan_unreached_reason(PROBE_RESET, 0) == SCAN_UNREACHED
+
+
+def test_scan_unreached_reason_timeout():
+    """Nothing came back while cnn.com answered → probe didn't get through;
+    default reading: fault on Sentry's side."""
+    assert scan_unreached_reason(PROBE_TIMEOUT, 0) == SCAN_UNREACHED
+
+
+def test_scan_unreached_reason_block_code():
+    """An HTTP code from the host → probe reached the host.
+    healthy=False carries the code in `code` (disposition PROBE_HTTP)."""
+    for code in (403, 429, 502, 503, 504):
+        assert scan_unreached_reason(PROBE_HTTP, code) == SCAN_UNREACHED, code
+
+
+def test_control_probe_ok_block_page_counts_as_exit_working():
+    """D3 — a block page (403) is a completed TLS+HTTP exchange through the
+    exit, so it proves the exit works even though the status is a block."""
+    from run_medium import control_probe_ok
+    assert control_probe_ok("https://cnn.com/ [403]", 0) is True
+    assert control_probe_ok("https://cnn.com/ [200]", 0) is True
+
+
+def test_control_probe_ok_cnn_fails_returns_false():
+    """cnn fails (rc!=0 or no [NNN] status parsed) → control_probe_ok False →
+    the gate takes the egress path, never the target path."""
+    from run_medium import control_probe_ok
+    assert control_probe_ok("", 1) is False        # httpx errored
+    assert control_probe_ok("", 0) is False        # no status code parsed
+    assert control_probe_ok("garbage", 0) is False
+
+
+def test_target_proven_reachable_skips_cnn_d1_early_return(monkeypatch):
+    """When a prior tool already proved the target reachable this run
+    (target_proven_reachable=True), cnn.com answering must NOT trigger the
+    4c D1 early-return (which degrades the run as scan_unreached). The gate falls through to the #32 prior-tool-
+    success short-circuit and returns (True, "")."""
+    import run_medium
+
+    class _MinCtx:
+        validate_mode = False
+        target_proven_reachable = True
+        ban_events = []
+
+    ctx = _MinCtx()
+
+    # cnn.com answers (the exit works) — but the D1 early-return must be
+    # skipped because the target is already proven reachable this run.
+    monkeypatch.setattr(run_medium, "control_probe_reachable", lambda: True)
+    # The target probe keeps failing.
+    monkeypatch.setattr(
+        run_medium, "healthcheck", lambda c: (False, 0, PROBE_REFUSED)
+    )
+    # Keep the fall-through fast and offline: the pre-rotate retry returns
+    # unhealthy without sleeping, and rotate_vpn reports failure so the loop
+    # breaks out after one iteration and reaches the short-circuit.
+    monkeypatch.setattr(
+        run_medium,
+        "healthcheck_with_retry",
+        lambda *a, **k: (False, 0, PROBE_TIMEOUT),
+    )
+    monkeypatch.setattr(run_medium, "rotate_vpn", lambda c: False)
+
+    healthy, reason = run_medium.ensure_healthy_egress(ctx, max_rotations=2)
+
+    assert healthy is True
+    assert reason == ""
 
 
 # ─── #32 — healthcheck probe + prior-tool-success short-circuit (2026-06-16)
