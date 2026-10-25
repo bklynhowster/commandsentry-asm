@@ -54,7 +54,7 @@ from typing import Optional
 
 # ─── Rotation log caps (advisor ruling Q2 2026-06-12) ────────────────────
 # Hard caps on rotation_log subarrays to prevent rotation-storm bloat
-# (testfire-bans-every-IP scenario). When either cap is hit, the runner
+# (worst case: no egress IP passes a healthy probe on this run). When either cap is hit, the runner
 # sets rotation_storm=true and stops appending. The cap-hit itself is
 # independent evidence of severe degradation.
 MAX_BAN_EVENTS: int = 500
@@ -67,7 +67,8 @@ MAX_HEALTHCHECK_FAILURES: int = 500
 # the runner does NOT bring up Mullvad and scans from the GitHub Actions
 # datacenter egress. That's only safe against public, deliberately-
 # vulnerable training targets we have explicit permission to scan AND
-# that don't ban the GH-runner egress range.
+# that answer the GH-runner egress range (the host answering HTTP is reachable;
+# the scan is against a test target).
 #
 # This allowlist is the SAFETY CONTROL. assert_validate_mode_target_allowed
 # fires BEFORE any target-bound op — same fail-closed discipline as the
@@ -91,7 +92,7 @@ MAX_HEALTHCHECK_FAILURES: int = 500
 VALIDATION_TARGETS: frozenset[str] = frozenset({
     "demo.testfire.net",   # IBM AltoroMutual — public training target
     # Add Hetzner WebGoat / DVWA hostname here ONLY if Step 1 probe
-    # shows testfire bans the GH-runner egress (advisor Q3 default).
+    # shows testfire answering the GH-runner egress with a 403/503 (advisor Q3 default).
 })
 
 
@@ -118,7 +119,7 @@ class DegradedRunError(Exception):
     Reason slugs (stable strings — surfaced in scan_run.error_message and
     used in tool_status[chunk]={ok: false, reason: <slug>}):
 
-      - "rotation_exhausted"            — chunk hit all-IPs-banned, skipped
+      - "rotation_exhausted"            — chunk: no egress IP passed the probe (no answer, or a failed probe), skipped
       - "tool_status_invariant"         — tools_run != tool_status.keys()
       - "target_unreachable_after_run"  — post-tool healthcheck failed
       - "target_unreachable_pre_run"    — pre-tool healthcheck + rc!=0
@@ -129,6 +130,7 @@ class DegradedRunError(Exception):
       - "vpn_bringup_failed"            — batch 2 (validate-mode)
       - "asset_pre_flight_unreachable"  — pre-first-chunk probe failed
       - "no_tls_handshake"              — connected + probed but no TLS handshake completed (egress reset / decommissioned / absent TLS)
+      - "scan_unreached"                — job 4c: probe didn't get through to the host while cnn.com answered through the same exit (default: fault on Sentry's side)
     """
 
     def __init__(self, reason: str, context: str = "") -> None:
@@ -213,8 +215,8 @@ def is_tool_output_degraded(
       degradation was detected.
     """
     # Authority 1: post-run healthcheck. If the target stopped responding
-    # to us, we cannot trust any "no findings" result — we may have been
-    # banned mid-tool. Hard abort.
+    # to us, we cannot trust any "no findings" result — the probe stopped
+    # getting through mid-tool. Hard abort.
     if not post_health:
         return "target_unreachable_after_run"
 
@@ -322,6 +324,25 @@ POST_ROTATE_SETTLE_ATTEMPTS = 3 # retry post-rotate settle N times
 POST_ROTATE_SETTLE_DELAY_S = 5  # wait between settle probes (~15s total)
 
 
+# ─── scan-unreached (job 4c, 2026-10-25) ──────────────────────────────
+# The medium healthcheck used to collapse refused / reset / timeout all to a
+# bare code 0, so the engine could not tell why a probe failed to reach the host. Two fixes: (1) the probe now records the TCP disposition
+# instead of discarding it; (2) a cnn.com control probe on the same exit tells
+# "our exit is dead" from "our probe didn't get through while the exit works" (one-retry-then-
+# stop; cnn.com, any answer counts — rulings D1 and D3).
+
+# What the target probe actually saw (healthcheck returns these as disposition).
+PROBE_HTTP = "http"        # got an HTTP status — the code rides in the tuple
+PROBE_REFUSED = "refused"  # RST on connect — the host answered: box is up, port closed
+PROBE_RESET = "reset"      # TCP answered, then reset (TLS/HTTP) — probe reached the host
+PROBE_TIMEOUT = "timeout"  # nothing came back — suspect Sentry's side first (probe, exit, runner)
+
+# The new reason slug. Rides tool_status and scan_run.error_message via
+# ensure_healthy_egress → mark_tool_degraded, exactly like the existing
+# skipped_target_unreachable / egress_unstable.
+SCAN_UNREACHED = "scan_unreached"  # probe didn't get through; cnn.com answered
+
+
 def egress_failure_reason(probe_codes: list[int]) -> str:
     """Classify why an ensure_healthy_egress loop ended without a
     healthy result. The single piece of new logic introduced by #30's
@@ -331,7 +352,8 @@ def egress_failure_reason(probe_codes: list[int]) -> str:
     Heuristic:
       - If ANY probe returned an HTTP code > 0 → 'skipped_target_unreachable'
         The egress worked (target spoke HTTP back, even if the response
-        was a ban code like 403/503). Target is the problem, not the tunnel.
+        was a 403/503 — the host answered, so it is reachable and up).
+          The exit reached the host and the host replied.
       - If EVERY probe returned 0 (or the list is empty) → 'egress_unstable'
         No tunnel ever produced a target-reachable state. WG layer + or
         rotation pool is the problem, not the target.
@@ -350,6 +372,30 @@ def egress_failure_reason(probe_codes: list[int]) -> str:
     return "egress_unstable"
 
 
+def scan_unreached_reason(disposition: str, code: int) -> str:
+    """Classify a target that failed to answer healthily even though the
+    cnn.com control probe proved our exit passes traffic (job 4c, D1–D3).
+
+    Called only when the control probe answered and the target still failed
+    after its one D1 retry. The honest answer: on this scan Sentry's probe
+    didn't get through to the host while cnn.com answered through the same
+    exit — the default reading is a fault on Sentry's side (our probe, our
+    exit, our runner), never the target, and not "the host is down".
+
+    The probe's disposition (refused, reset, timeout, HTTP code) and whether
+    cnn.com answered stay as recorded detail in the log and the rotation event,
+    not in the slug.
+
+    Pure — unit-tested independent of the probe loop, mirroring
+    egress_failure_reason.
+    """
+    if code > 0:
+        return SCAN_UNREACHED
+    if disposition == PROBE_TIMEOUT:
+        return SCAN_UNREACHED
+    return SCAN_UNREACHED
+
+
 def healthcheck_with_retry(
     healthcheck_fn,
     attempts: int,
@@ -361,7 +407,7 @@ def healthcheck_with_retry(
     attempts come back unhealthy, returns the LAST result.
 
     Pure helper — `healthcheck_fn` is any callable returning
-    `(healthy: bool, http_code: int)`. `sleep_fn` defaults to
+    `(healthy: bool, http_code: int, disposition: str)`. `sleep_fn` defaults to
     `time.sleep` but can be injected for tests (use a no-op or a
     counter).
 
@@ -371,12 +417,12 @@ def healthcheck_with_retry(
     different code path.
 
     Behavioral contract:
-      - If 1st call returns healthy → returns (True, code) immediately,
-        zero sleeps.
-      - If 1st call returns unhealthy, 2nd healthy → returns (True,
-        code), 1 sleep.
-      - If all `attempts` unhealthy → returns (False, last_code),
-        `attempts - 1` sleeps.
+      - If 1st call returns healthy → returns (True, code, disposition)
+        immediately, zero sleeps.
+      - If 1st call returns unhealthy, 2nd healthy → returns
+        (True, code, disposition), 1 sleep.
+      - If all `attempts` unhealthy → returns
+        (False, last_code, last_disposition), `attempts - 1` sleeps.
 
     Used by ensure_healthy_egress in two places:
       1. PRE-rotate (PRE_ROTATE_RETRY_ATTEMPTS) — filter transient
@@ -388,10 +434,10 @@ def healthcheck_with_retry(
     import time
     if sleep_fn is None:
         sleep_fn = time.sleep
-    last_result = (False, 0)
+    last_result = (False, 0, PROBE_TIMEOUT)
     for i in range(attempts):
-        healthy, code = healthcheck_fn()
-        last_result = (healthy, code)
+        healthy, code, disposition = healthcheck_fn()
+        last_result = (healthy, code, disposition)
         if healthy:
             return last_result
         if i < attempts - 1:
@@ -456,7 +502,7 @@ def assert_tool_status_invariant(
 
 def cap_aware_append_ban(ctx_ban_events: list[dict], ctx_rotation_storm: bool,
                          event: dict) -> bool:
-    """Append a ban event to ctx.ban_events with the MAX_BAN_EVENTS cap.
+    """Append a rotation event to ctx.ban_events with the MAX_BAN_EVENTS cap.
 
     Returns True if the cap was just hit by this call (caller should
     flip ctx.rotation_storm=True). Returns False otherwise (already-capped
@@ -465,6 +511,9 @@ def cap_aware_append_ban(ctx_ban_events: list[dict], ctx_rotation_storm: bool,
     Pattern lets the caller manage the flag without leaking the list-
     mutation into the caller's branch. See run_medium.py's append helper
     for the bound-to-ctx wrapper.
+
+    Note: `ban_events` is a historical field name preserved for database
+    compatibility; the events record rotation attempts, not target-side blocks.
     """
     if ctx_rotation_storm:
         return False  # already capped, drop silently
@@ -534,8 +583,8 @@ def delta_close_eligible(tool_status: dict) -> bool:
 # degrade-and-continue is determined MECHANICALLY by which function produced the
 # reason slug — not by per-site judgement:
 #
-#   ensure_healthy_egress   → egress lost / ban rotations exhausted  → ALWAYS abort
-#   is_tool_output_degraded → all 3 slugs are unreachable/ban        → ALWAYS abort
+#   ensure_healthy_egress   → egress lost / rotation pool exhausted  → ALWAYS abort
+#   is_tool_output_degraded → all 3 slugs: unreachable, probe didn't get through → ALWAYS abort
 #   <tool>_is_degraded      → the tool misbehaved, target reachable  → ALWAYS degrade
 #   testssl_is_degraded     → STRADDLES; split by slug (see run_heavy)
 #
@@ -547,7 +596,7 @@ def delta_close_eligible(tool_status: dict) -> bool:
 # raises as 15 (three were comments) and as the stale source-pins: a slug
 # rename, a new reason, or a typo silently misclassifies — and the failure
 # DIRECTION is a harm-condition falling through to "degraded", i.e. a scan that
-# keeps hammering a target that already banned us and records a false-clean.
+# keeps probing a host its probes can't get through to and records a false-clean.
 #
 # Instead the disposition travels WITH the reason from the function that
 # produced it. A new slug added to a harm-condition producer inherits abort by
@@ -566,8 +615,8 @@ DEGRADED = "degraded"       # tool failure: record it, keep scanning
 #                      as ok is the exact defect spec 198 exists to fix: 4 of 6
 #                      nuclei chunks on Command run #2624 timed out with zero
 #                      retained output and were recorded {"ok": true}.
-#   * not ABORT_SCAN — nothing harmful happened. The target is reachable, we
-#                      are not banned. Aborting would trade fictional coverage
+#   * not ABORT_SCAN — nothing harmful happened. The target is reachable, our
+#                      probe is getting through. Aborting would trade fictional coverage
 #                      for ZERO coverage (spec 198 §4.4).
 #   * not DEGRADED   — the tool did not misbehave. nuclei did exactly what it
 #                      was configured to do; the wall clock is OUR knob.
@@ -608,11 +657,11 @@ _COVERAGES = (COVERAGE_COMPLETE, COVERAGE_PARTIAL_SIGNIFICANT,
 #
 #   * `wall_clock_cut_400s` is the ONLY nuclei cut reason on record — 13
 #     occurrences, 9 assets, 9 of them medium.
-#   * There is NO signature-block reason on nuclei at all. The filter
+#   * There is NO signature-cut reason on nuclei at all. The filter
 #     bottleneck surfaces UPSTREAM as `tech_detect_blocked` on the httpx
 #     phase (23 occurrences), never on nuclei.
 #   * Reason: a WAF-fronted asset is routed to the safe-only plan, which
-#     COMPLETES. You cannot be signature-blocked on templates you were never
+#     COMPLETES. You cannot hit a signature-cut on templates you were never
 #     offered. Their non-coverage is `routed_safe_only`, not a cut.
 #
 # So the classes below span FOUR mechanisms, not two, and deliberately cover
@@ -626,7 +675,7 @@ _COVERAGES = (COVERAGE_COMPLETE, COVERAGE_PARTIAL_SIGNIFICANT,
 # field existed, which is the point of it.
 
 CUT_TIME = "time"            # OUR budget ran out. More budget would help.
-CUT_FILTER = "filter"        # a WAF/content filter refused us. Budget is irrelevant.
+CUT_FILTER = "filter"        # something other than the content answered (a WAF block page or challenge, a failed TLS handshake). Budget is irrelevant.
 CUT_TRANSPORT = "transport"  # never reached the target at all.
 CUT_POLICY = "policy"        # WE chose not to run it. Not a failure.
 CUT_TOOL = "tool"            # the tool itself misbehaved.
@@ -650,6 +699,7 @@ _CUT_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
     ("ban",                         CUT_FILTER),
     ("tls_handshake_failed",        CUT_FILTER),  # 2026-10-18: reset AFTER connect = refusal by a reachable host (legacy cipher floor), not transport
     ("no_tls_handshake",            CUT_FILTER),  # 2026-10-18: connected + probed but no TLS handshake completed (egress reset / decommissioned / absent TLS) — reachable, not transport
+    ("scan_unreached",              CUT_TRANSPORT),  # job 4c: probe didn't get through; cnn.com answered
     ("curl_failed",                 CUT_TRANSPORT),
     ("homepage_fetch_failed",       CUT_TRANSPORT),
     ("all_probes_failed",           CUT_TRANSPORT),
@@ -676,7 +726,7 @@ _CUT_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
     # `unclassified`. The docstring is the authoritative vocabulary; leaving
     # known slugs unmapped would under-count real classes until someone
     # happened to notice.
-    ("rotation_exhausted",          CUT_FILTER),     # every IP banned
+    ("rotation_exhausted",          CUT_FILTER),     # no egress IP passed the probe (classed here historically; suspect Sentry's side first)
     ("output_stderr_contains_unreachable_pattern", CUT_TRANSPORT),
     ("asset_pre_flight_unreachable", CUT_TRANSPORT),
     ("vpn_bringup_failed",          CUT_TRANSPORT),
@@ -744,7 +794,7 @@ def phase_cut_reason(entry: dict) -> str | None:
 #
 #   * tech-detect SUCCEEDED and the target simply isn't any of the five stacks
 #     (a Cisco ASA, say) → 4 is the COMPLETE, CORRECT plan → trustworthy
-#   * tech-detect was BLOCKED → the stack is unknown → the plan is TRUNCATED
+#   * tech-detect FAILED → the stack is unknown → the plan is TRUNCATED
 #     → untrustworthy
 #
 # Missing APPLICABILITY vs missing INFORMATION. Same numbers, opposite meaning.
@@ -766,7 +816,8 @@ def phase_cut_reason(entry: dict) -> str | None:
 # reason was set". The catch-all `else` branch emits tech_detect_* instead,
 # which this gate DENIES. Verified on the persisted record 2026-09-07:
 # stack_not_applicable co-occurs with httpx ok:true; tech_detect_blocked with
-# httpx degraded; never crossed.
+# httpx degraded; never crossed. (tech_detect_blocked is the slug — the host
+# answered, httpx was cut by a response filter, not by a transport failure.)
 TRUSTWORTHY_PLAN_DELTA_REASONS: frozenset[str] = frozenset({
     "stack_not_applicable",   # complete plan; those stacks don't apply here
 })
@@ -857,9 +908,11 @@ class Degradation:
 
 
 def egress_degradation(reason: str) -> Degradation:
-    """ensure_healthy_egress reasons. ALWAYS abort: the egress is banned or
-    unhealthy after rotations are exhausted, so any further request scans from
-    a banned/wrong vantage. The artifact these accompany records banned:True."""
+    """ensure_healthy_egress reasons. ALWAYS abort: no egress exit
+    passed the health probe after rotations are exhausted, so any further request
+    would scan from an unproven vantage. The artifact these accompany records
+    banned:True (historical field name — records rotation exhaustion, not
+    a target-side block)."""
     return Degradation(reason, ABORT_SCAN)
 
 
@@ -868,7 +921,7 @@ def b1_degradation(reason: str) -> Degradation:
     (target_unreachable_after_run / target_unreachable_pre_run /
     output_stderr_contains_unreachable_pattern) means we could not reach the
     target — so "no findings" is not evidence of no findings, and mid-tool
-    unreachability may be a ban in progress."""
+    unreachability means the probe stopped getting through."""
     return Degradation(reason, ABORT_SCAN)
 
 

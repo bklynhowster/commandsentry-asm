@@ -190,8 +190,8 @@ ALIVE_CLOCK_SQL = (
 #
 # ⛔ THE FAILURE MODE THIS TUPLE CREATES, and why a test guards it instead of a
 # comment (4.7, relay 166). The plausible future change is HEAVY falling back to
-# tool_status when naabu is blocked — a WAF blocking naabu while the host answers
-# HTTP is not hypothetical on the FortiGate fleet. On that day heavy routes
+# tool_status when naabu gets no open ports — naabu can return zero ports while
+# the host answers HTTP (observed on the record). On that day heavy routes
 # tool_status carrying "httpx", this tuple does not contain it,
 # observation_proves_alive returns False, the clock is never bumped, and the host
 # drifts toward looking DARK. Silent, and exactly the class we spent 2026-09-15

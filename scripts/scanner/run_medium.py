@@ -101,11 +101,16 @@ from degradation import (
     MAX_HEALTHCHECK_FAILURES,
     POST_ROTATE_SETTLE_ATTEMPTS,
     POST_ROTATE_SETTLE_DELAY_S,
+    PROBE_HTTP,
+    PROBE_REFUSED,
+    PROBE_RESET,
+    PROBE_TIMEOUT,
     PRE_ROTATE_RETRY_ATTEMPTS,
     PRE_ROTATE_RETRY_DELAY_S,
     VALIDATION_TARGETS,
     assert_tool_status_invariant,
     assert_validate_mode_target_allowed,
+    scan_unreached_reason,
     cap_aware_append_ban,
     cap_aware_append_healthcheck_failure,
     delta_close_eligible,
@@ -2179,10 +2184,62 @@ def rotate_vpn(ctx: ScanContext) -> bool:
 BAN_OR_PATH_DOWN_CODES = (403, 429, 502, 503, 504)
 
 
-def healthcheck(ctx: ScanContext) -> tuple[bool, int]:
-    """Probe the target via the Go httpx client. Returns (healthy, http_code).
+def tcp_probe_disposition(host: str, port: int, timeout_s: float = 5.0) -> str:
+    """Job 4c — classify a failed healthcheck at the TCP layer, without
+    sending a byte beyond the handshake. Used only AFTER httpx got no code.
+
+    Returns:
+      - PROBE_REFUSED — RST on connect. The host answered TCP RST on connect.
+      - PROBE_RESET   — TCP handshake completed, but httpx then failed above
+                        it (TLS/HTTP reset). TCP handshake completed but httpx failed above it (TLS/HTTP reset).
+      - PROBE_TIMEOUT — no TCP answer. The box is down, or silently dropping
+                        our exit.
+      - "error"       — could not classify (DNS failure etc.).
+    """
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout_s):
+            return PROBE_RESET
+    except (ConnectionRefusedError, ConnectionResetError):
+        return PROBE_REFUSED
+    except socket.timeout:
+        return PROBE_TIMEOUT
+    except OSError:
+        return "error"
+
+
+def control_probe_ok(stdout: str, rc: int) -> bool:
+    """Job 4c, D3 — the cnn.com control probe 'worked' iff httpx returned any
+    HTTP status code. A block page (403 etc.) is a completed TLS+HTTP exchange
+    through the exit, so it still proves the exit passes real traffic.
+    Pure — unit-tested from canned stdout/rc."""
+    if rc != 0:
+        return False
+    return bool(re.search(r"\[(\d{3})\]", stdout))
+
+
+def control_probe_reachable() -> bool:
+    """Job 4c, D3 — probe cnn.com on the same exit as the target. cnn.com is the
+    single neutral control host (any HTTP answer, a block page included, counts
+    as the exit working). Only runs after a target probe failed."""
+    rc, stdout, _ = run_cmd(
+        ["httpx", "-silent", "-status-code", "-no-color",
+         "-timeout", "10", "-u", "https://cnn.com/"],
+        timeout=15,
+    )
+    return control_probe_ok(stdout, rc)
+
+
+def healthcheck(ctx: ScanContext) -> tuple[bool, int, str]:
+    """Probe the target via the Go httpx client. Returns
+    (healthy, http_code, disposition).
+
     'healthy' = origin answered with a non-block response.
-    code 0 = no HTTP response at all (timeout / refused / reset).
+    code 0 = no HTTP response at all — and disposition then records WHAT the
+    connection said (PROBE_REFUSED / PROBE_RESET / PROBE_TIMEOUT) instead of
+    throwing that fact away (job 4c, 2026-10-25). A refusal or a reset means
+    the host answered; only a timeout leaves scan-unreached undecided, which the
+    cnn.com control probe in ensure_healthy_egress then settles.
 
     #32 (2026-06-16): switched from curl to httpx. nuclei + httpx share
     the Go ProjectDiscovery retryablehttp + Go TLS stack; curl uses
@@ -2207,16 +2264,21 @@ def healthcheck(ctx: ScanContext) -> tuple[bool, int]:
          "-u", f"https://{ctx.web_host}/"],
         timeout=15,
     )
-    if rc != 0:
-        return False, 0
+    if rc == 0:
+        # Parse "https://<host>/ [200]" → 200. Tolerate extra lines / noise.
+        m = re.search(r"\[(\d{3})\]", stdout)
+        if m:
+            code = int(m.group(1))
+            healthy = code not in BAN_OR_PATH_DOWN_CODES
+            return healthy, code, PROBE_HTTP
 
-    # Parse "https://<host>/ [200]" → 200. Tolerate extra lines / noise.
-    m = re.search(r"\[(\d{3})\]", stdout)
-    if not m:
-        return False, 0
-    code = int(m.group(1))
-    healthy = code not in BAN_OR_PATH_DOWN_CODES
-    return healthy, code
+    # No HTTP answer — classify what the TCP connection said (job 4c).
+    disposition = tcp_probe_disposition(ctx.web_host, 443)
+    if disposition == "error":
+        # No evidence the box answered (DNS/connect error) — treat like a
+        # silent nothing-back so it reads "not answering our exit", not "up".
+        disposition = PROBE_TIMEOUT
+    return False, 0, disposition
 
 
 def should_suppress_ffuf_redirect(
@@ -2756,6 +2818,13 @@ def ensure_healthy_egress(
                                       a confirmed-healthy egress (or no
                                       rotation happened and target won't
                                       answer). The original reason.
+      - "scan_unreached"            — cnn.com answered but the probe didn't
+                                       get through to the host: the default
+                                       reading is a fault on Sentry's side
+                                       (our probe, our exit, our runner), never
+                                       the target (one retry, then stop for the
+                                       host). Job 4c.
+                                      unknown). Job 4c.
 
     #30 hardening over the original first-fail-rotates loop:
       1. PRE-ROTATE RETRY — before rotating on an unhealthy check, do
@@ -2792,8 +2861,39 @@ def ensure_healthy_egress(
     # zeroes = tunnel never settled.
     probe_codes: list[int] = []
 
+    # Job 4c (2026-10-25): probe once, then a cnn.com control probe tells
+    # "our exit is dead" from "this target won't answer our exit".
+    healthy, code, disposition = healthcheck(ctx)
+    probe_codes.append(code)
+    if healthy:
+        return True, ""
+
+    if control_probe_reachable() and not ctx.target_proven_reachable:
+        # The exit works, so the probe didn't get through to the host. D1: ONE retry, then stop
+        # for this host until the next cycle — no rotation when the
+        # exit works but the target probe fails.
+        healthy, code, disposition = healthcheck(ctx)
+        probe_codes.append(code)
+        if healthy:
+            log(f"healthcheck: target recovered on retry (HTTP {code})")
+            return True, ""
+        reason = scan_unreached_reason(disposition, code)
+        log(f"  ✗ probe didn't get through while cnn.com answered — {reason} "
+            f"(disposition={disposition}, HTTP {code}); stopping for host (D1)")
+        return False, reason
+
+    # Reach here when either (a) the cnn.com control probe failed — our exit
+    # is the problem (the target is never the suspect) — or (b) cnn.com
+    # answered but a prior tool already proved the target reachable this run
+    # (#32): then the probe-vs-target failure is a request-shape mismatch,
+    # not a reachability issue, and the D1 early-return above must not degrade the run.
+    # Both fall through to today's rotation path; case (b) ends at the #32
+    # short-circuit below, which returns healthy instead of degrading.
+    log(f"healthcheck: target (HTTP {code}) unhealthy — proceeding through "
+        f"retry / rotation / prior-tool-success path")
+
     # First pass — pre-rotate retry to filter transient blips.
-    healthy, code = healthcheck_with_retry(
+    healthy, code, disposition = healthcheck_with_retry(
         bind_healthcheck,
         attempts=PRE_ROTATE_RETRY_ATTEMPTS,
         delay_s=PRE_ROTATE_RETRY_DELAY_S,
@@ -2819,7 +2919,7 @@ def ensure_healthy_egress(
 
         # Post-rotate settle — give the new tunnel time to start
         # passing target traffic before declaring it unhealthy.
-        healthy, code = healthcheck_with_retry(
+        healthy, code, disposition = healthcheck_with_retry(
             bind_healthcheck,
             attempts=POST_ROTATE_SETTLE_ATTEMPTS,
             delay_s=POST_ROTATE_SETTLE_DELAY_S,
@@ -4278,7 +4378,7 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         probe_egress_ip = ctx.egress_ips_seen[-1] if ctx.egress_ips_seen else None
         pre_code = None
         if THRESHOLD_PROBE_MODE or patient_effective:
-            _, pre_code = healthcheck(ctx)
+            _, pre_code, _ = healthcheck(ctx)
             tag_lbl = "PROBE" if THRESHOLD_PROBE_MODE else "PATIENT"
             log(f"  {tag_lbl} pre-chunk healthcheck on {probe_egress_ip}: HTTP {pre_code}")
 
@@ -4325,7 +4425,7 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
         # (2026-07-04). Returns on the first healthy probe, so zero added
         # latency on good hosts. A dead backend (persistent 504) fails every
         # attempt with a non-zero ban code and still degrades.
-        post_chunk_healthy, post_chunk_code = healthcheck_with_retry(
+        post_chunk_healthy, post_chunk_code, _ = healthcheck_with_retry(
             lambda: healthcheck(ctx),
             attempts=POST_ROTATE_SETTLE_ATTEMPTS,
             delay_s=POST_ROTATE_SETTLE_DELAY_S,
@@ -4468,7 +4568,7 @@ def run_nuclei_chunked(ctx: ScanContext) -> None:
             # Task #31: use healthcheck()'s own verdict instead of a second
             # inline copy of the code allowlist (which had drifted into the
             # same 404-means-banned bug).
-            post_healthy, post_code = healthcheck(ctx)
+            post_healthy, post_code, _ = healthcheck(ctx)
             post_banned = not post_healthy
             tag_lbl = "PROBE" if THRESHOLD_PROBE_MODE else "PATIENT"
             log(f"  {tag_lbl} post-chunk healthcheck on {probe_egress_ip}: HTTP {post_code} → "
@@ -5336,7 +5436,7 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
         # (2026-07-04). Returns on the first healthy probe, so zero added
         # latency on good hosts. A dead backend (persistent 504) fails every
         # attempt with a non-zero ban code and still degrades.
-        post_chunk_healthy, post_chunk_code = healthcheck_with_retry(
+        post_chunk_healthy, post_chunk_code, _ = healthcheck_with_retry(
             lambda: healthcheck(ctx),
             attempts=POST_ROTATE_SETTLE_ATTEMPTS,
             delay_s=POST_ROTATE_SETTLE_DELAY_S,
