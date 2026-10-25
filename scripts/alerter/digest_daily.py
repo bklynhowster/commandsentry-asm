@@ -153,12 +153,33 @@ def _day(dt: datetime) -> str:
     return f"{dt:%b} {dt.day}"
 
 
-# ── sites: one per name, www. folded in ───────────────────────────────────────
+# ── sites: from the evidence (KB 12 job 4, push B) ────────────────────────────
+# Howie, 2026-10-24 21:44: "it's the same damn box it's the same site." Ruled 2026-10-25
+# 08:46 (D1): a www name and its plain name are one site only on evidence seen on both
+# names (public.site_members, read through the v_site_of view, migration 20261025b) —
+# never because of what the names look like. run_alerter loads the map once per run with
+# set_site_map(); every site_of() call below reads it.
+_SITE_MAP: dict | None = None
+
+
+def set_site_map(rows) -> None:
+    """Rows of SQL_SITE_MAP: (asset_id, site_asset_id) for each name the evidence puts on
+    another name's site. None — the read failed, or migration B isn't applied yet — keeps
+    the old name rule, so a failed read never un-merges a site."""
+    global _SITE_MAP
+    _SITE_MAP = None if rows is None else {str(a).strip(): str(s).strip() for a, s in rows}
+
+
 def site_of(asset_id: str, names) -> str:
-    """'www.example.com' -> 'example.com' when the plain name is also a live asset.
-    The two are one website to a reader (Howie, 10-22: the apex/www split 'is
-    confusing and needs to be rethought'); a www. host with no plain twin stays itself."""
+    """The site a host belongs to, when that site is also a live asset in `names`.
+    With the evidence loaded: www.example.com -> example.com only if site_members says
+    they are one site; the three Unimac www.<sub> names (wildcard DNS, job 4 D5) stay
+    themselves. Without it (set_site_map(None), tests, a failed read): the old name rule,
+    'www.example.com' -> 'example.com' when the plain name is also a live asset."""
     a = (asset_id or "").strip()
+    if _SITE_MAP is not None:
+        s = _SITE_MAP.get(a)
+        return s if s and s in names else a
     if a.lower().startswith("www.") and a[4:] in names:
         return a[4:]
     return a

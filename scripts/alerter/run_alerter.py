@@ -888,6 +888,30 @@ SELECT a.asset_id,
  ORDER BY a.asset_id
 """
 
+# KB 12 job 4 (push B): which names are one site, from the evidence (site_members through
+# v_site_of, migration 20261025b). Only the names that move: every other asset is its own site.
+SQL_SITE_MAP = """
+SELECT asset_id, site_asset_id
+  FROM public.v_site_of
+ WHERE asset_id <> site_asset_id
+ ORDER BY asset_id
+"""
+
+
+def _read_site_map(conn):
+    """[(asset_id, site_asset_id)] from v_site_of, or None when it cannot be read (the view
+    missing before migration 20261025b, or any error): None keeps the digest's old name
+    rule, so a failed read never un-merges a site."""
+    try:
+        with conn.transaction():
+            with conn.cursor() as c2:
+                c2.execute(SQL_SITE_MAP)
+                return c2.fetchall()
+    except Exception as exc:                       # pragma: no cover - live only
+        print(f"  site map read failed ({exc!r}) — sites fold by the old name rule")
+        return None
+
+
 # Certificates about to expire: the newest open "TLS certificate expiring soon — expires
 # < N days (k)" per host. The digest works out today's days-left from k and when the
 # check last looked. ⛔ ONLY WHILE THE LATEST DEEP SCAN STILL SEES IT: the certificate
@@ -1694,6 +1718,7 @@ def _weekly_model(conn, *, now, brand):
     whole local days before today; `opened` / `closed` run on to now so a rating that
     moved in Monday's early hours is still explained."""
     window_start, window_end, days = _dw.week_window(now, brand)
+    _dd.set_site_map(_read_site_map(conn))          # job 4: sites from the evidence
     with conn.cursor() as cur:
         cur.execute(SQL_NEW_FINDINGS_IN_WINDOW, (window_start, now))
         opened = cur.fetchall()
@@ -1904,6 +1929,7 @@ def main() -> int:
         # since", the "Do:" line), never the send.
         def _soft(label, sql, params=None):
             return _soft_read(conn, label, sql, params)
+        _dd.set_site_map(_read_site_map(conn))      # job 4: sites from the evidence
         sites = _soft("site ratings", SQL_SITE_RATINGS, {"t": window_start})
         certs = _soft("expiring certificates", SQL_CERTS_EXPIRING)
         listed = sorted({r[1] for r in list(new_findings) + list(regressed) + list(confirmed)})
