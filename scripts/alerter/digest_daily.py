@@ -93,7 +93,9 @@ SEV_WORD = {"CRITICAL": "Critical", "HIGH": "High", "MODERATE-HIGH": "Moderate-h
 INK, MUTED, RULE, PAGE = "#0F1B2D", "#4A5668", "#E4E9F0", "#E9EEF5"
 GOOD = "#0B7A55"
 FONT = "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif"
-DISPLAY = "'Bricolage Grotesque', 'Helvetica Neue', Helvetica, Arial, sans-serif"
+# Howie, 2026-10-24 13:23, on Bricolage Grotesque: "the font is weird. For example, look at that F.
+# It's really strange." Public Sans is the face he approved that day (job 3l, 2026-10-26).
+DISPLAY = "'Public Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif"
 
 DEFAULT_BRAND = {
     "short_name": "Sentry", "band_bg": "#0A4595", "band_text": "#FFFFFF",
@@ -1138,7 +1140,7 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light"><title>{escape(model["headline"])}</title>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@700;800&amp;display=swap" rel="stylesheet">
 <style>
 @keyframes grow{{from{{transform:scaleX(0)}}to{{transform:scaleX(1)}}}}
 .seg{{transform-origin:left center;animation:grow .9s cubic-bezier(.3,.7,.2,1) both}}

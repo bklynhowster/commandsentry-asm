@@ -670,7 +670,7 @@ def render_weekly_html(m: dict, *, portal_url: str = "", product_name: str = "")
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light"><title>{escape(m["headline"])}</title>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@700;800&amp;display=swap" rel="stylesheet">
 <style>
 @keyframes rise{{from{{transform:scaleY(0)}}to{{transform:scaleY(1)}}}}
 @keyframes ping{{0%{{box-shadow:0 0 0 0 rgba(15,27,45,.45)}}70%{{box-shadow:0 0 0 8px rgba(15,27,45,0)}}100%{{box-shadow:0 0 0 8px rgba(15,27,45,0)}}}}

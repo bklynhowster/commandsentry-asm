@@ -250,7 +250,9 @@ def test_a_test_send_says_so_first_in_the_subject():
 def test_a_test_send_and_a_dry_run_write_nothing():
     src = inspect.getsource(ra.main)
     assert "record       = not (args.dry_run or args.preview)" in src
-    assert "if record:\n                cur.execute(SQL_INSERT_RUN_START" in src
+    # job 3l (2026-10-26): an approval digest writes its runs row when it goes out, not here;
+    # a test send and a dry run still write none (record is False for both).
+    assert "if record and not gate:\n                cur.execute(SQL_INSERT_RUN_START" in src
     assert "if run_id is not None:" in src, "no run row, nothing to finalize"
     assert "window_start = window_end - timedelta(hours=PREVIEW_HOURS)" in src
     assert src.index("preview_recipients(") < src.index("refusing to send the digest")

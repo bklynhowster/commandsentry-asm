@@ -45,6 +45,10 @@ Optional env vars:
   ALERTER_PREVIEW_TO       with --preview: send only to these (comma-separated).
                            Each must already be on ALERTER_TO — a test send may
                            narrow the list, never add to it.
+  ALERTER_APPROVER         the one address that gets every scheduled digest FIRST
+                           (approval.py, Howie 2026-10-26). The others on ALERTER_TO
+                           get it only after he presses Send. Unset => a scheduled
+                           digest sends nothing at all.
 
 Usage:
   python3 run_alerter.py             # send email + record run
@@ -55,6 +59,8 @@ Usage:
                                      # nothing written — the real schedule's
                                      # window is untouched (KB 12 job 3l, Howie
                                      # 2026-10-22 16:54)
+  python3 run_alerter.py --send-approved   # digest-send.yml: send every digest
+                                     # Howie approved to the others, then record it
 """
 
 from __future__ import annotations
@@ -74,6 +80,7 @@ import block_page_signatures as _bps  # noqa: E402 — Obsidian 312: the block-p
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import digest_daily as _dd  # noqa: E402 — KB 12 job 3l: the daily list (buckets, bar, email-safe HTML)
 import digest_weekly as _dw  # noqa: E402 — KB 12 job 3l slice 2: the Monday weekly
+import approval as _ap  # noqa: E402 — job 3l: Howie approves before anyone else gets it
 from datetime import datetime, timedelta, timezone
 from html import escape, unescape
 
@@ -1780,6 +1787,149 @@ def _weekly_model(conn, *, now, brand):
 # Main
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# KB 12 job 3l (2026-10-26) — Howie approves before anyone else gets it (approval.py)
+# ---------------------------------------------------------------------------
+# public.digest_pending, migration 20261026c. One row per digest built: exactly what the
+# others will receive, who they are, and the hash of the Send button's token.
+
+# A digest that is being sent right now has not written its runs row yet; the next daily
+# starts after it all the same, so nothing is told twice.
+SQL_PENDING_SENDING_END = """
+SELECT max(window_end) FROM public.digest_pending WHERE alerter_name = %s AND status = 'sending'
+"""
+
+# Building a digest retires the older one of its kind that never went out (an approval
+# counts until the next email is built): the new one covers what it did.
+SQL_PENDING_SUPERSEDE = """
+UPDATE public.digest_pending SET status = 'superseded'
+ WHERE kind = %s AND status IN ('awaiting', 'approved')
+"""
+
+SQL_PENDING_INSERT = """
+INSERT INTO public.digest_pending
+       (kind, alerter_name, expires_at, window_start, window_end, subject, html, text_body,
+        recipients, fingerprint, token_hash, finalize)
+VALUES (%s, %s, now() + make_interval(hours => %s), %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+RETURNING id
+"""
+
+SQL_PENDING_FAILED = """
+UPDATE public.digest_pending SET status = 'failed', error = %s WHERE id = %s
+"""
+
+# One approved digest at a time, oldest first; SKIP LOCKED so two senders never take the same.
+SQL_PENDING_CLAIM = """
+UPDATE public.digest_pending d
+   SET status = 'sending', attempts = d.attempts + 1
+ WHERE d.id = (SELECT p.id FROM public.digest_pending p
+                WHERE p.status = 'approved'
+                ORDER BY p.built_at, p.id
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED)
+RETURNING d.id, d.kind, d.alerter_name, d.window_start, d.window_end, d.subject, d.html,
+          d.text_body, d.recipients, d.fingerprint, d.finalize, d.attempts
+"""
+
+SQL_PENDING_SENT = """
+UPDATE public.digest_pending SET status = 'sent', sent_at = now(), error = NULL WHERE id = %s
+"""
+
+SQL_PENDING_RETRY = """
+UPDATE public.digest_pending SET status = %s, error = %s WHERE id = %s
+"""
+
+
+def _gate_and_send(conn, *, kind, name, subject, html, text, window_start, window_end,
+                   finalize, approver, others, from_addr, from_name, api_key, portal_url,
+                   brand) -> int:
+    """Store the others' email and send the approver's copy. Writes no runs row and no told
+    record: those are written when it actually goes out (_send_approved)."""
+    token = _ap.new_token()
+    hours = _ap.WEEKLY_EXPIRES_HOURS if kind == "weekly" else _ap.DAILY_EXPIRES_HOURS
+    with conn.cursor() as cur:
+        cur.execute(SQL_PENDING_SUPERSEDE, (kind,))
+        cur.execute(SQL_PENDING_INSERT, (
+            kind, name, hours, window_start, window_end, subject, html, text, others,
+            _ap.fingerprint(subject, html, text), _ap.token_hash(token),
+            json.dumps(finalize, default=str),
+        ))
+        pending_id = cur.fetchone()[0]
+    conn.commit()
+    a_subject, a_html, a_text = _ap.approver_copy(
+        subject, html, text, url=_ap.approve_url(portal_url, token), others=others, kind=kind)
+    try:
+        send_via_sendgrid(api_key=api_key, from_addr=from_addr, from_name=from_name,
+                          to_addrs=approver, subject=a_subject, html=a_html, text=a_text,
+                          inline_images=_dd.inline_images(brand))
+    except Exception as e:
+        with conn.cursor() as cur:
+            cur.execute(SQL_PENDING_FAILED, (f"approval copy: {str(e)[:1800]}", pending_id))
+        conn.commit()
+        print(f"{kind} digest: the approval copy did not send ({e}); nobody else gets it",
+              file=sys.stderr)
+        return 1
+    # No addresses and never the token in the log: these repos' Actions logs are public.
+    print(f"{kind} digest: approval copy sent; waiting for approval to send it to "
+          f"{len(others)} other recipient(s) (digest_pending id {pending_id})")
+    return 0
+
+
+def _send_approved(conn, *, from_addr, from_name, api_key) -> int:
+    """digest-send.yml: every approved digest, oldest first, to its stored recipients,
+    byte for byte; then its runs row and its told record, as a scheduled send writes them."""
+    brand = _dd.load_brand()
+    sent_n, failed_n = 0, 0
+    while True:
+        with conn.cursor() as cur:
+            cur.execute(SQL_PENDING_CLAIM)
+            row = cur.fetchone()
+        conn.commit()
+        if not row:
+            break
+        (pid, kind, name, w_start, w_end, subject, html, text, recipients, fp, finalize,
+         attempts) = row
+        finalize = finalize or {}
+        if _ap.fingerprint(subject, html, text) != fp:
+            with conn.cursor() as cur:
+                cur.execute(SQL_PENDING_RETRY, ("failed", "stored email changed after it was built", pid))
+            conn.commit()
+            print(f"{kind} digest {pid}: stored email changed after it was built; not sent",
+                  file=sys.stderr)
+            failed_n += 1
+            continue
+        try:
+            send_via_sendgrid(api_key=api_key, from_addr=from_addr, from_name=from_name,
+                              to_addrs=list(recipients), subject=subject, html=html, text=text,
+                              inline_images=_dd.inline_images(brand))
+        except Exception as e:
+            again = attempts < _ap.MAX_SEND_ATTEMPTS
+            with conn.cursor() as cur:
+                cur.execute(SQL_PENDING_RETRY, ("approved" if again else "failed", str(e)[:1800], pid))
+            conn.commit()
+            print(f"{kind} digest {pid}: send failed (attempt {attempts}"
+                  f"{', will try again' if again else ', giving up'}): {e}", file=sys.stderr)
+            failed_n += 1
+            if again:
+                break          # the next tick tries again; don't spin on a broken mailer
+            continue
+        counts = finalize.get("counts") or [0, 0, 0]
+        with conn.cursor() as cur:
+            cur.execute(SQL_INSERT_RUN_START, (name, w_start, w_end))
+            run_id = cur.fetchone()[0]
+            cur.execute(SQL_FINALIZE_RUN, (int(counts[0]), int(counts[1]), int(counts[2]), True,
+                                           "success", None, list(finalize.get("high_risk_ids") or []),
+                                           run_id))
+            cur.execute(SQL_PENDING_SENT, (pid,))
+        conn.commit()
+        _told_record(conn, [tuple(r) for r in (finalize.get("told_full") or [])])
+        print(f"{kind} digest {pid}: sent to {len(recipients)} recipient(s)")
+        sent_n += 1
+    if not (sent_n or failed_n):
+        print("nothing approved to send")
+    return 1 if failed_n else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dry-run", action="store_true",
@@ -1791,6 +1941,9 @@ def main() -> int:
     ap.add_argument("--preview", action="store_true",
                     help="a test send: last 24 h (7 days with --weekly), sent now, nothing "
                          "written; ALERTER_PREVIEW_TO may narrow the recipients")
+    ap.add_argument("--send-approved", action="store_true",
+                    help="digest-send.yml: send every digest Howie approved to the others, then "
+                         "record it (approval.py)")
     args = ap.parse_args()
 
     dsn          = _env("SUPABASE_DSN", required=True)
@@ -1845,6 +1998,15 @@ def main() -> int:
     # Supabase link is the fallback only so an unset var cannot break a send.
     portal_url   = (_env("ALERTER_PORTAL_URL", default="") or "").rstrip("/") or dashboard_url
 
+    if args.send_approved:
+        # The stored digests carry their own recipients; only the sender identity is needed.
+        if not (from_addr and from_name):
+            print("::warning::ALERTER_FROM / ALERTER_FROM_NAME not set — refusing to send "
+                  "approved digests rather than send as another instance.", file=sys.stderr)
+            return 0
+        with psycopg.connect(dsn, autocommit=False) as conn:
+            return _send_approved(conn, from_addr=from_addr, from_name=from_name, api_key=api_key)
+
     if not args.dry_run and not (from_addr and from_name and to_addrs):
         _missing = [n for n, v in (("ALERTER_FROM", from_addr),
                                    ("ALERTER_FROM_NAME", from_name),
@@ -1854,11 +2016,23 @@ def main() -> int:
               file=sys.stderr)
         return 0
 
+    # Job 3l (Howie, 2026-10-26): every real digest goes to the approver first; the others get
+    # it only after he presses Send. A dry run and a test send are unchanged (a test send is
+    # his own, by hand). No approver set = a real digest sends nothing at all.
+    approver, others = [], []
+    if record:
+        approver, others = _ap.split_recipients(to_addrs, _env("ALERTER_APPROVER", default="") or "")
+        if not approver:
+            print("::warning::ALERTER_APPROVER not set — refusing to send the digest: it goes to "
+                  "the approver first, and to the others only after approval.", file=sys.stderr)
+            return 0
+    gate = bool(record and others)
+
     with psycopg.connect(dsn, autocommit=False) as conn:
         if args.weekly:
             return _run_weekly(conn, args=args, record=record, name=name, to_addrs=to_addrs,
                                api_key=api_key, from_addr=from_addr, from_name=from_name,
-                               portal_url=portal_url)
+                               portal_url=portal_url, gate=gate, approver=approver, others=others)
         with conn.cursor() as cur:
             # Resolve the window
             cur.execute(SQL_LAST_WINDOW_END, (name,))
@@ -1869,10 +2043,18 @@ def main() -> int:
             if args.preview:
                 # A test send covers the last day, whatever the schedule last covered.
                 window_start = window_end - timedelta(hours=PREVIEW_HOURS)
+            if gate:
+                # Job 3l: the window starts where the last email that WENT OUT ended (so a
+                # skipped day rolls into this one), or after one being sent right now.
+                cur.execute(SQL_PENDING_SENDING_END, (name,))
+                sending_end = cur.fetchone()[0]
+                if sending_end and sending_end > window_start:
+                    window_start = sending_end
 
-            # Open the run row early so we can finalize it in any branch
+            # Open the run row early so we can finalize it in any branch. Job 3l: an approval
+            # digest writes its runs row when it actually goes out (_send_approved).
             run_id: int | None = None
-            if record:
+            if record and not gate:
                 cur.execute(SQL_INSERT_RUN_START, (name, window_start, window_end))
                 run_id = cur.fetchone()[0]
                 conn.commit()
@@ -2009,6 +2191,16 @@ def main() -> int:
                 print(f">> full HTML written to {args.html_out} (logo as logo.png beside it)")
             return 0
 
+        if gate:
+            return _gate_and_send(
+                conn, kind="daily", name=name, subject=subject, html=html, text=text,
+                window_start=window_start, window_end=window_end,
+                finalize={"counts": [len(confirmed), len(regressed), len(high_risk)],
+                          "high_risk_ids": current_high_risk_ids,
+                          "told_full": model.get("told_full") or []},
+                approver=approver, others=others, from_addr=from_addr, from_name=from_name,
+                api_key=api_key, portal_url=portal_url, brand=brand)
+
         # Send + finalize
         status = "success"
         err: str | None = None
@@ -2049,7 +2241,7 @@ def main() -> int:
 
 
 def _run_weekly(conn, *, args, record, name, to_addrs, api_key, from_addr, from_name,
-                portal_url) -> int:
+                portal_url, gate=False, approver=(), others=()) -> int:
     """KB 12 job 3l slice 2 — the Monday weekly. A real run records one runs row under
     ALERTER_WEEKLY_NAME (its own name: the daily's window is never touched); a dry run
     or a test send records nothing."""
@@ -2076,6 +2268,15 @@ def _run_weekly(conn, *, args, record, name, to_addrs, api_key, from_addr, from_
                 f.write(html.replace(f"cid:{_dd.LOGO_CID}", "logo.png"))
             print(f">> full HTML written to {args.html_out} (logo as logo.png beside it)")
         return 0
+
+    if gate:                                       # job 3l: to the approver first
+        return _gate_and_send(
+            conn, kind="weekly", name=name, subject=subject, html=html, text=text,
+            window_start=model["window_start"], window_end=model["window_end"],
+            finalize={"counts": [0, 0, 0], "high_risk_ids": [],
+                      "told_full": model.get("told_full") or []},
+            approver=list(approver), others=list(others), from_addr=from_addr,
+            from_name=from_name, api_key=api_key, portal_url=portal_url, brand=brand)
 
     run_id = None
     if record:
