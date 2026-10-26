@@ -17,6 +17,7 @@ not the app's own input validation, and not an edge quirk. Hence the two guards:
   Q2 — 5-gate false-positive check on each block, so we don't mistake the app's own
        403 page for an edge WAF block.
 """
+import re
 
 # Q1: genuinely different attack vectors. The bar stays ">=2 of these blocked" — a single
 # class alone is an app-native input validator, not a WAF.
@@ -98,6 +99,7 @@ def _payload_blocked(baseline: dict, resp: dict) -> bool:
 
 
 # ── 311 (2026-10-13): A REDIRECT IS NOT A TEST ───────────────────────────────────────
+# (351, 2026-10-26: except a redirect to a sign-in, which tests the front door; below.)
 # www.commandcompanies.com, the first live differential on Command after the probe was
 # armed: the benign baseline came back HTTP 301 (nginx, "301 Moved Permanently", 162 B,
 # Location: https://commandcompanies.com/?q…) and so did all three attack payloads —
@@ -132,6 +134,79 @@ def baseline_served(status) -> bool:
     return 200 <= s < 300
 
 
+# ── 351 (2026-10-26): A SIGN-IN IS THE FRONT DOOR, AND IT CAN BE TESTED ─────────────────
+# Howie, 16:01, on atlantis-gcp.prodexlabs.com, where every request is redirected to its
+# own Google sign-in (/oauth2/start): "Why does authentication redirect negate the WAF
+# scan?" 16:05: "I think you should test. You should say what the test actually measured."
+#
+# 311 made every redirect baseline UNDEFINED. It was written for www.commandcompanies.com,
+# which redirects to ANOTHER site: the application lives at the apex, so nothing at www
+# could be about it. A sign-in is different. The application lives behind it, on this
+# host, and whatever stands in front of the host answers an attack-shaped request before
+# the login does: a firewall there would refuse it, and the login redirects it like any
+# other visitor. So a baseline that redirects to a sign-in measures the front door, and
+# only the front door. Nothing behind the login is reached (Sentry has no account).
+#
+# An attack request that got the SAME redirect as the ordinary one (to the same sign-in,
+# our query string removed) reached the login: not blocked, whatever its size.
+# pm.unimacgraphics.com's ASP.NET redirect echoes the requested address in its body, so
+# the four sizes differ (216 / 238 / 264 / 246, 2026-10-16): the same login, four sizes.
+# Anything else (a 403, a block page, a redirect somewhere else) is read by the usual
+# gates against the redirect.
+#
+# What counts as a sign-in is the portal's rule (protection-panel.mjs, redirectKind): an
+# identity provider's host, or a login path. Same patterns here; both sides are pinned on
+# the same real targets (test_signin_front_door_351.py, tests/protection-panel-check.mjs).
+FRONT_DOOR_SIGNIN = "signin"
+_SIGNIN_HOSTS = re.compile(
+    r"(^|\.)(login\.microsoftonline\.com|accounts\.google\.com|login\.live\.com|okta\.com"
+    r"|auth0\.com|onelogin\.com)$", re.I)
+_SIGNIN_PATH = re.compile(r"oauth|log-?in|sign-?in|sso|saml|authorize|/auth(/|$)", re.I)
+_ABS_URL = re.compile(r"^[a-z][a-z0-9+.-]*://([^/?#]+)(.*)$", re.I)
+
+
+def redirect_is_signin(target) -> bool:
+    """Does this redirect target (the Location without its query string) go to a sign-in?
+    True for an identity provider's host, or for a login path on any host (a relative
+    Location is a path on this host)."""
+    t = (target or "").strip() if isinstance(target, str) else ""
+    if not t:
+        return False
+    m = _ABS_URL.match(t)
+    host, path = (m.group(1).split(":")[0].lower(), m.group(2) or "/") if m else ("", t)
+    return bool((host and _SIGNIN_HOSTS.search(host)) or _SIGNIN_PATH.search(path))
+
+
+def _reached_same_signin(baseline: dict, resp: dict) -> bool:
+    """The attack request got the same redirect as the ordinary one: it reached the login."""
+    try:
+        s = int(resp.get("status") or 0)
+    except (TypeError, ValueError):
+        return False
+    b = (baseline.get("redirect_to") or "").strip()
+    return 300 <= s < 400 and bool(b) and (resp.get("redirect_to") or "").strip() == b
+
+
+def _classify_signin_front_door(baseline: dict, payloads: list, status, target: str) -> dict:
+    """351: the baseline redirected to a sign-in. Measure the front door."""
+    counted = [p for p in payloads if p.get("cls") in INDEPENDENT_CLASSES]
+    at_login = sorted({p["cls"] for p in counted if _reached_same_signin(baseline, p)})
+    blocked = sorted({p["cls"] for p in counted
+                      if not _reached_same_signin(baseline, p) and _payload_blocked(baseline, p)})
+    base = {"evidence_class": "presence_only", "blocked": blocked,
+            "front_door": FRONT_DOOR_SIGNIN, "redirect_to": target, "reached_signin": at_login}
+    if len(blocked) >= 2:
+        return {**base, "waf_present": True,
+                "reason": (f"baseline redirected to a sign-in (status={status} to {target}); "
+                           f"{len(blocked)} independent payload classes were refused before it "
+                           f"({', '.join(blocked)})")}
+    return {**base, "waf_present": False,
+            "reason": (f"baseline redirected to a sign-in (status={status} to {target}); the front "
+                       f"door was measured: {len(at_login)} payload class(es) got the same redirect "
+                       f"to the sign-in, {len(blocked)} blocked ({', '.join(blocked) or 'none'}). "
+                       "Nothing behind the sign-in was reached.")}
+
+
 def classify_waf_differential(baseline: dict, payloads: list) -> dict:
     """Return {waf_present, evidence_class, blocked, reason[, undefined, redirect_to]}.
 
@@ -144,6 +219,10 @@ def classify_waf_differential(baseline: dict, payloads: list) -> dict:
                            'baseline_redirect' (3xx; `redirect_to` carries the Location
                            target without its query string) or 'baseline_not_served'
                            (0 / 4xx / 5xx). Not a measurement; never earns a finding.
+    - front_door 'signin' (351): the baseline redirected to a sign-in, so the front door
+                           was measured (True / False as above, of the door only), with
+                           `redirect_to` and `reached_signin` (the classes that got the
+                           same redirect as the ordinary request).
     `payloads` = list of {cls: 'sqli'|'xss'|'lfi', status, size, tokens, headers}.
     """
     # gate 1 — a differential is only meaningful if the BENIGN baseline was SERVED (2xx).
@@ -155,6 +234,8 @@ def classify_waf_differential(baseline: dict, payloads: list) -> dict:
             is_redirect = False
         if is_redirect:
             target = baseline.get("redirect_to") or ""
+            if redirect_is_signin(target):
+                return _classify_signin_front_door(baseline, payloads, status, target)
             return {"waf_present": None, "evidence_class": "presence_only", "blocked": [],
                     "undefined": UNDEFINED_REDIRECT, "redirect_to": target or None,
                     "reason": (f"baseline redirected (status={status}"

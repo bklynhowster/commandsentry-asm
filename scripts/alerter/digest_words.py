@@ -38,6 +38,18 @@ PLUGIN_NAMES = {"revslider": "Slider Revolution", "mega_main_menu": "Mega Main M
 
 # {it}: "this site" / "these sites"; {them}: "it" / "them"; {x}: the regex's first group
 FAMILIES = (
+    # 351 (2026-10-26): measured at a sign-in. Before the general entry, which would say the
+    # test attacks "walked straight in": here they got as far as the login, like any visitor.
+    {"key": "waf-absent-signin", "match": r"^No enforcing WAF in front of the sign-in", "who": "it",
+     "title": "No web firewall in front of the sign-in on {it}",
+     "why": "Our harmless test attacks got the same treatment as a normal visitor: straight to the "
+            "login page. Nothing in front of the login said no. We have no account, so we can't see "
+            "what's behind it. Neither can an attacker without one, which is the whole point of a login.",
+     "do": "Put a web application firewall in front of {it} (Cloudflare, an Azure Application "
+           "Gateway WAF, Google Cloud Armor, or similar), or limit who can reach the sign-in (a VPN or "
+           "an allow-list) if only your own people use {them}.",
+     "fixed": "a web firewall now stands in front of the sign-in",
+     "headline": "put a web firewall in front of the sign-in on {where}"},
     {"key": "waf-absent", "match": r"^No enforcing WAF", "who": "it",
      "title": "No web firewall in front of {it}",
      "why": "Our harmless test attacks walked straight in. Nothing between {it} and the internet "
