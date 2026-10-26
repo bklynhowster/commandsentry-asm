@@ -481,12 +481,63 @@ def _dedupe(rows, seen: set) -> list:
     return out
 
 
+# ── KB 12 job 3t: "not responding", every morning until the host leaves ─────────
+# Howie, 2026-10-26 07:16 (D5): "The daily email gets a line when the host stops responding. It
+# continues for the amount of time that we set for 7 days, and then it's gone." So: one block,
+# every daily while the host is not responding (NOT routed through say-once, by that ruling),
+# gone once it has left the portal. Rows come from public.v_asset_reachability (migration
+# 20261026a), the same view the portal's banner reads:
+#   (asset_id, last_answer_at, reason, notice_since, leaves_on)
+NOT_RESPONDING_BODY = ("Sentry's checks have had no answer from these for more than a day. "
+                       "Each one leaves the portal 7 days after Sentry first flagged it, "
+                       "unless it answers again.")
+REASON_WORDS = {
+    "name_gone": "Its name no longer exists on the internet.",
+    "no_answer": "Its name still points to an address, but nothing answers there.",
+    "never_answered": "Sentry has never had an answer from it.",
+}
+
+
+def checks_stopped_item(reach_checks, brand):
+    """Plan v1.2 ("Sentry itself says when the checks have stopped"): `reach_checks` is the
+    view's (checks_fresh, newest check) row. When the checks are stale, the view flags nobody
+    and the writer removes nobody, so the daily says why instead of going quiet. None when the
+    checks are fresh or could not be read. PURE."""
+    if not reach_checks or reach_checks[0] is not False:
+        return None
+    newest = reach_checks[1] if len(reach_checks) > 1 else None
+    when = (f"The last one ran {_day(local_time(newest, brand))}, {_clock(local_time(newest, brand))}. "
+            if newest is not None else "They have not run yet. ")
+    return {
+        "kind": "coverage", "severity": "",
+        "title": "Sentry's reachability checks have stopped",
+        "body": ("A gap in our own checking, not a problem found on any host. " + when
+                 + "Until they run again, no host is marked not responding and none leaves the portal."),
+        "lines": [], "note": "", "sites": [], "why": "", "do": "", "tag": "",
+    }
+
+
+def not_responding_line(row, brand) -> str:
+    """'valorep.prodexlabs.com: no answer since Oct 22, 2:25 PM. Its name no longer exists on
+    the internet. Leaves the portal on Nov 2.' PURE."""
+    aid, last_answer, reason, _notice, leaves_on = row[:5]
+    if last_answer is not None:
+        t = local_time(last_answer, brand)
+        head = f"{aid}: no answer since {_day(t)}, {_clock(t)}."
+    else:
+        head = f"{aid}: no answer from Sentry's checks."
+    words = REASON_WORDS.get(reason or "", "")
+    tail = f" Leaves the portal on {_day(local_time(leaves_on, brand))}." if leaves_on is not None else ""
+    return head + (f" {words}" if words else "") + tail
+
+
 def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
                 high_risk, new_assets, dark_assets, stale_assets, canary_violations,
                 baseline, came_back=None, fixed=None, enforcement_flips=None,
                 unrecognized_pages=None, sites=None, certs=None, prev_deep=None,
                 hints=None, brand=None, stale_words=None, stale_intro="",
-                stale_note="", details=None, told=None) -> dict:
+                stale_note="", details=None, told=None, not_responding=None,
+                reach_checks=None) -> dict:
     """Everything the two renderers need, decided once. PURE.
 
     Job 3s ("say it once"): `told` is the record of what was told ({finding_id: row});
@@ -546,6 +597,13 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
 
     do, ticket, done = [], [], []
 
+    # Job 3t: a host that is not responding is said once in its own block below; it is not
+    # also "lost sight of" (that block means a gap in OUR checking) or "stopped answering".
+    not_responding = list(not_responding or [])
+    quiet_ids = {r[0] for r in not_responding}
+    stale_assets = [r for r in (stale_assets or []) if r[0] not in quiet_ids]
+    dark_assets = [r for r in (dark_assets or []) if r[0] not in quiet_ids]
+
     # 1. our own coverage, first: a gap in our checking hides everything below it
     if stale_assets or canary_violations:
         lines = []
@@ -568,6 +626,22 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
             "body": body + " Until it closes, they get no new findings.",
             "lines": lines, "note": (f"Overdue means: {stale_note}." if stale_note else ""),
             "sites": [], "why": "", "do": "", "tag": "",
+        })
+
+    # 1b. job 3t: the reachability checks themselves stopped (then nobody is flagged, 1c is empty)
+    checks_stopped = checks_stopped_item(reach_checks, brand)
+    if checks_stopped:
+        do.append(checks_stopped)
+
+    # 1c. job 3t (D5): hosts that are not responding — every day until they leave
+    if not_responding:
+        n = len(not_responding)
+        do.append({
+            "kind": "not_responding", "severity": "",
+            "title": f"{n} host{' is' if n == 1 else 's are'} not responding",
+            "body": NOT_RESPONDING_BODY,
+            "lines": [not_responding_line(r, brand) for r in not_responding],
+            "note": "", "sites": [], "why": "", "do": "", "tag": "",
         })
 
     # 2. findings that need you today
@@ -733,7 +807,7 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
         "sites_total": len(now_b), "counts": now_c, "counts_then": then_c,
         "bands_now": now_b, "bands_then": then_b,
         "change": change_words(now_c, then_c, now_b, then_b, "yesterday") if now_b else "",
-        "degraded": bool(stale_assets or canary_violations),
+        "degraded": bool(stale_assets or canary_violations or checks_stopped),
         "headline": headline(n_do, n_ticket, do, ticket),
         "minor": minor,
         "baseline": baseline or {},
@@ -950,6 +1024,8 @@ def _card(item: dict, portal: str) -> str:
     ring = fill if sev else "#0A4595"
     if item.get("kind") == "coverage":      # our own blind spot: berry, no severity pill
         ring, tint = "#8B1A4A", "#F9E8EF"
+    if item.get("kind") == "not_responding":  # job 3t: the host stopped answering — red, no pill
+        ring, tint = "#A32D2D", "#FCEBEB"
     if item.get("overdue_since"):           # job 3r: known, has a fix, sitting — calm violet
         ring, tint = OVERDUE_FILL, OVERDUE_TINT
     head = escape(item["title"])

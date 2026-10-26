@@ -385,6 +385,24 @@ WHERE e.event_type = 'asset_first_seen'
 ORDER BY e.observed_at DESC, e.asset_id;
 """
 
+# KB 12 job 3t (D5): hosts that are not responding right now, from the same view the portal's
+# banner reads (migration 20261026a). Read SOFT: before that migration, or on any failure, the
+# block is simply absent (never a failed send).
+SQL_NOT_RESPONDING = """
+SELECT r.asset_id, r.last_answer_at, r.reason, r.notice_since, r.leaves_on
+  FROM public.v_asset_reachability r
+ WHERE r.not_responding
+ ORDER BY r.last_answer_at ASC NULLS FIRST, r.asset_id;
+"""
+
+# Job 3t (plan v1.2): are the reachability checks running? The view's own 12-hour rule
+# (checks_fresh), so the daily and the banner can never disagree about it. One row; on an
+# instance with no owned assets, (NULL, NULL) and nothing is said.
+SQL_REACH_CHECKS = """
+SELECT bool_or(r.checks_fresh), max(r.last_check_at)
+  FROM public.v_asset_reachability r;
+"""
+
 SQL_DARK_ASSETS_IN_WINDOW = """
 SELECT
   e.asset_id,
@@ -1444,7 +1462,8 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
                   baseline, came_back=None, fixed=None, enforcement_flips=None,
                   unrecognized_pages=None, sites=None, certs=None, prev_deep=None,
                   hints=None, brand=None, discovery_stale_hours=24,
-                  deepscan_stale_hours=192, details=None, told=None) -> dict:
+                  deepscan_stale_hours=192, details=None, told=None,
+                  not_responding=None, reach_checks=None) -> dict:
     """KB 12 job 3l — every part of the old email, sorted into Do today / Worth a ticket /
     Off your plate by digest_daily.build_model. The stale-host wording stays this file's
     (stale_row_words, note 320)."""
@@ -1458,7 +1477,8 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
         prev_deep=prev_deep, hints=hints, brand=brand if brand is not None else _dd.load_brand(),
         stale_words=stale_row_words, stale_intro=STALE_INTRO,
         stale_note=stale_overdue_note(discovery_stale_hours, deepscan_stale_hours),
-        details=details, told=told,
+        details=details, told=told, not_responding=not_responding,
+        reach_checks=reach_checks,
     )
 
 
@@ -1489,6 +1509,7 @@ def render_html(
     prev_deep: dict | None = None,
     hints: dict | None = None,
     brand: dict | None = None,
+    not_responding: list[tuple] | None = None,
 ) -> str:
     """The daily digest as a to-do list (KB 12 job 3l, design D). Howie, 2026-10-22:
     "This entire email needs to be simplified and redesigned" … "Let's have it be
@@ -1503,7 +1524,8 @@ def render_html(
         fixed=fixed, enforcement_flips=enforcement_flips,
         unrecognized_pages=unrecognized_pages, sites=sites, certs=certs,
         prev_deep=prev_deep, hints=hints, brand=brand,
-        discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours)
+        discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours,
+        not_responding=not_responding)
     return _dd.render_html(model, portal_url=dashboard_url, product_name=product_name)
 
 
@@ -1534,6 +1556,7 @@ def render_text(
     hints: dict | None = None,
     brand: dict | None = None,
     portal_url: str = "",
+    not_responding: list[tuple] | None = None,
 ) -> str:
     """Plain-text twin of render_html: the same buckets, finding ids kept (plain text is
     what gets grepped and pasted into a ticket, note 152 P2)."""
@@ -1545,7 +1568,8 @@ def render_text(
         fixed=fixed, enforcement_flips=enforcement_flips,
         unrecognized_pages=unrecognized_pages, sites=sites, certs=certs,
         prev_deep=prev_deep, hints=hints, brand=brand,
-        discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours)
+        discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours,
+        not_responding=not_responding)
     return _dd.render_text(model, portal_url=portal_url, product_name=product_name)
 
 
@@ -1930,6 +1954,8 @@ def main() -> int:
         def _soft(label, sql, params=None):
             return _soft_read(conn, label, sql, params)
         _dd.set_site_map(_read_site_map(conn))      # job 4: sites from the evidence
+        not_responding = _soft("not responding", SQL_NOT_RESPONDING)   # job 3t (D5)
+        reach_checks = (_soft("reachability checks", SQL_REACH_CHECKS) or [None])[0]
         sites = _soft("site ratings", SQL_SITE_RATINGS, {"t": window_start})
         certs = _soft("expiring certificates", SQL_CERTS_EXPIRING)
         listed = sorted({r[1] for r in list(new_findings) + list(regressed) + list(confirmed)})
@@ -1957,7 +1983,8 @@ def main() -> int:
             enforcement_flips=enforcement_flips, unrecognized_pages=unrecognized_pages,
             sites=sites, certs=certs, prev_deep=prev_deep, hints=hints, brand=brand,
             discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours,
-            details=details, told=told,
+            details=details, told=told, not_responding=not_responding,
+            reach_checks=reach_checks,
         )
         subject = _dd.subject(model, from_name)
         if args.preview:
