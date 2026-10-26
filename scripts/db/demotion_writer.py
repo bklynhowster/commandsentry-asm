@@ -7,10 +7,40 @@ confirmation, and an optimistic-concurrency flip that can't lose a race with the
 
 Runs as a step in asm-discover.yml AFTER import_asm_to_surface.py, every 6h.
 
-SAFETY: default is --write-enable OFF. With writes off this process changes NO asset
-state; it only inserts observation rows into public.p2_demotion_dryrun (would_demote +
-hold_reason + gate_state) so the ~2026-07-25 review can validate the guards against real
-fleet behaviour before anything tombstones a live asset.
+SAFETY: default is --write-enable OFF. With writes off this process changes no asset's
+discovery_status, clock or reason; it inserts observation rows into public.p2_demotion_dryrun
+(would_demote + hold_reason + gate_state) and — since job 3t — stamps or clears ONE display
+field, assets.fade_detected_at (when the "not responding" notice began). Nothing leaves the
+portal, comes back, or has its clock bumped without --write-enable.
+
+⛔ JOB 3t (2026-10-26) — "NOT RESPONDING", THEN IT LEAVES THE PORTAL. Howie, 07:00: "initially we
+let people know that it's not responding and then after a certain amount of time we say that it's
+going off-line and out of the portal". Ruled 07:16 (D1-D7) and 08:39 (D8-D10); plan v1.2, reviewed
+by Qwen3.8 Max (MF1-MF10). What changed here:
+  - ONE SOURCE. Candidates, the notice and the leave date come from public.v_asset_reachability
+    (migration 20261026a), the same view the portal and the daily read. Its clock is the newest
+    liveness ANSWER from any route; assets.last_alive_at is the scan/import clock (MF1).
+  - THE NOTICE. Every run (dry-run too: it is display state) stamps fade_detected_at on each host
+    the view says is not responding, and clears it when the host answers again or is put on hold.
+    The banner (portal push P) lands before this push, so the stamp can never predate the banner
+    (D8).
+  - THE FLIP needs a notice that is 7 days old, AND 7 days since the last answer (D2, the view's
+    leaves_on), fresh checks, no hold, no answer in 72 h, plus the July gates. A NULL notice is a
+    HOLD ('no_notice_yet'), never "floor satisfied" (MF3). DWELL is 7 days for every reason; the
+    July 'unreachable' hold is gone (D2).
+  - TWO CLOCKS, KEPT APART (MF7). Selection uses the view's clock; multi_probe's re-read and
+    Q_FLIP's optimistic lock keep the raw last_alive_at, so a fresh verdict can't fake a race.
+  - THE WRITER'S PROBE uses asset_liveness.select_probe_ports (the worker's set; it reaches the
+    port-53-only nameservers) — defence in depth with the 72 h answer skip.
+  - COMING BACK (MF5): a went_dark host with an answer in the last 24 h is brought back through
+    asset_liveness.resurrect_if_dark (write mode; dry-run logs 'would_resurrect'). The liveness
+    worker probes went_dark hosts so an answer can be seen.
+  - STALE CHECKS (alternative 3): if the instance's newest verdict is older than 12 h, nothing is
+    stamped, cleared, brought back or demoted this run.
+  - HELD hosts (assets.dark_hold_reason, D7) are logged 'policy_hold' and never touched.
+  - A REFUSAL IS AN ANSWER (Howie 2026-10-25 10:00: "a host with any port that answers is UP").
+    The writer's own re-probe removes only on dns_gone or unreachable (REMOVABLE_REASONS); a
+    refused re-probe (July's service_gone, Q5 below) is a hold, 'reprobe_refused_is_an_answer'.
 
 Spec: P2_DEMOTION_WRITER_BUILD_SPEC.md v2 (4.7 Q1-Q8 applied). Grounded on the real repo:
   - staleness-by-age (no per-sweep counter exists); multi-probe re-verify == the K the
@@ -56,10 +86,17 @@ except ImportError:
     )
     raise
 
-# ── Constants (4.7-ratified). DWELL_DAYS MUST match asset_dark_debounce_state() in
-#    migration 20260712a — the regression test test_flip_at_matches_sql_constants guards drift. ──
-SHOW_THRESHOLD_HOURS = 72          # Q3 reuse detect_dark_assets DARK_THRESHOLD_HOURS
-DWELL_DAYS = {"dns_gone": 7, "service_gone": 14, "unreachable": None}  # None = HOLD
+# ── Constants. NOTICE_DAYS / DWELL_DAYS MUST match v_asset_reachability's leaves_on in
+#    migration 20261026a (7 days, or a per-host dark_patience_override_days) — pinned by
+#    test_demotion_writer.py::test_dwell_matches_sql_migration. (The July comment named a test,
+#    test_flip_at_matches_sql_constants, that never existed; MF2.) ──
+SHOW_THRESHOLD_HOURS = 72          # no answer for this long before the writer probes (= dark-event gate)
+NOTICE_DAYS = 7                    # job 3t D2: 7 days, whatever the reason
+DWELL_DAYS = {"dns_gone": NOTICE_DAYS, "service_gone": NOTICE_DAYS, "unreachable": NOTICE_DAYS}
+# Job 3t: what the writer's own re-probe may remove on. A refusal (service_gone) is an answer.
+REMOVABLE_REASONS = ("dns_gone", "unreachable")
+VERDICT_FRESH_HOURS = 12           # job 3t: the instance's newest check must be this recent (= asset_liveness)
+COME_BACK_HOURS = 24               # job 3t MF5: an answer this recent brings a went_dark host back
 PROBE_COUNT = 3                    # Q4 multi-probe
 PROBE_INTERVAL_S = 30
 PROBE_TIMEOUT_S = 4
@@ -89,6 +126,7 @@ def now() -> datetime:
 # path, so the two liveness semantics (state-flip vs alert-suppression) can never drift
 # (4.7 risk #1). Re-exported under the original name so every existing caller + test is unchanged.
 from asset_liveness import classify_ports_for_state_flip as classify_ports  # noqa: E402
+from asset_liveness import resurrect_if_dark, select_probe_ports  # noqa: E402  (job 3t)
 
 
 def aggregate_probes(reasons: list[str], last_alive_moved: bool) -> dict:
@@ -157,13 +195,36 @@ def evaluate_gate(bumped: int, denom: int, prev_healthy: bool | None,
 
 
 def flip_at(last_alive: datetime, reason: str, override_days: int | None) -> datetime | None:
-    """When the writer becomes eligible to flip. None => HOLD (unreachable).
-    MUST match asset_dark_debounce_state() SQL; parity asserted by the regression test.
-    """
+    """July helper, kept for its callers: last_alive + the dwell for `reason`. Since job 3t every
+    reason is NOTICE_DAYS, and the decision reads the view's leaves_on instead (flip_decision)."""
     d = override_days if override_days is not None else DWELL_DAYS.get(reason)
     if d is None:
         return None
     return last_alive + timedelta(days=d)
+
+
+def flip_decision(*, notice_since: datetime | None, leaves_on: datetime | None,
+                  first_observed: datetime | None, demoted_so_far: int,
+                  at: datetime) -> str | None:
+    """PURE (job 3t). After the probes agree the host is gone: why it is held, or None = flip.
+
+    Order matters and every branch is a HOLD except the last:
+      no_notice_yet   — the notice was never stamped. NULL never satisfies the floor (MF3): a host
+                        nobody was warned about is never removed.
+      within_dwell    — leaves_on (the view: greatest(notice, last answer) + 7 days, D2) not yet
+                        reached. A missing leaves_on with a notice present is also a hold.
+      not_eligible_7d — first_observed unknown or under MIN_LIVE_DAYS (July Q6; #369/#370 guard).
+      rate_limited    — RATE_LIMIT flips already this run (July Q6).
+    """
+    if notice_since is None:
+        return "no_notice_yet"
+    if leaves_on is None or at < leaves_on:
+        return "within_dwell"
+    if first_observed is None or (at - first_observed).days < MIN_LIVE_DAYS:
+        return "not_eligible_7d"
+    if demoted_so_far >= RATE_LIMIT:
+        return "rate_limited"
+    return None
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -234,13 +295,55 @@ WHERE asset_id = %(m)s
 ORDER BY observed_at DESC
 LIMIT 1
 """
+# Job 3t: candidates come from the view (its clock = the newest liveness answer, any route). The
+# RAW assets.last_alive_at rides along for multi_probe's re-read and Q_FLIP's lock (MF7). The view's
+# not_responding already means: owned, confirmed_live, not held, fresh checks, no answer for 24 h.
 Q_CANDIDATES = """
-SELECT asset_id, last_alive_at, first_observed, dark_patience_override_days
-FROM public.assets
-WHERE discovery_status = 'confirmed_live'
-  AND last_alive_at IS NOT NULL
-  AND last_alive_at < now() - %(show)s::interval
-ORDER BY last_alive_at ASC
+SELECT a.asset_id, a.last_alive_at, a.first_observed, r.last_answer_at, r.notice_since, r.leaves_on
+FROM public.assets a
+JOIN public.v_asset_reachability r ON r.asset_id = a.asset_id
+WHERE a.discovery_status = 'confirmed_live'
+  AND r.not_responding
+  AND (r.last_answer_at IS NULL OR r.last_answer_at < now() - %(show)s::interval)
+ORDER BY r.last_answer_at ASC NULLS FIRST, a.asset_id
+"""
+Q_CHECKS_NEWEST = "SELECT max(probed_at) FROM public.asset_liveness_verdict"
+# The notice (job 3t D2/D8): stamped on every host the view says is not responding, in BOTH modes
+# (display state). Cleared when the host answered after its notice began, or was put on hold.
+Q_STAMP_NOTICE = """
+UPDATE public.assets a
+   SET fade_detected_at = now()
+  FROM public.v_asset_reachability r
+ WHERE r.asset_id = a.asset_id
+   AND r.not_responding
+   AND a.fade_detected_at IS NULL
+RETURNING a.asset_id
+"""
+Q_CLEAR_NOTICE = """
+UPDATE public.assets a
+   SET fade_detected_at = NULL
+  FROM public.v_asset_reachability r
+ WHERE r.asset_id = a.asset_id
+   AND a.discovery_status = 'confirmed_live'
+   AND a.fade_detected_at IS NOT NULL
+   AND (a.dark_hold_reason IS NOT NULL
+        OR (r.last_answer_at IS NOT NULL AND r.last_answer_at > a.fade_detected_at))
+RETURNING a.asset_id
+"""
+Q_HELD_QUIET = """
+SELECT r.asset_id, r.last_answer_at
+  FROM public.v_asset_reachability r
+ WHERE r.discovery_status = 'confirmed_live'
+   AND r.held_reason IS NOT NULL
+   AND (r.last_answer_at IS NULL OR r.last_answer_at < now() - interval '24 hours')
+ ORDER BY r.asset_id
+"""
+Q_COME_BACK = """
+SELECT r.asset_id, r.last_answer_at
+  FROM public.v_asset_reachability r
+ WHERE r.discovery_status = 'went_dark'
+   AND r.last_answer_at > now() - %(win)s::interval
+ ORDER BY r.asset_id
 """
 Q_SURFACE_PORTS = "SELECT surface_data FROM public.asset_surface WHERE asset_id = %(a)s"
 Q_LAST_ALIVE = "SELECT last_alive_at FROM public.assets WHERE asset_id = %(a)s"
@@ -275,6 +378,12 @@ Q_AUDIT = """
 INSERT INTO public.admin_audit_log (actor_user_id, action, target_user_id, target_email,
                                     before_state, after_state, details)
 VALUES (NULL, 'auto_went_dark', NULL, NULL,
+        %(before)s, %(after)s, %(details)s)
+"""
+Q_AUDIT_BACK = """
+INSERT INTO public.admin_audit_log (actor_user_id, action, target_user_id, target_email,
+                                    before_state, after_state, details)
+VALUES (NULL, 'auto_came_back', NULL, NULL,
         %(before)s, %(after)s, %(details)s)
 """
 
@@ -333,6 +442,11 @@ def sweep_health(conn) -> dict:
 
 def log_dryrun(conn, run_tag, sweep_healthy, asset_id, disc, last_alive, reason,
                days_remaining, flip, would, hold, gate_state, write_enabled):
+    # Job 3t (Qwen code review minor 2) — what p2_demotion_dryrun.last_alive_at holds depends on
+    # the row: for a candidate (hold_reason NULL/'WOULD', within_dwell, no_notice_yet,
+    # reprobe_*, race_importer_won, rate_limited, not_eligible_7d) it is the RAW scan clock
+    # assets.last_alive_at (MF7); for 'policy_hold', 'came_back' and 'would_resurrect' it is the
+    # view's last_answer_at (the newest liveness answer). Read it per hold_reason for D9.
     age_h = None
     if last_alive is not None:
         age_h = round((now() - last_alive).total_seconds() / 3600.0, 1)
@@ -346,14 +460,77 @@ def log_dryrun(conn, run_tag, sweep_healthy, asset_id, disc, last_alive, reason,
         })
 
 
+def checks_are_fresh(newest, at=None) -> bool:
+    """PURE (job 3t): the instance's newest liveness verdict is under VERDICT_FRESH_HOURS old."""
+    if newest is None:
+        return False
+    at = at or now()
+    if getattr(newest, "tzinfo", None) is None:
+        newest = newest.replace(tzinfo=UTC)
+    return (at - newest) <= timedelta(hours=VERDICT_FRESH_HOURS)
+
+
+def notices_and_come_backs(conn, run_tag: str, write_enabled: bool, gate_state: dict) -> dict:
+    """Job 3t: stamp / clear the notice (both modes), log the held hosts, and bring back a
+    went_dark host that answered in the last COME_BACK_HOURS (write mode; dry-run logs it).
+    Called only when the checks are fresh."""
+    with conn.cursor() as cur:
+        cur.execute(Q_STAMP_NOTICE)
+        stamped = [r[0] for r in cur.fetchall()]
+        cur.execute(Q_CLEAR_NOTICE)
+        cleared = [r[0] for r in cur.fetchall()]
+        cur.execute(Q_HELD_QUIET)
+        held = cur.fetchall()
+        cur.execute(Q_COME_BACK, {"win": f"{COME_BACK_HOURS} hours"})
+        back = cur.fetchall()
+    conn.commit()
+    for asset_id, last_answer in held:
+        log_dryrun(conn, run_tag, True, asset_id, "confirmed_live", last_answer, None, None,
+                   None, False, "policy_hold", gate_state, write_enabled)
+    came_back = 0
+    for asset_id, last_answer in back:
+        if write_enabled:
+            with conn.cursor() as cur:
+                n = resurrect_if_dark(cur, asset_id, logfn=print)
+                if n is not None:
+                    cur.execute(Q_AUDIT_BACK, {
+                        "before": Json({"discovery_status": "went_dark"}),
+                        "after": Json({"discovery_status": "confirmed_live"}),
+                        "details": Json({"asset_id": asset_id, "rule": "demotion_writer_3t",
+                                         "last_answer_at": last_answer.isoformat() if last_answer else None,
+                                         "resurrection_count": n}),
+                    })
+                    came_back += 1
+        log_dryrun(conn, run_tag, True, asset_id, "went_dark", last_answer, None, None, None,
+                   False, "came_back" if write_enabled else "would_resurrect", gate_state, write_enabled)
+    conn.commit()
+    print(f"  notice: stamped {len(stamped)} {stamped}; cleared {len(cleared)} {cleared}; "
+          f"held {len(held)}; back {len(back)}{'' if write_enabled else ' (dry-run)'}")
+    return {"stamped": stamped, "cleared": cleared, "held": len(held), "back": len(back),
+            "came_back": came_back}
+
+
 def run(conn, write_enabled: bool, run_tag: str) -> int:
     gate = sweep_health(conn)
+    with conn.cursor() as cur:
+        cur.execute(Q_CHECKS_NEWEST)
+        newest = cur.fetchone()[0]
+    fresh = checks_are_fresh(newest)
+    gate["state"]["checks_newest"] = newest.isoformat() if newest else None
+    gate["state"]["checks_fresh"] = fresh
     # Per-run gate marker row. Record THIS sweep's coverage_ok (not the final gate
     # decision) so the next run's consecutive-healthy check has a real prior to read —
     # recording gate["ok"] here would deadlock the gate (it can never bootstrap).
     log_dryrun(conn, run_tag, gate["coverage_ok"], SWEEP_MARKER, None, None, None, None,
-               None, False, gate["reason"], gate["state"], write_enabled)
+               None, False, gate["reason"] if fresh else "checks_stale", gate["state"], write_enabled)
     conn.commit()
+    if not fresh:
+        # Job 3t (alternative 3): the liveness worker stopped or is behind. Stamp nothing, clear
+        # nothing, bring nothing back, demote nothing — and say so (note 161:90's precedent).
+        print(f"::warning::demotion_writer: newest liveness check is {newest} — older than "
+              f"{VERDICT_FRESH_HOURS} h; doing nothing this run")
+        return 0
+    notices_and_come_backs(conn, run_tag, write_enabled, gate["state"])
     if not gate["ok"]:
         print(f"  sweep gate: {gate['reason']} {gate['state']} — demoting nothing")
         return 0
@@ -364,50 +541,43 @@ def run(conn, write_enabled: bool, run_tag: str) -> int:
     print(f"  sweep healthy ({gate['state']}); {len(cands)} fade candidate(s)")
 
     demoted = 0
-    for asset_id, last_alive, first_observed, override_days in cands:
-        ports = known_ports(conn, asset_id)
+    for asset_id, last_alive, first_observed, last_answer, notice_since, leaves_on in cands:
+        # The worker's port set (job 3t): reaches the port-53-only nameservers.
+        ports = select_probe_ports(asset_id, known_ports(conn, asset_id))
+        # MF7: the RAW scan clock for the race re-read, never the view's answer clock.
         probe = multi_probe(conn, asset_id, last_alive, ports)
+        days_rem = max(0, (leaves_on - now()).days) if leaves_on else None
 
-        def emit(reason, days_rem, flip, would, hold):
+        def emit(reason, would, hold):
             log_dryrun(conn, run_tag, True, asset_id, "confirmed_live", last_alive,
-                       reason, days_rem, flip, would, hold, gate["state"], write_enabled)
+                       reason, days_rem, leaves_on, would, hold, gate["state"], write_enabled)
             conn.commit()
 
         if probe["decision"] == "alive":
             if write_enabled:
                 with conn.cursor() as cur:
                     cur.execute(Q_BUMP_ALIVE, {"a": asset_id})
-            emit(None, None, None, False, "reprobe_alive")
+            emit(None, False, "reprobe_alive")
             continue
         if probe["decision"] == "mixed":
-            emit(None, None, None, False, "reprobe_mixed_reason")
+            emit(None, False, "reprobe_mixed_reason")
             continue
 
         reason = probe["reason"]
-        fa = flip_at(last_alive, reason, override_days)
-        if write_enabled and reason in ("dns_gone", "service_gone", "unreachable"):
+        if reason not in REMOVABLE_REASONS:
+            # Job 3t: Howie 2026-10-25 10:00, "a host with any port that answers is UP". A refused
+            # connection is an answer: the view never flags one, so the writer never removes one
+            # (July's service_gone, "host up, service gone", is a hold now, not a removal).
+            emit(reason, False, "reprobe_refused_is_an_answer")
+            continue
+        if write_enabled:
             with conn.cursor() as cur:
                 cur.execute(Q_SET_FADE, {"a": asset_id, "reason": reason})
 
-        if reason == "unreachable":
-            emit(reason, None, None, False, "unreachable_hold")
-            continue
-
-        days_rem = max(0, (fa - now()).days) if fa else None
-        if fa is not None and now() < fa:
-            emit(reason, days_rem, fa, False, "within_dwell")
-            continue
-        # first_observed is NULL for a freshly-discovered asset (e.g. the new
-        # perimeter-IP assets 24-38-70-x / 52-119-65-x). Unknown age = we cannot
-        # prove it has lived >= MIN_LIVE_DAYS, so it is NOT demotion-eligible —
-        # same bucket as the <7d guard, and the conservative choice (never demote
-        # on unknown age). This None-guard also prevents `now() - None`, the
-        # TypeError that failed ASM Discover #369/#370 (2026-07-19).
-        if first_observed is None or (now() - first_observed).days < MIN_LIVE_DAYS:
-            emit(reason, days_rem, fa, False, "not_eligible_7d")
-            continue
-        if demoted >= RATE_LIMIT:
-            emit(reason, days_rem, fa, False, "rate_limited")
+        hold = flip_decision(notice_since=notice_since, leaves_on=leaves_on,
+                             first_observed=first_observed, demoted_so_far=demoted, at=now())
+        if hold is not None:
+            emit(reason, False, hold)
             continue
 
         # ── would demote ──
@@ -415,8 +585,8 @@ def run(conn, write_enabled: bool, run_tag: str) -> int:
             with conn.cursor() as cur:
                 cur.execute(Q_FLIP, {"a": asset_id, "reason": reason, "eval": last_alive})
                 n = cur.rowcount
-            if n == 0:  # importer bumped last_alive_at during the probe window — it won
-                emit(reason, 0, fa, True, "race_importer_won")
+            if n == 0:  # a scan bumped last_alive_at during the probe window — it won
+                emit(reason, True, "race_importer_won")
                 continue
             ambiguous = probe.get("note", "").startswith("mixed")
             with conn.cursor() as cur:
@@ -426,10 +596,12 @@ def run(conn, write_enabled: bool, run_tag: str) -> int:
                     "details": Json({
                         "asset_id": asset_id, "dark_reason": reason,
                         "last_alive_at": last_alive.isoformat() if last_alive else None,
-                        "rule": "demotion_writer_v1", "ambiguous_reason": ambiguous,
+                        "last_answer_at": last_answer.isoformat() if last_answer else None,
+                        "notice_since": notice_since.isoformat() if notice_since else None,
+                        "rule": "demotion_writer_3t", "ambiguous_reason": ambiguous,
                     }),
                 })
-        emit(reason, 0, fa, True, None)
+        emit(reason, True, None)
         demoted += 1
 
     print(f"  done: {demoted} demotion(s) {'WRITTEN' if write_enabled else '(dry-run)'}")
@@ -448,7 +620,7 @@ def main() -> int:
     if not args.dsn:
         print("error: --dsn or SUPABASE_DSN required", file=sys.stderr)
         return 1
-    mode = "WRITE-ENABLED" if args.write_enable else "dry-run (no asset writes)"
+    mode = "WRITE-ENABLED" if args.write_enable else "dry-run (notice stamps only; no flips)"
     print(f"demotion_writer: {mode}  run_tag={args.run_tag}")
     conn = psycopg.connect(args.dsn, autocommit=False)
     try:
@@ -462,7 +634,8 @@ def main() -> int:
         conn.rollback()
         msg = e.diag.message_primary if getattr(e, "diag", None) else str(e)
         print(f"::warning::demotion_writer: foundation missing ({msg}); "
-              f"apply migration 20260712a_asset_dark_debounce_p2.sql. No-op this run.",
+              f"apply migrations 20260712a_asset_dark_debounce_p2.sql and 20261026a_reachability.sql. "
+              f"No-op this run.",
               file=sys.stderr)
         return 0
     except Exception:

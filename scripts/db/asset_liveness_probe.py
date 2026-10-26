@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """asset_liveness_probe.py — per-sweep liveness probe worker (Obsidian 161 step 2, 4.7 Q2/Q4/Q7).
 
-Probes EVERY confirmed_live asset once per sweep and writes ONE public.asset_liveness_verdict row
+Probes EVERY confirmed_live asset — and, since job 3t, every went_dark one (so a host that left
+the portal is still checked and can come back when it answers; Qwen MF5) — once per sweep and
+writes ONE public.asset_liveness_verdict row
 per asset — the shared verdict later read by the dark-digest suppression AND the went_dark demotion
 writer (via asset_liveness.get_fresh_verdict). PURE observation: writes only to
 asset_liveness_verdict, NEVER mutates asset state. Runs as a step in asm-discover.yml BEFORE
@@ -50,7 +52,12 @@ MAX_WORKERS = 24                 # bounded concurrency (4.7 Q7 pacing — light 
 SWEEP_RESPONDED_FLOOR = 0.10     # <10% of a non-trivial fleet responding => egress broken => abort
 MIN_FLEET_FOR_FLOOR = 10         # below this, no floor (a tiny fleet legitimately can be mostly quiet)
 
-Q_CONFIRMED_LIVE = "SELECT asset_id FROM public.assets WHERE discovery_status = 'confirmed_live'"
+# Job 3t (MF5): went_dark hosts are probed too. Without it nothing automatic ever checks a host
+# that left (enqueue-fleet.yml scans confirmed_live only), so "it comes back by itself if it
+# answers again" would be false. Pure observation still: a verdict row, nothing else; the writer
+# brings the host back (asset_liveness.resurrect_if_dark).
+Q_CONFIRMED_LIVE = ("SELECT asset_id FROM public.assets "
+                    "WHERE discovery_status IN ('confirmed_live', 'went_dark')")
 Q_UPSERT_VERDICT = """
 INSERT INTO public.asset_liveness_verdict
   (asset_id, sweep_id, probed_at, any_port_responded, any_port_open, per_port_results, probe_source)
@@ -104,8 +111,8 @@ def sweep_ok(verdicts: list, fleet_size: int) -> tuple[bool, str]:
 
 # ── DB glue ─────────────────────────────────────────────────────────────────────────────────────
 def confirmed_live_targets(conn) -> list[tuple[str, list[int]]]:
-    """(asset_id, probe_ports) for every confirmed_live asset. Ports = known-open (asset_surface)
-    ∪ asset-type fallback ∪ safe defaults."""
+    """(asset_id, probe_ports) for every confirmed_live or went_dark asset (job 3t). Ports =
+    known-open (asset_surface) ∪ asset-type fallback ∪ safe defaults."""
     with conn.cursor() as cur:
         cur.execute(Q_CONFIRMED_LIVE)
         asset_ids = [r[0] for r in cur.fetchall()]
@@ -128,9 +135,9 @@ def write_verdict(conn, asset_id: str, sweep_id: str, v: dict, source: str) -> N
 def run(conn, dry_run: bool, sweep_id: str, source: str) -> int:
     targets = confirmed_live_targets(conn)
     fleet = len(targets)
-    log(f"sweep {sweep_id[:8]} — {fleet} confirmed_live asset(s); dry_run={dry_run}")
+    log(f"sweep {sweep_id[:8]} — {fleet} confirmed_live or went_dark asset(s); dry_run={dry_run}")
     if not targets:
-        log("no confirmed_live assets — nothing to probe")
+        log("no confirmed_live or went_dark assets — nothing to probe")
         return 0
 
     results: dict[str, dict | None] = {}

@@ -501,13 +501,17 @@ jobs:
           python3 -m pip install --break-system-packages --quiet 'psycopg[binary]==3.3.4'
           python3 scripts/db/asset_liveness_probe.py --run-tag "${GITHUB_RUN_ID}"
 
-      - name: P2 demotion writer (DRY-RUN — no asset writes)
+      - name: P2 demotion writer (DRY-RUN — notice stamps only, no status changes)
         # Went-dark demotion writer in DRY-RUN mode: --write-enable is intentionally
-        # OMITTED, so this changes NO asset state — it only inserts observation rows into
-        # public.p2_demotion_dryrun (would_demote + hold_reason + gate_state) for the
-        # ~2026-07-25 soak review. Runs AFTER the importer so last_alive_at is fresh.
-        # Spec: P2_DEMOTION_WRITER_BUILD_SPEC.md. Do NOT add --write-enable until the
-        # 14-day clean soak clears and the flip is signed off.
+        # OMITTED, so no host leaves the portal, comes back, or has its status or clocks
+        # changed. Since KB 12 job 3t (2026-10-26) it writes ONE display field,
+        # assets.fade_detected_at: the "not responding" notice, stamped on each host the
+        # view v_asset_reachability says is not responding and cleared when it answers or
+        # is held. It also inserts observation rows into public.p2_demotion_dryrun
+        # (would_demote + hold_reason + gate_state). Runs AFTER the importer.
+        # Spec: P2_DEMOTION_WRITER_BUILD_SPEC.md; job 3t plan v1.2. Do NOT add
+        # --write-enable until the dry-run log matches the portal's banner host for host
+        # (Howie's D9, 2026-10-26) and he switches it on (S2).
         if: success() && steps.targets.outputs.mode != 'skipped'
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
@@ -517,7 +521,7 @@ jobs:
             exit 0
           fi
           python3 -m pip install --break-system-packages --quiet 'psycopg[binary]==3.3.4'
-          # DRY-RUN: --write-enable intentionally omitted. Logs only; no asset writes.
+          # DRY-RUN: --write-enable intentionally omitted. Notice stamps + logs only; no status changes.
           python3 scripts/db/demotion_writer.py --run-tag "${GITHUB_RUN_ID}"
 
       - name: One site, not two — www/plain evidence (job 4; nothing reads it yet)
