@@ -116,6 +116,11 @@ jobs:
           ALERTER_FROM:        ${{ vars.ALERTER_FROM       || 'CommandSentry@commandcompanies.com' }}
           ALERTER_FROM_NAME:   ${{ vars.ALERTER_FROM_NAME  || 'COMMANDsentry' }}
           ALERTER_TO:          ${{ vars.ALERTER_TO         || 'hschneider@commandcompanies.com,howiehow@mac.com' }}
+          # KB 12 job 3l (Howie, 2026-10-26): every scheduled digest goes to this one address
+          # first; the rest of ALERTER_TO gets it only after he presses Send in that email
+          # (approval.py; digest-send.yml sends it). Repo variable only, NO fallback: unset =
+          # the digest sends nothing.
+          ALERTER_APPROVER: ${{ vars.ALERTER_APPROVER }}
           ALERTER_DASHBOARD_URL: ${{ vars.ALERTER_DASHBOARD_URL || 'https://supabase.com/dashboard/project/hdygktppfvuspnumpfuq' }}
           # Note 307 — links in the email go to the portal, not the raw database.
           ALERTER_PORTAL_URL:    ${{ vars.ALERTER_PORTAL_URL    || 'https://commandsentry-portal.netlify.app' }}

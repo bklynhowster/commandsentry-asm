@@ -284,7 +284,8 @@ def test_the_page_is_tables_inline_styles_and_one_style_block():
     assert "<script" not in html and "<form" not in html
     assert html.count("<style>") == 1 and "prefers-reduced-motion" in html
     assert 'role="presentation"' in html and "max-width:640px" in html and 'width="680"' not in html
-    assert "fonts.googleapis.com/css2?family=Bricolage+Grotesque" in html
+    assert "fonts.googleapis.com/css2?family=Public+Sans" in html
+    assert "Bricolage" not in html, "Howie rejected that face on 2026-10-24 (\"look at that F\")"
 
 
 def test_every_image_is_an_inline_cid_and_the_logo_rides_along():

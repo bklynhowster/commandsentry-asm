@@ -1,0 +1,66 @@
+name: Send approved digest
+
+# KB 12 job 3l (2026-10-26). Howie, 14:00: "I want the mail to come only to me, and then I
+# have the ability to approve it for further distribution." 14:17: "I don't want to have to go
+# into a GitHub web page every morning to simply approve it."
+#
+# The daily and the Monday weekly (alerter.yml) now go to ALERTER_APPROVER only, with a "Send to
+# the others" button. The button's page on the portal marks that email approved
+# (public.digest_approve, migration 20261026c). THIS job sends every approved email, byte for
+# byte what Howie read without the approval strip, to the people stored with it, then records
+# the run and what was told, exactly as a scheduled send writes them.
+#
+# When: the portal fires this the moment Howie presses Send (workflow_dispatch, the same token
+# it already uses to start scans), and it also runs every 10 minutes as the backstop. A run
+# with nothing approved reads one row and exits. Its log names no address and no token (this
+# repo's Actions logs are public).
+#
+# ⚠ Command's identity fallbacks below are the same literals as alerter.yml's and, like those,
+# MUST NOT be copied to another instance. Prodex's copy of this file has none.
+
+on:
+  schedule:
+    - cron: "3-53/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Its own group: never shares the digest's (a queued tick must never displace a pending digest).
+concurrency:
+  group: digest-send
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'psycopg[binary]==3.3.4' 'pyyaml>=6,<7'
+
+      - name: Send approved digests
+        env:
+          SUPABASE_DSN:        ${{ secrets.SUPABASE_DSN }}
+          SENDGRID_API_KEY:    ${{ secrets.SENDGRID_API_KEY }}
+          RESEND_API_KEY:      ${{ secrets.RESEND_API_KEY }}
+          MAIL_PROVIDER:       ${{ vars.MAIL_PROVIDER }}
+          SMTP_HOST:           ${{ vars.SMTP_HOST }}
+          SMTP_PORT:           ${{ vars.SMTP_PORT }}
+          SMTP_USER:           ${{ vars.SMTP_USER }}
+          SMTP_PASS:           ${{ secrets.SMTP_PASS }}
+          INSTANCE_NAME:       ${{ github.event.repository.name }}
+          ALERTER_FROM:        ${{ vars.ALERTER_FROM       || 'CommandSentry@commandcompanies.com' }}
+          ALERTER_FROM_NAME:   ${{ vars.ALERTER_FROM_NAME  || 'COMMANDsentry' }}
+        run: python scripts/alerter/run_alerter.py --send-approved
