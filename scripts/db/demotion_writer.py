@@ -7,6 +7,9 @@ confirmation, and an optimistic-concurrency flip that can't lose a race with the
 
 Runs as a step in asm-discover.yml AFTER import_asm_to_surface.py, every 6h.
 
+LIVE SINCE S2 (KB 12 job 3t, 2026-10-26): asm-discover.yml passes --write-enable, on Howie's word
+("Build S2.", 18:54) after the D9 read-back passed (the dry-run log matched the banner host for host).
+
 SAFETY: default is --write-enable OFF. With writes off this process changes no asset's
 discovery_status, clock or reason; it inserts observation rows into public.p2_demotion_dryrun
 (would_demote + hold_reason + gate_state) and — since job 3t — stamps or clears ONE display
@@ -56,13 +59,14 @@ Spec: P2_DEMOTION_WRITER_BUILD_SPEC.md v2 (4.7 Q1-Q8 applied). Grounded on the r
 
 Env: SUPABASE_DSN (same as the importer) or --dsn. psycopg3.
 
-COMPANION CHANGES (do at write-enable, with the importer in front of us — NOT edited blind
-here because import_asm_to_surface.py's UPSERT diverges Command-cloud vs Prodex-characterization):
-  1. importer resurrection hook: when a went_dark asset is re-observed confirmed_live, in the
-     SAME upsert UPDATE bump resurrection_count, clear went_dark_at/fade_detected_at/dark_reason,
-     stamp last_transition_at (single SET; four-gate-valid + >=1 service only).
-  2. asm-discover.yml: add a step after the importer that runs this script (write-enable off).
-  3. Q7 audit: confirm no non-observation writer mutates a went_dark asset's asset_surface.
+COMPANION CHANGES: all three were needed before write-enable, and all three are DONE (checked
+2026-10-26 at S2):
+  1. the resurrection hook: asset_liveness.resurrect_if_dark (RESURRECT_ASSET_SQL clears
+     went_dark_at, fade_detected_at and dark_reason, bumps resurrection_count, stamps
+     last_transition_at), called by import_asm_to_surface.py, run_light, run_medium, run_heavy and
+     this writer's own come-back pass (relay 167/169, 2026-09-15; job 3t MF5).
+  2. asm-discover.yml runs this script after the importer (and, since S2, with --write-enable).
+  3. the Q7 audit: done, failed, fixed (note 161, the resurrect asymmetry).
 """
 
 from __future__ import annotations
