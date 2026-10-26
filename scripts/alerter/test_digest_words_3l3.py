@@ -94,6 +94,12 @@ def test_every_family_says_what_it_is_what_it_means_and_the_fix():
             assert f["do"] and f["headline"].count("{where}") == 1, f["key"]
     x = w.words("No enforcing WAF in front of live application", 2)
     assert x["title"] == "No web firewall in front of these sites" and "{" not in x["why"] + x["do"]
+    # 351 (2026-10-26): measured at a sign-in, the attacks got as far as the login, no further
+    s = w.words("No enforcing WAF in front of the sign-in", 1)
+    assert s["title"] == "No web firewall in front of the sign-in on this site"
+    assert "walked straight in" not in s["why"] and "login page" in s["why"] and "{" not in s["why"] + s["do"]
+    assert w.family_key("No enforcing WAF in front of the sign-in") == "waf-absent-signin"
+    assert w.family_key("No enforcing WAF in front of live application") == "waf-absent"
 
 
 # ── the daily's items ────────────────────────────────────────────────────────

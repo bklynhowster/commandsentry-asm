@@ -140,7 +140,7 @@ from run_light import derive_hostname
 # collector below does the HTTP (benign baseline + payload GETs) and hands the
 # captured responses to the classifier. Same-dir module, imported like run_medium.
 from waf_differential import (classify_waf_differential, INDEPENDENT_CLASSES, baseline_served,
-                              UNDEFINED_REDIRECT)
+                              UNDEFINED_REDIRECT, FRONT_DOOR_SIGNIN)
 # 315 — the capture names the block page per class (scripts/normalize, on sys.path above).
 from block_page_signatures import annotate_fired
 
@@ -337,6 +337,10 @@ class HeavyScanContext:
     waf_absence_emitted: str | None = None
     waf_exposure_read_ok: bool = False
     waf_exposed_emitted: bool = False
+    # 351 (2026-10-26): the baseline redirected to a SIGN-IN and the probe measured the
+    # front door (waf_differential front_door 'signin'). Read in the clean close-out by
+    # reopen_signin_rows_retracted_by_311 (getattr, like the 3b fields above).
+    waf_signin_measured: bool = False
     # waf_detected / waf_kind / tech_stack — heavy doesn't probe these
     # but the medium-side helpers (build_rotation_log, scan metadata
     # writer) read them. Default to "not detected."
@@ -2620,10 +2624,14 @@ def _no_waf_proven(baseline: dict, verdict: dict) -> bool:
     — the one shape that proves ABSENCE. A redirect or dead-origin baseline is inconclusive
     and a single-class block is ambiguous (app input-validator); NEITHER earns the finding
     (the empirical bar). baseline_served is the classifier's own gate-1 predicate, so the
-    emitter cannot drift from it again."""
+    emitter cannot drift from it again.
+
+    351 (Howie, 2026-10-26 16:05): a baseline that redirected to a SIGN-IN is the one
+    redirect that measures something, the front door (waf_differential, front_door
+    'signin'). Zero classes blocked there proves the same absence, of the door."""
     if verdict.get("waf_present") is not False:
         return False
-    if not baseline_served(baseline.get("status")):
+    if not baseline_served(baseline.get("status")) and verdict.get("front_door") != FRONT_DOOR_SIGNIN:
         return False
     return len(verdict.get("blocked") or []) == 0
 
@@ -2715,7 +2723,16 @@ def _read_waf_exposure(ctx) -> tuple[bool, list]:
     return False, []
 
 
-def _no_waf_description(baseline: dict) -> str:
+def _no_waf_description(baseline: dict, verdict: dict | None = None) -> str:
+    v = verdict or {}
+    if v.get("front_door") == FRONT_DOOR_SIGNIN:
+        # 351 — what was measured at a sign-in, and no more.
+        n_at = len(v.get("reached_signin") or [])
+        return (
+            f"Differential probe: an ordinary request was redirected (HTTP {baseline.get('status')}) "
+            f"to this host's sign-in ({v.get('redirect_to') or 'its login'}). None of the "
+            f"{len(_WAF_PAYLOADS)} independent attack-payload classes tested ({_waf_classes_tested_label()}) "
+            f"was refused; {n_at} got the same redirect to the sign-in as the ordinary request")
     return (
         f"Differential probe: a benign baseline returned HTTP {baseline.get('status')} and "
         f"all {len(_WAF_PAYLOADS)} independent attack-payload classes tested "
@@ -2737,7 +2754,8 @@ def _maybe_emit_no_waf_finding(ctx: HeavyScanContext, baseline: dict, verdict: d
             "candidate (mail/ftp kind or confirmed edge_firewall) -> no finding (3b D3)")
         return
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    head = _no_waf_description(baseline)
+    head = _no_waf_description(baseline, verdict)
+    signin = verdict.get("front_door") == FRONT_DOOR_SIGNIN
     if _waf_confirmed_present(ctx):
         ctx.waf_absence_emitted = "present_not_enforcing"
         check_id, sev = WAF_PRESENT_NOT_ENFORCING_CHECK_ID, "MODERATE-HIGH"
@@ -2746,6 +2764,18 @@ def _maybe_emit_no_waf_finding(ctx: HeavyScanContext, baseline: dict, verdict: d
                 "The control is present but not enforcing (monitor mode, a disabled policy or rules "
                 "that do not cover these classes): a protection believed to be in place is not. "
                 "PCI DSS 6.4.2; NIST SP 800-53 SC-7. Presence-only method: names no product.")
+    elif signin:
+        # 351 — the same finding id and rating (3b: absence alone is MODERATE), worded for
+        # what a sign-in lets Sentry see: the door, not the rooms.
+        ctx.waf_absence_emitted = "absent"
+        check_id, sev = WAF_ABSENT_CHECK_ID, "MODERATE"
+        title = "No enforcing WAF in front of the sign-in"
+        desc = (head + " — no payload-inspecting WAF is enforcing in front of this host's sign-in. "
+                "Sentry has no account, so nothing behind the sign-in was tested. That is a missing "
+                "compensating control (PCI DSS 6.4.2; NIST SP 800-53 SC-7), not a vulnerability on its "
+                "own: the login, and the application behind it, take traffic from the internet with "
+                "nothing in front screening it. Presence-only method: this asserts the ABSENCE of "
+                "blocking and names no product.")
     else:
         ctx.waf_absence_emitted = "absent"
         check_id, sev = WAF_ABSENT_CHECK_ID, "MODERATE"
@@ -3223,6 +3253,83 @@ def settle_waf_absence_family(conn, ctx: HeavyScanContext, Json) -> int:
     return n
 
 
+# ── 351 (2026-10-26): A SIGN-IN MEASURED WITHDRAWS 311'S RETRACTION ──────────────────────
+# atlantis-gcp.prodexlabs.com: on 2026-10-09 the probe read its four identical 302s to the
+# Google sign-in as "nothing blocked" and minted 'No enforcing WAF' (HIGH, before 3b); on
+# 2026-10-16 311 retracted it as false_positive ("no application at this address"). Howie's
+# 351 ruling withdraws that premise for a sign-in: the application is behind it, and the
+# door was measured. The upsert never reopens a false_positive (sticky by design, run_medium
+# UPSERT_FINDING_SQL) and never lowers a severity, so a re-measured absence would stay
+# retracted, and HIGH. This step is the one way back, and only for a row whose LATEST audit
+# entry is 311's own retraction: a person marking it false_positive afterwards made a
+# decision this never overrides. Reopened as 'detected' (it was never fixed, so not
+# 'regressed'), at the severity this run emitted (3b: MODERATE alone), with an audit row;
+# the history row is write_finding_history_for_scan_run's, which runs right after and
+# records the reopened status for THIS scan (the 3b reopen does the same). Only the rows
+# this run emitted; nothing else.
+SIGNIN_REOPEN_ACTION = "signin_front_door_reopened"
+SIGNIN_REOPEN_RULE = "note_351_signin_front_door_reopens_311_retraction"
+
+REOPEN_311_RETRACTED_SQL = """
+UPDATE public.findings f
+   SET current_status = 'detected',
+       severity       = %(severity)s::severity_t,
+       updated_at     = now()
+ WHERE f.finding_id = %(finding_id)s
+   AND f.asset_id   = %(asset_id)s
+   AND f.source::text = 'commandsentry_heavy'
+   AND f.current_status::text = 'false_positive'
+   AND (SELECT l.action
+          FROM public.admin_audit_log l
+         WHERE l.after_state->>'finding_id' = f.finding_id
+         ORDER BY l.created_at DESC
+         LIMIT 1) = %(retraction_action)s
+RETURNING f.finding_id, f.severity::text AS severity
+"""
+
+_SIGNIN_REOPEN_CHECK_IDS = (WAF_ABSENT_CHECK_ID, WAF_PRESENT_NOT_ENFORCING_CHECK_ID, WAF_EXPOSED_CHECK_ID)
+
+
+def reopen_signin_rows_retracted_by_311(conn, ctx: HeavyScanContext, Json) -> int:
+    """CLEAN PATH ONLY. This run measured a sign-in's front door and emitted an
+    absence-family finding: if that row sits in false_positive because 311 retracted it
+    (and nothing since), reopen it at this run's severity. Returns the rows reopened."""
+    if not getattr(ctx, "waf_signin_measured", False):
+        return 0
+    emitted = {f.finding_id: f.severity for f in (ctx.findings or [])
+               if getattr(f, "source", None) == "commandsentry_heavy"}
+    n = 0
+    for check_id in _SIGNIN_REOPEN_CHECK_IDS:
+        fid = stable_finding_id(ctx.asset_id, "commandsentry_heavy", check_id, ctx.hostname)
+        sev = emitted.get(fid)
+        if not sev:
+            continue
+        with conn.cursor() as cur:
+            cur.execute(REOPEN_311_RETRACTED_SQL, {"finding_id": fid, "asset_id": ctx.asset_id,
+                                                   "severity": sev,
+                                                   "retraction_action": REDIRECT_RETRACTION_ACTION})
+            row = cur.fetchone()
+            if not row:
+                continue
+            cur.execute(MEASURED_REMEDIATION_AUDIT_SQL, {
+                "action": SIGNIN_REOPEN_ACTION,
+                "before": Json({"finding_id": fid, "current_status": "false_positive",
+                                "source": "commandsentry_heavy"}),
+                "after": Json({"finding_id": fid, "current_status": "detected", "severity": sev}),
+                "details": Json({"rule": SIGNIN_REOPEN_RULE, "asset_id": ctx.asset_id,
+                                 "scan_run_id": ctx.scan_run_id,
+                                 "reason": ("the differential probe measured this host's sign-in, its "
+                                            "front door, and nothing in front of it refused the attack "
+                                            "classes: 311 retracted this finding because a redirect meant "
+                                            "'no application here', and a sign-in is the one redirect with "
+                                            "the application behind it (Howie, 2026-10-26)")}),
+            })
+        n += 1
+        log(f"  sign-in front door: reopened '{check_id}' for {ctx.asset_id} as detected ({sev}; "
+            "audit row written)")
+    return n
+
+
 def supersede_partial_on_measured_absence(conn, ctx: HeavyScanContext, Json) -> int:
     """CLEAN PATH ONLY. This run measured a pass-through on EVERY class (the HIGH was
     emitted): the open 'partial coverage' finding is superseded — closed_reclassified, the
@@ -3363,6 +3470,13 @@ def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> N
                         "evidence_class": verdict["evidence_class"]})
         if ctx.waf_block_measured is not None:
             details["passed_through"] = list(ctx.waf_block_measured["passed"])
+        if verdict.get("front_door") == FRONT_DOOR_SIGNIN:
+            # 351 — a sign-in measured the front door. The portal reads these three to say
+            # so ("got the same redirect to the sign-in"), and where the sign-in is.
+            details["front_door"] = FRONT_DOOR_SIGNIN
+            details["reached_signin"] = list(verdict.get("reached_signin") or [])
+            details["baseline_redirect_to"] = verdict.get("redirect_to") or None
+            ctx.waf_signin_measured = True
         if waf_present is None:
             # 311 — the probe fired but measured nothing: the baseline was not a served
             # page. Recorded as UNDEFINED, with the kind and (on a redirect) the target,
@@ -4759,6 +4873,12 @@ def run(descriptor_path: str, dsn: str) -> int:
         n_family = settle_waf_absence_family(conn, ctx, Json)
         if n_family:
             log(f"absence family: {n_family} row(s) settled (3b)")
+        # 351 — a sign-in's measured front door reopens what 311 retracted on the same
+        # host. After 3b's settle (which leaves false_positive rows alone) and before
+        # finding_history, which then records the reopened row as observed by this scan.
+        n_signin = reopen_signin_rows_retracted_by_311(conn, ctx, Json)
+        if n_signin:
+            log(f"sign-in front door: {n_signin} row(s) retracted by 311 reopened (351)")
 
         # Note 129 round 7 — finding_history per re-emitted finding.
         # Runs AFTER the per-source regress loop so the recorded
