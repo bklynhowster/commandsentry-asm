@@ -17,11 +17,18 @@ So, every scheduled daily and Monday weekly:
   Not approved = nobody else gets it. The next daily is built from the last email that
   actually went out, so a skipped day rolls into it; building it retires the older one.
 
+Round 5 (2026-10-27, Howie 08:46–08:47): his copy carries TWO one-time buttons, "Approve for
+email" (the email, exactly as the others get it) and "Post to Slack" (a different, shorter
+piece of writing for the developers in #on-call), each its own decision; the Slack draft is
+shown under its button; the Slack button is absent on a day with nothing for a developer.
+With no Slack half given, the strip is the 3l one, byte for byte (Command stays as it is).
+
 PURE. No database, no network. run_alerter.py does the reading, writing and sending.
 """
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import secrets
 from html import escape
@@ -31,6 +38,19 @@ APPROVE_PATH = "/digest/approve"
 DAILY_EXPIRES_HOURS = 36          # the next daily retires it first; this is the backstop
 WEEKLY_EXPIRES_HOURS = 7 * 24
 MAX_SEND_ATTEMPTS = 3
+DAILY_EXPIRES_VAR = "DIGEST_DAILY_EXPIRES_HOURS"   # round 5, ruling 3: Prodex sets 24; unset = 36
+
+
+def daily_expires_hours(env=None) -> int:
+    """Per instance: a daily expires when the next one is built (Howie, 2026-10-27 09:53,
+    ruling 3) — Prodex sets DIGEST_DAILY_EXPIRES_HOURS=24; an unset or bad value keeps 36, so
+    Command is unchanged (the review's M5: this file is byte-identical in both repos)."""
+    raw = (env if env is not None else os.environ).get(DAILY_EXPIRES_VAR, "")
+    try:
+        n = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return DAILY_EXPIRES_HOURS
+    return n if 1 <= n <= 24 * 14 else DAILY_EXPIRES_HOURS
 
 STRIP_BG, STRIP_TEXT, STRIP_BUTTON = "#FFF1C2", "#3B2C00", "#14213D"
 _FONT = "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif"
@@ -136,8 +156,89 @@ def with_strip_text(text: str, strip: str) -> str:
     return strip + text
 
 
-def approver_copy(subject: str, html: str, text: str, *, url: str, others: list[str], kind: str):
-    """(subject, html, text) for the approver, from exactly what the others will get."""
+def approver_copy(subject: str, html: str, text: str, *, url: str, others: list[str], kind: str,
+                  slack: dict | None = None, notes: list[str] | None = None):
+    """(subject, html, text) for the approver, from exactly what the others will get. With
+    `slack` (round 5) the strip has two buttons and the Slack draft; `notes` are lines for the
+    approver only (Sentry's own problems, a fallback reason). Neither given = the 3l strip."""
+    if slack is None and not notes:
+        return (approval_subject(subject),
+                with_strip_html(html, strip_html(url, others, kind)),
+                with_strip_text(text, strip_text(url, others, kind)))
     return (approval_subject(subject),
-            with_strip_html(html, strip_html(url, others, kind)),
-            with_strip_text(text, strip_text(url, others, kind)))
+            with_strip_html(html, strip_html_v2(url, others, kind, slack=slack, notes=notes or [])),
+            with_strip_text(text, strip_text_v2(url, others, kind, slack=slack, notes=notes or [])))
+
+
+# ── round 5: two buttons ───────────────────────────────────────────────────────
+SLACK_BUTTON = "#4A154B"
+SLACK_PATH = APPROVE_PATH          # same page; the token says which action it is for
+
+
+def slack_url(portal_url: str, token: str) -> str:
+    return approve_url(portal_url, token)
+
+
+def _slack_block_html(slack: dict | None) -> str:
+    if slack is None:
+        return ""
+    ch = escape(slack.get("channel") or "#on-call")
+    if not slack.get("payload_text"):
+        return (f'<tr><td style="padding:0 24px 12px;font-family:{_FONT};font-size:14px;line-height:1.5;'
+                f'color:{STRIP_TEXT};">Nothing for {ch} today: nothing new that a developer acts on, and no nudge due.</td></tr>')
+    lines = "".join(f'<div style="margin-top:8px;">{escape(ln)}</div>' for ln in slack["payload_text"].split("\n\n") if ln.strip())
+    wired = slack.get("wired", True)
+    btn = (f'<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="{SLACK_BUTTON}" '
+           f'style="background:{SLACK_BUTTON};border-radius:8px;"><a href="{escape(slack["url"])}" style="display:inline-block;'
+           f'padding:12px 20px;font-family:{_FONT};font-size:15px;font-weight:700;color:#FFFFFF;text-decoration:none;">'
+           f'Post to Slack&nbsp;&nbsp;&rarr; {ch}</a></td></tr></table>') if wired else (
+           f'<div style="font-family:{_FONT};font-size:14px;color:{STRIP_TEXT};">Post to Slack: not wired yet '
+           f'(the {ch} webhook is not set on GitHub), so nothing can post.</div>')
+    return (f'<tr><td style="padding:0 24px 6px;font-family:{_FONT};font-size:13px;line-height:1.5;font-weight:700;'
+            f'text-transform:uppercase;letter-spacing:.06em;color:{STRIP_TEXT};">What {ch} would get</td></tr>'
+            f'<tr><td style="padding:0 24px 12px;"><div style="font-family:{_FONT};font-size:14px;line-height:1.5;color:{STRIP_TEXT};'
+            f'background:#FFFFFF;border-left:4px solid {SLACK_BUTTON};border-radius:0 8px 8px 0;padding:10px 14px;white-space:pre-wrap;">'
+            f'{lines}</div></td></tr>'
+            f'<tr><td style="padding:0 24px 14px;">{btn}</td></tr>')
+
+
+def strip_html_v2(url: str, others: list[str], kind: str, *, slack: dict | None, notes: list[str]) -> str:
+    who = ", ".join(escape(a) for a in others)
+    note_rows = "".join(
+        f'<tr><td style="padding:0 24px 10px;font-family:{_FONT};font-size:13px;line-height:1.5;color:{STRIP_TEXT};">'
+        f'{escape(n)}</td></tr>' for n in notes)
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        'data-approval-strip="2"><tr><td align="center" style="padding:20px 8px 0;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'bgcolor="{STRIP_BG}" style="width:100%;max-width:640px;background:{STRIP_BG};border-radius:14px;">'
+        f'<tr><td style="padding:18px 24px 6px;font-family:{_FONT};font-size:17px;line-height:1.35;'
+        f'font-weight:700;color:{STRIP_TEXT};">Only you have this so far.</td></tr>'
+        f'<tr><td style="padding:0 24px 14px;font-family:{_FONT};font-size:14px;line-height:1.5;'
+        f'color:{STRIP_TEXT};">Two separate decisions. Press one, both, or neither; nothing goes anywhere until you do.</td></tr>'
+        '<tr><td style="padding:0 24px 12px;"><table role="presentation" cellpadding="0" cellspacing="0" '
+        f'border="0"><tr><td bgcolor="{STRIP_BUTTON}" style="background:{STRIP_BUTTON};border-radius:8px;">'
+        f'<a href="{escape(url)}" style="display:inline-block;padding:12px 20px;font-family:{_FONT};'
+        f'font-size:15px;font-weight:700;color:#FFFFFF;text-decoration:none;">Approve for email&nbsp;&nbsp;&rarr; {who}</a>'
+        '</td></tr></table></td></tr>'
+        + _slack_block_html(slack) + note_rows +
+        f'<tr><td style="padding:0 24px 18px;font-family:{_FONT};font-size:13px;line-height:1.5;'
+        f'color:{STRIP_TEXT};">{escape(_if_not(kind))} Below this note: the email exactly as the others would get it.</td></tr>'
+        '</table></td></tr></table>'
+    )
+
+
+def strip_text_v2(url: str, others: list[str], kind: str, *, slack: dict | None, notes: list[str]) -> str:
+    lines = ["ONLY YOU HAVE THIS SO FAR. Two separate decisions; press one, both, or neither.",
+             f"Approve for email ({', '.join(others)}): {url}"]
+    if slack is not None:
+        ch = slack.get("channel") or "#on-call"
+        if not slack.get("payload_text"):
+            lines.append(f"Nothing for {ch} today.")
+        elif slack.get("wired", True):
+            lines += [f"Post to Slack ({ch}): {slack['url']}", f"What {ch} would get:", slack["payload_text"]]
+        else:
+            lines += [f"Post to Slack ({ch}): not wired yet, nothing can post.", f"What {ch} would get:", slack["payload_text"]]
+    lines += list(notes)
+    lines += [_if_not(kind), TEXT_RULE, ""]
+    return "\n".join(lines)

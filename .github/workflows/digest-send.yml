@@ -53,6 +53,8 @@ jobs:
       - name: Send approved digests
         env:
           SUPABASE_DSN:        ${{ secrets.SUPABASE_DSN }}
+          # 3l round 5: the #on-call post goes out from here, once per approval, never retried.
+          SLACK_ONCALL_WEBHOOK: ${{ secrets.SLACK_ONCALL_WEBHOOK }}
           SENDGRID_API_KEY:    ${{ secrets.SENDGRID_API_KEY }}
           RESEND_API_KEY:      ${{ secrets.RESEND_API_KEY }}
           MAIL_PROVIDER:       ${{ vars.MAIL_PROVIDER }}
