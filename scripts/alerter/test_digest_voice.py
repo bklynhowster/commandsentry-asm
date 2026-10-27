@@ -339,7 +339,10 @@ def test_write_uses_one_call_with_the_facts_and_returns_the_json():
     out = dv.write(f, api_key="k", previous_text="yesterday's words", post=post)
     assert len(calls) == 1 and calls[0][0] == dv.API_URL and calls[0][2] == "k"
     body = calls[0][1]
-    assert body["model"] == dv.MODEL_ID == "claude-sonnet-5-5" and body["temperature"] == dv.TEMPERATURE
+    assert body["model"] == dv.MODEL_ID == "claude-sonnet-4-6" and body["temperature"] == dv.TEMPERATURE
+    synth = open(os.path.join(HERE, "..", "backfill", "synthesize_finding_descriptions.py"), encoding="utf-8").read()
+    assert 'MODEL_ID = "claude-sonnet-4-6"' in synth, "the writer uses the id this repo already calls daily with the same key"
+
     assert "yesterday's words" in body["messages"][0]["content"] and '"id": "c1"' in body["messages"][0]["content"]
     assert "never anyone's job" in body["system"].lower() or "being fired" in body["system"].lower()
     assert out["headline"] == "One box went quiet."
@@ -381,3 +384,20 @@ def test_the_email_and_the_subject_read_as_howies():
     assert "Public Sans" in html and "—" not in text
     assert dv.subject(out, f, product_name="PRODEXsentry", local_end=NOW) == "[PRODEXsentry] Tuesday: one box went quiet"
     assert "4 small things" in text
+
+
+def test_an_api_error_is_reported_in_the_apis_own_words_and_never_the_key():
+    import io, urllib.error
+    body = json.dumps({"type": "error", "error": {"type": "not_found_error", "message": "model: claude-sonnet-5-5"}}).encode()
+    e = urllib.error.HTTPError("https://api.anthropic.com/v1/messages", 404, "Not Found", {}, io.BytesIO(body))
+    assert dv.api_error_words(e) == "not_found_error: model: claude-sonnet-5-5"
+    e2 = urllib.error.HTTPError("u", 500, "x", {}, io.BytesIO(b"<html>oops</html>"))
+    assert dv.api_error_words(e2) == ""
+    f = _facts()
+    def post(url, b, key):
+        raise urllib.error.HTTPError(url, 400, "Bad Request", {}, io.BytesIO(json.dumps({"error": {"type": "invalid_request_error", "message": "max_tokens: too large; sk-ant-SHOULD-NOT-LEAK"}}).encode()))
+    try:
+        dv.write(f, api_key="sk-ant-THEKEY", post=post)
+        assert False, "should raise"
+    except dv.VoiceError as ve:
+        assert str(ve).startswith("API HTTP 400, invalid_request_error: max_tokens: too large") and "THEKEY" not in str(ve)
