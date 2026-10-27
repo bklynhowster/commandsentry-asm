@@ -54,7 +54,9 @@ TIMEOUT_S = 90
 STILL_OPEN_MAX = 3                      # the two or three worst open things (Howie, 09:00)
 EMAIL_ENTRY_MAX_CHARS = 800                 # a firewall paragraph that says what was sent runs long
 SLACK_ENTRY_MAX_CHARS = 600
+NUDGE_MAX_CHARS = 240                   # a nudge is ONE line (Howie 16:32: "way too wordy")
 LINE_MAX_CHARS = 300
+HOSTS_NAMED_MAX = 6                     # more than six hosts: six names, then "and N more" (16:30)
 
 # Never in anything a person reads (Howie 09:38: "I don't want there ever to be anything in
 # this that talks about somebody getting fired"; 08:40: no blame, no ownership).
@@ -99,16 +101,16 @@ PLAIN = (
      "firewall is present, never which product.",
      "Switch that firewall from watching (detect or monitor mode) to blocking (prevent mode). The next deep scan checks."),
     (re.compile(r"^BREACH attack", re.I),
-     "Compressed pages could let an attacker read a secret out of them (the BREACH trick)",
+     "Compressed pages could leak a secret (BREACH)",
      "The site compresses its pages (gzip). Someone who can watch the traffic and make a browser send "
      "requests could use that to read a secret out of a page, a token or a session cookie, a bit at a time.",
      "Turn compression off for pages that carry secrets, or mask the tokens on those pages. A few lines of server config."),
     (re.compile(r"Obsolete 3DES/IDEA", re.I),
-     "Old weak ciphers (3DES) are still offered",
+     "Old weak ciphers (3DES) still offered",
      "3DES is a 1990s cipher; a long capture of traffic can be broken. Modern browsers never pick it, old tools might.",
      "Drop 3DES and the other legacy ciphers from the TLS settings."),
     (re.compile(r"^TLS · BEAST", re.I),
-     "Old CBC ciphers the BEAST trick goes after are still offered",
+     "Old CBC ciphers (BEAST) still offered",
      "Browsers have worked around BEAST for years; offering those ciphers at all is a legacy setting.",
      "Prefer the AES-GCM and ChaCha20 cipher suites and drop the CBC ones."),
 )
@@ -212,6 +214,8 @@ def _item(iid: str, section: str, kind: str, severity: str, hosts: list, what: s
     # two headers; test send 2, 10-27 15:25: the writer said "two" and was refused for it)
     nums = set(_numbers_in(_norm_numbers(text_for_dates))) | {str(len(hosts))} | {str(n) for n in extra_numbers}
     nums |= {str(len(detail))} if detail else set()
+    if len(hosts) > HOSTS_NAMED_MAX:
+        nums.add(str(len(hosts) - HOSTS_NAMED_MAX))     # "and 14 more"
     if ":" in what:
         names = [n for n in re.split(r",|\band\b", what.split(":", 1)[1]) if n.strip()]
         if len(names) >= 2:
@@ -342,7 +346,7 @@ HOWIE'S VOICE, from his own writing (a profile built from 72 of his emails and h
 THE EMAIL HE APPROVED (match its rhythm and register, not its sentences; the facts differ every day):
 "Morning. Short version: one of our boxes went quiet, and that's the only real news today. valorep.prodexlabs.com hasn't answered since Oct 22, and its name doesn't resolve on the internet anymore, so it looks like it was taken down for good. If that's right, it drops off the portal on its own on Nov 2. l3h-ss, prod, l3h-nh and l3h-ivs all turned away Sentry's test requests, which is a good sign. Something is standing guard in front of them, a firewall or a security device of some kind, and Sentry is still working out which. Still sitting there: the firewall in front of bitec, demo and highcom is there but it's only watching, not blocking. That's been the case since Oct 22, and I think it's the most serious thing open right now. 4 small things also turned up, none of them need anybody, they're in the portal if you're curious."
 
-RULES THAT NEVER BEND. Say each fact once. The same problem on several hosts is ONE sentence that names the hosts (short names are fine: "bitec, demo and highcom"). Never assign blame or ownership: never "this is on us", "on you", "nothing for you to do", "somebody dropped the ball". Never mention anyone's job, being fired, HR or discipline. A thing that turns away Sentry's attack-shaped requests is GOOD news: something is standing guard and Sentry is still working out which product. Say what Sentry actually sent ONCE, the first time it matters (an item's "why" tells you); after that refer back to it ("the same three requests"), never describe it again. When two items are about firewalls in opposite states, say so in one breath, so nobody reads them as the same story twice. Never use the word "vulnerable". Never add a date, number, host, product or severity that is not in the facts for that item, and never move one from one item to another. Severity words only as given ("Moderate", "Moderate-high", "High"); you may also just say "the most serious thing open" without a word. For a NUDGE (slack_nudge items) never say how long it has been open and never give a date.
+RULES THAT NEVER BEND. Say each fact once. The same problem on several hosts is ONE sentence that names the hosts (short names are fine: "bitec, demo and highcom"). EVERY entry names EVERY host in its item's "hosts" list, however short the entry: never "five of our sites", never a host left out. One sentence can carry six names. Only when an item has MORE than six hosts: name the first six, then "and N more" with N the exact remainder. Never assign blame or ownership: never "this is on us", "on you", "nothing for you to do", "somebody dropped the ball". Never mention anyone's job, being fired, HR or discipline. A thing that turns away Sentry's attack-shaped requests is GOOD news: something is standing guard and Sentry is still working out which product. Say what Sentry actually sent ONCE, the first time it matters (an item's "why" tells you); after that refer back to it ("the same three requests"), never describe it again. When two items are about firewalls in opposite states, say so in one breath, so nobody reads them as the same story twice. Never use the word "vulnerable". Never add a date, number, host, product or severity that is not in the facts for that item, and never move one from one item to another. Severity words only as given ("Moderate", "Moderate-high", "High"); you may also just say "the most serious thing open" without a word. For a NUDGE (slack_nudge items) never say how long it has been open and never give a date.
 
 OUTPUT. Strict JSON, no prose around it, this shape:
 {"subject": "<5-9 words, no prefix, says the one main thing>",
@@ -350,10 +354,10 @@ OUTPUT. Strict JSON, no prose around it, this shape:
  "opening": "<one or two sentences, e.g. 'Morning. Short version: ...'>",
  "email": [{"id": "<item id>", "text": "<one paragraph about that item only>"}],
  "fixed": [{"id": "<item id>", "text": "<one sentence>"}],
- "still_open": [{"id": "<item id>", "text": "<ONE sentence, two at most: a reminder, not a briefing; the detail is in the portal>"}],
+ "still_open": [{"id": "<item id>", "text": "<ONE line, under 240 characters: '[Grade] the problem in plain words on host, host and host.' Nothing else; the detail is in the portal. The firewall item may add its one sentence about the hosts above.>"}],
  "small_line": "<one sentence about the small stuff, or empty string if small_count is 0>",
  "slack": {"changed": [{"id": "<item id>", "text": "<one or two sentences; a finding starts with its severity word in brackets, exactly as given, e.g. '[Moderate] ...'>"}],
-           "nudge": [{"id": "<item id>", "text": "<two or three sentences starting with the severity word in brackets: what, why it matters in plain words, the fix>"}],
+           "nudge": [{"id": "<item id>", "text": "<ONE line, under 240 characters: '[Grade] the problem in plain words on host, host and host.' Nothing else.>"}],
            "closing": "<one short easy-going sentence, no dates, no job talk, or empty string>"}}
 Each item gives "what", "why", "fix", its "hosts", and "detail": per-host specifics in the scanner's own words (when a host stopped answering, why, when it leaves; what a block page looked like), which you may draw on, saying things once. Every item in the facts must get exactly one entry in its own list, in the order given, and no entry may name an item that is not in the facts. The Slack entries are for developers: concrete, host first, what to do; the email entries are for the leadership trio: what happened and what it means. The two are different pieces of writing, not a shortened copy of each other. If "previous_text" is given, do not reuse its sentences or openers."""
 
@@ -436,6 +440,8 @@ def _entry_problems(entry: dict, item: dict, where: str, portal_host: str) -> li
     if not isinstance(text, str) or not text.strip():
         return [f"{where} {item['id']}: empty"]
     limit = SLACK_ENTRY_MAX_CHARS if where.startswith("slack") else EMAIL_ENTRY_MAX_CHARS
+    if item["section"] in ("still", "slack_nudge"):
+        limit = NUDGE_MAX_CHARS + (len(_OPPOSITE) + 1 if item["why"] == _OPPOSITE else 0)
     if len(text) > limit:
         out.append(f"{where} {item['id']}: too long ({len(text)} chars)")
     low = text.lower()
@@ -449,8 +455,14 @@ def _entry_problems(entry: dict, item: dict, where: str, portal_host: str) -> li
         if re.fullmatch(r"\d+(\.\d+)+", h):          # a version number, not a host
             continue
         out.append(f"{where} {item['id']}: names a host that is not its own ({h})")
-    for h in item["hosts"]:
-        if h.lower() not in low and _short(h).lower() not in low:
+    missing = [h for h in item["hosts"] if h.lower() not in low and _short(h).lower() not in low]
+    if len(item["hosts"]) > HOSTS_NAMED_MAX and missing:
+        # six names and "and N more" is the form for a long list (Howie 16:30)
+        named = len(item["hosts"]) - len(missing)
+        if named < HOSTS_NAMED_MAX or f"and {len(missing)} more" not in low:
+            out.append(f"{where} {item['id']}: with {len(item['hosts'])} hosts, name {HOSTS_NAMED_MAX} and say 'and {len(item['hosts']) - HOSTS_NAMED_MAX} more'")
+    else:
+        for h in missing:
             out.append(f"{where} {item['id']}: does not name {h}")
     # dates
     for d in _dates_in(text):
@@ -497,7 +509,7 @@ def _entry_problems(entry: dict, item: dict, where: str, portal_host: str) -> li
     # severity words: never another item's; on Slack, always its own (Howie 15:38: "you
     # should identify if it's a medium, informational, or a low")
     own = set(SEVERITY_WORDS.get((item.get("severity") or "").upper(), ()))
-    if where.startswith("slack") and item.get("severity_word") and not re.search(
+    if (where.startswith("slack") or item["section"] == "still") and item.get("severity_word") and not re.search(
             r"(?<![a-z-])" + re.escape(item["severity_word"].lower()) + r"(?![a-z-])", low):
         out.append(f"{where} {item['id']}: does not say its severity ({item['severity_word']})")
     for w in ALL_SEVERITY_WORDS:
@@ -627,16 +639,19 @@ def _hosts_words(hosts: list) -> str:
         return ""
     if len(hs) == 1:
         return hs[0]
+    if len(hs) > HOSTS_NAMED_MAX:
+        return ", ".join(hs[:HOSTS_NAMED_MAX]) + f" and {len(hs) - HOSTS_NAMED_MAX} more"
     return ", ".join(hs[:-1]) + " and " + hs[-1]
 
 
 def _para(it: dict) -> str:
     w = _hosts_words(it["hosts"])
     what = it["what"].rstrip(".")
-    if it["section"] == "still":
-        # Howie 15:32: "way too long and detailed." A nudge is one line; the detail is in the
-        # portal. The one thing it may add is the sentence that relates it to an item above.
-        s = f"{what}" + (f" on {w}" if w and w.lower() not in what.lower() else "") + "."
+    if it["section"] in ("still", "slack_nudge"):
+        # Howie 15:32: "way too long and detailed"; 16:32: "way too wordy". A nudge is ONE
+        # line: the grade, the problem in plain words, the hosts. The detail is in the portal.
+        # The one thing it may add is the sentence that relates it to an item above.
+        s = _sev_prefix(it) + f"{what}" + (f" on {w}" if w and w.lower() not in what.lower() else "") + "."
         if it["why"] == _OPPOSITE:
             s += " " + _OPPOSITE
         return s
@@ -664,6 +679,13 @@ def _para(it: dict) -> str:
     if it["fix"]:
         s += " " + it["fix"].rstrip(".") + "."
     return s
+
+
+def _closing(n: int) -> str:
+    if n == 0:
+        return ""
+    head = {1: "It isn't urgent.", 2: "Neither one is urgent."}.get(n, "None of these is urgent.")
+    return head + " If you own one of those boxes, it's a quick fix when you get a chance."
 
 
 def _sev_prefix(it: dict) -> str:
@@ -699,8 +721,8 @@ def fallback(f: dict) -> dict:
                        f"they're in the portal if you're curious." if small else ""),
         "slack": {
             "changed": [{"id": it["id"], "text": _sev_prefix(it) + _para(it)} for it in kc],
-            "nudge": [{"id": it["id"], "text": _sev_prefix(it) + _para(it)} for it in kn],
-            "closing": "Neither one is urgent. If you own one of those boxes, it's a quick fix when you get a chance." if kn else "",
+            "nudge": [{"id": it["id"], "text": _para(it)} for it in kn],
+            "closing": _closing(len(kn)),
         },
     }
 
@@ -762,7 +784,7 @@ def render_html(out: dict, f: dict, *, brand: dict, logo_cid: str, local_end: da
         rows.append(f'<tr><td class="px" style="background:#FFFFFF;padding:22px 32px 0;">'
                     f'<div style="font-family:{FONT};font-size:12px;letter-spacing:.08em;text-transform:uppercase;'
                     f'color:{PURPLE};font-weight:700;">Still sitting there</div>'
-                    + _p(" ".join(e.get("text", "").strip() for e in out["still_open"]), extra="margin-top:8px;")
+                    + "".join(_p(e.get("text", "").strip(), extra="margin-top:8px;") for e in out["still_open"])
                     + '</td></tr>')
     if out.get("small_line"):
         rows.append(f'<tr><td class="px" style="background:#FFFFFF;padding:18px 32px 0;">'
@@ -799,7 +821,7 @@ def render_text(out: dict, f: dict, *, brand: dict, local_end: datetime, portal_
     for e in out.get("fixed", []):
         lines += [e.get("text", ""), ""]
     if out.get("still_open"):
-        lines += ["Still sitting there: " + " ".join(e.get("text", "").strip() for e in out["still_open"]), ""]
+        lines += ["Still sitting there:"] + [e.get("text", "").strip() for e in out["still_open"]] + [""]
     if out.get("small_line"):
         lines += [out["small_line"], ""]
     if portal_url:

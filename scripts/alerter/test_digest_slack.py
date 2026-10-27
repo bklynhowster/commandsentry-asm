@@ -63,6 +63,22 @@ ROWS = (
 )
 
 
+def _mh(rows):
+    """The same rows with the developer-side Moderates raised to Moderate-high: since Howie's
+    16:33 ruling ("These missing security headers are nonsense") a nudge is Moderate-high and
+    up, so the merge/cap/timer tests need rows that clear the floor."""
+    return [r[:3] + ("MODERATE-HIGH",) + r[4:] if r[3] == "MODERATE" and ds.is_developer(r[2], "") else r for r in rows]
+
+
+def test_a_moderate_never_nudges_the_channel():
+    """Howie 16:33: "These missing security headers are nonsense ... if there's something
+    that's important that's been ignored for a while, we can bring it up." """
+    assert ds.NUDGE_FLOOR == ("CRITICAL", "HIGH", "MODERATE-HIGH")
+    assert ds.nudge_items(_items(ROWS), None, NOW) == [], "today's Prodex population is all Moderate: no nudge, no post"
+    assert ds.nudge_items(_items(_mh(ROWS)), None, NOW) != []
+    assert ds.changed_items({"ticket": [{"kind": "finding", "severity": "MODERATE", "title": "Missing security header: Content-Security-Policy", "family": "", "sites": ["q.prodexlabs.com"], "finding_ids": ["q:csp"]}]}) != [], "news stays Moderate and up"
+
+
 def test_the_allow_list_is_the_developer_side_and_everything_else_is_the_emails():
     assert ds.is_developer("Missing security header: Content-Security-Policy", "")
     assert ds.is_developer("Security headers missing or weak", "")
@@ -86,24 +102,24 @@ def test_the_allow_list_is_the_developer_side_and_everything_else_is_the_emails(
 
 
 def test_the_nudge_has_a_floor_a_unit_a_cap_and_merges_same_condition_pairs():
-    items = _items(ROWS)
+    items = _items(_mh(ROWS))
     n = ds.nudge_items(items, None, NOW)
     titles = [i["title"] for i in n]
     assert len(n) <= ds.NUDGE_MAX == 3
-    assert "Old weak ciphers" in titles[0] and titles[1].startswith("Security headers missing: Content-Security-Policy, Strict-Transport-Security")
+    assert titles[0] == "Old weak ciphers (3DES, BEAST) still offered" and titles[1] == "Security headers missing: CSP, HSTS"
     assert titles[2].startswith("BREACH"), "worst, then most hosts (5, 5, 3), then oldest"
     headers = n[1]
     assert headers["sites"] == sorted({f"{h}.prodexlabs.com" for h in ("www", "cooked", "preview", "azure-demo", "atlantis-gcp")})
     assert not any(f.endswith(":hstslow") for f in headers["finding_ids"]), "HSTS is LOW: below the floor"
     assert not any("dmarc" in f or "spf" in f or ":waf" in f for i in n for f in i["finding_ids"]), "the email's items never nudge the channel"
     assert "www:hdr2" in headers["finding_ids"], "'Security headers missing or weak' is the same condition: merged"
-    more = ROWS + [_row("php:ood", "php.prodexlabs.com", "Runs PHP 8.1.2: out of date — 3 published flaws fixed in later versions; update it", source="advisory_watch")]
+    more = _mh(ROWS + [_row("php:ood", "php.prodexlabs.com", "Runs PHP 8.1.2: out of date — 3 published flaws fixed in later versions; update it", source="advisory_watch")])
     n4 = ds.nudge_items(_items(more), None, NOW)
     assert len(n4) == 3 and not any("php:ood" in i["finding_ids"] for i in n4), "a fourth group waits for a later post"
 
 
 def test_the_nudge_waits_30_days_and_comes_back_on_the_timer():
-    items = _items(ROWS)
+    items = _items(_mh(ROWS))
     hdr = [r[0] for r in ROWS if r[2].startswith(("Missing security header", "Security headers missing"))]
     told = {f: {"last_full_at": NOW - timedelta(days=10)} for f in hdr}
     n = ds.nudge_items(items, told, NOW)
@@ -111,7 +127,7 @@ def test_the_nudge_waits_30_days_and_comes_back_on_the_timer():
     told = {f: {"last_full_at": NOW - timedelta(days=31)} for f in hdr}
     n = ds.nudge_items(items, told, NOW)
     assert any(i["title"].startswith("Security headers") for i in n), "31 days: due again"
-    young = _items([_row("y:csp", "y.prodexlabs.com", "Missing security header: Content-Security-Policy", first=NEWISH)])
+    young = _items([_row("y:csp", "y.prodexlabs.com", "Missing security header: Content-Security-Policy", sev="MODERATE-HIGH", first=NEWISH)])
     assert ds.nudge_items(young, None, NOW) == [], "younger than 30 days is news, not a nudge"
     low_only = _items([_row("l:hsts", "l.prodexlabs.com", "HSTS not enabled", sev="LOW")])
     assert ds.nudge_items(low_only, None, NOW) == [], "below the floor: never a nudge, even with room"
@@ -125,13 +141,13 @@ def test_section_one_and_the_exclusions():
                     {"kind": "blockpage", "severity": "", "title": "Something unrecognized is blocking in front of x", "sites": ["x.prodexlabs.com"]},
                     {"kind": "finding", "severity": "LOW", "title": "low thing", "family": "", "sites": ["z"], "finding_ids": ["z:l"]}],
          "done": [{"kind": "fixed", "title": "Fixed on b.prodexlabs.com: a thing.", "lines": []}]}
-    sel = ds.select(m, _items(ROWS + [_row("q:csp", "q.prodexlabs.com", "Missing security header: Content-Security-Policy")]), None, NOW)
+    sel = ds.select(m, _items(_mh(ROWS + [_row("q:csp", "q.prodexlabs.com", "Missing security header: Content-Security-Policy")])), None, NOW)
     kinds = [(i["kind"], i.get("slack_color")) for i in sel["changed"]]
     assert kinds == [("not_responding", ds.RED), ("finding", ds.RED), ("finding", ds.RED), ("fixed", ds.GREEN)]
     assert not any(i["kind"] in ("coverage", "blockpage") for i in sel["changed"]), "Sentry's own and the block pages are not developer news"
     assert not any("q:csp" in i["finding_ids"] for i in sel["nudge"]), "today's news is not also a nudge"
-    recs = ds.records(sel, {"cooked:3des": "MODERATE"})
-    assert ("cooked:3des", "MODERATE") in recs and not any(f.endswith(":csp") for f, _s in recs), \
+    recs = ds.records(sel, {"cooked:3des": "MODERATE-HIGH"})
+    assert ("cooked:3des", "MODERATE-HIGH") in recs and not any(f.endswith(":csp") for f, _s in recs), \
         "a condition that is news today on one host is not nudged on the others the same day"
     assert not any(f == "a:ab" for f, _s in ds.records(sel)), "section 1 is news, not a telling"
 
