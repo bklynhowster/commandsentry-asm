@@ -497,3 +497,42 @@ def test_a_nudge_is_one_graded_line_and_a_long_host_list_is_six_and_n_more():
     bad2 = "[Moderate-high] Compressed pages could leak a secret (BREACH) on h0, h1, h2, h3, h4, h5 and some others."
     assert any("name 6 and say 'and 14 more'" in p for p in dv._entry_problems({"id": "n9", "text": bad2}, it, "slack.nudge", ""))
     assert dv._closing(0) == "" and dv._closing(1).startswith("It isn't urgent.") and dv._closing(2).startswith("Neither one") and dv._closing(3).startswith("None of these is urgent.")
+
+
+# ── round 5, Howie 17:43 and 17:53: the grade as a pill, a host name in bold, everywhere ──
+def test_the_still_rows_carry_the_grade_as_a_pill_from_the_facts_not_the_words():
+    f = _facts(); m = _model(); out = _good(f)
+    html = dv.render_html(out, f, brand=BRAND, logo_cid=dd.LOGO_CID, local_end=m["local_end"],
+                          portal_url="https://prodexsentry.netlify.app", product_name="PRODEXsentry")
+    assert "[Moderate-high]" not in html                     # the bracket is gone from the line
+    ink, tint = dv.GRADE_COLORS["Moderate-high"]
+    assert f'background:{tint}' in html and f'color:{ink}' in html and '>Moderate-high</span>' in html
+    assert 'border-radius:999px' in html                     # it is a pill
+    assert 'text-transform:uppercase' not in html.split("Still sitting there")[0][-400:]
+    # the word on the pill is the item's own, whatever the writer wrote
+    assert dv.split_grade("[moderate high] x on a.") == ("Moderate-high", "x on a.")
+    assert dv.split_grade("no grade here.") == ("", "no grade here.")
+    assert dv.grade_pill("") == ""
+    # a quiet host has no grade: its row has no empty pill cell
+    assert 'colspan="2"' in dv.grade_row("", "quiet line", first=True)
+    assert 'colspan="2"' not in dv.grade_row("Low", "x", first=True)
+    assert "border-top:1px solid" not in dv.grade_row("Low", "x", first=True)
+    assert "border-top:1px solid" in dv.grade_row("Low", "x", first=False)
+
+
+def test_a_host_name_is_bold_wherever_it_appears_full_or_short_and_never_inside_a_longer_one():
+    f = _facts(); m = _model(); out = _good(f)
+    html = dv.render_html(out, f, brand=BRAND, logo_cid=dd.LOGO_CID, local_end=m["local_end"],
+                          portal_url="https://prodexsentry.netlify.app", product_name="PRODEXsentry")
+    b = '<span style="font-weight:600;">'
+    assert b + "valorep.prodexlabs.com</span>" in html        # the opening paragraph, full name
+    for short in ("l3h-ss", "prod", "l3h-nh", "l3h-ivs", "bitec", "demo", "highcom"):
+        assert b + short + "</span>" in html                    # the block-page and firewall lines, short names
+    assert b + "prod</span>.prodexlabs" not in html             # never a short name inside the long one
+    assert html.count("<span style=\"font-weight:600;\"><span") == 0
+    # a short name that ends a sentence is still bold; 'prod' inside 'production' is not
+    hosts = ["prod.prodexlabs.com", "cooked.prodexlabs.com"]
+    assert dv.mark_hosts("missing on prod and cooked.", hosts) == f"missing on {b}prod</span> and {b}cooked</span>."
+    assert dv.mark_hosts("the production box", hosts) == "the production box"
+    assert dv.mark_hosts("Prod.prodexlabs.com is up", hosts) == f"{b}Prod.prodexlabs.com</span> is up"
+    assert dv.all_hosts(f) == sorted({h for it in f["items"] for h in it["hosts"]})
