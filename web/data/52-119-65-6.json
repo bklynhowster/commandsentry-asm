@@ -10,18 +10,13 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-10-27T13:10:45Z_020f8570",
-    "started_at": "2026-10-27T13:10:45Z",
-    "completed_at": "2026-10-27T13:12:46Z",
-    "duration_seconds": 121,
+    "id": "scan_2026-10-27T18:52:56Z_636dd348",
+    "started_at": "2026-10-27T18:52:56Z",
+    "completed_at": "2026-10-27T18:53:33Z",
+    "duration_seconds": 37,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
-      "fingerprintx",
-      "httpx",
-      "naabu",
-      "testssl",
-      "wafw00f",
       "whois"
     ]
   },
@@ -30,7 +25,7 @@
     "subdomain_count": 1,
     "live_subdomain_count": 1,
     "host_count": 1,
-    "service_count": 2,
+    "service_count": 0,
     "newest_cert_expiry_days": null,
     "top_hosting_org": "Natural Wireless, LLC",
     "platforms": []
@@ -41,13 +36,13 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "manual",
-      "first_discovered": "2026-10-27T13:12:46Z",
-      "last_seen": "2026-10-27T13:12:46Z",
+      "first_discovered": "2026-10-27T18:53:33Z",
+      "last_seen": "2026-10-27T18:53:33Z",
       "tags": [],
       "reachability": {
-        "live": true,
-        "http_status": 500,
-        "title": "The URL you requested has been blocked"
+        "live": false,
+        "http_status": null,
+        "title": null
       },
       "probe_status": {},
       "hosts": [
@@ -62,34 +57,7 @@
           "is_private": false
         }
       ],
-      "services": [
-        {
-          "ip": "52.119.65.6",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "52.119.65.6",
-          "port": 443,
-          "protocol": "tcp",
-          "service": "https",
-          "banner": null,
-          "tls": true,
-          "cert": {
-            "san": [
-              "No",
-              "SAN,",
-              "browsers",
-              "are",
-              "complaining"
-            ],
-            "self_signed": false
-          }
-        }
-      ],
+      "services": [],
       "dns": {
         "a": [],
         "aaaa": [],
@@ -106,15 +74,15 @@
         "tech": []
       },
       "waf": {
-        "detected": true,
-        "vendor": "FortiWeb",
-        "confidence": "high"
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
       }
     }
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-10-27T07:07:31Z_801149ca",
+    "since_scan": "scan_2026-10-27T13:10:45Z_020f8570",
     "added": {
       "subdomains": [],
       "services": [],
@@ -122,37 +90,36 @@
     },
     "removed": {
       "subdomains": [],
-      "services": [],
+      "services": [
+        {
+          "subdomain": "52.119.65.6",
+          "ip": "52.119.65.6",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "52.119.65.6",
+          "ip": "52.119.65.6",
+          "port": 443,
+          "protocol": "tcp"
+        }
+      ],
       "hosts": []
     },
     "changed": {
       "fingerprint": [],
       "cert": [],
-      "reachability": []
+      "reachability": [
+        {
+          "subdomain": "52.119.65.6",
+          "from": true,
+          "to": false,
+          "is_root": true
+        }
+      ]
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-09-28T19:02:49Z_47e51161",
-      "started_at": "2026-09-28T19:02:49Z",
-      "completed_at": "2026-09-28T19:04:25Z",
-      "subdomain_count": 1,
-      "live_subdomain_count": 1,
-      "host_count": 1,
-      "service_count": 2,
-      "subdomain_names": [
-        "52.119.65.6"
-      ],
-      "ports_by_sub": {
-        "52.119.65.6": {
-          "52.119.65.6": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {}
-    },
     {
       "scan_id": "scan_2026-09-29T01:36:36Z_07676c69",
       "started_at": "2026-09-29T01:36:36Z",
@@ -2649,6 +2616,22 @@
             443
           ]
         }
+      },
+      "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-10-27T18:52:56Z_636dd348",
+      "started_at": "2026-10-27T18:52:56Z",
+      "completed_at": "2026-10-27T18:53:33Z",
+      "subdomain_count": 1,
+      "live_subdomain_count": 1,
+      "host_count": 1,
+      "service_count": 0,
+      "subdomain_names": [
+        "52.119.65.6"
+      ],
+      "ports_by_sub": {
+        "52.119.65.6": {}
       },
       "tech_versions": {}
     }
