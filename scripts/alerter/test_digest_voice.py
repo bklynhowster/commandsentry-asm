@@ -73,16 +73,16 @@ def _good(f):
         by[it["section"]].append(it)
     c1 = by["changed"][0]
     out = {"subject": "one box went quiet", "headline": "One box went quiet.",
-           "opening": "Morning. Short version: one of our boxes went quiet, and that's the only real news today.",
+           "opening": "Here's your morning briefing. One of our boxes went quiet, and that's the only real news today.",
            "email": [], "fixed": [], "still_open": [], "small_line": "4 small things also turned up, none of them need anybody, they're in the portal if you're curious.",
            "slack": {"changed": [], "nudge": [], "closing": "Neither one is urgent. If you own one of those boxes, it's a ten-minute fix when you get a chance."}}
-    out["email"].append({"id": c1["id"], "text": "valorep.prodexlabs.com hasn't answered since Oct 22, and its name doesn't resolve on the internet anymore, so it looks like it was taken down for good. If that's right, it drops off the portal on its own on Nov 2."})
+    out["email"].append({"id": c1["id"], "text": "valorep.prodexlabs.com looks like it's been down since Oct 22. If it doesn't come back by Nov 2, it drops off the portal on its own and we don't have to talk about it anymore."})
     for it in by["changed"][1:]:
-        out["email"].append({"id": it["id"], "text": "l3h-ss, prod, l3h-nh and l3h-ivs all turned away Sentry's test traffic, which is a good sign. Something is standing guard in front of them, a firewall or a security device of some kind, and Sentry is still working out which."})
+        out["email"].append({"id": it["id"], "text": "Since yesterday, l3h-ss, prod, l3h-nh and l3h-ivs have started blocking our probes. We send every box a few probes to check whether there's some kind of security device sitting in front of it, like a WAF. Something is now standing guard in front of those four, and we're still working out which product it is."})
     for it in by["still"]:
         out["still_open"].append({"id": it["id"], "text": "[Moderate-high] The firewall in front of bitec, demo and highcom is only watching, not blocking, since Oct 22, the most serious thing open."})
     for it in by["slack_changed"]:
-        out["slack"]["changed"].append({"id": it["id"], "text": "valorep.prodexlabs.com stopped answering on Oct 22 and its name doesn't resolve anymore, so it looks like it was taken down. If somebody expects it to be up, that's worth a look."})
+        out["slack"]["changed"].append({"id": it["id"], "text": "valorep.prodexlabs.com looks down since Oct 22. If somebody expects it to be up, that's worth a look; otherwise it drops off the portal on Nov 2."})
     for it in by["slack_nudge"]:
         out["slack"]["nudge"].append({"id": it["id"], "text": "[Moderate] Two security headers are missing on prodexlabs.com and cooked: they don't send Strict-Transport-Security or Content-Security-Policy. A couple of lines of server config."})
     return out
@@ -101,7 +101,9 @@ def test_the_sheet_is_closed_and_every_item_has_an_id_hosts_dates_and_numbers():
     assert f["small_count"] == 4 and f["sentry_only"] == []
     req = dv.required_ids(f)
     assert len(req["email"]) == 2 and req["still_open"] == ["s1"] and req["slack_nudge"] == ["n1"]
-    assert c1["detail"] == ["valorep.prodexlabs.com: no answer since Oct 22, 2:25 PM. Its name no longer exists on the internet. Leaves the portal on Nov 2."]
+    assert c1["detail"] == ["valorep.prodexlabs.com: looks down since Oct 22. Drops off the portal on Nov 2 if it stays down."], \
+        "Howie 18:22: nobody cares that the name does not resolve; the clock time goes too"
+    assert "resolve" not in " ".join(c1["detail"]) + c1["why"] and "Sentry" not in c1["why"]
 
 
 def test_the_same_thing_on_several_hosts_is_one_item_and_a_block_page_is_good_news():
@@ -111,28 +113,43 @@ def test_the_same_thing_on_several_hosts_is_one_item_and_a_block_page_is_good_ne
     c2 = f["items"][1]
     assert c2["kind"] == "blockpage" and len(c2["hosts"]) == 4 and c2["hosts"][0] == "l3h-ss.prodexlabs.com"
     assert "standing guard" in c2["what"] and "good news" in c2["why"] and "4" in c2["numbers"]
-    assert len(c2["detail"]) == 4 and c2["detail"][1].startswith("prod.prodexlabs.com: On Oct 27")
+    assert len(c2["detail"]) == 4 and c2["detail"][1] == "prod.prodexlabs.com: started blocking the probes on Oct 27."
     assert "Oct 27" in c2["dates"]
     assert "unrecognized" not in c2["what"], "the 3l title ('Something unrecognized is blocking') is not the voice's"
     para = dv._para(c2)
-    assert para.startswith("l3h-ss, prod, l3h-nh and l3h-ivs turned away Sentry's three attack-shaped test requests, the SQL injection, the script injection and the file-path trick, with a block page, which is good news")
-    assert dv._para(dict(c2, hosts=c2["hosts"][:1])).startswith("l3h-ss.prodexlabs.com turned away Sentry's three attack-shaped test requests")
-    assert "3" in c2["numbers"] and "1" in c2["numbers"], "the probe's spelled numbers are the item's own"
-    assert c2["why"].startswith("Sentry sent one plain, ordinary request and then three harmless requests shaped like the classic attacks"), "Howie 15:02: say what Sentry actually did"
+    assert para == ("Since yesterday, l3h-ss, prod, l3h-nh and l3h-ivs have started blocking our probes, which is good news. "
+                    + dv.THE_PROBE + " Something is now standing guard in front of them, and we're still working out which product it is.")
+    assert dv._para(dict(c2, hosts=c2["hosts"][:1])).startswith("Since yesterday, l3h-ss.prodexlabs.com has started blocking our probes, which is good news.")
+    assert "in front of it, and we're" in dv._para(dict(c2, hosts=c2["hosts"][:1]))
+    assert "new" not in para.replace("news", ""), "Howie 18:33: these boxes are not new, what is new is that they block"
+    assert "already in our fleet" in c2["why"]
+    assert dv.THE_PROBE in c2["why"] and c2["why"].startswith("These boxes were already in our fleet"), \
+        "Howie 18:22: the probes that determine whether there is some type of security device in front, like a WAF; 18:33: not new boxes"
+    for word in ("Sentry", "test", "attack", "injection", "vendor", "library"):
+        assert word not in c2["why"] and word not in " ".join(c2["detail"]) and word not in c2["what"], word
+    assert all(len(sent.split()) <= 30 for sent in para.split(". ")), "short sentences"
     # one block page stays as it was shaped (no merge, its own host in the title)
     m = _model()
     m["ticket"] = [t for t in m["ticket"] if t.get("kind") != "blockpage"][:0] + [t for t in m["ticket"] if t.get("kind") == "blockpage"][:1]
     f1 = dv.facts(m)
     b1 = [i for i in f1["items"] if i["kind"] == "blockpage"]
     assert len(b1) == 1 and b1[0]["hosts"] == ["l3h-ss.prodexlabs.com"]
-    # a quiet host's paragraph carries the detail (why, and when it leaves), once
+    # a quiet host's paragraph is Howie's two sentences (18:22), nothing about why
     c1 = f["items"][0]
     p1 = dv._para(c1)
-    assert p1.count("Nov 2") == 1 and "Its name no longer exists on the internet." in p1 and "now you know" in p1
-    assert p1.count("valorep") == 1 and "checks. No answer since Oct 22, 2:25 PM." in p1, "the host is named once"
-    two = dict(c1, hosts=["a.prodexlabs.com", "b.prodexlabs.com"], detail=["a.prodexlabs.com: no answer since Oct 22.", "b.prodexlabs.com: no answer since Oct 23."])
+    assert p1 == ("valorep.prodexlabs.com looks like it's been down since Oct 22. If it doesn't come back by Nov 2, "
+                  "it drops off the portal on its own and we don't have to talk about it anymore.")
+    assert dv._para(dict(c1, detail=["valorep.prodexlabs.com: looks down."])) == (
+        "valorep.prodexlabs.com looks like it's been down. If it doesn't come back in the next few days, "
+        "it drops off the portal on its own and we don't have to talk about it anymore.")
+    two = dict(c1, hosts=["a.prodexlabs.com", "b.prodexlabs.com"],
+               detail=["a.prodexlabs.com: looks down since Oct 22.", "b.prodexlabs.com: looks down since Oct 23. Drops off the portal on Nov 3 if it stays down."])
     p2 = dv._para(two)
-    assert p2.startswith("a and b have stopped answering Sentry's checks. a.prodexlabs.com: no answer since Oct 22. b.prodexlabs.com: no answer since Oct 23. Any that were taken down")
+    assert p2 == ("a since Oct 22 and b since Oct 23 look like they're down. Any that don't come back drop off the portal "
+                  "on their own, and we don't have to talk about them anymore.")
+    assert dv._plain_quiet("x.prodexlabs.com: no answer from Sentry's checks. Leaves the portal on Nov 9.") == \
+        "x.prodexlabs.com: looks down. Drops off the portal on Nov 9 if it stays down."
+    assert dv._plain_quiet("something else entirely") == "something else entirely"
     # a rating item names its hosts from its lines, so the writer may say them
     m = _model()
     m["ticket"].append({"kind": "rating", "severity": "", "title": "A site got riskier", "body": "x",
@@ -172,10 +189,10 @@ def test_the_free_text_fields_cannot_carry_a_number_or_date_that_is_nobodys():
     _refused(lambda o: o.__setitem__("small_line", "9 small things also turned up, none need anybody."), "small_line: a number")
     _refused(lambda o: o.__setitem__("subject", "3 boxes went quiet"), "subject: a number")
     _refused(lambda o: o.__setitem__("headline", "One box went quiet on Oct 3."), "headline: a date")
-    _refused(lambda o: o.__setitem__("opening", "Morning. Short version: since Monday one box is quiet."), "opening: a date")
+    _refused(lambda o: o.__setitem__("opening", "Here's your morning briefing. since Monday one box is quiet."), "opening: a date")
     f = _facts()
     o = _good(f)
-    o["opening"] = "Morning. Short version: 2 things since yesterday, 4 small ones in the portal, and it's Tuesday, Oct 22 was the day valorep went quiet."
+    o["opening"] = "Here's your morning briefing. 2 things since yesterday, 4 small ones in the portal, and it's Tuesday, Oct 22 was the day valorep went quiet."
     o["headline"] = "One box went quiet, one block page, 4 small things."
     assert dv.check(o, f, portal_url="https://prodexsentry.netlify.app") == [], "the day's own counts, one, the day, and an item's date pass"
 
@@ -223,12 +240,12 @@ def test_banned_words_are_whole_words_and_grading_words_are_refused():
     (one trip = a fallback day); a Moderate-high item called 'minor' passed."""
     f = _facts()
     o = _good(f)
-    o["opening"] = "Morning. Short version: the default settings on users' boxes are fine, a firewall is doing its job, and the most serious thing open is the one below."
+    o["opening"] = "Here's your morning briefing. the default settings on users' boxes are fine, a firewall is doing its job, and the most serious thing open is the one below."
     assert dv.check(o, f, portal_url="https://prodexsentry.netlify.app") == [], "whole words only: default, users, firewall are innocent; 'serious' ranks, it does not grade"
-    _refused(lambda o: o.__setitem__("opening", "Morning. Short version: HR has the list."), "banned word: 'hr'")
-    _refused(lambda o: o.__setitem__("opening", "Morning. Short version: this is not anyone's fault."), "banned word: 'fault'")
-    _refused(lambda o: o.__setitem__("opening", "Morning. Short version: this one is on us."), "banned word: 'on us'")
-    _refused(lambda o: o.__setitem__("opening", "Morning. Short version: nobody is getting fired over a header."), "banned word: 'fired'")
+    _refused(lambda o: o.__setitem__("opening", "Here's your morning briefing. HR has the list."), "banned word: 'hr'")
+    _refused(lambda o: o.__setitem__("opening", "Here's your morning briefing. this is not anyone's fault."), "banned word: 'fault'")
+    _refused(lambda o: o.__setitem__("opening", "Here's your morning briefing. this one is on us."), "banned word: 'on us'")
+    _refused(lambda o: o.__setitem__("opening", "Here's your morning briefing. nobody is getting fired over a header."), "banned word: 'fired'")
     _refused(lambda o: o["still_open"].__setitem__(0, {"id": "s1", "text": "[Moderate-high] The firewall in front of bitec, demo and highcom is only watching. A minor thing."}), "severity word 'minor'")
     _refused(lambda o: o["still_open"].__setitem__(0, {"id": "s1", "text": "[Moderate-high] The firewall in front of bitec, demo and highcom is only watching. Trivial, really."}), "severity word 'trivial'")
 
@@ -305,8 +322,8 @@ def test_a_nudge_with_a_date_or_a_since_is_refused():
 
 def test_job_talk_blame_and_vulnerable_are_refused():
     _refused(lambda o: o["slack"].__setitem__("closing", "Nobody's going to get fired over either one."), "banned word: 'fired'")
-    _refused(lambda o: o.__setitem__("opening", "Morning. This one's on us."), "banned word: 'on us'")
-    _refused(lambda o: o.__setitem__("opening", "Morning. Nothing for you to do today."), "banned word: 'nothing for you to do'")
+    _refused(lambda o: o.__setitem__("opening", "Here's your morning briefing. This one's on us."), "banned word: 'on us'")
+    _refused(lambda o: o.__setitem__("opening", "Here's your morning briefing. Nothing for you to do today."), "banned word: 'nothing for you to do'")
     _refused(lambda o: o["still_open"].__setitem__(0, {"id": "s1", "text": "bitec, demo and highcom are vulnerable behind a watching firewall since Oct 22."}),
              "banned word: 'vulnerable'")
 
@@ -412,24 +429,27 @@ def test_two_firewall_stories_say_they_are_opposites_and_say_what_sentry_sent():
     f = _facts()
     c2 = [it for it in f["items"] if it["kind"] == "blockpage"][0]
     s1 = [it for it in f["items"] if it["section"] == "still"][0]
-    assert "SQL injection" in c2["why"] and "script injection" in c2["why"] and "turned away" in c2["why"]
-    assert s1["why"] == "The same three attack-shaped requests that the hosts above turned away went straight through here: this firewall is watching, not blocking.", \
-        "Howie 15:32: the probe is described once; the firewall item refers back"
-    assert "SQL injection" not in s1["why"]
+    assert dv.THE_PROBE in c2["why"] and "block the probes" in c2["why"]
+    assert s1["why"] == "The same probes that the hosts above now block go straight through here. This firewall is watching, not blocking.", \
+        "Howie 15:32: the probes are explained once; the firewall item refers back"
+    assert "WAF" not in s1["why"] and "few probes" not in s1["why"]
     fb = dv.fallback(f)
     still = fb["still_open"][0]["text"]
     assert still == "[Moderate-high] A web firewall is there, but it's only watching on bitec, demo and highcom. " + s1["why"], "a nudge is one line plus the one sentence that relates it"
     assert "<ONE line, under 240 characters" in dv.SYSTEM and "ONCE, the first time it matters" in dv.SYSTEM
+    assert "WHO READS IT" in dv.SYSTEM and "never more than 30 words" in dv.SYSTEM and "like a WAF" in dv.SYSTEM
+    assert "test requests" not in dv.SYSTEM.split("THE EMAIL HE APPROVED")[1] and "resolve" not in dv.SYSTEM.split("THE EMAIL HE APPROVED")[1]
     import re as _re
     assert not any(_re.search(r"\b" + _re.escape(h.split(".")[0]) + r"\b", s1["why"]) for h in c2["hosts"]), "the other item's hosts are never named (the host rule would refuse it)"
     assert dv.check(dv.fallback(f), f, portal_url="https://prodexsentry.netlify.app") == []
     # no block page on the sheet: no "opposite" line
     f2 = dv.facts(_model() | {"ticket": []}, still_open=_still())
     s1b = [it for it in f2["items"] if it["section"] == "still"][0]
-    assert "hosts above" not in s1b["why"] and "SQL injection" in s1b["why"] and "went straight through" in s1b["why"], "alone, the firewall item explains the probe itself"
+    assert "hosts above" not in s1b["why"] and dv.THE_PROBE in s1b["why"] and "go straight through" in s1b["why"], "alone, the firewall item explains the probes itself"
     assert dv.fallback(f2)["still_open"][0]["text"] == "[Moderate-high] A web firewall is there, but it's only watching on bitec, demo and highcom."
     # the writer's instructions carry his profile's words and the approved morning
-    assert "He dictates." in dv.SYSTEM and "Short version:" in dv.SYSTEM and "THE EMAIL HE APPROVED" in dv.SYSTEM
+    assert "He dictates." in dv.SYSTEM and "Here's your morning briefing." in dv.SYSTEM and "THE EMAIL HE APPROVED" in dv.SYSTEM
+    assert 'never "Short version:"' in dv.SYSTEM
     assert "Do not invent folksy idioms" in dv.SYSTEM and "firewalls in opposite states" in dv.SYSTEM
 
 
@@ -536,3 +556,62 @@ def test_a_host_name_is_bold_wherever_it_appears_full_or_short_and_never_inside_
     assert dv.mark_hosts("the production box", hosts) == "the production box"
     assert dv.mark_hosts("Prod.prodexlabs.com is up", hosts) == f"{b}Prod.prodexlabs.com</span> is up"
     assert dv.all_hosts(f) == sorted({h for it in f["items"] for h in it["hosts"]})
+
+
+# ── Howie 18:15/18:22: plain, how we talk; never the scanner's mechanics; no run-ons ──────
+def test_a_run_on_sentence_and_scanner_mechanics_are_refused():
+    f = _facts()
+    long = ("Sentry sent one plain request and then three attack-shaped ones, a SQL injection, a script injection and a "
+            "give-me-a-file-off-your-disk trick, and both hosts turned the attack-shaped ones away with a block page Sentry "
+            "doesn't recognize yet.")
+    assert len(long.split()) == 36
+    _refused(lambda o: o["email"].__setitem__(1, {"id": "c2", "text": "l3h-ss, prod, l3h-nh and l3h-ivs are new. " + long}),
+             "a sentence of 36 words")
+    _refused(lambda o: o["email"].__setitem__(1, {"id": "c2", "text": "l3h-ss, prod, l3h-nh and l3h-ivs turned away our test traffic, which is good."}),
+             "banned word: 'test traffic'")
+    _refused(lambda o: o["email"].__setitem__(0, {"id": "c1", "text": "valorep.prodexlabs.com looks down since Oct 22 and its name doesn't resolve anymore. It drops off the portal on Nov 2."}),
+             "banned word: 'resolve'")
+    _refused(lambda o: o["opening"].__setitem__ if False else o.__setitem__("opening", "Here's your morning briefing. our DNS is fine and one box looks down."),
+             "banned word: 'dns'")
+    # 32 words is the cap for the writer; the fallback and the careful answer sit well under it
+    o = _good(f)
+    o["opening"] = dv.OPENER + " " + " ".join(["word"] * 32) + "."
+    assert dv.check(o, f, portal_url="https://prodexsentry.netlify.app") == []
+    o["opening"] = dv.OPENER + " " + " ".join(["word"] * 33) + "."
+    assert any(p.startswith("a sentence of 33 words") for p in dv.check(o, f, portal_url="https://prodexsentry.netlify.app"))
+    fb = dv.fallback(f)
+    for e in fb["email"] + fb["still_open"] + fb["slack"]["changed"] + fb["slack"]["nudge"]:
+        for sent in e["text"].split(". "):
+            assert len(sent.split()) <= 30, sent
+    assert dv._plain_block("l3h-ss.prodexlabs.com: On Oct 27 it turned away the attack-style test strings with a page no vendor the block-page library knows (no page captured).") == \
+        "l3h-ss.prodexlabs.com: started blocking the probes on Oct 27."
+    assert dv._plain_block("x.prodexlabs.com: something else") == "x.prodexlabs.com: started blocking the probes."
+    # the slack half's quiet-host item carries the same plain lines, and the fallback's line is Howie's
+    k1 = [it for it in f["items"] if it["section"] == "slack_changed"][0]
+    assert k1["detail"] == ["valorep.prodexlabs.com: looks down since Oct 22. Drops off the portal on Nov 2 if it stays down."]
+    assert fb["slack"]["changed"][0]["text"].startswith("valorep.prodexlabs.com looks like it's been down since Oct 22.")
+
+
+def test_the_email_opens_with_the_morning_briefing_line_and_new_boxes_are_the_only_new_thing():
+    """Howie 18:33: "you don't say 'short version.' You can say, 'Here's your morning briefing.'"
+    and "Did these boxes not exist before? ... say something like 'There are some new boxes
+    that have joined our fleet'" (only for the item that IS new boxes)."""
+    f = _facts()
+    _refused(lambda o: o.__setitem__("opening", "Morning. Short version: one box looks down."), "banned word: 'short version'")
+    _refused(lambda o: o.__setitem__("opening", "Morning. One box looks down."), "opening: does not start with \"Here's your morning briefing.\"")
+    for n in (0, 1, 2):
+        m = _model()
+        m["do"], m["ticket"] = m["do"][:n], ([] if n < 2 else m["ticket"])
+        fb = dv.fallback(dv.facts(m))
+        assert fb["opening"].startswith("Here's your morning briefing. "), fb["opening"]
+        assert "Short version" not in fb["opening"]
+    m = _model()
+    m["ticket"].append({"kind": "assets", "severity": "", "title": "2 new hosts found", "sites": [], "why": "", "do": "", "tag": "",
+                        "lines": ["a.prodexlabs.com: first seen Oct 27, not rated yet", "b.prodexlabs.com: first seen Oct 27, rated moderate"]})
+    f2 = dv.facts(m)
+    new = [it for it in f2["items"] if it["kind"] == "assets"][0]
+    assert new["hosts"] == ["a.prodexlabs.com", "b.prodexlabs.com"] and "joined our fleet" in new["why"]
+    assert dv._para(new) == "Some new boxes have joined our fleet: a and b. They get the same checks as everything else from here on."
+    assert dv._para(dict(new, hosts=new["hosts"][:1])) == "A new box has joined our fleet: a.prodexlabs.com. It gets the same checks as everything else from here on."
+    assert dv.check(dv.fallback(f2), f2, portal_url="https://prodexsentry.netlify.app") == []
+    assert '"N new hosts found" is about new boxes' in dv.SYSTEM
