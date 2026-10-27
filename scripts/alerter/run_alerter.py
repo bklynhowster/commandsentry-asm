@@ -81,6 +81,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import digest_daily as _dd  # noqa: E402 — KB 12 job 3l: the daily list (buckets, bar, email-safe HTML)
 import digest_weekly as _dw  # noqa: E402 — KB 12 job 3l slice 2: the Monday weekly
 import approval as _ap  # noqa: E402 — job 3l: Howie approves before anyone else gets it
+import digest_voice as _dv  # noqa: E402 — 3l round 5: the daily in Howie's voice
+import digest_slack as _ds  # noqa: E402 — 3l round 5: the #on-call post
 from datetime import datetime, timedelta, timezone
 from html import escape, unescape
 
@@ -1744,6 +1746,104 @@ def _told_record(conn, records) -> int:
         return 0
 
 
+def _read_slack_told(conn):
+    """{finding_id: row} from public.slack_told, or None when it cannot be read (the table
+    missing before migration 20261027a): None means everything is untold."""
+    cols = ("finding_id", "first_told_at", "last_full_at", "reminders", "closed_seen_at")
+    try:
+        with conn.transaction():
+            with conn.cursor() as c2:
+                c2.execute(SQL_SLACK_TOLD_READ)
+                return {r[0]: dict(zip(cols, r)) for r in c2.fetchall()}
+    except Exception as exc:                       # pragma: no cover - live only
+        print(f"  slack record read failed ({exc!r}) — the nudge treats everything as untold")
+        return None
+
+
+def _slack_told_mark_closed(conn) -> int:
+    try:
+        with conn.transaction():
+            with conn.cursor() as c2:
+                c2.execute(SQL_SLACK_TOLD_MARK_CLOSED)
+                n = c2.rowcount
+        conn.commit()
+        return n if n and n > 0 else 0
+    except Exception as exc:                       # pragma: no cover - live only
+        print(f"  slack record mark-closed failed ({exc!r}) — carrying on")
+        return 0
+
+
+def _slack_told_record(conn, records) -> int:
+    """(finding_id, severity) for every nudge member in a post that worked. Never fatal."""
+    if not records:
+        return 0
+    try:
+        with conn.transaction():
+            with conn.cursor() as c2:
+                c2.executemany(SQL_SLACK_TOLD_RECORD, [(f,) for f, *_rest in records])
+        conn.commit()
+        return len(records)
+    except Exception as exc:                       # pragma: no cover - live only
+        print(f"  slack record write failed ({exc!r}) — these will be nudged again")
+        return 0
+
+
+def _post_slack(webhook: str, payload: dict, *, post=None) -> tuple[bool, str]:
+    """ONE POST to the incoming webhook. (ok, note): the note is a fixed message plus the HTTP
+    status only, never an exception's text (which can carry the URL: plan v2 M4)."""
+    if not webhook:
+        return False, "no webhook set"
+    body = json.dumps(payload).encode("utf-8")
+    try:
+        if post is not None:
+            code = int(post(webhook, body))
+        else:
+            req = urllib.request.Request(webhook, data=body, method="POST",
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                code = int(r.status)
+    except urllib.error.HTTPError as e:            # pragma: no cover - live only
+        return False, f"Slack answered HTTP {int(e.code)}"
+    except Exception as e:
+        return False, f"the post failed before Slack answered ({type(e).__name__})"
+    return (code == 200), ("posted" if code == 200 else f"Slack answered HTTP {code}")
+
+
+def _voice_on() -> bool:
+    return (_env("ALERTER_VOICE", default="") or "").strip().lower() == "howie"
+
+
+def _slack_on() -> bool:
+    return (_env("ALERTER_SLACK", default="") or "").strip().lower() in ("on", "true", "1", "yes")
+
+
+def _still_open_picks(open_items, changed_ids, now, told):
+    """The two or three worst open things that are not today's news (Howie, 09:00), worst then
+    oldest; `recent` marks one first seen inside two weeks, whose date may be said."""
+    picks = []
+    for it in open_items:
+        if (it.get("severity") or "").upper() not in _ds.MODERATE_PLUS:
+            continue
+        if any(f in changed_ids for f in it.get("finding_ids", [])):
+            continue
+        it["recent"] = bool(it.get("since") is not None and now - it["since"] <= timedelta(days=14))
+        picks.append(it)
+    picks.sort(key=lambda g: (_ds.SEV_RANK.get((g.get("severity") or "").upper(), 9), g.get("since") or now, g.get("title", "")))
+    return picks[:_dv.STILL_OPEN_MAX]
+
+
+def _open_items(rows, names, now):
+    """group_problems over the open Moderate+ rows, each item with `since` = its earliest
+    first sighting (column 9)."""
+    first = {r[0]: r[9] for r in rows if len(r) > 9 and r[9] is not None}
+    details = {r[0]: (r[7] if len(r) > 7 else "", list(r[8] or []) if len(r) > 8 else []) for r in rows}
+    items = _dd.group_problems([r for r in rows if not _dd.dw_words.is_guess(r[2])], names, details=details)
+    for g in items:
+        seen = [first[f] for f in g.get("finding_ids", []) if f in first]
+        g["since"] = min(seen) if seen else None
+    return items
+
+
 def _weekly_model(conn, *, now, brand):
     """Every read the weekly needs, then digest_weekly.build_weekly. The week is the seven
     whole local days before today; `opened` / `closed` run on to now so a rating that
@@ -1839,25 +1939,163 @@ SQL_PENDING_RETRY = """
 UPDATE public.digest_pending SET status = %s, error = %s WHERE id = %s
 """
 
+# ── 3l round 5 (2026-10-27): the daily in Howie's voice, and the Slack half ────────────
+# Every open Moderate+ problem, member by member, with its first sighting: the daily's
+# "Still sitting there" picks and the Slack nudge both read this (same 10 columns as
+# SQL_OPEN_SERIOUS, first_detected_at last). No parameters.
+SQL_OPEN_PROBLEMS = """
+SELECT f.finding_id, r.scope_id, f.title, f.severity::text, f.current_status::text,
+       f.source::text, f.last_observed_at, f.description, f.cve, f.first_detected_at
+  FROM public.v_fleet_open_reps r
+ CROSS JOIN LATERAL unnest(r.member_finding_ids) AS m(fid)
+  JOIN public.findings f ON f.finding_id = m.fid
+ WHERE f.severity::text IN ('CRITICAL', 'HIGH', 'MODERATE-HIGH', 'MODERATE')
+ ORDER BY CASE f.severity::text WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
+               WHEN 'MODERATE-HIGH' THEN 3 ELSE 4 END, f.first_detected_at, r.scope_id, f.finding_id
+"""
+
+# The text of the last digest of this kind that actually went out: "don't reuse yesterday's
+# sentences" (plan v2 m5). None on the first run.
+SQL_PENDING_LAST_SENT_TEXT = """
+SELECT text_body FROM public.digest_pending
+ WHERE kind = %s AND status = 'sent'
+ ORDER BY sent_at DESC NULLS LAST, id DESC LIMIT 1
+"""
+
+# A Slack half that failed since the last post: Howie's copy says so (plan v2 M3).
+SQL_PENDING_SLACK_LAST_FAILED = """
+SELECT built_at, slack_error, slack_payload FROM public.digest_pending
+ WHERE kind = %s AND slack_status = 'failed'
+   AND built_at > coalesce((SELECT max(slack_posted_at) FROM public.digest_pending
+                             WHERE kind = %s AND slack_status = 'posted'), '-infinity'::timestamptz)
+ ORDER BY built_at DESC LIMIT 1
+"""
+
+SQL_PENDING_INSERT_V2 = """
+INSERT INTO public.digest_pending
+       (kind, alerter_name, expires_at, window_start, window_end, subject, html, text_body,
+        recipients, fingerprint, token_hash, finalize,
+        slack_payload, slack_status, slack_token_hash, slack_finalize)
+VALUES (%s, %s, now() + make_interval(hours => %s), %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb,
+        %s::jsonb, %s, %s, %s::jsonb)
+RETURNING id
+"""
+
+# Retiring the older daily retires its Slack half too (a click on an old button then answers
+# "superseded", and the page says so).
+SQL_PENDING_SLACK_SUPERSEDE = """
+UPDATE public.digest_pending SET slack_status = 'superseded'
+ WHERE kind = %s AND slack_status IN ('awaiting', 'approved')
+"""
+
+# One approved post at a time, oldest first; the claim is the ONE attempt it ever gets.
+SQL_PENDING_SLACK_CLAIM = """
+UPDATE public.digest_pending d
+   SET slack_status = 'posting', slack_attempts = d.slack_attempts + 1
+ WHERE d.id = (SELECT p.id FROM public.digest_pending p
+                WHERE p.slack_status = 'approved'
+                ORDER BY p.built_at, p.id
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED)
+RETURNING d.id, d.kind, d.slack_payload, d.slack_finalize
+"""
+
+SQL_PENDING_SLACK_POSTED = """
+UPDATE public.digest_pending SET slack_status = 'posted', slack_posted_at = now(), slack_error = NULL
+ WHERE id = %s
+"""
+
+SQL_PENDING_SLACK_FAILED = """
+UPDATE public.digest_pending SET slack_status = 'failed', slack_error = %s WHERE id = %s
+"""
+
+# A post that was claimed and never finished (the runner died): failed, never retried — a
+# webhook returns no message id, so a second POST could post twice and nobody could tell
+# (plan v2 M3). The items ride in the next post; Howie's copy says so.
+SQL_PENDING_SLACK_STALE = """
+UPDATE public.digest_pending
+   SET slack_status = 'failed',
+       slack_error = 'not sure it posted: the post was started and never finished'
+ WHERE slack_status = 'posting'
+   AND coalesce(slack_approved_at, built_at) < now() - interval '10 minutes'
+RETURNING id
+"""
+
+# 3l-R: an email that was claimed and never finished is retried once (a duplicate email is
+# recoverable; a duplicate public post is not).
+# A send that was started and never finished (the runner died between 'sending' and 'sent')
+# may or may not have gone out, and a daily sent twice to Sean and Keanu is worse than one
+# missed (the next daily covers it), so it is marked failed, never put back (Qwen, code review
+# 12:02, M-C6: the first build re-approved it once).
+SQL_PENDING_EMAIL_STALE = """
+UPDATE public.digest_pending
+   SET status = 'failed',
+       error = 'not sure it sent: the send was started and never finished'
+ WHERE status = 'sending'
+   AND coalesce(approved_at, built_at) < now() - interval '30 minutes'
+RETURNING id, status
+"""
+
+# The channel's own record (migration 20261027a); same shape as the email's told record.
+SQL_SLACK_TOLD_READ = """
+SELECT finding_id, first_told_at, last_full_at, reminders, closed_seen_at FROM public.slack_told
+"""
+
+SQL_SLACK_TOLD_MARK_CLOSED = """
+UPDATE public.slack_told t
+   SET closed_seen_at = now(), updated_at = now()
+  FROM public.findings f
+ WHERE f.finding_id = t.finding_id
+   AND f.current_status::text NOT IN ('detected', 'confirmed', 'open', 'regressed')
+   AND (t.closed_seen_at IS NULL OR t.closed_seen_at <= t.last_full_at)
+"""
+
+SQL_SLACK_TOLD_RECORD = """
+INSERT INTO public.slack_told AS t (finding_id, first_told_at, last_full_at, reminders, updated_at)
+VALUES (%s, now(), now(), 0, now())
+ON CONFLICT (finding_id) DO UPDATE
+   SET last_full_at = now(), reminders = t.reminders + 1, updated_at = now()
+"""
+
 
 def _gate_and_send(conn, *, kind, name, subject, html, text, window_start, window_end,
                    finalize, approver, others, from_addr, from_name, api_key, portal_url,
-                   brand) -> int:
-    """Store the others' email and send the approver's copy. Writes no runs row and no told
-    record: those are written when it actually goes out (_send_approved)."""
+                   brand, slack_payload=None, slack_records=(), notes=(), slack_on=False) -> int:
+    """Store the others' email (and, round 5, the Slack post) and send the approver's copy.
+    Writes no runs row and no told record: those are written when it actually goes out
+    (_send_approved). Each half has its own one-time token and its own status."""
     token = _ap.new_token()
-    hours = _ap.WEEKLY_EXPIRES_HOURS if kind == "weekly" else _ap.DAILY_EXPIRES_HOURS
+    hours = _ap.WEEKLY_EXPIRES_HOURS if kind == "weekly" else _ap.daily_expires_hours()
+    s_token = _ap.new_token() if slack_payload else None
     with conn.cursor() as cur:
         cur.execute(SQL_PENDING_SUPERSEDE, (kind,))
-        cur.execute(SQL_PENDING_INSERT, (
-            kind, name, hours, window_start, window_end, subject, html, text, others,
-            _ap.fingerprint(subject, html, text), _ap.token_hash(token),
-            json.dumps(finalize, default=str),
-        ))
+        if slack_on:
+            cur.execute(SQL_PENDING_SLACK_SUPERSEDE, (kind,))
+            cur.execute(SQL_PENDING_INSERT_V2, (
+                kind, name, hours, window_start, window_end, subject, html, text, others,
+                _ap.fingerprint(subject, html, text), _ap.token_hash(token),
+                json.dumps(finalize, default=str),
+                json.dumps(slack_payload) if slack_payload else None,
+                "awaiting" if slack_payload else "none",
+                _ap.token_hash(s_token) if s_token else None,
+                json.dumps({"records": [list(r) for r in slack_records]}, default=str),
+            ))
+        else:
+            cur.execute(SQL_PENDING_INSERT, (
+                kind, name, hours, window_start, window_end, subject, html, text, others,
+                _ap.fingerprint(subject, html, text), _ap.token_hash(token),
+                json.dumps(finalize, default=str),
+            ))
         pending_id = cur.fetchone()[0]
     conn.commit()
+    slack = None
+    if slack_on:
+        slack = {"channel": "#on-call", "wired": bool(_env("SLACK_ONCALL_WEBHOOK", default="")),
+                 "payload_text": _ds.preview_text(slack_payload),
+                 "url": _ap.slack_url(portal_url, s_token) if s_token else ""}
     a_subject, a_html, a_text = _ap.approver_copy(
-        subject, html, text, url=_ap.approve_url(portal_url, token), others=others, kind=kind)
+        subject, html, text, url=_ap.approve_url(portal_url, token), others=others, kind=kind,
+        slack=slack, notes=list(notes) or None)
     try:
         send_via_sendgrid(api_key=api_key, from_addr=from_addr, from_name=from_name,
                           to_addrs=approver, subject=a_subject, html=a_html, text=a_text,
@@ -1880,6 +2118,19 @@ def _send_approved(conn, *, from_addr, from_name, api_key) -> int:
     byte for byte; then its runs row and its told record, as a scheduled send writes them."""
     brand = _dd.load_brand()
     sent_n, failed_n = 0, 0
+    # Round 5: rows claimed by a runner that died. Neither is retried (a webhook can't tell us
+    # whether the post landed; a mail API that was never answered may have sent). Each sweep
+    # is its own transaction, so one failing (the slack columns not there yet) leaves the other.
+    for label, sql in (("digest", SQL_PENDING_EMAIL_STALE), ("slack post", SQL_PENDING_SLACK_STALE)):
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                for row in cur.fetchall():
+                    print(f"{label} {row[0]}: started and never finished; failed, not retried", file=sys.stderr)
+            conn.commit()
+        except Exception as exc:                   # pragma: no cover - live only
+            conn.rollback()
+            print(f"  stale {label} sweep skipped ({type(exc).__name__})")
     while True:
         with conn.cursor() as cur:
             cur.execute(SQL_PENDING_CLAIM)
@@ -1925,9 +2176,48 @@ def _send_approved(conn, *, from_addr, from_name, api_key) -> int:
         _told_record(conn, [tuple(r) for r in (finalize.get("told_full") or [])])
         print(f"{kind} digest {pid}: sent to {len(recipients)} recipient(s)")
         sent_n += 1
-    if not (sent_n or failed_n):
+    posted_n, pfailed_n = _post_approved(conn)
+    if not (sent_n or failed_n or posted_n or pfailed_n):
         print("nothing approved to send")
-    return 1 if failed_n else 0
+    return 1 if (failed_n or pfailed_n) else 0
+
+
+def _post_approved(conn, *, post=None) -> tuple[int, int]:
+    """Round 5: every approved Slack post, oldest first, ONE attempt each; then its record."""
+    webhook = _env("SLACK_ONCALL_WEBHOOK", default="") or ""
+    posted_n, failed_n = 0, 0
+    while True:
+        try:
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(SQL_PENDING_SLACK_CLAIM)
+                    row = cur.fetchone()
+        except Exception as exc:                   # before migration 20261027a
+            conn.rollback()
+            print(f"  slack claim skipped ({type(exc).__name__})")
+            return 0, 0
+        conn.commit()
+        if not row:
+            break
+        pid, kind, payload, s_finalize = row
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        ok, note = _post_slack(webhook, payload or {}, post=post)
+        with conn.cursor() as cur:
+            if ok:
+                cur.execute(SQL_PENDING_SLACK_POSTED, (pid,))
+            else:
+                cur.execute(SQL_PENDING_SLACK_FAILED, (note, pid))
+        conn.commit()
+        if ok:
+            recs = ((s_finalize or {}).get("records") if isinstance(s_finalize, dict) else None) or []
+            _slack_told_record(conn, [tuple(r) for r in recs])
+            print(f"{kind} slack post {pid}: posted")
+            posted_n += 1
+        else:
+            print(f"{kind} slack post {pid}: not posted ({note}); not retried", file=sys.stderr)
+            failed_n += 1
+    return posted_n, failed_n
 
 
 def main() -> int:
@@ -2169,10 +2459,76 @@ def main() -> int:
             reach_checks=reach_checks,
         )
         subject = _dd.subject(model, from_name)
-        if args.preview:
-            subject = preview_subject(subject)
         html = _dd.render_html(model, portal_url=portal_url, product_name=from_name)
         text = _dd.render_text(model, portal_url=portal_url, product_name=from_name)
+
+        # ── 3l round 5: the voice and the Slack half (Prodex: ALERTER_VOICE / ALERTER_SLACK) ──
+        slack_payload, slack_records, notes = None, [], []
+        voice_on, slack_on = _voice_on(), _slack_on()
+        if voice_on or slack_on:
+            open_rows = _soft("open problems", SQL_OPEN_PROBLEMS)
+            names = {r[0] for r in sites} | {r[1] for r in open_rows}
+            open_items = _open_items(open_rows, names, window_end)
+            changed_ids = {f for i in model["do"] + model["ticket"] for f in i.get("finding_ids", [])}
+            still = _still_open_picks(open_items, changed_ids, window_end, told) if voice_on else []
+            selection = {"changed": [], "nudge": []}
+            if slack_on:
+                if record:
+                    _slack_told_mark_closed(conn)
+                selection = _ds.select(model, open_items, _read_slack_told(conn), window_end,
+                                       quiet_news=_ds.quiet_news(not_responding, window_start, window_end))
+            sentry_only = [i for i in model["do"] if i.get("kind") == "coverage"]
+            fct = _dv.facts(model, still_open=still, slack=selection, sentry_only=sentry_only,
+                            company=brand.get("short_name", ""), day=f"{model['local_end']:%A, %B %-d}")
+            out, reason = None, ""
+            if voice_on:
+                prev = _soft("previous digest text", SQL_PENDING_LAST_SENT_TEXT, ("daily",))
+                prev_text = prev[0][0] if prev and prev[0] and prev[0][0] else ""
+                try:
+                    out = _dv.write(fct, api_key=_env("ANTHROPIC_API_KEY", default="") or "", previous_text=prev_text)
+                    problems = _dv.check(out, fct, portal_url=portal_url)
+                    if problems:
+                        reason = "the check refused it: " + "; ".join(problems[:4])
+                        out = None
+                except _dv.VoiceError as e:
+                    reason = str(e)
+            if out is None:
+                out = _dv.fallback(fct)
+                if voice_on:
+                    notes.append(f"Written from the fallback today ({reason}).")
+                    print(f"voice: fallback ({reason})")
+                # Qwen M-C1: the fallback is checked too. It is deterministic and the facts are
+                # cleaned on the way in, so this should never fire; if it does, Howie's copy
+                # says so before he approves anything (the fallback still goes to him: the
+                # alternative is no daily at all).
+                fb_problems = _dv.check(out, fct, portal_url=portal_url)
+                if fb_problems:
+                    notes.append("The fallback itself tripped the check (" + "; ".join(fb_problems[:3])
+                                 + "). Read it before approving.")
+                    print("voice: the fallback tripped the check: " + "; ".join(fb_problems[:3]), file=sys.stderr)
+            if voice_on:
+                subject = _dv.subject(out, fct, product_name=from_name, local_end=model["local_end"])
+                html = _dv.render_html(out, fct, brand=brand, logo_cid=_dd.LOGO_CID, local_end=model["local_end"],
+                                       portal_url=portal_url, product_name=from_name, fallback_reason=reason)
+                text = _dv.render_text(out, fct, brand=brand, local_end=model["local_end"],
+                                       portal_url=portal_url, product_name=from_name)
+                for so in sentry_only:
+                    notes.append("Sentry's own, for you only: " + so.get("title", "")
+                                 + (" (" + "; ".join(so.get("lines", [])[:3]) + ")" if so.get("lines") else ""))
+            if slack_on:
+                slack_payload = _ds.payload(out, selection, product_name=from_name,
+                                            day_label=f"{model['local_end']:%A, %B %-d}")
+                member_sev = {r[0]: (r[3] or "").upper() for r in open_rows}
+                slack_records = _ds.records(selection, member_sev)
+                last_failed = _soft("last failed slack post", SQL_PENDING_SLACK_LAST_FAILED, ("daily", "daily"))
+                if last_failed and last_failed[0]:
+                    was = _ds.preview_text(last_failed[0][2] if isinstance(last_failed[0][2], dict) else None)
+                    notes.append(f"The last #on-call post may not have gone out ({last_failed[0][1] or 'unknown'}). "
+                                 f"Today's draft does not repeat it; if you want it posted by hand, this is what it said: "
+                                 + (was.replace("\n", " / ") if was else "(no text kept)"))
+            model["voice"] = {"ok": voice_on and not reason, "reason": reason, "slack": bool(slack_payload)}
+        if args.preview:
+            subject = preview_subject(subject)
 
         if args.dry_run:
             print(">> DRY RUN — would send to:", ", ".join(to_addrs))
@@ -2185,6 +2541,11 @@ def main() -> int:
             print("===== HTML (first 800 chars) =====")
             print(html[:800])
             print("... (truncated)")
+            if slack_on:
+                print("===== SLACK (#on-call) =====")
+                print(_ds.preview_text(slack_payload) or "(nothing for #on-call today)")
+            for n_ in notes:
+                print(f">> note for the approver: {n_}")
             if args.html_out:
                 with open(args.html_out, "w", encoding="utf-8") as f:
                     f.write(html.replace(f"cid:{_dd.LOGO_CID}", "logo.png"))
@@ -2197,9 +2558,12 @@ def main() -> int:
                 window_start=window_start, window_end=window_end,
                 finalize={"counts": [len(confirmed), len(regressed), len(high_risk)],
                           "high_risk_ids": current_high_risk_ids,
-                          "told_full": model.get("told_full") or []},
+                          "told_full": model.get("told_full") or [],
+                          "voice": model.get("voice") or {}},
                 approver=approver, others=others, from_addr=from_addr, from_name=from_name,
-                api_key=api_key, portal_url=portal_url, brand=brand)
+                api_key=api_key, portal_url=portal_url, brand=brand,
+                slack_payload=slack_payload, slack_records=slack_records, notes=notes,
+                slack_on=slack_on)
 
         # Send + finalize
         status = "success"

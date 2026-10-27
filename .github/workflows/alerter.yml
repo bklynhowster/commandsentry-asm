@@ -121,6 +121,18 @@ jobs:
           # (approval.py; digest-send.yml sends it). Repo variable only, NO fallback: unset =
           # the digest sends nothing.
           ALERTER_APPROVER: ${{ vars.ALERTER_APPROVER }}
+          # 3l round 5 (2026-10-27): the daily in Howie's voice and the #on-call post. All
+          # three switches are repo VARIABLES (public, non-secret); unset = the daily as it
+          # was. ALERTER_VOICE=howie turns the writer on; ALERTER_SLACK=on adds the Slack
+          # draft and its button; DIGEST_DAILY_EXPIRES_HOURS=24 makes a daily expire when
+          # the next is built. The two secrets: the writer's API key (already used by
+          # enrich-finding-descriptions.yml) and the #on-call webhook (here only so the copy
+          # can say whether the button is wired; digest-send.yml is what posts).
+          ALERTER_VOICE:       ${{ vars.ALERTER_VOICE }}
+          ALERTER_SLACK:       ${{ vars.ALERTER_SLACK }}
+          DIGEST_DAILY_EXPIRES_HOURS: ${{ vars.DIGEST_DAILY_EXPIRES_HOURS }}
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+          SLACK_ONCALL_WEBHOOK: ${{ secrets.SLACK_ONCALL_WEBHOOK }}
           ALERTER_DASHBOARD_URL: ${{ vars.ALERTER_DASHBOARD_URL || 'https://supabase.com/dashboard/project/hdygktppfvuspnumpfuq' }}
           # Note 307 — links in the email go to the portal, not the raw database.
           ALERTER_PORTAL_URL:    ${{ vars.ALERTER_PORTAL_URL    || 'https://commandsentry-portal.netlify.app' }}
