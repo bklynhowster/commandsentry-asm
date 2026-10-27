@@ -62,7 +62,13 @@ HOSTS_NAMED_MAX = 6                     # more than six hosts: six names, then "
 # this that talks about somebody getting fired"; 08:40: no blame, no ownership).
 BANNED = ("fired", "firing", "fire ", "let go", "your job", "their job", "his job", "her job",
           "blame", "on us", "nothing for you to do", "discipline", "hr ", "vulnerable",
-          "accountable", "fault")
+          "accountable", "fault",
+          # Howie 18:22: readers do not know what the scanner sends; no mechanics, no DNS talk
+          "test traffic", "test request", "test requests", "attack-shaped", "give-me-a-file",
+          "resolve", "resolves", "dns",
+          "short version")        # Howie 18:33: "you don't say 'short version'"
+OPENER = "Here's your morning briefing."   # Howie 18:33: the email opens with this, every day
+SENTENCE_MAX_WORDS = 32      # Howie 18:15: a 36-word sentence "makes your eyes go to the back of your head"; the rules say 30
 # Whole words only (Qwen, code review 12:02: "default" tripped 'fault' and "on users" tripped
 # 'on us', and one trip sends the whole day to the fallback).
 _BANNED_RE = [re.compile(r"(?<![a-z-])" + re.escape(w.strip()) + r"(?![a-z-])") for w in BANNED]
@@ -83,23 +89,35 @@ ALL_SEVERITY_WORDS = ("critical", "high", "moderate-high", "moderate high", "mod
 # one the model echoes it and the check refuses the day, then the fallback prints it raw).
 # So every fact string is cleaned on its way INTO the sheet, and the titles with no plain
 # words in digest_words get them here.
-THE_PROBE = ("Sentry sent one plain, ordinary request and then three harmless requests shaped like the classic "
-             "attacks, a SQL injection, a script injection and a give-me-a-file-off-your-disk trick, to see what "
-             "answers.")
+# Howie 18:15, on a paragraph that spelled the three requests out: "a run-on sentence that
+# makes your eyes go to the back of your head. I want plain, how we talk, simple." 18:22: "people
+# don't know what Sentry is. People don't know what the test traffic is"; say "the probes that
+# determine whether there is some type of security device that's just in front, like a WAF";
+# "generic and simple, so people really understand." So: what we found and what it means, in
+# his words; never what the scanner sends or how a check works.
+THE_PROBE = ("We send every box a few probes to check whether some kind of security device, like a WAF, "
+             "is sitting in front of it.")
 PLAIN = (
     (re.compile(r"^Something unrecognized is blocking|^Something is standing guard", re.I),
      None,                                             # keep the title it came with
-     THE_PROBE + " The plain request got through fine and the three attack-shaped ones were turned away with a "
-     "block page Sentry does not recognize yet, which is good news: a firewall or a security device of some kind "
-     "is standing guard, and Sentry is still working out which product. The pages are kept with the scans.",
+     "These boxes were already in our fleet; what is new is that they block the probes. " + THE_PROBE
+     + " So something is now standing guard in front of them, and we are still working out which product it is. "
+     "That is good news.",
      ""),
     (re.compile(r"^A web firewall is there, but it's only watching|^WAF detected but not blocking", re.I),
      None,
-     "A firewall answers in front of it, it announces itself the way firewalls do, but when Sentry sent its "
-     "three harmless attack-shaped requests, a SQL injection, a script injection and a give-me-a-file-off-your-disk "
-     "trick, all three went straight through to the site. It is watching, not blocking. Sentry only tells that a "
-     "firewall is present, never which product.",
+     "There is a firewall in front of it. " + THE_PROBE + " Here they go straight through to the site. "
+     "So that firewall is watching, not blocking.",
      "Switch that firewall from watching (detect or monitor mode) to blocking (prevent mode). The next deep scan checks."),
+    (re.compile(r"^\d+ new hosts? found", re.I),
+     None,
+     "New boxes that have joined our fleet. They get the same checks as everything else from here on.",
+     ""),
+    (re.compile(r"^\d+ hosts? (?:is|are) not responding", re.I),
+     None,
+     "Looks down. Any box that does not come back drops off the portal on its own, and we do not have to talk "
+     "about it anymore.",
+     ""),
     (re.compile(r"^BREACH attack", re.I),
      "Compressed pages could leak a secret (BREACH)",
      "The site compresses its pages (gzip). Someone who can watch the traffic and make a browser send "
@@ -139,8 +157,8 @@ def _plain(title: str, body: str, fix: str) -> tuple:
     return title, body, fix
 
 
-_OPPOSITE = ("The same three attack-shaped requests that the hosts above turned away went straight through "
-             "here: this firewall is watching, not blocking.")
+_OPPOSITE = ("The same probes that the hosts above now block go straight through here. "
+             "This firewall is watching, not blocking.")
 
 
 def _relate(items: list) -> None:
@@ -230,6 +248,46 @@ def _item(iid: str, section: str, kind: str, severity: str, hosts: list, what: s
     }
 
 
+_QUIET_LINE = re.compile(r"^(?P<host>\S+): no answer(?: since (?P<since>[A-Z][a-z]{2} \d{1,2}))?[^.]*\."
+                         r"(?:.*?Leaves the portal on (?P<leaves>[A-Z][a-z]{2} \d{1,2})\.)?", re.S)
+_PLAIN_QUIET = re.compile(r"^(?P<host>\S+): looks down(?: since (?P<since>[A-Z][a-z]{2} \d{1,2}))?\."
+                          r"(?: Drops off the portal on (?P<leaves>[A-Z][a-z]{2} \d{1,2}) if it stays down\.)?")
+
+
+def _plain_quiet(line: str) -> str:
+    """The scanner's 'valorep: no answer since Oct 22, 2:25 PM. Its name no longer exists on
+    the internet. Leaves the portal on Nov 2.' as the readers want it (Howie 18:22: "Nobody
+    cares if the name doesn't resolve ... It's just a quick thing"): 'valorep: looks down since
+    Oct 22. Drops off the portal on Nov 2 if it stays down.' A line in another shape is kept."""
+    m = _QUIET_LINE.match(line or "")
+    if not m:
+        return line
+    s = f"{m.group('host')}: looks down" + (f" since {m.group('since')}" if m.group("since") else "") + "."
+    if m.group("leaves"):
+        s += f" Drops off the portal on {m.group('leaves')} if it stays down."
+    return s
+
+
+_BLOCK_LINE = re.compile(r"^(?P<host>\S+): On (?P<day>[A-Z][a-z]{2} \d{1,2}) ")
+
+
+def _plain_block(line: str) -> str:
+    """The scanner's 'l3h-ss: On Oct 27 it turned away the attack-style test strings with a
+    page no vendor the block-page library knows ...' as 'l3h-ss: started blocking the probes
+    on Oct 27.' (Howie 18:22: no mechanics). A line in another shape keeps only its host."""
+    m = _BLOCK_LINE.match(line or "")
+    if m:
+        return f"{m.group('host')}: started blocking the probes on {m.group('day')}."
+    host = (line or "").split(":", 1)[0].strip()
+    return f"{host}: started blocking the probes." if host else line
+
+
+def _quiet_parts(line: str) -> tuple:
+    """(host, since, leaves) from a plain quiet line; ('', '', '') for any other line."""
+    m = _PLAIN_QUIET.match(line or "")
+    return (m.group("host"), m.group("since") or "", m.group("leaves") or "") if m else ("", "", "")
+
+
 def _hosts_of_rating_lines(lines) -> list:
     return [ln.split(" is now", 1)[0].strip() for ln in lines or [] if " is now" in ln]
 
@@ -244,7 +302,7 @@ def _merge_blockpages(items: list) -> list:
     hosts = [h for i in pages for h in (i.get("sites") or [])]
     merged = {
         "kind": "blockpage", "severity": "",
-        "title": f"Something is standing guard in front of {len(hosts)} of our hosts, and Sentry is still working out what",
+        "title": f"Something is standing guard in front of {len(hosts)} of our hosts, and we are still working out what",
         "body": "",                                    # PLAIN gives it the probe, in words
         "sites": hosts, "lines": [f"{i['sites'][0]}: {i.get('body', '')}" for i in pages if i.get("sites")],
         "why": "", "do": "", "tag": "",
@@ -280,9 +338,16 @@ def facts(model: dict, *, still_open=None, slack=None, sentry_only=None, company
             hosts = [ln.split(":")[0] for ln in it.get("lines", []) if ":" in ln]
         if kind == "rating":
             hosts = _hosts_of_rating_lines(it.get("lines"))
+        lines = list(it.get("lines") or [])
+        title = it.get("title", "")
+        if kind == "not_responding":
+            lines = [_plain_quiet(ln) for ln in lines]
+        if kind == "blockpage":
+            lines = [_plain_block(ln) for ln in lines]
+            title = re.sub(r"^Something unrecognized is blocking", "Something is standing guard", title)
         items.append(_item(f"c{n+1}", "changed", kind, it.get("severity", ""), hosts,
-                           it.get("title", ""), it.get("body", "") or it.get("why", ""), it.get("do", ""),
-                           _text_of(it), extra_numbers=[len(it.get("lines") or [])], detail=it.get("lines") or [],
+                           title, it.get("body", "") or it.get("why", ""), it.get("do", ""),
+                           _text_of(it), extra_numbers=[len(lines)], detail=lines,
                            family=it.get("family", "")))
     for n, it in enumerate(model.get("done", [])):
         hosts = [ln.split(":")[0] for ln in it.get("lines", []) if ":" in ln]
@@ -297,9 +362,12 @@ def facts(model: dict, *, still_open=None, slack=None, sentry_only=None, company
         items.append(d)
     slack = slack or {}
     for n, it in enumerate(slack.get("changed", [])):
+        lines = list(it.get("lines") or [])
+        if it.get("kind") == "not_responding":
+            lines = [_plain_quiet(ln) for ln in lines]
         items.append(_item(f"k{n+1}", "slack_changed", it.get("kind", "finding"), it.get("severity", ""),
                            list(it.get("sites") or it.get("hosts") or []), it.get("title", ""),
-                           it.get("body", ""), it.get("do", ""), _text_of(it), detail=it.get("lines") or []))
+                           it.get("body", ""), it.get("do", ""), _text_of(it), detail=lines))
     for n, it in enumerate(slack.get("nudge", [])):
         items.append(_item(f"n{n+1}", "slack_nudge", "nudge", it.get("severity", ""),
                            list(it.get("sites") or []), it.get("title", ""), it.get("body", ""),
@@ -332,26 +400,28 @@ def required_ids(f: dict) -> dict:
 
 
 # ── the writer ──────────────────────────────────────────────────────────────────────────
-SYSTEM = """You write a short morning security email and a Slack post for a small company, in the voice of Howie, its security lead, to his own colleagues. Everything you write is read by people on the same team, so it is all "we" and "our"; Sentry is the company's own scanner and is referred to as "Sentry".
+SYSTEM = """You write a short morning security email and a Slack post for a small company, in the voice of Howie, its security lead, to his own colleagues. Everything you write is read by people on the same team, so it is all "we" and "our". Sentry is the company's own scanner: say "we" for what it did, and never explain what it is or how it works.
 
 HOWIE'S VOICE, from his own writing (a profile built from 72 of his emails and his Slack):
-- He dictates. Long, flowing, comma-joined sentences, the way people talk, not fragments. No em dashes, no semicolons, no bullet lists, no headings, no bold. Where a dash would go, a comma or a new sentence.
-- He opens with the point. "Short version:" is his signature move in writing. Spoken openers and pivots, used sparingly: "Morning.", "Obviously", "However,", "Look,", "just FYI", "Believe me,".
+- He dictates. It reads spoken, not composed, but one thing per sentence: the way you would say it out loud to a colleague, never a run-on. No sentence over 30 words. No em dashes, no semicolons, no bullet lists, no headings, no bold. Where a dash would go, a comma or a new sentence.
+- He opens with the point. This email always opens "Here's your morning briefing." and then the point; never "Short version:". Spoken openers and pivots, used sparingly: "Obviously", "However,", "Look,", "just FYI", "Believe me,".
 - He hedges his own framing and holds the line anyway: "I think", "somewhat", "a little bit", "some kind of", "if I had to choose". Softened, not uncertain.
 - He does NOT signpost or build an argument ("what really did it for me is", "the rest follows from that", "so we'd be"). He says things in sequence and lets the reader put it together.
 - Old-fashioned turns dropped into plain delivery, only his own: "much obliged", "whereby", "the nuts and bolts of that", "make sure everything is kosher", "holding the bag". Do not invent folksy idioms; when unsure, plainer is more him.
 - Warm and direct with his own people. Specific data inline, no corporate-speak, no "I hope this finds you well", nothing that reads composed. He often ends by handing off or saying what is next, not with a summary.
 - His verbatim rhythm sample: "Obviously Attio is the more mature product, but if I had to choose between Monaco and Day AI, I think Day AI still is somewhat better. Monaco is by far the most immature of the bunch. However, if they have the most incredible features ever, we can set up some kind of guardrails to protect ourselves from them. You guys tell me which direction you want to go."
 
-THE EMAIL HE APPROVED (match its rhythm and register, not its sentences; the facts differ every day):
-"Morning. Short version: one of our boxes went quiet, and that's the only real news today. valorep.prodexlabs.com hasn't answered since Oct 22, and its name doesn't resolve on the internet anymore, so it looks like it was taken down for good. If that's right, it drops off the portal on its own on Nov 2. l3h-ss, prod, l3h-nh and l3h-ivs all turned away Sentry's test requests, which is a good sign. Something is standing guard in front of them, a firewall or a security device of some kind, and Sentry is still working out which. Still sitting there: the firewall in front of bitec, demo and highcom is there but it's only watching, not blocking. That's been the case since Oct 22, and I think it's the most serious thing open right now. 4 small things also turned up, none of them need anybody, they're in the portal if you're curious."
+WHO READS IT. People who are not security people. They do not know what the scanner is, what it sends, or how a check works, and they do not want to. Say what we found and what it means for us, in the fewest plain words, the way he talks. Never describe the scanner's mechanics: no "test traffic", "test requests", "attack-shaped", no naming of attack types, nothing about a name resolving or DNS. "We" did the checking. Short sentences: never more than 30 words in one sentence. A box that stopped answering gets two sentences: it looks down since when, and it drops off the portal on its own if it does not come back; nothing about why.
 
-RULES THAT NEVER BEND. Say each fact once. The same problem on several hosts is ONE sentence that names the hosts (short names are fine: "bitec, demo and highcom"). EVERY entry names EVERY host in its item's "hosts" list, however short the entry: never "five of our sites", never a host left out. One sentence can carry six names. Only when an item has MORE than six hosts: name the first six, then "and N more" with N the exact remainder. Never assign blame or ownership: never "this is on us", "on you", "nothing for you to do", "somebody dropped the ball". Never mention anyone's job, being fired, HR or discipline. A thing that turns away Sentry's attack-shaped requests is GOOD news: something is standing guard and Sentry is still working out which product. Say what Sentry actually sent ONCE, the first time it matters (an item's "why" tells you); after that refer back to it ("the same three requests"), never describe it again. When two items are about firewalls in opposite states, say so in one breath, so nobody reads them as the same story twice. Never use the word "vulnerable". Never add a date, number, host, product or severity that is not in the facts for that item, and never move one from one item to another. Severity words only as given ("Moderate", "Moderate-high", "High"); you may also just say "the most serious thing open" without a word. For a NUDGE (slack_nudge items) never say how long it has been open and never give a date.
+THE EMAIL HE APPROVED (match its rhythm and register, not its sentences; the facts differ every day):
+"Here's your morning briefing. One of our boxes looks down, and two others got some protection in front of them, which is good. valorep.prodexlabs.com looks like it's been down since Oct 22. If it doesn't come back by Nov 2, it drops off the portal on its own and we don't have to talk about it anymore. Since yesterday, l3h-ss and prod have started blocking our probes. We send every box a few probes to check whether there's some kind of security device sitting in front of it, like a WAF. Something is now standing guard in front of those two, and we're still working out which product it is. Still sitting there: the firewall in front of bitec, demo and highcom is only watching, not blocking. 4 small things also turned up, none of them need anybody, they're in the portal if you're curious."
+
+RULES THAT NEVER BEND. Say each fact once. The same problem on several hosts is ONE sentence that names the hosts (short names are fine: "bitec, demo and highcom"). EVERY entry names EVERY host in its item's "hosts" list, however short the entry: never "five of our sites", never a host left out. One sentence can carry six names. Only when an item has MORE than six hosts: name the first six, then "and N more" with N the exact remainder. Never assign blame or ownership: never "this is on us", "on you", "nothing for you to do", "somebody dropped the ball". Never mention anyone's job, being fired, HR or discipline. A box that now blocks the probes is GOOD news: something is standing guard, and we are still working out which product. Such a box is not new, it was in our fleet already; only an item titled "N new hosts found" is about new boxes, and those "joined our fleet". The probes are explained ONCE, the first time it matters (an item's "why" tells you); after that refer back to them ("the same probes"), never explain them again. When two items are about firewalls in opposite states, say so in one breath, so nobody reads them as the same story twice. Never use the word "vulnerable". Never add a date, number, host, product or severity that is not in the facts for that item, and never move one from one item to another. Severity words only as given ("Moderate", "Moderate-high", "High"); you may also just say "the most serious thing open" without a word. For a NUDGE (slack_nudge items) never say how long it has been open and never give a date.
 
 OUTPUT. Strict JSON, no prose around it, this shape:
 {"subject": "<5-9 words, no prefix, says the one main thing>",
  "headline": "<one short sentence, the main thing>",
- "opening": "<one or two sentences, e.g. 'Morning. Short version: ...'>",
+ "opening": "<'Here's your morning briefing.' then one sentence with the point>",
  "email": [{"id": "<item id>", "text": "<one paragraph about that item only>"}],
  "fixed": [{"id": "<item id>", "text": "<one sentence>"}],
  "still_open": [{"id": "<item id>", "text": "<ONE line, under 240 characters: '[Grade] the problem in plain words on host, host and host.' Nothing else; the detail is in the portal. The firewall item may add its one sentence about the hosts above.>"}],
@@ -572,12 +642,23 @@ def check(out: dict, f: dict, *, portal_url: str = "") -> list[str]:
             problems.append(f"{key}: too long")
     if not isinstance(slack.get("closing", ""), str):
         problems.append("slack.closing: not text")
+    if isinstance(out.get("opening"), str) and not out["opening"].strip().startswith(OPENER):
+        problems.append(f"opening: does not start with {OPENER!r}")
     if f.get("small_count", 0) == 0 and str(out.get("small_line", "")).strip():
         problems.append("small_line: says something about small items when there are none")
 
     # whole-output rules
     whole = _flatten(out)
     low = " " + whole.lower() + " "
+    texts = [str(out.get(k, "")) for k in ("subject", "headline", "opening", "small_line")]
+    texts.append(str(slack.get("closing", "")))
+    for entries in (out.get("email"), out.get("fixed"), out.get("still_open"), slack.get("changed"), slack.get("nudge")):
+        texts += [str(e.get("text", "")) for e in (entries or []) if isinstance(e, dict)]
+    for t in texts:
+        for sent in re.split(r"(?<=[.!?])\s+", t):
+            n = len(sent.split())
+            if n > SENTENCE_MAX_WORDS:
+                problems.append(f"a sentence of {n} words ({sent[:50]}...)")
     for w, rx in zip(BANNED, _BANNED_RE):
         if rx.search(low):
             problems.append(f"banned word: {w.strip()!r}")
@@ -656,23 +737,30 @@ def _para(it: dict) -> str:
             s += " " + _OPPOSITE
         return s
     if it["kind"] == "not_responding":
-        one = len(it["hosts"]) == 1
-        lines = it.get("detail") or []
-        if one:                                        # "valorep: no answer since ..." → the host is already named
-            lines = [d.split(":", 1)[1].strip() if ":" in d else d for d in lines]
-            lines = [d[0].upper() + d[1:] if d else d for d in lines]
-        detail = " ".join(d.rstrip(".") + "." for d in lines)
-        return (f"{w} {'has' if one else 'have'} stopped answering Sentry's checks. "
-                + (detail + " " if detail else "")
-                + (f"If that was on purpose, nothing to do, it leaves the portal on its own. If it should be up, now you know."
-                   if one else
-                   f"Any that were taken down on purpose leave the portal on their own. If one of them should be up, now you know.")).strip()
+        # Howie 18:22, his own sentences: "valorep.prodexlabs.com looks like it's been down since
+        # October 22 ... If it doesn't show up in the next few days, it's dropping off the portal,
+        # and we don't have to talk about it anymore."
+        parts = {h: (sc, lv) for h, sc, lv in (_quiet_parts(d) for d in it.get("detail") or []) if h}
+        if len(it["hosts"]) == 1:
+            h = it["hosts"][0]
+            since, leaves = parts.get(h, ("", ""))
+            when = f" by {leaves}" if leaves else " in the next few days"
+            return (f"{h} looks like it's been down{' since ' + since if since else ''}. If it doesn't come back{when}, "
+                    f"it drops off the portal on its own and we don't have to talk about it anymore.")
+        named = [_short(h) + (f" since {parts[h][0]}" if parts.get(h, ('', ''))[0] else "") for h in it["hosts"]]
+        return (", ".join(named[:-1]) + " and " + named[-1] + " look like they're down. Any that don't come back "
+                "drop off the portal on their own, and we don't have to talk about them anymore.")
     if it["kind"] == "blockpage":
+        # Howie 18:33: "Did these boxes not exist before?" No: the boxes were here; what is new
+        # is that they block the probes. Say that, and say "new boxes" only for the item that is.
         one = len(it["hosts"]) == 1
-        return (f"{w} turned away Sentry's three attack-shaped test requests, the SQL injection, the script injection "
-                f"and the file-path trick, with a block page, which is good news: something is standing guard in front of "
-                f"{'it' if one else 'them'}, a firewall or a security device of some kind, and Sentry is still working out "
-                f"which. The plain request got through fine.")
+        return (f"Since yesterday, {w} {'has' if one else 'have'} started blocking our probes, which is good news. "
+                f"{THE_PROBE} Something is now standing guard in front of {'it' if one else 'them'}, and we're still "
+                f"working out which product it is.")
+    if it["kind"] == "assets":
+        one = len(it["hosts"]) == 1
+        return (f"{'A new box has' if one else 'Some new boxes have'} joined our fleet: {w}. "
+                f"{'It gets' if one else 'They get'} the same checks as everything else from here on.")
     s = f"{what}" + (f" on {w}" if w and w.lower() not in what.lower() else "") + "."
     if it["why"]:
         s += " " + it["why"].rstrip(".") + "."
@@ -703,14 +791,14 @@ def fallback(f: dict) -> dict:
     n = len(changed)
     if n == 0:
         headline, subject = "A quiet night.", "quiet night, nothing new"
-        opening = "Morning. Short version: nothing new since yesterday."
+        opening = f"{OPENER} Nothing new since yesterday."
     elif n == 1:
         headline = changed[0]["what"].rstrip(".") + "."
         subject = changed[0]["what"][:60]
-        opening = f"Morning. Short version: one thing since yesterday, {changed[0]['what'][0].lower()}{changed[0]['what'][1:].rstrip('.')}."
+        opening = f"{OPENER} One thing since yesterday: {changed[0]['what'][0].lower()}{changed[0]['what'][1:].rstrip('.')}."
     else:
         headline, subject = f"{n} things since yesterday.", f"{n} things since yesterday"
-        opening = f"Morning. Short version: {n} things since yesterday, the first one matters most."
+        opening = f"{OPENER} {n} things since yesterday, the first one matters most."
     small = f.get("small_count", 0)
     return {
         "subject": subject, "headline": headline, "opening": opening,
