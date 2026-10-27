@@ -202,6 +202,45 @@ def _slack_block_html(slack: dict | None) -> str:
             f'<tr><td style="padding:0 24px 14px;">{btn}</td></tr>')
 
 
+def preview_copy(subject: str, html: str, text: str, *, slack: dict | None, notes: list[str] | None = None):
+    """A TEST SEND's copy (round 5, Howie 15:33: "You've yet to show me what we're going to
+    throw into Slack"): the email as the others would get it, with a strip on top showing the
+    #on-call draft and the notes, and NO buttons: a test send approves nothing and posts
+    nothing. `subject` already carries the test prefix."""
+    notes = list(notes or [])
+    if slack is None and not notes:
+        return subject, html, text
+    ch = (slack or {}).get("channel") or "#on-call"
+    body = (slack or {}).get("payload_text") or ""
+    lines = "".join(f'<div style="margin-top:8px;">{escape(ln)}</div>' for ln in body.split("\n\n") if ln.strip())
+    slack_rows = ((f'<tr><td style="padding:0 24px 6px;font-family:{_FONT};font-size:13px;line-height:1.5;font-weight:700;'
+                   f'text-transform:uppercase;letter-spacing:.06em;color:{STRIP_TEXT};">What {escape(ch)} would get</td></tr>'
+                   f'<tr><td style="padding:0 24px 12px;"><div style="font-family:{_FONT};font-size:14px;line-height:1.5;color:{STRIP_TEXT};'
+                   f'background:#FFFFFF;border-left:4px solid {SLACK_BUTTON};border-radius:0 8px 8px 0;padding:10px 14px;white-space:pre-wrap;">'
+                   f'{lines}</div></td></tr>') if body else
+                  (f'<tr><td style="padding:0 24px 12px;font-family:{_FONT};font-size:14px;line-height:1.5;'
+                   f'color:{STRIP_TEXT};">Nothing for {escape(ch)} today: nothing new that a developer acts on, and no nudge due.</td></tr>'))
+    note_rows = "".join(
+        f'<tr><td style="padding:0 24px 10px;font-family:{_FONT};font-size:13px;line-height:1.5;color:{STRIP_TEXT};">'
+        f'{escape(n)}</td></tr>' for n in notes)
+    strip = (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        'data-approval-strip="test"><tr><td align="center" style="padding:20px 8px 0;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'bgcolor="{STRIP_BG}" style="width:100%;max-width:640px;background:{STRIP_BG};border-radius:14px;">'
+        f'<tr><td style="padding:18px 24px 6px;font-family:{_FONT};font-size:17px;line-height:1.35;'
+        f'font-weight:700;color:{STRIP_TEXT};">Test send. Nothing was sent to anyone else and nothing was posted.</td></tr>'
+        + slack_rows + note_rows +
+        f'<tr><td style="padding:0 24px 18px;font-family:{_FONT};font-size:13px;line-height:1.5;'
+        f'color:{STRIP_TEXT};">Below this note: the email exactly as the others would get it.</td></tr>'
+        '</table></td></tr></table>'
+    )
+    tlines = ["TEST SEND. Nothing was sent to anyone else and nothing was posted."]
+    tlines += [f"What {ch} would get:", body] if body else [f"Nothing for {ch} today."]
+    tlines += notes + [TEXT_RULE, ""]
+    return subject, with_strip_html(html, strip), with_strip_text(text, "\n".join(tlines))
+
+
 def strip_html_v2(url: str, others: list[str], kind: str, *, slack: dict | None, notes: list[str]) -> str:
     who = ", ".join(escape(a) for a in others)
     note_rows = "".join(

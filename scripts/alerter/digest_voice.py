@@ -137,23 +137,24 @@ def _plain(title: str, body: str, fix: str) -> tuple:
     return title, body, fix
 
 
-_OPPOSITE = (" That is the opposite of the hosts above, where the same three requests were turned away: there, "
-             "something is blocking; here, the firewall is only watching.")
+_OPPOSITE = ("The same three attack-shaped requests that the hosts above turned away went straight through "
+             "here: this firewall is watching, not blocking.")
 
 
 def _relate(items: list) -> None:
     """Howie 15:02: two firewall stories in one email read as the same story twice unless the
-    email says they are opposites. When a block-page item (something blocks) and a watching-
-    only firewall item are both on the sheet, the watching one says so, host-free (the per-
-    item host rule forbids naming the other item's hosts)."""
+    email says they are opposites; 15:32: "You are describing the three-pronged attack twice.
+    It's not necessary. Do it once and then refer to it later." When a block-page item
+    (something blocks) and a watching-only firewall item are both on the sheet, the watching
+    one's why becomes ONE sentence that refers back, host-free (the per-item host rule forbids
+    naming the other item's hosts). Alone, it keeps the full explanation."""
     guarding = [it for it in items if it["kind"] == "blockpage"]
     if not guarding:
         return
     for it in items:
         if it["section"] in ("changed", "still") and (it.get("family") == "waf-not-blocking"
                                                      or it["what"].startswith("A web firewall is there, but it's only watching")):
-            if _OPPOSITE.strip() not in it["why"]:
-                it["why"] = (it["why"].rstrip() + _OPPOSITE).strip()
+            it["why"] = _OPPOSITE
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 WORD_NUMBERS = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
@@ -206,7 +207,15 @@ def _item(iid: str, section: str, kind: str, severity: str, hosts: list, what: s
     what, why, fix = _clean(what), _clean(why), _clean(fix)
     detail = [_clean(d) for d in detail if d]
     text_for_dates = " ".join([_clean(text_for_dates), what, why, fix] + detail)
+    # the item's own numbers: everything its facts say, how many hosts, how many detail lines,
+    # and how many names its title lists after a colon ("Security headers missing: CSP, HSTS" is
+    # two headers; test send 2, 10-27 15:25: the writer said "two" and was refused for it)
     nums = set(_numbers_in(_norm_numbers(text_for_dates))) | {str(len(hosts))} | {str(n) for n in extra_numbers}
+    nums |= {str(len(detail))} if detail else set()
+    if ":" in what:
+        names = [n for n in re.split(r",|\band\b", what.split(":", 1)[1]) if n.strip()]
+        if len(names) >= 2:
+            nums.add(str(len(names)))
     return {
         "id": iid, "section": section, "kind": kind, "severity": severity or "",
         "severity_word": _sev_word(severity), "hosts": hosts, "family": family or "",
@@ -333,7 +342,7 @@ HOWIE'S VOICE, from his own writing (a profile built from 72 of his emails and h
 THE EMAIL HE APPROVED (match its rhythm and register, not its sentences; the facts differ every day):
 "Morning. Short version: one of our boxes went quiet, and that's the only real news today. valorep.prodexlabs.com hasn't answered since Oct 22, and its name doesn't resolve on the internet anymore, so it looks like it was taken down for good. If that's right, it drops off the portal on its own on Nov 2. l3h-ss, prod, l3h-nh and l3h-ivs all turned away Sentry's test requests, which is a good sign. Something is standing guard in front of them, a firewall or a security device of some kind, and Sentry is still working out which. Still sitting there: the firewall in front of bitec, demo and highcom is there but it's only watching, not blocking. That's been the case since Oct 22, and I think it's the most serious thing open right now. 4 small things also turned up, none of them need anybody, they're in the portal if you're curious."
 
-RULES THAT NEVER BEND. Say each fact once. The same problem on several hosts is ONE sentence that names the hosts (short names are fine: "bitec, demo and highcom"). Never assign blame or ownership: never "this is on us", "on you", "nothing for you to do", "somebody dropped the ball". Never mention anyone's job, being fired, HR or discipline. A thing that turns away Sentry's attack-shaped requests is GOOD news: something is standing guard and Sentry is still working out which product. When two items are about firewalls in opposite states, say so in one breath ("the opposite of the hosts above"), so nobody reads them as the same story twice. Say what Sentry actually sent when it matters (an item's "why" tells you). Never use the word "vulnerable". Never add a date, number, host, product or severity that is not in the facts for that item, and never move one from one item to another. Severity words only as given ("Moderate", "Moderate-high", "High"); you may also just say "the most serious thing open" without a word. For a NUDGE (slack_nudge items) never say how long it has been open and never give a date.
+RULES THAT NEVER BEND. Say each fact once. The same problem on several hosts is ONE sentence that names the hosts (short names are fine: "bitec, demo and highcom"). Never assign blame or ownership: never "this is on us", "on you", "nothing for you to do", "somebody dropped the ball". Never mention anyone's job, being fired, HR or discipline. A thing that turns away Sentry's attack-shaped requests is GOOD news: something is standing guard and Sentry is still working out which product. Say what Sentry actually sent ONCE, the first time it matters (an item's "why" tells you); after that refer back to it ("the same three requests"), never describe it again. When two items are about firewalls in opposite states, say so in one breath, so nobody reads them as the same story twice. Never use the word "vulnerable". Never add a date, number, host, product or severity that is not in the facts for that item, and never move one from one item to another. Severity words only as given ("Moderate", "Moderate-high", "High"); you may also just say "the most serious thing open" without a word. For a NUDGE (slack_nudge items) never say how long it has been open and never give a date.
 
 OUTPUT. Strict JSON, no prose around it, this shape:
 {"subject": "<5-9 words, no prefix, says the one main thing>",
@@ -341,17 +350,21 @@ OUTPUT. Strict JSON, no prose around it, this shape:
  "opening": "<one or two sentences, e.g. 'Morning. Short version: ...'>",
  "email": [{"id": "<item id>", "text": "<one paragraph about that item only>"}],
  "fixed": [{"id": "<item id>", "text": "<one sentence>"}],
- "still_open": [{"id": "<item id>", "text": "<one or two sentences about that item only>"}],
+ "still_open": [{"id": "<item id>", "text": "<ONE sentence, two at most: a reminder, not a briefing; the detail is in the portal>"}],
  "small_line": "<one sentence about the small stuff, or empty string if small_count is 0>",
- "slack": {"changed": [{"id": "<item id>", "text": "<one or two sentences>"}],
-           "nudge": [{"id": "<item id>", "text": "<two or three sentences: what, why it matters in plain words, the fix>"}],
+ "slack": {"changed": [{"id": "<item id>", "text": "<one or two sentences; a finding starts with its severity word in brackets, exactly as given, e.g. '[Moderate] ...'>"}],
+           "nudge": [{"id": "<item id>", "text": "<two or three sentences starting with the severity word in brackets: what, why it matters in plain words, the fix>"}],
            "closing": "<one short easy-going sentence, no dates, no job talk, or empty string>"}}
 Each item gives "what", "why", "fix", its "hosts", and "detail": per-host specifics in the scanner's own words (when a host stopped answering, why, when it leaves; what a block page looked like), which you may draw on, saying things once. Every item in the facts must get exactly one entry in its own list, in the order given, and no entry may name an item that is not in the facts. The Slack entries are for developers: concrete, host first, what to do; the email entries are for the leadership trio: what happened and what it means. The two are different pieces of writing, not a shortened copy of each other. If "previous_text" is given, do not reuse its sentences or openers."""
 
 
 def _prompt(f: dict, previous_text: str) -> str:
+    req = required_ids(f)
+    lists = (f"email: {req['email']}; fixed: {req['fixed']}; still_open: {req['still_open']}; "
+             f"slack.changed: {req['slack_changed']}; slack.nudge: {req['slack_nudge']}")
     return (f"Today is {f.get('day') or 'today'}. Company: {f.get('company') or 'Prodex'}.\n\n"
             f"FACTS (the only things you may say):\n{json.dumps(f['items'], indent=1)}\n\n"
+            f"WHICH IDS GO IN WHICH LIST (exactly these, in this order; an empty list stays empty):\n{lists}\n\n"
             f"small_count: {f.get('small_count', 0)}\n\n"
             + (f"previous_text (do not reuse these sentences):\n{previous_text[:3000]}\n\n" if previous_text else "")
             + "Write the JSON now.")
@@ -481,8 +494,12 @@ def _entry_problems(entry: dict, item: dict, where: str, portal_host: str) -> li
     for n in _NUMBER.findall(_norm_numbers(scrub)):
         if n not in item["numbers"] and n not in ("1",):
             out.append(f"{where} {item['id']}: a number that is not its own ({n})")
-    # severity words
+    # severity words: never another item's; on Slack, always its own (Howie 15:38: "you
+    # should identify if it's a medium, informational, or a low")
     own = set(SEVERITY_WORDS.get((item.get("severity") or "").upper(), ()))
+    if where.startswith("slack") and item.get("severity_word") and not re.search(
+            r"(?<![a-z-])" + re.escape(item["severity_word"].lower()) + r"(?![a-z-])", low):
+        out.append(f"{where} {item['id']}: does not say its severity ({item['severity_word']})")
     for w in ALL_SEVERITY_WORDS:
         if re.search(r"(?<![a-z-])" + re.escape(w) + r"(?![a-z-])", low) and w not in own:
             if w in ("high", "moderate") and any(x.startswith(w) for x in own):
@@ -616,6 +633,13 @@ def _hosts_words(hosts: list) -> str:
 def _para(it: dict) -> str:
     w = _hosts_words(it["hosts"])
     what = it["what"].rstrip(".")
+    if it["section"] == "still":
+        # Howie 15:32: "way too long and detailed." A nudge is one line; the detail is in the
+        # portal. The one thing it may add is the sentence that relates it to an item above.
+        s = f"{what}" + (f" on {w}" if w and w.lower() not in what.lower() else "") + "."
+        if it["why"] == _OPPOSITE:
+            s += " " + _OPPOSITE
+        return s
     if it["kind"] == "not_responding":
         one = len(it["hosts"]) == 1
         lines = it.get("detail") or []
@@ -640,6 +664,11 @@ def _para(it: dict) -> str:
     if it["fix"]:
         s += " " + it["fix"].rstrip(".") + "."
     return s
+
+
+def _sev_prefix(it: dict) -> str:
+    """Slack lines name their grade (Howie 15:38): "[Moderate] ..."; a quiet host has none."""
+    return f"[{it['severity_word']}] " if it.get("severity_word") else ""
 
 
 def fallback(f: dict) -> dict:
@@ -669,8 +698,8 @@ def fallback(f: dict) -> dict:
         "small_line": (f"{small} small thing{'s' if small != 1 else ''} also turned up, none of them need anybody, "
                        f"they're in the portal if you're curious." if small else ""),
         "slack": {
-            "changed": [{"id": it["id"], "text": _para(it)} for it in kc],
-            "nudge": [{"id": it["id"], "text": _para(it)} for it in kn],
+            "changed": [{"id": it["id"], "text": _sev_prefix(it) + _para(it)} for it in kc],
+            "nudge": [{"id": it["id"], "text": _sev_prefix(it) + _para(it)} for it in kn],
             "closing": "Neither one is urgent. If you own one of those boxes, it's a quick fix when you get a chance." if kn else "",
         },
     }

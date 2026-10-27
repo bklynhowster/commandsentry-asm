@@ -2529,6 +2529,11 @@ def main() -> int:
             model["voice"] = {"ok": voice_on and not reason, "reason": reason, "slack": bool(slack_payload)}
         if args.preview:
             subject = preview_subject(subject)
+            if slack_on or notes:
+                # a test send shows the #on-call draft and the notes on top, with no buttons
+                subject, html, text = _ap.preview_copy(
+                    subject, html, text, notes=notes,
+                    slack=({"channel": "#on-call", "payload_text": _ds.preview_text(slack_payload)} if slack_on else None))
 
         if args.dry_run:
             print(">> DRY RUN — would send to:", ", ".join(to_addrs))
