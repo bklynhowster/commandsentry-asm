@@ -80,7 +80,7 @@ def _good(f):
     for it in by["changed"][1:]:
         out["email"].append({"id": it["id"], "text": "l3h-ss, prod, l3h-nh and l3h-ivs all turned away Sentry's test traffic, which is a good sign. Something is standing guard in front of them, a firewall or a security device of some kind, and Sentry is still working out which."})
     for it in by["still"]:
-        out["still_open"].append({"id": it["id"], "text": "The firewall in front of bitec, demo and highcom is there but it's only watching, not blocking. That's been the case since Oct 22, and it's the most serious thing open right now."})
+        out["still_open"].append({"id": it["id"], "text": "[Moderate-high] The firewall in front of bitec, demo and highcom is only watching, not blocking, since Oct 22, the most serious thing open."})
     for it in by["slack_changed"]:
         out["slack"]["changed"].append({"id": it["id"], "text": "valorep.prodexlabs.com stopped answering on Oct 22 and its name doesn't resolve anymore, so it looks like it was taken down. If somebody expects it to be up, that's worth a look."})
     for it in by["slack_nudge"]:
@@ -229,8 +229,8 @@ def test_banned_words_are_whole_words_and_grading_words_are_refused():
     _refused(lambda o: o.__setitem__("opening", "Morning. Short version: this is not anyone's fault."), "banned word: 'fault'")
     _refused(lambda o: o.__setitem__("opening", "Morning. Short version: this one is on us."), "banned word: 'on us'")
     _refused(lambda o: o.__setitem__("opening", "Morning. Short version: nobody is getting fired over a header."), "banned word: 'fired'")
-    _refused(lambda o: o["still_open"].__setitem__(0, {"id": "s1", "text": "The firewall in front of bitec, demo and highcom is only watching. A minor thing."}), "severity word 'minor'")
-    _refused(lambda o: o["still_open"].__setitem__(0, {"id": "s1", "text": "The firewall in front of bitec, demo and highcom is only watching. Trivial, really."}), "severity word 'trivial'")
+    _refused(lambda o: o["still_open"].__setitem__(0, {"id": "s1", "text": "[Moderate-high] The firewall in front of bitec, demo and highcom is only watching. A minor thing."}), "severity word 'minor'")
+    _refused(lambda o: o["still_open"].__setitem__(0, {"id": "s1", "text": "[Moderate-high] The firewall in front of bitec, demo and highcom is only watching. Trivial, really."}), "severity word 'trivial'")
 
 
 def test_the_scanners_raw_titles_are_cleaned_on_the_way_into_the_sheet():
@@ -252,9 +252,9 @@ def test_the_scanners_raw_titles_are_cleaned_on_the_way_into_the_sheet():
     whole = " ".join(dv._flatten(it) for it in f["items"])
     assert "—" not in whole and "·" not in whole and "vulnerable" not in whole.lower()
     n1 = [it for it in f["items"] if it["section"] == "slack_nudge"][0]
-    assert n1["what"].startswith("Compressed pages could let an attacker read a secret") and "gzip" in n1["why"] and "server config" in n1["fix"]
+    assert n1["what"] == "Compressed pages could leak a secret (BREACH)" and "gzip" in n1["why"] and "server config" in n1["fix"]
     s1 = [it for it in f["items"] if it["section"] == "still"]
-    assert s1[0]["what"].startswith("Old CBC ciphers") and s1[1]["what"].startswith("Old weak ciphers (3DES)")
+    assert s1[0]["what"] == "Old CBC ciphers (BEAST) still offered" and s1[1]["what"] == "Old weak ciphers (3DES) still offered"
     assert s1[0]["why"] == "The tool flags the host as exposed to it."
     c = [it for it in f["items"] if it["section"] == "changed"][-1]
     assert "possibly exposed, see above" in c["why"] and c["what"].startswith("Compressed pages")
@@ -418,8 +418,8 @@ def test_two_firewall_stories_say_they_are_opposites_and_say_what_sentry_sent():
     assert "SQL injection" not in s1["why"]
     fb = dv.fallback(f)
     still = fb["still_open"][0]["text"]
-    assert still == "A web firewall is there, but it's only watching on bitec, demo and highcom. " + s1["why"], "a nudge is one line plus the one sentence that relates it"
-    assert "<ONE sentence, two at most" in dv.SYSTEM and "ONCE, the first time it matters" in dv.SYSTEM
+    assert still == "[Moderate-high] A web firewall is there, but it's only watching on bitec, demo and highcom. " + s1["why"], "a nudge is one line plus the one sentence that relates it"
+    assert "<ONE line, under 240 characters" in dv.SYSTEM and "ONCE, the first time it matters" in dv.SYSTEM
     import re as _re
     assert not any(_re.search(r"\b" + _re.escape(h.split(".")[0]) + r"\b", s1["why"]) for h in c2["hosts"]), "the other item's hosts are never named (the host rule would refuse it)"
     assert dv.check(dv.fallback(f), f, portal_url="https://prodexsentry.netlify.app") == []
@@ -427,7 +427,7 @@ def test_two_firewall_stories_say_they_are_opposites_and_say_what_sentry_sent():
     f2 = dv.facts(_model() | {"ticket": []}, still_open=_still())
     s1b = [it for it in f2["items"] if it["section"] == "still"][0]
     assert "hosts above" not in s1b["why"] and "SQL injection" in s1b["why"] and "went straight through" in s1b["why"], "alone, the firewall item explains the probe itself"
-    assert dv.fallback(f2)["still_open"][0]["text"] == "A web firewall is there, but it's only watching on bitec, demo and highcom."
+    assert dv.fallback(f2)["still_open"][0]["text"] == "[Moderate-high] A web firewall is there, but it's only watching on bitec, demo and highcom."
     # the writer's instructions carry his profile's words and the approved morning
     assert "He dictates." in dv.SYSTEM and "Short version:" in dv.SYSTEM and "THE EMAIL HE APPROVED" in dv.SYSTEM
     assert "Do not invent folksy idioms" in dv.SYSTEM and "firewalls in opposite states" in dv.SYSTEM
@@ -465,3 +465,35 @@ def test_a_slack_line_says_its_grade():
     assert fb["slack"]["changed"][0]["text"].startswith("valorep"), "a quiet host carries no grade"
     assert dv.check(fb, f, portal_url="https://prodexsentry.netlify.app") == []
     assert "severity word in brackets" in dv.SYSTEM
+
+
+def test_the_rules_say_every_host_is_named_even_in_one_sentence():
+    """Run #19 (10-27 16:24): told to keep a nudge to one sentence, the writer named one of
+    five sites and the check refused the day. The rule is now in so many words."""
+    assert "EVERY entry names EVERY host" in dv.SYSTEM and 'never "five of our sites"' in dv.SYSTEM
+    assert "MORE than six hosts: name the first six" in dv.SYSTEM
+
+
+def test_a_nudge_is_one_graded_line_and_a_long_host_list_is_six_and_n_more():
+    """Howie 16:32: "way too wordy ... you didn't tell us what level of severity this is";
+    16:30: twenty hosts in one breath. A nudge or a still line: '[Grade] what on hosts.',
+    under 240 characters; more than six hosts is six names and 'and N more'."""
+    f = _facts()
+    o = _good(f)
+    o["still_open"][0]["text"] = "The firewall in front of bitec, demo and highcom is only watching, not blocking."
+    assert any("does not say its severity (Moderate-high)" in p for p in dv.check(o, f, portal_url="https://prodexsentry.netlify.app"))
+    o = _good(f)
+    o["slack"]["nudge"][0]["text"] = "[Moderate] " + "Two security headers are missing on prodexlabs.com and cooked, " * 4 + "and that is a lot of words."
+    assert any("too long" in p for p in dv.check(o, f, portal_url="https://prodexsentry.netlify.app"))
+    # twenty hosts: six names and "and 14 more"
+    hosts = [f"h{i}.prodexlabs.com" for i in range(20)]
+    it = dv._item("n9", "slack_nudge", "nudge", "MODERATE-HIGH", hosts, "Compressed pages could leak a secret (BREACH)", "", "", "", dates_allowed=False)
+    assert dv._hosts_words(hosts) == "h0, h1, h2, h3, h4, h5 and 14 more"
+    line = dv._para(it)
+    assert line == "[Moderate-high] Compressed pages could leak a secret (BREACH) on h0, h1, h2, h3, h4, h5 and 14 more." and len(line) < 240
+    assert dv._entry_problems({"id": "n9", "text": line}, it, "slack.nudge", "") == []
+    bad = "[Moderate-high] Compressed pages could leak a secret (BREACH) on h0, h1 and 18 more."
+    assert any("name 6 and say 'and 14 more'" in p for p in dv._entry_problems({"id": "n9", "text": bad}, it, "slack.nudge", ""))
+    bad2 = "[Moderate-high] Compressed pages could leak a secret (BREACH) on h0, h1, h2, h3, h4, h5 and some others."
+    assert any("name 6 and say 'and 14 more'" in p for p in dv._entry_problems({"id": "n9", "text": bad2}, it, "slack.nudge", ""))
+    assert dv._closing(0) == "" and dv._closing(1).startswith("It isn't urgent.") and dv._closing(2).startswith("Neither one") and dv._closing(3).startswith("None of these is urgent.")

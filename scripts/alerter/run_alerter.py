@@ -1826,8 +1826,10 @@ def _still_open_picks(open_items, changed_ids, now, told):
             continue
         if any(f in changed_ids for f in it.get("finding_ids", [])):
             continue
-        it["recent"] = bool(it.get("since") is not None and now - it["since"] <= timedelta(days=14))
         picks.append(it)
+    picks = _ds.merge_items(picks)                      # the two header items are one line (16:32)
+    for it in picks:
+        it["recent"] = bool(it.get("since") is not None and now - it["since"] <= timedelta(days=14))
     picks.sort(key=lambda g: (_ds.SEV_RANK.get((g.get("severity") or "").upper(), 9), g.get("since") or now, g.get("title", "")))
     return picks[:_dv.STILL_OPEN_MAX]
 

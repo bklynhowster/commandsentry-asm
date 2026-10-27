@@ -23,6 +23,10 @@ from datetime import timedelta
 
 SEV_RANK = {"CRITICAL": 1, "HIGH": 2, "MODERATE-HIGH": 3, "MODERATE": 4, "LOW": 5, "INFO": 6}
 MODERATE_PLUS = ("CRITICAL", "HIGH", "MODERATE-HIGH", "MODERATE")
+# Howie 2026-10-27 16:33, on a nudge about missing security headers: "These missing security
+# headers are nonsense ... if there's something that's important that's been ignored for a
+# while, we can bring it up." A nudge is Moderate-high and up; news (section 1) stays Moderate+.
+NUDGE_FLOOR = ("CRITICAL", "HIGH", "MODERATE-HIGH")
 NUDGE_DAYS = 30                 # the email's timer (3s), same here so the two never disagree
 NUDGE_MIN_AGE_DAYS = 30         # a nudge is for something that has sat; younger is news
 NUDGE_MAX = 3                   # the two or three worst, worst first (the email's rule)
@@ -122,7 +126,7 @@ def nudge_items(open_items: list[dict], slack_told: dict | None, now, *, exclude
     told = slack_told or {}
     cands = []
     for it in open_items:
-        if (it.get("severity") or "").upper() not in MODERATE_PLUS:
+        if (it.get("severity") or "").upper() not in NUDGE_FLOOR:
             continue
         if not is_developer(it.get("title"), it.get("family")):
             continue
@@ -138,37 +142,50 @@ def nudge_items(open_items: list[dict], slack_told: dict | None, now, *, exclude
         if lasts and now - max(lasts) < timedelta(days=NUDGE_DAYS):
             continue
         cands.append(it)
-    merged: dict = {}
-    for it in cands:
-        k = merge_key(it.get("title"), it.get("family"))
-        g = merged.get(k)
-        if g is None:
-            merged[k] = dict(it, sites=sorted(set(it.get("sites") or [])), finding_ids=list(it["finding_ids"]),
-                             titles=[it.get("title", "")], merge_key=k)
-            continue
-        g["sites"] = sorted(set(g["sites"]) | set(it.get("sites") or []))
-        g["finding_ids"] = list(g["finding_ids"]) + list(it["finding_ids"])
-        g["titles"].append(it.get("title", ""))
-        if SEV_RANK.get((it.get("severity") or "").upper(), 9) < SEV_RANK.get((g.get("severity") or "").upper(), 9):
-            g["severity"] = it["severity"]
-        if it.get("since") is not None and (g.get("since") is None or it["since"] < g["since"]):
-            g["since"] = it["since"]
-    items = list(merged.values())
-    for g in items:
-        if len(g.get("titles", [])) > 1:
-            g["title"] = _merged_title(g["merge_key"], g["titles"])
+    items = merge_items(cands)
     # worst first, then the one on the most hosts, then the oldest, then the title
     items.sort(key=lambda g: (SEV_RANK.get((g.get("severity") or "").upper(), 9), -len(g.get("sites") or []),
                               g.get("since") or now, g.get("title", "")))
     return items[:NUDGE_MAX]
 
 
+def merge_items(items: list[dict]) -> list[dict]:
+    """Same-condition groups (MERGE_GROUPS) become one item with the hosts' union, the worst
+    severity and the earliest since; used by the nudge and by the email's still-open picks
+    (Howie 16:32: the two header items in one breath, as one line)."""
+    merged: dict = {}
+    for it in items:
+        k = merge_key(it.get("title"), it.get("family"))
+        g = merged.get(k)
+        if g is None:
+            merged[k] = dict(it, sites=sorted(set(it.get("sites") or [])), finding_ids=list(it.get("finding_ids") or []),
+                             titles=[it.get("title", "")], merge_key=k)
+            continue
+        g["sites"] = sorted(set(g["sites"]) | set(it.get("sites") or []))
+        g["finding_ids"] = list(g["finding_ids"]) + list(it.get("finding_ids") or [])
+        g["titles"].append(it.get("title", ""))
+        if SEV_RANK.get((it.get("severity") or "").upper(), 9) < SEV_RANK.get((g.get("severity") or "").upper(), 9):
+            g["severity"] = it["severity"]
+        if it.get("since") is not None and (g.get("since") is None or it["since"] < g["since"]):
+            g["since"] = it["since"]
+    out = list(merged.values())
+    for g in out:
+        if len(g.get("titles", [])) > 1:
+            g["title"] = _merged_title(g["merge_key"], g["titles"])
+    return out
+
+
+HEADER_SHORT = {"Content-Security-Policy": "CSP", "Strict-Transport-Security": "HSTS", "X-Frame-Options": "X-Frame-Options",
+                "X-Content-Type-Options": "X-Content-Type-Options", "Referrer-Policy": "Referrer-Policy",
+                "Permissions-Policy": "Permissions-Policy"}
+
+
 def _merged_title(key: str, titles: list) -> str:
     if key == "security headers":
-        names = sorted({t.split(":", 1)[1].strip() for t in titles if ":" in t})
+        names = sorted({HEADER_SHORT.get(t.split(":", 1)[1].strip(), t.split(":", 1)[1].strip()) for t in titles if ":" in t})
         return ("Security headers missing: " + ", ".join(names)) if names else "Security headers missing"
     if key == "weak ciphers":
-        return "Old weak ciphers still offered (3DES, and the CBC ones the BEAST attack goes after)"
+        return "Old weak ciphers (3DES, BEAST) still offered"
     return titles[0]
 
 
