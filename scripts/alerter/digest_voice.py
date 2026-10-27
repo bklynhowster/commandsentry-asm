@@ -41,7 +41,10 @@ import urllib.request
 from datetime import datetime
 from html import escape
 
-MODEL_ID = "claude-sonnet-5-5"          # the one place the id lives (plan v2, M8)
+MODEL_ID = "claude-sonnet-4-6"          # the one place the id lives (plan v2, M8). The id this
+                                        # repo already calls with the same key every day
+                                        # (synthesize_finding_descriptions.py); the first test
+                                        # send (10-27 14:53) got HTTP 400 on "claude-sonnet-5-5".
 TEMPERATURE = 0.8                       # Howie, 09:53: "a certain amount of randomness"
 MAX_TOKENS = 2500
 API_URL = "https://api.anthropic.com/v1/messages"
@@ -310,6 +313,18 @@ def api_post(url: str, body: dict, api_key: str, timeout: int = TIMEOUT_S) -> di
         return json.loads(r.read().decode("utf-8"))
 
 
+def api_error_words(e) -> str:
+    """What the API said, for the log and Howie's copy: its error type and message only (the
+    API's own words about the request, never the key or the prompt), cut short."""
+    try:
+        raw = e.read().decode("utf-8", "replace") if hasattr(e, "read") else ""
+        err = json.loads(raw).get("error", {}) if raw else {}
+        words = f"{err.get('type', '')}: {err.get('message', '')}".strip(": ")
+    except Exception:
+        words = ""
+    return re.sub(r"\s+", " ", words)[:160]
+
+
 def write(f: dict, *, api_key: str, previous_text: str = "", post=api_post, model_id: str = MODEL_ID,
           temperature: float = TEMPERATURE) -> dict:
     """ONE call; returns the parsed JSON answer. Raises VoiceError with a short reason on any
@@ -321,7 +336,8 @@ def write(f: dict, *, api_key: str, previous_text: str = "", post=api_post, mode
     try:
         resp = post(API_URL, body, api_key)
     except urllib.error.HTTPError as e:                       # pragma: no cover - live only
-        raise VoiceError(f"API HTTP {e.code}") from None
+        words = api_error_words(e)
+        raise VoiceError(f"API HTTP {e.code}" + (f", {words}" if words else "")) from None
     except Exception as e:
         raise VoiceError(f"API call failed: {type(e).__name__}") from None
     try:
