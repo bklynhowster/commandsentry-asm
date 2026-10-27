@@ -52,7 +52,7 @@ API_VERSION = "2023-06-01"
 TIMEOUT_S = 90
 
 STILL_OPEN_MAX = 3                      # the two or three worst open things (Howie, 09:00)
-EMAIL_ENTRY_MAX_CHARS = 700
+EMAIL_ENTRY_MAX_CHARS = 800                 # a firewall paragraph that says what was sent runs long
 SLACK_ENTRY_MAX_CHARS = 600
 LINE_MAX_CHARS = 300
 
@@ -81,7 +81,23 @@ ALL_SEVERITY_WORDS = ("critical", "high", "moderate-high", "moderate high", "mod
 # one the model echoes it and the check refuses the day, then the fallback prints it raw).
 # So every fact string is cleaned on its way INTO the sheet, and the titles with no plain
 # words in digest_words get them here.
+THE_PROBE = ("Sentry sent one plain, ordinary request and then three harmless requests shaped like the classic "
+             "attacks, a SQL injection, a script injection and a give-me-a-file-off-your-disk trick, to see what "
+             "answers.")
 PLAIN = (
+    (re.compile(r"^Something unrecognized is blocking|^Something is standing guard", re.I),
+     None,                                             # keep the title it came with
+     THE_PROBE + " The plain request got through fine and the three attack-shaped ones were turned away with a "
+     "block page Sentry does not recognize yet, which is good news: a firewall or a security device of some kind "
+     "is standing guard, and Sentry is still working out which product. The pages are kept with the scans.",
+     ""),
+    (re.compile(r"^A web firewall is there, but it's only watching|^WAF detected but not blocking", re.I),
+     None,
+     "A firewall answers in front of it, it announces itself the way firewalls do, but when Sentry sent its "
+     "three harmless attack-shaped requests, a SQL injection, a script injection and a give-me-a-file-off-your-disk "
+     "trick, all three went straight through to the site. It is watching, not blocking. Sentry only tells that a "
+     "firewall is present, never which product.",
+     "Switch that firewall from watching (detect or monitor mode) to blocking (prevent mode). The next deep scan checks."),
     (re.compile(r"^BREACH attack", re.I),
      "Compressed pages could let an attacker read a secret out of them (the BREACH trick)",
      "The site compresses its pages (gzip). Someone who can watch the traffic and make a browser send "
@@ -110,11 +126,34 @@ def _clean(text) -> str:
 
 
 def _plain(title: str, body: str, fix: str) -> tuple:
-    """(what, why, fix) in plain words for a title digest_words has none for; else as given."""
+    """(what, why, fix) in plain words for a title digest_words has none for, or whose words
+    hide what Sentry did (Howie 15:02: "what was Sentry actually trying to do?"); else as given.
+    A PLAIN row with `what` None keeps the title; a row's `why` replaces the body outright."""
     for pat, what, why, do in PLAIN:
         if pat.search(title or ""):
-            return what, body or why, fix or do
+            if what is None:                           # a firewall row: its words replace the body
+                return title, why, (fix or do)
+            return what, (body or why), (fix or do)
     return title, body, fix
+
+
+_OPPOSITE = (" That is the opposite of the hosts above, where the same three requests were turned away: there, "
+             "something is blocking; here, the firewall is only watching.")
+
+
+def _relate(items: list) -> None:
+    """Howie 15:02: two firewall stories in one email read as the same story twice unless the
+    email says they are opposites. When a block-page item (something blocks) and a watching-
+    only firewall item are both on the sheet, the watching one says so, host-free (the per-
+    item host rule forbids naming the other item's hosts)."""
+    guarding = [it for it in items if it["kind"] == "blockpage"]
+    if not guarding:
+        return
+    for it in items:
+        if it["section"] in ("changed", "still") and (it.get("family") == "waf-not-blocking"
+                                                     or it["what"].startswith("A web firewall is there, but it's only watching")):
+            if _OPPOSITE.strip() not in it["why"]:
+                it["why"] = (it["why"].rstrip() + _OPPOSITE).strip()
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 WORD_NUMBERS = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
@@ -160,16 +199,17 @@ def _short(host: str) -> str:
 
 
 def _item(iid: str, section: str, kind: str, severity: str, hosts: list, what: str, why: str,
-          fix: str, text_for_dates: str, *, dates_allowed: bool = True, extra_numbers=(), detail=()) -> dict:
+          fix: str, text_for_dates: str, *, dates_allowed: bool = True, extra_numbers=(), detail=(),
+          family: str = "") -> dict:
     hosts = [h for h in hosts if h]
     what, why, fix = _plain(what or "", why or "", fix or "")
     what, why, fix = _clean(what), _clean(why), _clean(fix)
     detail = [_clean(d) for d in detail if d]
     text_for_dates = " ".join([_clean(text_for_dates), what, why, fix] + detail)
-    nums = set(_numbers_in(text_for_dates)) | {str(len(hosts))} | {str(n) for n in extra_numbers}
+    nums = set(_numbers_in(_norm_numbers(text_for_dates))) | {str(len(hosts))} | {str(n) for n in extra_numbers}
     return {
         "id": iid, "section": section, "kind": kind, "severity": severity or "",
-        "severity_word": _sev_word(severity), "hosts": hosts,
+        "severity_word": _sev_word(severity), "hosts": hosts, "family": family or "",
         "what": what, "why": why, "fix": fix,
         "detail": detail,                            # per-host specifics, in the model's words
         "dates": _dates_in(text_for_dates) if dates_allowed else [],
@@ -192,9 +232,7 @@ def _merge_blockpages(items: list) -> list:
     merged = {
         "kind": "blockpage", "severity": "",
         "title": f"Something is standing guard in front of {len(hosts)} of our hosts, and Sentry is still working out what",
-        "body": ("Each one turned away Sentry's attack-style test strings with a block page Sentry does not "
-                 "recognize yet, which is good news: a firewall or a security device of some kind is in front "
-                 "of it. Sentry keeps the pages with the scans and keeps working out which product it is."),
+        "body": "",                                    # PLAIN gives it the probe, in words
         "sites": hosts, "lines": [f"{i['sites'][0]}: {i.get('body', '')}" for i in pages if i.get("sites")],
         "why": "", "do": "", "tag": "",
     }
@@ -231,7 +269,8 @@ def facts(model: dict, *, still_open=None, slack=None, sentry_only=None, company
             hosts = _hosts_of_rating_lines(it.get("lines"))
         items.append(_item(f"c{n+1}", "changed", kind, it.get("severity", ""), hosts,
                            it.get("title", ""), it.get("body", "") or it.get("why", ""), it.get("do", ""),
-                           _text_of(it), extra_numbers=[len(it.get("lines") or [])], detail=it.get("lines") or []))
+                           _text_of(it), extra_numbers=[len(it.get("lines") or [])], detail=it.get("lines") or [],
+                           family=it.get("family", "")))
     for n, it in enumerate(model.get("done", [])):
         hosts = [ln.split(":")[0] for ln in it.get("lines", []) if ":" in ln]
         items.append(_item(f"f{n+1}", "fixed", it.get("kind", "fixed"), "", hosts,
@@ -241,7 +280,7 @@ def facts(model: dict, *, still_open=None, slack=None, sentry_only=None, company
         text = _text_of(it) + (f" {_day(since)}" if since is not None else "")
         d = _item(f"s{n+1}", "still", it.get("told_kind") or "open", it.get("severity", ""),
                   list(it.get("sites") or []), it.get("title", ""), it.get("body", ""), it.get("do", ""),
-                  text, dates_allowed=bool(it.get("recent")))
+                  text, dates_allowed=bool(it.get("recent")), family=it.get("family", ""))
         items.append(d)
     slack = slack or {}
     for n, it in enumerate(slack.get("changed", [])):
@@ -252,6 +291,7 @@ def facts(model: dict, *, still_open=None, slack=None, sentry_only=None, company
         items.append(_item(f"n{n+1}", "slack_nudge", "nudge", it.get("severity", ""),
                            list(it.get("sites") or []), it.get("title", ""), it.get("body", ""),
                            it.get("do", ""), _text_of(it), dates_allowed=False))
+    _relate(items)
     return {
         "company": company, "day": day,
         "small_count": int(model.get("low", 0) or 0) + int(model.get("info", 0) or 0),
@@ -281,7 +321,19 @@ def required_ids(f: dict) -> dict:
 # ── the writer ──────────────────────────────────────────────────────────────────────────
 SYSTEM = """You write a short morning security email and a Slack post for a small company, in the voice of Howie, its security lead, to his own colleagues. Everything you write is read by people on the same team, so it is all "we" and "our"; Sentry is the company's own scanner and is referred to as "Sentry".
 
-VOICE. Conversational, dictated, New York plain English. Long comma-joined sentences are fine; no bullet lists in the email; no headings; no em dashes (use commas or a new sentence). Openers and pivots like "Morning.", "Short version:", "Heads up:", "Obviously", "just FYI", "Look," are welcome, used sparingly. Say each fact once. The same problem on several hosts is ONE sentence that names the hosts (short names are fine: "bitec, demo and highcom"). Never assign blame or ownership: never "this is on us", "on you", "nothing for you to do", "somebody dropped the ball". Never mention anyone's job, being fired, HR or discipline. A thing that is turning away our test traffic is GOOD news: something is standing guard and Sentry is still working out which product. Never use the word "vulnerable". Never add a date, number, host, product or severity that is not in the facts for that item, and never move one from one item to another. Severity words only as given ("Moderate", "Moderate-high", "High"); you may also just say "the most serious thing open" without a word. For a NUDGE (slack_nudge items) never say how long it has been open and never give a date.
+HOWIE'S VOICE, from his own writing (a profile built from 72 of his emails and his Slack):
+- He dictates. Long, flowing, comma-joined sentences, the way people talk, not fragments. No em dashes, no semicolons, no bullet lists, no headings, no bold. Where a dash would go, a comma or a new sentence.
+- He opens with the point. "Short version:" is his signature move in writing. Spoken openers and pivots, used sparingly: "Morning.", "Obviously", "However,", "Look,", "just FYI", "Believe me,".
+- He hedges his own framing and holds the line anyway: "I think", "somewhat", "a little bit", "some kind of", "if I had to choose". Softened, not uncertain.
+- He does NOT signpost or build an argument ("what really did it for me is", "the rest follows from that", "so we'd be"). He says things in sequence and lets the reader put it together.
+- Old-fashioned turns dropped into plain delivery, only his own: "much obliged", "whereby", "the nuts and bolts of that", "make sure everything is kosher", "holding the bag". Do not invent folksy idioms; when unsure, plainer is more him.
+- Warm and direct with his own people. Specific data inline, no corporate-speak, no "I hope this finds you well", nothing that reads composed. He often ends by handing off or saying what is next, not with a summary.
+- His verbatim rhythm sample: "Obviously Attio is the more mature product, but if I had to choose between Monaco and Day AI, I think Day AI still is somewhat better. Monaco is by far the most immature of the bunch. However, if they have the most incredible features ever, we can set up some kind of guardrails to protect ourselves from them. You guys tell me which direction you want to go."
+
+THE EMAIL HE APPROVED (match its rhythm and register, not its sentences; the facts differ every day):
+"Morning. Short version: one of our boxes went quiet, and that's the only real news today. valorep.prodexlabs.com hasn't answered since Oct 22, and its name doesn't resolve on the internet anymore, so it looks like it was taken down for good. If that's right, it drops off the portal on its own on Nov 2. l3h-ss, prod, l3h-nh and l3h-ivs all turned away Sentry's test requests, which is a good sign. Something is standing guard in front of them, a firewall or a security device of some kind, and Sentry is still working out which. Still sitting there: the firewall in front of bitec, demo and highcom is there but it's only watching, not blocking. That's been the case since Oct 22, and I think it's the most serious thing open right now. 4 small things also turned up, none of them need anybody, they're in the portal if you're curious."
+
+RULES THAT NEVER BEND. Say each fact once. The same problem on several hosts is ONE sentence that names the hosts (short names are fine: "bitec, demo and highcom"). Never assign blame or ownership: never "this is on us", "on you", "nothing for you to do", "somebody dropped the ball". Never mention anyone's job, being fired, HR or discipline. A thing that turns away Sentry's attack-shaped requests is GOOD news: something is standing guard and Sentry is still working out which product. When two items are about firewalls in opposite states, say so in one breath ("the opposite of the hosts above"), so nobody reads them as the same story twice. Say what Sentry actually sent when it matters (an item's "why" tells you). Never use the word "vulnerable". Never add a date, number, host, product or severity that is not in the facts for that item, and never move one from one item to another. Severity words only as given ("Moderate", "Moderate-high", "High"); you may also just say "the most serious thing open" without a word. For a NUDGE (slack_nudge items) never say how long it has been open and never give a date.
 
 OUTPUT. Strict JSON, no prose around it, this shape:
 {"subject": "<5-9 words, no prefix, says the one main thing>",
@@ -578,8 +630,10 @@ def _para(it: dict) -> str:
                    f"Any that were taken down on purpose leave the portal on their own. If one of them should be up, now you know.")).strip()
     if it["kind"] == "blockpage":
         one = len(it["hosts"]) == 1
-        return (f"{w} turned away Sentry's test traffic, which is good news: something is standing guard in front of "
-                f"{'it' if one else 'them'}, a firewall or a security device of some kind, and Sentry is still working out which.")
+        return (f"{w} turned away Sentry's three attack-shaped test requests, the SQL injection, the script injection "
+                f"and the file-path trick, with a block page, which is good news: something is standing guard in front of "
+                f"{'it' if one else 'them'}, a firewall or a security device of some kind, and Sentry is still working out "
+                f"which. The plain request got through fine.")
     s = f"{what}" + (f" on {w}" if w and w.lower() not in what.lower() else "") + "."
     if it["why"]:
         s += " " + it["why"].rstrip(".") + "."

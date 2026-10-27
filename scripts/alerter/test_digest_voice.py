@@ -115,8 +115,10 @@ def test_the_same_thing_on_several_hosts_is_one_item_and_a_block_page_is_good_ne
     assert "Oct 27" in c2["dates"]
     assert "unrecognized" not in c2["what"], "the 3l title ('Something unrecognized is blocking') is not the voice's"
     para = dv._para(c2)
-    assert para.startswith("l3h-ss, prod, l3h-nh and l3h-ivs turned away Sentry's test traffic, which is good news")
-    assert dv._para(dict(c2, hosts=c2["hosts"][:1])).startswith("l3h-ss.prodexlabs.com turned away Sentry's test traffic, which is good news: something is standing guard in front of it")
+    assert para.startswith("l3h-ss, prod, l3h-nh and l3h-ivs turned away Sentry's three attack-shaped test requests, the SQL injection, the script injection and the file-path trick, with a block page, which is good news")
+    assert dv._para(dict(c2, hosts=c2["hosts"][:1])).startswith("l3h-ss.prodexlabs.com turned away Sentry's three attack-shaped test requests")
+    assert "3" in c2["numbers"] and "1" in c2["numbers"], "the probe's spelled numbers are the item's own"
+    assert c2["why"].startswith("Sentry sent one plain, ordinary request and then three harmless requests shaped like the classic attacks"), "Howie 15:02: say what Sentry actually did"
     # one block page stays as it was shaped (no merge, its own host in the title)
     m = _model()
     m["ticket"] = [t for t in m["ticket"] if t.get("kind") != "blockpage"][:0] + [t for t in m["ticket"] if t.get("kind") == "blockpage"][:1]
@@ -401,3 +403,25 @@ def test_an_api_error_is_reported_in_the_apis_own_words_and_never_the_key():
         assert False, "should raise"
     except dv.VoiceError as ve:
         assert str(ve).startswith("API HTTP 400, invalid_request_error: max_tokens: too large") and "THEKEY" not in str(ve)
+
+
+def test_two_firewall_stories_say_they_are_opposites_and_say_what_sentry_sent():
+    """Howie 15:02: "what was Sentry actually trying to do?" and "how are you differentiating
+    [the web firewall] from anything you've mentioned before?" Both items say what was sent;
+    the watching-only one says it is the opposite of the hosts above, naming no host of theirs."""
+    f = _facts()
+    c2 = [it for it in f["items"] if it["kind"] == "blockpage"][0]
+    s1 = [it for it in f["items"] if it["section"] == "still"][0]
+    assert "SQL injection" in c2["why"] and "script injection" in c2["why"] and "turned away" in c2["why"]
+    assert "SQL injection" in s1["why"] and "went straight through" in s1["why"]
+    assert s1["why"].endswith("That is the opposite of the hosts above, where the same three requests were turned away: there, something is blocking; here, the firewall is only watching.")
+    import re as _re
+    assert not any(_re.search(r"\b" + _re.escape(h.split(".")[0]) + r"\b", s1["why"]) for h in c2["hosts"]), "the other item's hosts are never named (the host rule would refuse it)"
+    assert dv.check(dv.fallback(f), f, portal_url="https://prodexsentry.netlify.app") == []
+    # no block page on the sheet: no "opposite" line
+    f2 = dv.facts(_model() | {"ticket": []}, still_open=_still())
+    s1b = [it for it in f2["items"] if it["section"] == "still"][0]
+    assert "opposite" not in s1b["why"] and "went straight through" in s1b["why"]
+    # the writer's instructions carry his profile's words and the approved morning
+    assert "He dictates." in dv.SYSTEM and "Short version:" in dv.SYSTEM and "THE EMAIL HE APPROVED" in dv.SYSTEM
+    assert "Do not invent folksy idioms" in dv.SYSTEM and "the opposite of the hosts above" in dv.SYSTEM
