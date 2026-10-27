@@ -65,6 +65,24 @@ def test_the_expiry_is_per_instance_and_defaults_to_36():
     assert ap.daily_expires_hours({"DIGEST_DAILY_EXPIRES_HOURS": ""}) == 36
 
 
+def test_a_test_send_shows_the_slack_draft_and_the_notes_with_no_button():
+    """Howie 15:33: "You've yet to show me what we're going to throw into Slack." A preview
+    test send carries the #on-call draft and the notes on top, and no button of any kind."""
+    s, html, text = ap.preview_copy("[TEST] S", HTML, "T", slack={"channel": "#on-call", "payload_text": "*What changed*\n• valorep went quiet."},
+                                    notes=["Written from the fallback today (x)."])
+    assert s == "[TEST] S" and 'data-approval-strip="test"' in html
+    assert "What #on-call would get" in html and "valorep went quiet." in html and "Written from the fallback today" in html
+    assert "Approve for email" not in html and "Post to Slack" not in html and "href=" not in html
+    assert "Nothing was sent to anyone else and nothing was posted" in html and html.endswith("</html>") and "<p>x</p>" in html
+    assert text.startswith("TEST SEND. Nothing was sent to anyone else and nothing was posted.\nWhat #on-call would get:\n*What changed*") and text.endswith("T")
+    s2, html2, text2 = ap.preview_copy("[TEST] S", HTML, "T", slack={"channel": "#on-call", "payload_text": ""})
+    assert "Nothing for #on-call today" in html2 and "Nothing for #on-call today." in text2
+    assert ap.preview_copy("[TEST] S", HTML, "T", slack=None) == ("[TEST] S", HTML, "T"), "no Slack half and no notes: the plain test email"
+    src = inspect.getsource(ra.main)
+    i = src.index("subject = preview_subject(subject)\n            if slack_on or notes:")
+    assert "_ap.preview_copy(" in src[i:i + 500] and "_ds.preview_text(slack_payload)" in src[i:i + 500]
+
+
 # ── the gates (M5, M6, G4) ────────────────────────────────────────────────────────────────
 def test_both_switches_are_off_unless_set_and_independent(monkeypatch):
     for k in ("ALERTER_VOICE", "ALERTER_SLACK"):

@@ -84,7 +84,7 @@ def _good(f):
     for it in by["slack_changed"]:
         out["slack"]["changed"].append({"id": it["id"], "text": "valorep.prodexlabs.com stopped answering on Oct 22 and its name doesn't resolve anymore, so it looks like it was taken down. If somebody expects it to be up, that's worth a look."})
     for it in by["slack_nudge"]:
-        out["slack"]["nudge"].append({"id": it["id"], "text": "Two security headers are missing on prodexlabs.com and cooked: they don't send Strict-Transport-Security or Content-Security-Policy. A couple of lines of server config."})
+        out["slack"]["nudge"].append({"id": it["id"], "text": "[Moderate] Two security headers are missing on prodexlabs.com and cooked: they don't send Strict-Transport-Security or Content-Security-Policy. A couple of lines of server config."})
     return out
 
 
@@ -183,16 +183,16 @@ def test_the_free_text_fields_cannot_carry_a_number_or_date_that_is_nobodys():
 def test_a_nudge_may_not_say_how_long_in_any_words():
     """Qwen, code review 12:02: 'Since last week' at the start of a sentence slipped past
     the ' since ' test; 'for weeks nobody has touched it' has no date and no number."""
-    _refused(lambda o: o["slack"]["nudge"].__setitem__(0, {"id": "n1", "text": "prodexlabs.com is missing a security header, flagged thirty times."}), "a number that is not its own (30)")
-    for bad in ("Since last week prodexlabs.com is missing a security header.",
-                "prodexlabs.com is missing a security header. For weeks nobody has touched it.",
-                "prodexlabs.com has been missing a security header for a while.",
-                "prodexlabs.com is missing a security header, open for three months.",
-                "prodexlabs.com is missing a security header, flagged ages ago."):
+    _refused(lambda o: o["slack"]["nudge"].__setitem__(0, {"id": "n1", "text": "[Moderate] prodexlabs.com is missing a security header, flagged thirty times."}), "a number that is not its own (30)")
+    for bad in ("[Moderate] Since last week prodexlabs.com is missing a security header.",
+                "[Moderate] prodexlabs.com is missing a security header. For weeks nobody has touched it.",
+                "[Moderate] prodexlabs.com has been missing a security header for a while.",
+                "[Moderate] prodexlabs.com is missing a security header, open for three months.",
+                "[Moderate] prodexlabs.com is missing a security header, flagged ages ago."):
         _refused(lambda o, bad=bad: o["slack"]["nudge"].__setitem__(0, {"id": "n1", "text": bad}), "a nudge says how long")
     f = _facts()
     o = _good(f)
-    o["slack"]["nudge"][0]["text"] = "Two security headers are missing on prodexlabs.com and cooked, Strict-Transport-Security and Content-Security-Policy. A couple of lines of server config."
+    o["slack"]["nudge"][0]["text"] = "[Moderate] Two security headers are missing on prodexlabs.com and cooked, Strict-Transport-Security and Content-Security-Policy. A couple of lines of server config."
     assert dv.check(o, f, portal_url="https://prodexsentry.netlify.app") == []
 
 
@@ -413,15 +413,55 @@ def test_two_firewall_stories_say_they_are_opposites_and_say_what_sentry_sent():
     c2 = [it for it in f["items"] if it["kind"] == "blockpage"][0]
     s1 = [it for it in f["items"] if it["section"] == "still"][0]
     assert "SQL injection" in c2["why"] and "script injection" in c2["why"] and "turned away" in c2["why"]
-    assert "SQL injection" in s1["why"] and "went straight through" in s1["why"]
-    assert s1["why"].endswith("That is the opposite of the hosts above, where the same three requests were turned away: there, something is blocking; here, the firewall is only watching.")
+    assert s1["why"] == "The same three attack-shaped requests that the hosts above turned away went straight through here: this firewall is watching, not blocking.", \
+        "Howie 15:32: the probe is described once; the firewall item refers back"
+    assert "SQL injection" not in s1["why"]
+    fb = dv.fallback(f)
+    still = fb["still_open"][0]["text"]
+    assert still == "A web firewall is there, but it's only watching on bitec, demo and highcom. " + s1["why"], "a nudge is one line plus the one sentence that relates it"
+    assert "<ONE sentence, two at most" in dv.SYSTEM and "ONCE, the first time it matters" in dv.SYSTEM
     import re as _re
     assert not any(_re.search(r"\b" + _re.escape(h.split(".")[0]) + r"\b", s1["why"]) for h in c2["hosts"]), "the other item's hosts are never named (the host rule would refuse it)"
     assert dv.check(dv.fallback(f), f, portal_url="https://prodexsentry.netlify.app") == []
     # no block page on the sheet: no "opposite" line
     f2 = dv.facts(_model() | {"ticket": []}, still_open=_still())
     s1b = [it for it in f2["items"] if it["section"] == "still"][0]
-    assert "opposite" not in s1b["why"] and "went straight through" in s1b["why"]
+    assert "hosts above" not in s1b["why"] and "SQL injection" in s1b["why"] and "went straight through" in s1b["why"], "alone, the firewall item explains the probe itself"
+    assert dv.fallback(f2)["still_open"][0]["text"] == "A web firewall is there, but it's only watching on bitec, demo and highcom."
     # the writer's instructions carry his profile's words and the approved morning
     assert "He dictates." in dv.SYSTEM and "Short version:" in dv.SYSTEM and "THE EMAIL HE APPROVED" in dv.SYSTEM
-    assert "Do not invent folksy idioms" in dv.SYSTEM and "the opposite of the hosts above" in dv.SYSTEM
+    assert "Do not invent folksy idioms" in dv.SYSTEM and "firewalls in opposite states" in dv.SYSTEM
+
+
+def test_the_second_test_send_refusals_are_allowed_now():
+    """Test send 2 (10-27 15:25, run #18): the writer said "two" about the headers item and
+    was refused ("a number that is not its own (2)"), and it put the email ids c1, c2 into
+    slack.changed. The count of names a title lists is the item's own; the prompt names the
+    ids per list."""
+    f = _facts()
+    n1 = [it for it in f["items"] if it["section"] == "slack_nudge"][0]
+    assert n1["what"].startswith("Security headers missing: Content-Security-Policy, Strict-Transport-Security")
+    assert "2" in n1["numbers"], "two names after the colon"
+    o = _good(f)
+    o["slack"]["nudge"][0]["text"] = "[Moderate] Two security headers are missing on prodexlabs.com and cooked, Strict-Transport-Security and Content-Security-Policy. A couple of lines of server config."
+    assert dv.check(o, f, portal_url="https://prodexsentry.netlify.app") == []
+    prompt = dv._prompt(f, "")
+    assert "WHICH IDS GO IN WHICH LIST" in prompt and "slack.changed: ['k1']" in prompt and "slack.nudge: ['n1']" in prompt and "email: ['c1', 'c2']" in prompt
+    # an item with detail lines may count them
+    c1 = f["items"][0]
+    assert str(len(c1["detail"])) in c1["numbers"]
+
+
+def test_a_slack_line_says_its_grade():
+    """Howie 15:38: "you should identify if it's a medium, informational, or a low." Every
+    Slack line about a graded finding carries its own severity word; a quiet host has none."""
+    _refused(lambda o: o["slack"]["nudge"].__setitem__(0, {"id": "n1", "text": "Two security headers are missing on prodexlabs.com and cooked. A couple of lines of server config."}),
+             "does not say its severity (Moderate)")
+    _refused(lambda o: o["slack"]["nudge"].__setitem__(0, {"id": "n1", "text": "[Low] Two security headers are missing on prodexlabs.com and cooked."}),
+             "severity word 'low' is not its own")
+    f = _facts()
+    fb = dv.fallback(f)
+    assert fb["slack"]["nudge"][0]["text"].startswith("[Moderate] Security headers missing")
+    assert fb["slack"]["changed"][0]["text"].startswith("valorep"), "a quiet host carries no grade"
+    assert dv.check(fb, f, portal_url="https://prodexsentry.netlify.app") == []
+    assert "severity word in brackets" in dv.SYSTEM
