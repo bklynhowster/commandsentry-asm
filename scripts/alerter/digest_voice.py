@@ -732,11 +732,83 @@ FONT = "'Public Sans', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helv
 INK, MUTED, PAGE = "#0F1B2D", "#4A5668", "#E9EEF5"
 PURPLE, PURPLE_TINT = "#6E56A6", "#F3F0FA"
 GREEN, GREEN_TINT = "#0B7A55", "#EAF6F1"
+HAIRLINE = "#E3E8F0"
+# The grade as a pill, not a word in brackets (Howie 17:43: the still lines "blend into
+# themselves"; "maybe you want to have the word 'moderate' look a little different"). Ink on a
+# tint per grade; the tints sit quietly on white and the ink reads at 12px.
+GRADE_COLORS = {
+    "Critical": ("#8A1C1C", "#FBE9E9"),
+    "High": ("#9A3B0C", "#FCEEE3"),
+    "Moderate-high": ("#7A5300", "#FBF1D6"),
+    "Moderate": ("#2F4F8F", "#E6EDF9"),
+    "Low": ("#4A5668", "#EDF0F4"),
+    "Info": ("#4A5668", "#EDF0F4"),
+}
+_GRADE_LEAD = re.compile(r"^\s*\[(critical|high|moderate-high|moderate high|moderate|low|info)\]\s*", re.I)
 
 
-def _p(text: str, size: int = 16, color: str = INK, extra: str = "") -> str:
+def split_grade(text: str) -> tuple[str, str]:
+    """'[Moderate] the problem on a and b.' -> ('Moderate', 'the problem on a and b.');
+    a line with no leading grade -> ('', the line)."""
+    m = _GRADE_LEAD.match(text or "")
+    if not m:
+        return "", (text or "").strip()
+    return _sev_word(m.group(1).replace(" ", "-")), (text or "")[m.end():].strip()
+
+
+def grade_pill(word: str) -> str:
+    if not word:
+        return ""
+    ink, tint = GRADE_COLORS.get(word, GRADE_COLORS["Low"])
+    return (f'<span style="display:inline-block;font-family:{FONT};font-size:12px;line-height:18px;font-weight:700;'
+            f'letter-spacing:.02em;color:{ink};background:{tint};border-radius:999px;padding:2px 10px;'
+            f'white-space:nowrap;">{escape(word)}</span>')
+
+
+def host_names(hosts: list) -> list:
+    """Every way a host may be written, full and short, longest first so 'prod' never lands
+    inside 'prod.prodexlabs.com'."""
+    return sorted({h for h in hosts if h} | {_short(h) for h in hosts if h}, key=len, reverse=True)
+
+
+def _host_re(name: str) -> re.Pattern:
+    # a whole name: not inside another word or a longer host, and not followed by more host
+    # ('prod' is not 'prod.prodexlabs.com'); a sentence's period after it is fine
+    return re.compile(r"(?<![\w.*-])" + re.escape(name) + r"(?![\w-])(?!\.\w)", re.I)
+
+
+def mark_hosts(escaped: str, hosts: list) -> str:
+    """Bold every host name in an already-escaped line (Howie 17:53: "it's a host ... find a
+    way to get it in people's eyes"), so the eye lands on which boxes."""
+    for n in host_names(hosts):
+        escaped = _host_re(escape(n)).sub(lambda m: f'<span style="font-weight:600;">{m.group(0)}</span>', escaped)
+    return escaped
+
+
+def all_hosts(f: dict) -> list:
+    """Every host on the sheet, for the lines that are nobody's item (headline, opening)."""
+    return sorted({h for it in f.get("items", []) for h in (it.get("hosts") or [])})
+
+
+def grade_row(word: str, body_html: str, *, first: bool, size: int = 16, color: str = INK,
+              pad: int = 14) -> str:
+    """One graded line as a table row: the pill in a narrow left cell, the line beside it;
+    a hairline above every row but the first. On a phone the pill stacks above the line."""
+    top = "" if first else f"border-top:1px solid {HAIRLINE};"
+    if not word:                                       # a quiet host has no grade: the line spans both cells
+        return (f'<tr><td colspan="2" valign="top" style="{top}padding:{pad}px 0;font-family:{FONT};font-size:{size}px;'
+                f'line-height:1.6;color:{color};">{body_html}</td></tr>')
+    return (f'<tr><td class="gr" valign="top" style="{top}padding:{pad + 1}px 14px {pad}px 0;width:1%;white-space:nowrap;">'
+            f'{grade_pill(word)}</td>'
+            f'<td class="gt" valign="top" style="{top}padding:{pad}px 0;font-family:{FONT};font-size:{size}px;'
+            f'line-height:1.6;color:{color};">{body_html}</td></tr>')
+
+
+def _p(text: str, size: int = 16, color: str = INK, extra: str = "", hosts: list = ()) -> str:
+    """A paragraph; with `hosts`, every host name in it is bold."""
+    body = mark_hosts(escape(text), list(hosts)) if hosts else escape(text)
     return (f'<div style="font-family:{FONT};font-size:{size}px;line-height:1.6;color:{color};{extra}">'
-            f'{escape(text)}</div>')
+            f'{body}</div>')
 
 
 def render_html(out: dict, f: dict, *, brand: dict, logo_cid: str, local_end: datetime,
@@ -751,6 +823,7 @@ def render_html(out: dict, f: dict, *, brand: dict, logo_cid: str, local_end: da
             f'{escape(product_name or b.get("short_name", "Sentry"))}</span>')
     border = f'border-bottom:1px solid {b["band_border"]};' if b.get("band_border") else ""
     by_id = {it["id"]: it for it in f["items"]}
+    hosts = all_hosts(f)                               # a host name is bold wherever it appears
     rows = [
         f'<tr><td bgcolor="{b.get("band_bg", "#FFFFFF")}" style="background:{b.get("band_bg", "#FFFFFF")};{border}'
         f'border-radius:14px 14px 0 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
@@ -760,7 +833,7 @@ def render_html(out: dict, f: dict, *, brand: dict, logo_cid: str, local_end: da
         f'{escape(product_name or "Sentry")}</span> · {local_end:%A}, {local_end:%B} {local_end.day}</td></tr></table></td></tr>',
         f'<tr><td class="px" style="background:#FFFFFF;padding:26px 32px 8px;">'
         f'<div style="font-family:{FONT};font-size:24px;line-height:1.25;font-weight:800;letter-spacing:-.01em;color:{INK};">'
-        f'{escape(out.get("headline", ""))}</div>{_p(out.get("opening", ""), extra="margin-top:14px;")}</td></tr>',
+        f'{mark_hosts(escape(out.get("headline", "")), hosts)}</div>{_p(out.get("opening", ""), extra="margin-top:14px;", hosts=hosts)}</td></tr>',
     ]
     first = True
     for e in out.get("email", []):
@@ -770,22 +843,31 @@ def render_html(out: dict, f: dict, *, brand: dict, logo_cid: str, local_end: da
                         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
                         f'<td style="width:5px;background:{PURPLE};border-radius:4px;"></td>'
                         f'<td style="padding:12px 16px 14px;background:{PURPLE_TINT};border-radius:0 10px 10px 0;">'
-                        f'{_p(e.get("text", ""))}</td></tr></table></td></tr>')
+                        f'{_p(e.get("text", ""), hosts=hosts)}</td></tr></table></td></tr>')
         else:
-            rows.append(f'<tr><td class="px" style="background:#FFFFFF;padding:18px 32px 0;">{_p(e.get("text", ""))}</td></tr>')
+            rows.append(f'<tr><td class="px" style="background:#FFFFFF;padding:18px 32px 0;">{_p(e.get("text", ""), hosts=hosts)}</td></tr>')
         first = False
     if out.get("fixed"):
         rows.append(f'<tr><td class="px" style="background:#FFFFFF;padding:18px 32px 0;">'
                     f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
                     f'<td style="width:5px;background:{GREEN};border-radius:4px;"></td>'
                     f'<td style="padding:12px 16px 14px;background:{GREEN_TINT};border-radius:0 10px 10px 0;">'
-                    + "".join(_p(e.get("text", "")) for e in out["fixed"]) + '</td></tr></table></td></tr>')
+                    + "".join(_p(e.get("text", ""), hosts=hosts) for e in out["fixed"]) + '</td></tr></table></td></tr>')
     if out.get("still_open"):
-        rows.append(f'<tr><td class="px" style="background:#FFFFFF;padding:22px 32px 0;">'
-                    f'<div style="font-family:{FONT};font-size:12px;letter-spacing:.08em;text-transform:uppercase;'
-                    f'color:{PURPLE};font-weight:700;">Still sitting there</div>'
-                    + "".join(_p(e.get("text", "").strip(), extra="margin-top:8px;") for e in out["still_open"])
-                    + '</td></tr>')
+        # Howie 17:43: a heading that reads as one, then one row per item: the grade as a
+        # pill on the left (from the item's own facts, never from the words), the line beside
+        # it with its host names in bold, a hairline between rows so nothing blends.
+        srows = []
+        for n, e in enumerate(out["still_open"]):
+            it = by_id.get(e.get("id"), {})
+            word, line = split_grade(e.get("text", ""))
+            word = it.get("severity_word") or word
+            srows.append(grade_row(word, mark_hosts(escape(line), hosts), first=(n == 0)))
+        rows.append(f'<tr><td class="px" style="background:#FFFFFF;padding:28px 32px 0;">'
+                    f'<div style="font-family:{FONT};font-size:18px;line-height:1.3;font-weight:800;'
+                    f'letter-spacing:-.01em;color:{INK};padding-bottom:4px;">Still sitting there</div>'
+                    f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+                    + "".join(srows) + '</table></td></tr>')
     if out.get("small_line"):
         rows.append(f'<tr><td class="px" style="background:#FFFFFF;padding:18px 32px 0;">'
                     f'{_p(out["small_line"], 15, MUTED)}</td></tr>')
@@ -804,7 +886,9 @@ def render_html(out: dict, f: dict, *, brand: dict, logo_cid: str, local_end: da
     return (f'<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<meta name="color-scheme" content="light"><title>{escape(out.get("headline", ""))}</title>'
             f'<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">'
-            '<style>@media only screen and (max-width: 520px) { .px { padding-left: 18px !important; padding-right: 18px !important; } }</style>'
+            '<style>@media only screen and (max-width: 520px) { .px { padding-left: 18px !important; padding-right: 18px !important; } '
+            f'.gr {{ display: block !important; width: auto !important; padding: 14px 0 0 !important; }} '
+            '.gt { display: block !important; border-top: 0 !important; padding-top: 6px !important; } }</style>'
             f'</head>\n<body style="margin:0;padding:0;background:{PAGE};">\n'
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{PAGE};">'
             '<tr><td align="center" style="padding:24px 12px 40px;">'

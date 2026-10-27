@@ -188,3 +188,19 @@ def test_the_post_has_the_approved_shape_and_none_when_empty():
     assert ds.payload({"slack": {"changed": [], "nudge": [], "closing": "x"}}, {"changed": [], "nudge": []},
                       product_name="P", day_label="d") is None
     assert "What changed since yesterday" in ds.preview_text(p) and ds.preview_text(None) == ""
+
+
+def test_the_post_bolds_every_host_in_slacks_own_markup_and_the_summary_stays_plain():
+    sel = {"changed": [{"kind": "not_responding", "slack_color": ds.RED, "sites": ["valorep.prodexlabs.com"]}],
+           "nudge": [{"kind": "finding", "sites": ["prodexlabs.com", "cooked.prodexlabs.com"]}]}
+    out = {"slack": {"changed": [{"id": "k1", "text": "valorep.prodexlabs.com stopped answering."}],
+                     "nudge": [{"id": "n1", "text": "[Moderate] Headers missing on prodexlabs.com and cooked."}],
+                     "closing": "Neither one is urgent."}}
+    p = ds.payload(out, sel, product_name="PRODEXsentry", day_label="Tuesday, October 27")
+    red = p["attachments"][0]["blocks"][0]["text"]["text"]
+    yellow = p["attachments"][1]["blocks"][0]["text"]["text"]
+    assert "• *valorep.prodexlabs.com* stopped answering." in red
+    assert "on *prodexlabs.com* and *cooked*." in yellow and "[Moderate]" in yellow
+    assert "*" not in p["text"].split(": ", 1)[1]              # the notification line is plain
+    assert ds.bold_hosts("prod and prod.prodexlabs.com", ["prod.prodexlabs.com"]) == "*prod* and *prod.prodexlabs.com*"
+    assert ds.bold_hosts("production", ["prod.prodexlabs.com"]) == "production"

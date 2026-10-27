@@ -179,14 +179,56 @@ def slack_url(portal_url: str, token: str) -> str:
     return approve_url(portal_url, token)
 
 
+_BOLD_LINE = re.compile(r"^\*(.+)\*$")
+_BOLD_RUN = re.compile(r"\*([^*\n]+)\*")
+
+
+def _mrkdwn_html(escaped: str) -> str:
+    """Slack's *bold* runs (the post's host names) as bold in the email's copy of it."""
+    return _BOLD_RUN.sub(lambda m: f'<span style="font-weight:600;">{m.group(1)}</span>', escaped)
+
+
+def slack_box_html(payload_text: str, ch: str) -> str:
+    """The #on-call draft as the email shows it (round 5, Howie 17:43): a white box with
+    Slack's purple edge, the post's lines inside it, each graded line with the grade as a
+    pill (digest_voice.grade_pill) instead of a word in brackets. With nothing to post, the
+    same box says so, so the Slack half is never missing from Howie's copy."""
+    from digest_voice import grade_row, split_grade  # noqa: E402 — the one pill, drawn in one place
+    body = (payload_text or "").strip()
+    if not body:
+        inner = (f'<div style="font-family:{_FONT};font-size:14px;line-height:1.5;color:{STRIP_TEXT};">'
+                 f'Nothing for {escape(ch)} today: nothing new that a developer acts on, and no nudge due.</div>')
+    else:
+        rows, first = [], True
+        for ln in body.split("\n"):
+            ln = ln.strip()
+            if not ln:
+                continue
+            m = _BOLD_LINE.match(ln)
+            if m:
+                rows.append(f'<tr><td colspan="2" style="padding:{0 if first else 12}px 0 2px;font-family:{_FONT};'
+                            f'font-size:13px;line-height:1.5;font-weight:700;color:{STRIP_TEXT};">{escape(m.group(1))}</td></tr>')
+            elif ln.startswith("• "):
+                word, line = split_grade(ln[2:])
+                rows.append(grade_row(word, _mrkdwn_html(escape(line)), first=True, size=14, color=STRIP_TEXT, pad=4))
+            else:
+                rows.append(f'<tr><td colspan="2" style="padding:8px 0 0;font-family:{_FONT};font-size:13px;'
+                            f'line-height:1.5;color:{STRIP_TEXT};">{escape(ln)}</td></tr>')
+            first = False
+        inner = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+                 + "".join(rows) + '</table>')
+    return (f'<div style="background:#FFFFFF;border-left:4px solid {SLACK_BUTTON};border-radius:0 8px 8px 0;'
+            f'padding:10px 14px;">{inner}</div>')
+
+
 def _slack_block_html(slack: dict | None) -> str:
     if slack is None:
         return ""
     ch = escape(slack.get("channel") or "#on-call")
     if not slack.get("payload_text"):
-        return (f'<tr><td style="padding:0 24px 12px;font-family:{_FONT};font-size:14px;line-height:1.5;'
-                f'color:{STRIP_TEXT};">Nothing for {ch} today: nothing new that a developer acts on, and no nudge due.</td></tr>')
-    lines = "".join(f'<div style="margin-top:8px;">{escape(ln)}</div>' for ln in slack["payload_text"].split("\n\n") if ln.strip())
+        return (f'<tr><td style="padding:0 24px 6px;font-family:{_FONT};font-size:13px;line-height:1.5;font-weight:700;'
+                f'text-transform:uppercase;letter-spacing:.06em;color:{STRIP_TEXT};">What {ch} would get</td></tr>'
+                f'<tr><td style="padding:0 24px 12px;">{slack_box_html("", slack.get("channel") or "#on-call")}</td></tr>')
     wired = slack.get("wired", True)
     btn = (f'<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="{SLACK_BUTTON}" '
            f'style="background:{SLACK_BUTTON};border-radius:8px;"><a href="{escape(slack["url"])}" style="display:inline-block;'
@@ -196,9 +238,7 @@ def _slack_block_html(slack: dict | None) -> str:
            f'(the {ch} webhook is not set on GitHub), so nothing can post.</div>')
     return (f'<tr><td style="padding:0 24px 6px;font-family:{_FONT};font-size:13px;line-height:1.5;font-weight:700;'
             f'text-transform:uppercase;letter-spacing:.06em;color:{STRIP_TEXT};">What {ch} would get</td></tr>'
-            f'<tr><td style="padding:0 24px 12px;"><div style="font-family:{_FONT};font-size:14px;line-height:1.5;color:{STRIP_TEXT};'
-            f'background:#FFFFFF;border-left:4px solid {SLACK_BUTTON};border-radius:0 8px 8px 0;padding:10px 14px;white-space:pre-wrap;">'
-            f'{lines}</div></td></tr>'
+            f'<tr><td style="padding:0 24px 12px;">{slack_box_html(slack["payload_text"], slack.get("channel") or "#on-call")}</td></tr>'
             f'<tr><td style="padding:0 24px 14px;">{btn}</td></tr>')
 
 
@@ -212,14 +252,9 @@ def preview_copy(subject: str, html: str, text: str, *, slack: dict | None, note
         return subject, html, text
     ch = (slack or {}).get("channel") or "#on-call"
     body = (slack or {}).get("payload_text") or ""
-    lines = "".join(f'<div style="margin-top:8px;">{escape(ln)}</div>' for ln in body.split("\n\n") if ln.strip())
     slack_rows = ((f'<tr><td style="padding:0 24px 6px;font-family:{_FONT};font-size:13px;line-height:1.5;font-weight:700;'
                    f'text-transform:uppercase;letter-spacing:.06em;color:{STRIP_TEXT};">What {escape(ch)} would get</td></tr>'
-                   f'<tr><td style="padding:0 24px 12px;"><div style="font-family:{_FONT};font-size:14px;line-height:1.5;color:{STRIP_TEXT};'
-                   f'background:#FFFFFF;border-left:4px solid {SLACK_BUTTON};border-radius:0 8px 8px 0;padding:10px 14px;white-space:pre-wrap;">'
-                   f'{lines}</div></td></tr>') if body else
-                  (f'<tr><td style="padding:0 24px 12px;font-family:{_FONT};font-size:14px;line-height:1.5;'
-                   f'color:{STRIP_TEXT};">Nothing for {escape(ch)} today: nothing new that a developer acts on, and no nudge due.</td></tr>'))
+                   f'<tr><td style="padding:0 24px 12px;">{slack_box_html(body, ch)}</td></tr>') if slack is not None else "")
     note_rows = "".join(
         f'<tr><td style="padding:0 24px 10px;font-family:{_FONT};font-size:13px;line-height:1.5;color:{STRIP_TEXT};">'
         f'{escape(n)}</td></tr>' for n in notes)
@@ -236,7 +271,8 @@ def preview_copy(subject: str, html: str, text: str, *, slack: dict | None, note
         '</table></td></tr></table>'
     )
     tlines = ["TEST SEND. Nothing was sent to anyone else and nothing was posted."]
-    tlines += [f"What {ch} would get:", body] if body else [f"Nothing for {ch} today."]
+    if slack is not None:
+        tlines += [f"What {ch} would get:", body] if body else [f"Nothing for {ch} today."]
     tlines += notes + [TEXT_RULE, ""]
     return subject, with_strip_html(html, strip), with_strip_text(text, "\n".join(tlines))
 

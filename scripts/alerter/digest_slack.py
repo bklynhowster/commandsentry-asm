@@ -217,6 +217,20 @@ def _mrkdwn(text: str) -> str:
     return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def bold_hosts(text: str, hosts: list) -> str:
+    """Slack's own bold around every host name (Howie 17:53: "it's a host ... find a way to
+    get it in people's eyes"): *valorep.prodexlabs.com*, *bitec*. Full and short names,
+    longest first; a name already inside *...* is left alone."""
+    from digest_voice import host_names, _host_re  # noqa: E402 — one list of a host's spellings
+    for n in host_names(hosts):
+        text = _host_re(n).sub(lambda m: f"*{m.group(0)}*", text)
+    return text
+
+
+def _hosts_of(items: list) -> list:
+    return sorted({h for it in items for h in (it.get("sites") or it.get("hosts") or [])})
+
+
 def payload(out: dict, selection: dict, *, product_name: str, day_label: str) -> dict | None:
     """The webhook body (Block Kit): a header, a red attachment for what changed, a green one
     for what got fixed, a yellow one for the nudge, a context closing. None when there is
@@ -226,19 +240,21 @@ def payload(out: dict, selection: dict, *, product_name: str, day_label: str) ->
     if not changed_txt and not nudge_txt:
         return None
     changed_items_ = selection.get("changed", [])
+    hosts = _hosts_of(changed_items_ + list(selection.get("nudge", [])))
     red, green = [], []
     for it, txt in zip(changed_items_, changed_txt):
         (green if it.get("slack_color") == GREEN else red).append(txt)
+    line = lambda t: "• " + bold_hosts(_mrkdwn(t), hosts)   # noqa: E731
     attachments = []
     if red:
         attachments.append({"color": RED, "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text":
-            "*What changed since yesterday*\n" + "\n".join("• " + _mrkdwn(t) for t in red)}}]})
+            "*What changed since yesterday*\n" + "\n".join(line(t) for t in red)}}]})
     if green:
         attachments.append({"color": GREEN, "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text":
-            "*Fixed, or back*\n" + "\n".join("• " + _mrkdwn(t) for t in green)}}]})
+            "*Fixed, or back*\n" + "\n".join(line(t) for t in green)}}]})
     if nudge_txt:
         blocks = [{"type": "section", "text": {"type": "mrkdwn", "text":
-                   "*Still sitting there, just FYI*\n" + "\n".join("• " + _mrkdwn(t) for t in nudge_txt)}}]
+                   "*Still sitting there, just FYI*\n" + "\n".join(line(t) for t in nudge_txt)}}]
         closing = ((out.get("slack") or {}).get("closing") or "").strip()
         if closing:
             blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": _mrkdwn(closing)}]})

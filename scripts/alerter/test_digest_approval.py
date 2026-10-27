@@ -193,3 +193,35 @@ def test_the_digest_workflow_passes_the_approver():
     wf = open(os.path.join(WF, "alerter.yml"), encoding="utf-8").read()
     assert re.search(r"ALERTER_APPROVER:\s+\$\{\{ vars\.ALERTER_APPROVER \}\}\n", wf), \
         "from the repo variable, with no fallback"
+
+
+# ── round 5, Howie 17:43/17:53: the Slack half is always shown, grades as pills, hosts bold ──
+def test_the_test_copy_always_shows_the_slack_box_when_slack_is_on_and_never_when_it_is_off():
+    html = "<html><body><p>mail</p></body></html>"
+    _, h, t = ap.preview_copy("[P] test", html, "mail", slack={"channel": "#on-call", "payload_text": ""}, notes=[])
+    assert "What #on-call would get" in h and "Nothing for #on-call today" in h
+    assert f"border-left:4px solid {ap.SLACK_BUTTON}" in h          # the empty box is still the Slack box
+    assert "Nothing for #on-call today." in t
+    _, h2, t2 = ap.preview_copy("[P] test", html, "mail", slack=None, notes=["a note"])
+    assert "#on-call" not in h2 and "#on-call" not in t2 and "a note" in h2
+    _, h3, _ = ap.preview_copy("[P] test", html, "mail", slack=None, notes=[])
+    assert h3 == html                                              # nothing to show: no strip
+
+
+def test_the_slack_box_renders_grades_as_pills_and_slack_bold_as_bold():
+    body = ("*What changed since yesterday*\n• *valorep.prodexlabs.com* stopped answering.\n\n"
+            "*Still sitting there, just FYI*\n• [Moderate] Headers missing on *prodexlabs.com* and *cooked*.\n\n"
+            "Neither one is urgent.")
+    h = ap.slack_box_html(body, "#on-call")
+    assert "[Moderate]" not in h and ">Moderate</span>" in h and "border-radius:999px" in h
+    assert '<span style="font-weight:600;">valorep.prodexlabs.com</span> stopped answering.' in h
+    assert '<span style="font-weight:600;">cooked</span>.' in h
+    assert "*" not in h                                            # Slack's asterisks never reach the email
+    assert ">What changed since yesterday<" in h and ">Neither one is urgent.<" in h
+    assert 'colspan="2"' in h                                      # the ungraded quiet-host line spans the row
+    for s in ap.strip_html_v2("https://p/x", ["a@b"], "daily", slack={"channel": "#on-call", "wired": True,
+                                                                      "payload_text": body, "url": "https://p/y"}, notes=[]):
+        pass
+    assert ">Moderate</span>" in ap.strip_html_v2("https://p/x", ["a@b"], "daily",
+                                                  slack={"channel": "#on-call", "wired": True, "payload_text": body,
+                                                         "url": "https://p/y"}, notes=[])
