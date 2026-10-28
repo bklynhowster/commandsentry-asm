@@ -361,6 +361,11 @@ def facts(model: dict, *, still_open=None, slack=None, sentry_only=None, company
         d = _item(f"s{n+1}", "still", it.get("told_kind") or "open", it.get("severity", ""),
                   list(it.get("sites") or []), it.get("title", ""), it.get("body", ""), it.get("do", ""),
                   text, dates_allowed=bool(it.get("recent")), family=it.get("family", ""))
+        # a still line is ONE line (Howie 16:32); the second real morning (10-28 08:28) fell back
+        # because this item alone carried the whole probe story and the writer wrote it all in.
+        # Its why is one short sentence; the portal has the rest.
+        if THE_PROBE in d["why"]:
+            d["why"] = "There is a firewall in front of it, but it is watching, not blocking."
         items.append(d)
     slack = slack or {}
     for n, it in enumerate(slack.get("changed", [])):
@@ -649,26 +654,21 @@ def check(out: dict, f: dict, *, portal_url: str = "") -> list[str]:
     if f.get("small_count", 0) == 0 and str(out.get("small_line", "")).strip():
         problems.append("small_line: says something about small items when there are none")
 
-    # whole-output rules
-    whole = _flatten(out)
-    low = " " + whole.lower() + " "
-    texts = [str(out.get(k, "")) for k in ("subject", "headline", "opening", "small_line")]
-    texts.append(str(slack.get("closing", "")))
-    for entries in (out.get("email"), out.get("fixed"), out.get("still_open"), slack.get("changed"), slack.get("nudge")):
-        texts += [str(e.get("text", "")) for e in (entries or []) if isinstance(e, dict)]
-    for t in texts:
+    # the line rules, each attributed to its line (so repair() can replace just that line)
+    for label, t in _lines(out):
+        low = " " + t.lower() + " "
         for sent in re.split(r"(?<=[.!?])\s+", t):
             n = len(sent.split())
             if n > SENTENCE_MAX_WORDS:
-                problems.append(f"a sentence of {n} words ({sent[:50]}...)")
-    for w, rx in zip(BANNED, _BANNED_RE):
-        if rx.search(low):
-            problems.append(f"banned word: {w.strip()!r}")
-    if EM_DASH in whole:
-        problems.append("em dash")
-    for u in _URL.findall(whole):
-        if not portal_url or not u.startswith(portal_url.rstrip("/")):
-            problems.append(f"a URL that is not the portal's ({u[:40]})")
+                problems.append(f"{label}: a sentence of {n} words ({sent[:50]}...)")
+        for w, rx in zip(BANNED, _BANNED_RE):
+            if rx.search(low):
+                problems.append(f"{label}: banned word: {w.strip()!r}")
+        if EM_DASH in t:
+            problems.append(f"{label}: em dash")
+        for u in _URL.findall(t):
+            if not portal_url or not u.startswith(portal_url.rstrip("/")):
+                problems.append(f"{label}: a URL that is not the portal's ({u[:40]})")
     # a host anywhere in the headline/opening/subject/closing must be some item's host; a
     # number there must be one of the day's counts; a date there must be some item's or the
     # day's own (the subject/headline/opening are free text: without this, "Nine small things"
@@ -710,6 +710,117 @@ def check(out: dict, f: dict, *, portal_url: str = "") -> list[str]:
             e.get("text", "") for e in slack.get("nudge", []) if isinstance(e, dict))):
         problems.append("slack: a date in the nudge or the closing")
     return problems
+
+
+FREE_KEYS = ("subject", "headline", "opening", "small_line")
+LISTS = {"email": "email", "fixed": "fixed", "still_open": "still_open", "slack.changed": "changed", "slack.nudge": "nudge"}
+_LABEL = re.compile(r"^(subject|headline|opening|small_line|slack\.closing|email|fixed|still_open|slack\.changed|slack\.nudge)(?: (\w+))?: ")
+_STRUCTURAL = ("not a list", "unknown item id", "belongs to another list", "twice", "has no entry", "not text")
+
+
+def _lines(out: dict):
+    """(label, text) for every line the writer wrote: the free lines, the closing, each entry."""
+    for k in FREE_KEYS:
+        yield k, str(out.get(k, "") or "")
+    slack = out.get("slack") if isinstance(out.get("slack"), dict) else {}
+    yield "slack.closing", str(slack.get("closing", "") or "")
+    for where, key in LISTS.items():
+        entries = (slack if where.startswith("slack.") else out).get(key, [])
+        for e in entries if isinstance(entries, list) else []:
+            if isinstance(e, dict):
+                yield f"{where} {e.get('id')}", str(e.get("text", "") or "")
+
+
+def repair(out: dict, f: dict, problems: list, *, portal_url: str = ""):
+    """Howie 2026-10-28 08:31, after two mornings went whole to the backup over one line each:
+    "One bad line and the entire email goes to the backup, even when the other nine sentences
+    were fine." Replace only the lines the check named with the fallback's lines for the same
+    place, keep the rest of the writer's prose, and check again. Returns (out2, replaced) with
+    `replaced` = [(label, the writer's line, why)], or (None, []) when the problems are
+    structural (a missing or unknown entry) or the repaired answer still fails."""
+    fb = fallback(f)
+    out2 = json.loads(json.dumps(out))
+    replaced = []
+    for pr in problems:
+        m = _LABEL.match(pr)
+        if not m or any(w in pr for w in _STRUCTURAL):
+            return None, []
+        label, iid = m.group(1), m.group(2)
+        why = pr[m.end():]
+        if any(r[0] == f"{label} {iid}".strip() for r in replaced):
+            continue
+        if label in FREE_KEYS:
+            replaced.append((label, out2.get(label, ""), why))
+            out2[label] = fb.get(label, "")
+        elif label == "slack.closing":
+            replaced.append((label, out2.get("slack", {}).get("closing", ""), why))
+            out2.setdefault("slack", {})["closing"] = fb["slack"]["closing"]
+        else:
+            key = LISTS[label]
+            holder = out2["slack"] if label.startswith("slack.") else out2
+            fb_holder = fb["slack"] if label.startswith("slack.") else fb
+            fb_text = next((e["text"] for e in fb_holder.get(key, []) if e["id"] == iid), None)
+            entry = next((e for e in holder.get(key, []) if isinstance(e, dict) and e.get("id") == iid), None)
+            if fb_text is None or entry is None:
+                return None, []
+            replaced.append((f"{label} {iid}", entry.get("text", ""), why))
+            entry["text"] = fb_text
+    if not replaced or check(out2, f, portal_url=portal_url):
+        return None, []
+    return out2, replaced
+
+
+_PLACE = {"subject": "the subject", "headline": "the headline", "opening": "the opening",
+          "small_line": "the line about the small things", "slack.closing": "the Slack closing",
+          "email": "the paragraph about", "fixed": "the fixed line about", "still_open": "the still-sitting-there line about",
+          "slack.changed": "the Slack line about", "slack.nudge": "the Slack nudge about"}
+
+
+def plain_reasons(replaced: list, f: dict) -> list:
+    """The note Howie reads, in plain words (08:29: "frankly, I'm baffled"): which line, what it
+    said, and why it was set aside; the check's shorthand stays in the log."""
+    by_id = {it["id"]: it for it in f.get("items", [])}
+    out = []
+    for label, line, why in replaced:
+        where, _, iid = label.partition(" ")
+        place = _PLACE.get(where, where)
+        if iid and iid in by_id:
+            it = by_id[iid]
+            place += " " + (_hosts_words(it["hosts"]) or it["what"][:40])
+        m = re.match(r"too long \((\d+) chars\)", why)
+        if m:
+            cap = NUDGE_MAX_CHARS if where in ("still_open", "slack.nudge") else (SLACK_ENTRY_MAX_CHARS if where.startswith("slack") else EMAIL_ENTRY_MAX_CHARS)
+            reason = f"it ran {m.group(1)} characters; the limit there is {cap}"
+        elif re.match(r"a sentence of (\d+) words", why):
+            n_words = re.match(r"a sentence of (\d+) words", why).group(1)
+            reason = f"one sentence ran {n_words} words; the limit is {SENTENCE_MAX_WORDS}"
+        elif "a number that is not" in why:
+            number = re.search(r"\((\S+)\)", why).group(1)
+            reason = f"it uses the number {number}, which is not in the facts for that place"
+        elif why.startswith("banned word"):
+            word = re.search(r"'([^']+)'", why).group(1)
+            reason = f"it uses the word '{word}', which the rules never allow"
+        elif "names a host" in why:
+            reason = "it names a box that is not in the facts for that place"
+        elif "does not name" in why:
+            reason = "it leaves out one of the boxes it should name"
+        elif "a date" in why:
+            reason = "it carries a date that is not that item's own"
+        elif "severity" in why:
+            reason = "it gets the grade wrong or leaves it out"
+        elif "how long" in why:
+            reason = "a nudge may not say how long something has been open"
+        elif "does not start with" in why:
+            reason = "it does not open with the briefing line"
+        elif "em dash" in why:
+            reason = "it uses an em dash"
+        else:
+            reason = why
+        said = line.strip()
+        if len(said) > 220:
+            said = said[:217].rstrip() + "..."
+        out.append(f"{place[0].upper() + place[1:]}: {reason}. It said: \"{said}\"")
+    return out
 
 
 def _flatten(out) -> str:

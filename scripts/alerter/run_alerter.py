@@ -2482,7 +2482,7 @@ def main() -> int:
             sentry_only = [i for i in model["do"] if i.get("kind") == "coverage"]
             fct = _dv.facts(model, still_open=still, slack=selection, sentry_only=sentry_only,
                             company=brand.get("short_name", ""), day=f"{model['local_end']:%A, %B %-d}")
-            out, reason = None, ""
+            out, reason, draft, replaced = None, "", None, []
             if voice_on:
                 prev = _soft("previous digest text", SQL_PENDING_LAST_SENT_TEXT, ("daily",))
                 prev_text = prev[0][0] if prev and prev[0] and prev[0][0] else ""
@@ -2490,14 +2490,30 @@ def main() -> int:
                     out = _dv.write(fct, api_key=_env("ANTHROPIC_API_KEY", default="") or "", previous_text=prev_text)
                     problems = _dv.check(out, fct, portal_url=portal_url)
                     if problems:
+                        # Howie 10-28 08:31: one bad line replaced, the rest of the writer's prose
+                        # kept; the whole fallback only when that cannot be done. The refused
+                        # draft is kept in the private pending row (finalize.voice.draft) and the
+                        # offending lines are quoted in Howie's note, in plain words.
+                        draft = out
                         reason = "the check refused it: " + "; ".join(problems[:4])
-                        out = None
+                        out, replaced = _dv.repair(out, fct, problems, portal_url=portal_url)
+                        if out is not None:
+                            print(f"voice: repaired, {len(replaced)} line(s) from the fallback ({'; '.join(r[0] for r in replaced)})")
+                            n_ = len(replaced)
+                            notes.append(f"{'One line' if n_ == 1 else str(n_) + ' lines'} of the model's draft {'was' if n_ == 1 else 'were'} "
+                                         f"set aside today and replaced with the backup's; the rest is the model's. "
+                                         + " ".join(_dv.plain_reasons(replaced, fct)))
                 except _dv.VoiceError as e:
                     reason = str(e)
             if out is None:
                 out = _dv.fallback(fct)
                 if voice_on:
-                    notes.append(f"Written from the fallback today ({reason}).")
+                    if draft is not None:
+                        why_ = _dv.plain_reasons([(pr.split(": ", 1)[0], "", pr.split(": ", 1)[1]) for pr in problems[:3]], fct)
+                        notes.append("The model's draft was set aside today and this is the backup version, written from the same facts. "
+                                     + " ".join(w.split(" It said:")[0] for w in why_))
+                    else:
+                        notes.append(f"The model did not answer today ({reason}); this is the backup version, written from the same facts.")
                     print(f"voice: fallback ({reason})")
                 # Qwen M-C1: the fallback is checked too. It is deterministic and the facts are
                 # cleaned on the way in, so this should never fire; if it does, Howie's copy
@@ -2528,7 +2544,8 @@ def main() -> int:
                     notes.append(f"The last #on-call post may not have gone out ({last_failed[0][1] or 'unknown'}). "
                                  f"Today's draft does not repeat it; if you want it posted by hand, this is what it said: "
                                  + (was.replace("\n", " / ") if was else "(no text kept)"))
-            model["voice"] = {"ok": voice_on and not reason, "reason": reason, "slack": bool(slack_payload)}
+            model["voice"] = {"ok": voice_on and not reason, "reason": reason, "slack": bool(slack_payload),
+                              "repaired": [r[0] for r in replaced], "draft": draft}
         if args.preview:
             subject = preview_subject(subject)
             if slack_on or notes:
