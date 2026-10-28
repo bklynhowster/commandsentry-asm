@@ -2469,6 +2469,11 @@ def main() -> int:
         voice_on, slack_on = _voice_on(), _slack_on()
         if voice_on or slack_on:
             open_rows = _soft("open problems", SQL_OPEN_PROBLEMS)
+            # Howie 2026-10-28 09:37: "If valor is gone then no need to report its
+            # vulnerabilities." A host on the not-responding roster drops out of the still and
+            # nudge picks; if it answers again, its findings come back with it.
+            quiet = {r[0] for r in (not_responding or [])}
+            open_rows = [r for r in open_rows if r[1] not in quiet]
             names = {r[0] for r in sites} | {r[1] for r in open_rows}
             open_items = _open_items(open_rows, names, window_end)
             changed_ids = {f for i in model["do"] + model["ticket"] for f in i.get("finding_ids", [])}
