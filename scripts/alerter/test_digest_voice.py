@@ -454,7 +454,7 @@ def test_two_firewall_stories_say_they_are_opposites_and_say_what_sentry_sent():
     # no block page on the sheet: no "opposite" line
     f2 = dv.facts(_model() | {"ticket": []}, still_open=_still())
     s1b = [it for it in f2["items"] if it["section"] == "still"][0]
-    assert "hosts above" not in s1b["why"] and dv.THE_PROBE in s1b["why"] and "go straight through" in s1b["why"], "alone, the firewall item explains the probes itself"
+    assert s1b["why"] == "There is a firewall in front of it, but it is watching, not blocking.", "alone, a still line is one line's worth (10-28 08:28)"
     assert dv.fallback(f2)["still_open"][0]["text"] == "[Moderate-high] A web firewall is there, but it's only watching on bitec, demo and highcom."
     # the writer's instructions carry his profile's words and the approved morning
     assert "He dictates." in dv.SYSTEM and "Here's your morning briefing." in dv.SYSTEM and "THE EMAIL HE APPROVED" in dv.SYSTEM
@@ -575,7 +575,7 @@ def test_a_run_on_sentence_and_scanner_mechanics_are_refused():
             "doesn't recognize yet.")
     assert len(long.split()) == 36
     _refused(lambda o: o["email"].__setitem__(1, {"id": "c2", "text": "l3h-ss, prod, l3h-nh and l3h-ivs are new. " + long}),
-             "a sentence of 36 words")
+             "email c2: a sentence of 36 words")
     _refused(lambda o: o["email"].__setitem__(1, {"id": "c2", "text": "l3h-ss, prod, l3h-nh and l3h-ivs turned away our test traffic, which is good."}),
              "banned word: 'test traffic'")
     _refused(lambda o: o["email"].__setitem__(0, {"id": "c1", "text": "valorep.prodexlabs.com looks down since Oct 22 and its name doesn't resolve anymore. It drops off the portal on Nov 2."}),
@@ -587,7 +587,7 @@ def test_a_run_on_sentence_and_scanner_mechanics_are_refused():
     o["opening"] = dv.OPENER + " " + " ".join(["word"] * 32) + "."
     assert dv.check(o, f, portal_url="https://prodexsentry.netlify.app") == []
     o["opening"] = dv.OPENER + " " + " ".join(["word"] * 33) + "."
-    assert any(p.startswith("a sentence of 33 words") for p in dv.check(o, f, portal_url="https://prodexsentry.netlify.app"))
+    assert any(p.startswith("opening: a sentence of 33 words") for p in dv.check(o, f, portal_url="https://prodexsentry.netlify.app"))
     fb = dv.fallback(f)
     for e in fb["email"] + fb["still_open"] + fb["slack"]["changed"] + fb["slack"]["nudge"]:
         for sent in e["text"].split(". "):
@@ -624,3 +624,53 @@ def test_the_email_opens_with_the_morning_briefing_line_and_new_boxes_are_the_on
     assert dv._para(dict(new, hosts=new["hosts"][:1])) == "A new box has joined our fleet: a.prodexlabs.com. It gets the same checks as everything else from here on."
     assert dv.check(dv.fallback(f2), f2, portal_url="https://prodexsentry.netlify.app") == []
     assert '"N new hosts found" is about new boxes' in dv.SYSTEM
+
+
+# ── Howie 2026-10-28 08:31: one bad line replaced, not the whole email ─────────────────────
+def test_one_bad_line_is_replaced_and_the_rest_of_the_writers_prose_stays():
+    f = _facts(); o = _good(f)
+    good_opening = o["opening"]
+    long = "We send every box a few probes to check whether some kind of security device, like a web application firewall, is sitting in front of it, and here they go straight through to the site, so that firewall is watching, not blocking."
+    o["still_open"][0]["text"] = "[Moderate-high] The firewall in front of bitec, demo and highcom is only watching, not blocking. " + long
+    probs = dv.check(o, f, portal_url="https://prodexsentry.netlify.app")
+    assert probs and all(p.startswith("still_open s1: ") for p in probs), probs
+    o2, replaced = dv.repair(o, f, probs, portal_url="https://prodexsentry.netlify.app")
+    assert o2 is not None and [r[0] for r in replaced] == ["still_open s1"]
+    assert o2["opening"] == good_opening and o2["email"] == o["email"], "the writer's other lines stay"
+    assert o2["still_open"][0]["text"] == dv.fallback(f)["still_open"][0]["text"]
+    assert dv.check(o2, f, portal_url="https://prodexsentry.netlify.app") == []
+    note = dv.plain_reasons(replaced, f)
+    assert len(note) == 1 and note[0].startswith("The still-sitting-there line about bitec, demo and highcom: one sentence ran ")
+    assert "the limit is 32" in note[0] and 'It said: "[Moderate-high] The firewall in front of bitec' in note[0]
+    assert "still_open s1" not in note[0], "the shorthand stays in the log"
+    # a free line and a Slack line too, in one go
+    o3 = _good(f)
+    o3["headline"] = "Nine boxes went quiet."
+    o3["slack"]["changed"][0]["text"] = "valorep.prodexlabs.com stopped answering and its name doesn't resolve anymore."
+    probs = dv.check(o3, f, portal_url="https://prodexsentry.netlify.app")
+    o4, replaced = dv.repair(o3, f, probs, portal_url="https://prodexsentry.netlify.app")
+    assert o4 is not None and sorted(r[0] for r in replaced) == ["headline", "slack.changed k1"]
+    assert o4["headline"] == dv.fallback(f)["headline"] and o4["opening"] == o3["opening"]
+    notes = dv.plain_reasons(replaced, f)
+    assert any(n.startswith("The headline: it uses the number 9") for n in notes)
+    assert any(n.startswith("The Slack line about valorep.prodexlabs.com: it uses the word 'resolve'") for n in notes)
+    # structural trouble is not repaired: the whole fallback
+    o5 = _good(f); o5["email"].append({"id": "zz", "text": "Something about nothing."})
+    probs = dv.check(o5, f, portal_url="https://prodexsentry.netlify.app")
+    assert dv.repair(o5, f, probs, portal_url="https://prodexsentry.netlify.app") == (None, [])
+    o6 = _good(f); del o6["email"][0]
+    probs = dv.check(o6, f, portal_url="https://prodexsentry.netlify.app")
+    assert dv.repair(o6, f, probs, portal_url="https://prodexsentry.netlify.app") == (None, [])
+
+
+def test_a_still_items_facts_are_one_lines_worth():
+    """The second real morning (10-28 08:28): alone on the sheet, the firewall item carried
+    the whole probe story and the writer wrote it all into the one-line still entry."""
+    f2 = dv.facts(_model() | {"ticket": []}, still_open=_still())
+    s1 = [it for it in f2["items"] if it["section"] == "still"][0]
+    assert s1["why"] == "There is a firewall in front of it, but it is watching, not blocking."
+    assert dv.THE_PROBE not in s1["why"] and len(s1["why"]) < 100
+    f = _facts()                                   # with a block page on the sheet: the refer-back sentence
+    s1 = [it for it in f["items"] if it["section"] == "still"][0]
+    assert s1["why"] == dv._OPPOSITE
+    assert dv.check(dv.fallback(f2), f2, portal_url="https://prodexsentry.netlify.app") == []
