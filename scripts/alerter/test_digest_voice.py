@@ -187,7 +187,16 @@ def test_the_free_text_fields_cannot_carry_a_number_or_date_that_is_nobodys():
     _refused(lambda o: o.__setitem__("opening", "Nine small things and one info finding are in the portal."), "opening: a number")
     _refused(lambda o: o.__setitem__("headline", "Six boxes went quiet."), "headline: a number")
     _refused(lambda o: o.__setitem__("small_line", "9 small things also turned up, none need anybody."), "small_line: a number")
-    _refused(lambda o: o.__setitem__("subject", "3 boxes went quiet"), "subject: a number")
+    _refused(lambda o: o.__setitem__("subject", "8 boxes went quiet"), "subject: a number")
+    # the first real morning (2026-10-28 08:03): "five boxes" was true (one down, four guarding) and
+    # was refused because the free lines knew only the first item's count. Now any item's count and
+    # the day's total of changed boxes pass; the firewall line may count "the hosts above".
+    f = _facts()
+    ok = _good(f)
+    ok["headline"] = "Five boxes: one down, four now guarded."
+    ok["still_open"][0]["text"] = "[Moderate-high] The firewall in front of bitec, demo and highcom is only watching, not blocking. The same probes the 4 hosts above block go straight through here."
+    assert dv.check(ok, f, portal_url="https://prodexsentry.netlify.app") == []
+    _refused(lambda o: o["still_open"].__setitem__(0, {"id": "s1", "text": "[Moderate-high] The firewall in front of bitec, demo and highcom is only watching, not blocking. The same probes the 6 hosts above block go straight through here."}), "a number that is not its own (6)")
     _refused(lambda o: o.__setitem__("headline", "One box went quiet on Oct 3."), "headline: a date")
     _refused(lambda o: o.__setitem__("opening", "Here's your morning briefing. since Monday one box is quiet."), "opening: a date")
     f = _facts()

@@ -52,6 +52,11 @@ MERGE_GROUPS = (
 )
 
 RED, YELLOW, GREEN = "#C43B3B", "#D9A400", "#2E8B57"
+# Howie 2026-10-28 08:11: "I want the ability to send a note to Slack every day if I want to.
+# I want the choice." So the draft and the Post button are there every day; on a day with
+# nothing to tell, the draft is this one line (his words, 08:12: "no new issues on any of our
+# boxes is adequate"; "nothing went down" dropped because a box can still be down that day).
+QUIET_LINE = "All quiet since yesterday: no new issues on any of our boxes, and nothing waiting on anybody."
 
 
 def is_developer(title: str | None, family: str | None) -> bool:
@@ -233,12 +238,16 @@ def _hosts_of(items: list) -> list:
 
 def payload(out: dict, selection: dict, *, product_name: str, day_label: str) -> dict | None:
     """The webhook body (Block Kit): a header, a red attachment for what changed, a green one
-    for what got fixed, a yellow one for the nudge, a context closing. None when there is
-    nothing to post. `out` is the writer's (checked) JSON; `selection` is select()'s."""
+    for what got fixed, a yellow one for the nudge, a context closing. On a day with nothing
+    to tell: the header and QUIET_LINE, so Howie still has the choice (08:11). `out` is the
+    writer's (checked) JSON; `selection` is select()'s."""
     changed_txt = [e.get("text", "") for e in (out.get("slack") or {}).get("changed", [])]
     nudge_txt = [e.get("text", "") for e in (out.get("slack") or {}).get("nudge", [])]
+    header = {"type": "header", "text": {"type": "plain_text", "text": f"{product_name}  ·  {day_label}", "emoji": True}}
     if not changed_txt and not nudge_txt:
-        return None
+        return {"text": f"{product_name}, {day_label}: {QUIET_LINE}",
+                "blocks": [header, {"type": "section", "text": {"type": "mrkdwn", "text": QUIET_LINE}}],
+                "attachments": [], "quiet": True}
     changed_items_ = selection.get("changed", [])
     hosts = _hosts_of(changed_items_ + list(selection.get("nudge", [])))
     red, green = [], []
@@ -262,7 +271,7 @@ def payload(out: dict, selection: dict, *, product_name: str, day_label: str) ->
     summary = " ".join(red + green + nudge_txt)[:280]
     return {
         "text": f"{product_name}, {day_label}: {summary}",
-        "blocks": [{"type": "header", "text": {"type": "plain_text", "text": f"{product_name}  ·  {day_label}", "emoji": True}}],
+        "blocks": [header],
         "attachments": attachments,
     }
 
@@ -271,7 +280,7 @@ def preview_text(p: dict | None) -> str:
     """What Howie's copy shows under the Post to Slack button: the post as plain lines."""
     if not p:
         return ""
-    lines = []
+    lines = [b["text"]["text"] for b in p.get("blocks", []) if b.get("type") == "section"]   # the quiet line
     for a in p.get("attachments", []):
         for b in a.get("blocks", []):
             if b.get("type") == "section":

@@ -185,9 +185,16 @@ def test_the_post_has_the_approved_shape_and_none_when_empty():
     assert "Two &lt;headers&gt; missing." in p["attachments"][2]["blocks"][0]["text"]["text"]
     assert p["attachments"][2]["blocks"][1]["type"] == "context"
     assert "fired" not in str(p).lower()
-    assert ds.payload({"slack": {"changed": [], "nudge": [], "closing": "x"}}, {"changed": [], "nudge": []},
-                      product_name="P", day_label="d") is None
+    # Howie 2026-10-28 08:11: the draft and the button every day; a quiet day is one line
+    q = ds.payload({"slack": {"changed": [], "nudge": [], "closing": "x"}}, {"changed": [], "nudge": []},
+                   product_name="P", day_label="d")
+    assert q["quiet"] is True and q["attachments"] == [] and q["blocks"][0]["type"] == "header"
+    assert q["blocks"][1]["text"]["text"] == ds.QUIET_LINE and q["text"] == "P, d: " + ds.QUIET_LINE
+    assert ds.preview_text(q) == ds.QUIET_LINE
+    assert "went down" not in ds.QUIET_LINE, "Howie 08:12: a box can still be down on a quiet day"
+    assert ds.records({"changed": [], "nudge": []}) == []
     assert "What changed since yesterday" in ds.preview_text(p) and ds.preview_text(None) == ""
+    assert "quiet" not in p and ds.preview_text(p).startswith("*What changed since yesterday*")
 
 
 def test_the_post_bolds_every_host_in_slacks_own_markup_and_the_summary_stays_plain():
