@@ -553,12 +553,14 @@ def test_a_host_name_is_bold_wherever_it_appears_full_or_short_and_never_inside_
     f = _facts(); m = _model(); out = _good(f)
     html = dv.render_html(out, f, brand=BRAND, logo_cid=dd.LOGO_CID, local_end=m["local_end"],
                           portal_url="https://prodexsentry.netlify.app", product_name="PRODEXsentry")
-    b = '<span style="font-weight:600;">'
+    b = '<span class="host" style="font-weight:600;">'
     assert b + "valorep.prodexlabs.com</span>" in html        # the opening paragraph, full name
     for short in ("l3h-ss", "prod", "l3h-nh", "l3h-ivs", "bitec", "demo", "highcom"):
         assert b + short + "</span>" in html                    # the block-page and firewall lines, short names
     assert b + "prod</span>.prodexlabs" not in html             # never a short name inside the long one
-    assert html.count("<span style=\"font-weight:600;\"><span") == 0
+    assert html.count(b + "<span") == 0
+    # mail apps must not turn a host into a link (Howie's 10-28 09:37 screenshot)
+    assert 'name="format-detection"' in html and "x-apple-data-detectors" in html
     # a short name that ends a sentence is still bold; 'prod' inside 'production' is not
     hosts = ["prod.prodexlabs.com", "cooked.prodexlabs.com"]
     assert dv.mark_hosts("missing on prod and cooked.", hosts) == f"missing on {b}prod</span> and {b}cooked</span>."
@@ -674,3 +676,16 @@ def test_a_still_items_facts_are_one_lines_worth():
     s1 = [it for it in f["items"] if it["section"] == "still"][0]
     assert s1["why"] == dv._OPPOSITE
     assert dv.check(dv.fallback(f2), f2, portal_url="https://prodexsentry.netlify.app") == []
+
+
+def test_a_grade_written_as_a_word_and_colon_is_stripped_too():
+    """Howie's 10-28 09:37 screenshot: the pill said Moderate and the line began "Moderate: old
+    weak ciphers" (the writer used a colon, not the bracket)."""
+    assert dv.split_grade("Moderate: old weak ciphers, 3DES and BEAST.") == ("Moderate", "Old weak ciphers, 3DES and BEAST.")
+    assert dv.split_grade("moderate-high: a firewall only watching.") == ("Moderate-high", "A firewall only watching.")
+    assert dv.split_grade("High traffic on the site.") == ("", "High traffic on the site."), "a grade word without the colon is the sentence"
+    f = _facts(); m = _model(); out = _good(f)
+    out["still_open"][0]["text"] = "Moderate-high: the firewall in front of bitec, demo and highcom is only watching."
+    html = dv.render_html(out, f, brand=BRAND, logo_cid=dd.LOGO_CID, local_end=m["local_end"],
+                          portal_url="https://prodexsentry.netlify.app", product_name="PRODEXsentry")
+    assert ">Moderate-high</span>" in html and "Moderate-high: the firewall" not in html and "The firewall in front of" in html

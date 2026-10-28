@@ -173,3 +173,20 @@ def test_the_workflows_pass_the_switches_as_variables_and_the_two_secrets():
     send = open(os.path.join(WF, "digest-send.yml"), encoding="utf-8").read()
     assert re.search(r"SLACK_ONCALL_WEBHOOK:\s+\$\{\{ secrets\.SLACK_ONCALL_WEBHOOK \}\}", send)
     assert "ANTHROPIC_API_KEY" not in send, "the sender writes nothing; it needs no writer key"
+
+
+def test_a_host_that_stopped_answering_is_not_in_the_still_or_nudge_picks():
+    """Howie 2026-10-28 09:37: "If valor is gone then no need to report its vulnerabilities."
+    The alerter drops the not-responding roster's hosts from the open rows before any pick."""
+    whole = open(ra.__file__).read()
+    i = whole.index('open_rows = _soft("open problems", SQL_OPEN_PROBLEMS)')
+    block = whole[i:i + 900]
+    assert "quiet = {r[0] for r in (not_responding or [])}" in block
+    assert "open_rows = [r for r in open_rows if r[1] not in quiet]" in block
+    assert block.index("not in quiet]") < block.index("_open_items(open_rows")
+    # and the picks themselves: a quiet host's rows leave the still list
+    rows = [("f1", "valorep.prodexlabs.com", "Obsolete 3DES/IDEA ciphers offered", "MODERATE", "open", "commandsentry_light", None, "", [], None),
+            ("f2", "cooked.prodexlabs.com", "Obsolete 3DES/IDEA ciphers offered", "MODERATE", "open", "commandsentry_light", None, "", [], None)]
+    quiet = {"valorep.prodexlabs.com"}
+    kept = [r for r in rows if r[1] not in quiet]
+    assert [r[1] for r in kept] == ["cooked.prodexlabs.com"]

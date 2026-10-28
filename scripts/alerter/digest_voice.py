@@ -950,7 +950,8 @@ GRADE_COLORS = {
     "Low": ("#4A5668", "#EDF0F4"),
     "Info": ("#4A5668", "#EDF0F4"),
 }
-_GRADE_LEAD = re.compile(r"^\s*\[(critical|high|moderate-high|moderate high|moderate|low|info)\]\s*", re.I)
+_GRADE_LEAD = re.compile(r"^\s*(?:\[(critical|high|moderate-high|moderate high|moderate|low|info)\]\s*"
+                         r"|(critical|high|moderate-high|moderate high|moderate|low|info)\s*:\s*)", re.I)
 
 
 def split_grade(text: str) -> tuple[str, str]:
@@ -959,7 +960,10 @@ def split_grade(text: str) -> tuple[str, str]:
     m = _GRADE_LEAD.match(text or "")
     if not m:
         return "", (text or "").strip()
-    return _sev_word(m.group(1).replace(" ", "-")), (text or "")[m.end():].strip()
+    rest = (text or "")[m.end():].strip()
+    if m.group(2) and rest[:1].islower():              # "Moderate: old weak ciphers" -> "Old weak ciphers"
+        rest = rest[0].upper() + rest[1:]
+    return _sev_word((m.group(1) or m.group(2)).replace(" ", "-")), rest
 
 
 def grade_pill(word: str) -> str:
@@ -987,7 +991,7 @@ def mark_hosts(escaped: str, hosts: list) -> str:
     """Bold every host name in an already-escaped line (Howie 17:53: "it's a host ... find a
     way to get it in people's eyes"), so the eye lands on which boxes."""
     for n in host_names(hosts):
-        escaped = _host_re(escape(n)).sub(lambda m: f'<span style="font-weight:600;">{m.group(0)}</span>', escaped)
+        escaped = _host_re(escape(n)).sub(lambda m: f'<span class="host" style="font-weight:600;">{m.group(0)}</span>', escaped)
     return escaped
 
 
@@ -1090,9 +1094,13 @@ def render_html(out: dict, f: dict, *, brand: dict, logo_cid: str, local_end: da
                 f'font-family:{FONT};font-size:12px;line-height:1.5;color:{MUTED};">Sent by {escape(product_name or "Sentry")} '
                 f'at {local_end:%-I:%M %p}. {escape(f.get("portal_note", ""))}</td></tr>')
     return (f'<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
-            f'<meta name="color-scheme" content="light"><title>{escape(out.get("headline", ""))}</title>'
+            f'<meta name="color-scheme" content="light"><meta name="format-detection" content="telephone=no,date=no,address=no,email=no,url=no">'
+            f'<title>{escape(out.get("headline", ""))}</title>'
             f'<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">'
-            '<style>@media only screen and (max-width: 520px) { .px { padding-left: 18px !important; padding-right: 18px !important; } '
+            '<style>a[x-apple-data-detectors], .host a { color: inherit !important; text-decoration: none !important; '
+            'font-size: inherit !important; font-family: inherit !important; font-weight: inherit !important; '
+            'line-height: inherit !important; } '
+            '@media only screen and (max-width: 520px) { .px { padding-left: 18px !important; padding-right: 18px !important; } '
             f'.gr {{ display: block !important; width: auto !important; padding: 14px 0 0 !important; }} '
             '.gt { display: block !important; border-top: 0 !important; padding-top: 6px !important; } }</style>'
             f'</head>\n<body style="margin:0;padding:0;background:{PAGE};">\n'

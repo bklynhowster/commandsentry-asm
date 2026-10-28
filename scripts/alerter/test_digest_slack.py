@@ -178,7 +178,9 @@ def test_the_post_has_the_approved_shape_and_none_when_empty():
     out = {"slack": {"changed": [{"id": "k1", "text": "valorep stopped answering."}, {"id": "k2", "text": "b is fixed."}],
                      "nudge": [{"id": "n1", "text": "Two <headers> missing."}], "closing": "Neither one is urgent."}}
     p = ds.payload(out, sel, product_name="PRODEXsentry", day_label="Tuesday, October 27")
-    assert p["blocks"][0]["type"] == "header" and p["blocks"][0]["text"]["text"].startswith("PRODEXsentry")
+    assert p["blocks"][0]["type"] == "header" and p["blocks"][0]["text"]["text"] == "Tuesday, October 27", \
+        "Howie 10-28 09:24: Slack prints the app's name already; the header is the day alone"
+    assert p["text"].startswith("Tuesday, October 27: ") and "PRODEXsentry" not in str(p)
     colors = [a["color"] for a in p["attachments"]]
     assert colors == [ds.RED, ds.GREEN, ds.YELLOW]
     assert "*What changed since yesterday*\n• valorep stopped answering." in p["attachments"][0]["blocks"][0]["text"]["text"]
@@ -189,7 +191,8 @@ def test_the_post_has_the_approved_shape_and_none_when_empty():
     q = ds.payload({"slack": {"changed": [], "nudge": [], "closing": "x"}}, {"changed": [], "nudge": []},
                    product_name="P", day_label="d")
     assert q["quiet"] is True and q["attachments"] == [] and q["blocks"][0]["type"] == "header"
-    assert q["blocks"][1]["text"]["text"] == ds.QUIET_LINE and q["text"] == "P, d: " + ds.QUIET_LINE
+    assert q["blocks"][1]["text"]["text"] == ds.QUIET_LINE and q["text"] == "d: " + ds.QUIET_LINE
+    assert q["blocks"][0]["text"]["text"] == "d" and "P" not in str(q["blocks"])
     assert ds.preview_text(q) == ds.QUIET_LINE
     assert "went down" not in ds.QUIET_LINE, "Howie 08:12: a box can still be down on a quiet day"
     assert ds.records({"changed": [], "nudge": []}) == []

@@ -243,9 +243,12 @@ def payload(out: dict, selection: dict, *, product_name: str, day_label: str) ->
     writer's (checked) JSON; `selection` is select()'s."""
     changed_txt = [e.get("text", "") for e in (out.get("slack") or {}).get("changed", [])]
     nudge_txt = [e.get("text", "") for e in (out.get("slack") or {}).get("nudge", [])]
-    header = {"type": "header", "text": {"type": "plain_text", "text": f"{product_name}  ·  {day_label}", "emoji": True}}
+    # Howie 2026-10-28 09:24, on the first post: "It says ProDex Sentry twice. Can that be
+    # reduced?" Slack prints the app's name on every post, so the header is the day alone, and
+    # the notification line (what a phone shows) likewise.
+    header = {"type": "header", "text": {"type": "plain_text", "text": day_label, "emoji": True}}
     if not changed_txt and not nudge_txt:
-        return {"text": f"{product_name}, {day_label}: {QUIET_LINE}",
+        return {"text": f"{day_label}: {QUIET_LINE}",
                 "blocks": [header, {"type": "section", "text": {"type": "mrkdwn", "text": QUIET_LINE}}],
                 "attachments": [], "quiet": True}
     changed_items_ = selection.get("changed", [])
@@ -270,7 +273,7 @@ def payload(out: dict, selection: dict, *, product_name: str, day_label: str) ->
         attachments.append({"color": YELLOW, "blocks": blocks})
     summary = " ".join(red + green + nudge_txt)[:280]
     return {
-        "text": f"{product_name}, {day_label}: {summary}",
+        "text": f"{day_label}: {summary}",
         "blocks": [header],
         "attachments": attachments,
     }
