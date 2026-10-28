@@ -171,10 +171,12 @@ def _relate(items: list) -> None:
     guarding = [it for it in items if it["kind"] == "blockpage"]
     if not guarding:
         return
+    above = str(len({h for g in guarding for h in g["hosts"]}))   # "the five hosts above" is a true count
     for it in items:
         if it["section"] in ("changed", "still") and (it.get("family") == "waf-not-blocking"
                                                      or it["what"].startswith("A web firewall is there, but it's only watching")):
             it["why"] = _OPPOSITE
+            it["numbers"] = sorted(set(it["numbers"]) | {above})
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 WORD_NUMBERS = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
@@ -678,9 +680,14 @@ def check(out: dict, f: dict, *, portal_url: str = "") -> list[str]:
         sections[it["section"]] = sections.get(it["section"], 0) + 1
     day_numbers = {str(n) for n in (f.get("small_count", 0), 0, 1, *sections.values())}
     day_numbers |= set(_numbers_in(str(f.get("day", ""))))
-    first = [it for it in f["items"] if it["section"] == "changed"][:1]
-    if first:                                           # the headline is about the main thing
-        day_numbers |= set(first[0]["numbers"])
+    # the free lines sum up the day: any item's own numbers, and how many boxes the day's
+    # changes touch in all (the first real morning, 2026-10-28: "five boxes" was true, one down
+    # and four guarding plus one more, and the check knew only the first item's count)
+    changed_items = [it for it in f["items"] if it["section"] == "changed"]
+    for it in f["items"]:
+        day_numbers |= set(it["numbers"])
+    day_numbers.add(str(sum(len(it["hosts"]) for it in changed_items)))
+    day_numbers.add(str(len({h for it in changed_items for h in it["hosts"]})))
     day_dates = {d for it in f["items"] for d in it["dates"]} | set(_dates_in(str(f.get("day", ""))))
     for key in ("subject", "headline", "opening", "small_line"):
         v = str(out.get(key, ""))

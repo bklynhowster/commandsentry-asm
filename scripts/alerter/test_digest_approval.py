@@ -225,3 +225,15 @@ def test_the_slack_box_renders_grades_as_pills_and_slack_bold_as_bold():
     assert ">Moderate</span>" in ap.strip_html_v2("https://p/x", ["a@b"], "daily",
                                                   slack={"channel": "#on-call", "wired": True, "payload_text": body,
                                                          "url": "https://p/y"}, notes=[])
+
+
+def test_a_quiet_day_still_shows_the_slack_draft_and_the_post_button():
+    """Howie 2026-10-28 08:11: "I want the ability to send a note to Slack every day if I want
+    to. I want the choice." The real copy carries the quiet line and the button."""
+    import digest_slack as ds
+    q = ds.payload({"slack": {"changed": [], "nudge": [], "closing": ""}}, {"changed": [], "nudge": []},
+                   product_name="PRODEXsentry", day_label="Wednesday, October 28")
+    h = ap.strip_html_v2("https://p/x", ["a@b"], "daily",
+                         slack={"channel": "#on-call", "wired": True, "payload_text": ds.preview_text(q), "url": "https://p/slack"}, notes=[])
+    assert ds.QUIET_LINE in h and "Post to Slack" in h and 'href="https://p/slack"' in h
+    assert "Nothing for #on-call today" not in h
