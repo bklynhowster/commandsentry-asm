@@ -203,7 +203,7 @@ def test_a_host_that_stopped_answering_is_not_in_the_still_or_nudge_picks():
 def test_a_long_email_keeps_its_button_on_top_too_so_gmail_never_hides_it():
     """Gmail clips at about 102 KB and the email's button is at the end (10-29). A long email
     (a big weekly) gets the button in the top strip as well; a normal daily gets it once."""
-    big = "<html><body><p>" + "x" * (ap.CLIP_SAFE_CHARS + 1) + "</p></body></html>"
+    big = "<html><body><p>" + "x" * (ap.CLIP_SAFE_BYTES + 1) + "</p></body></html>"
     slack = {"channel": "#on-call", "wired": True, "payload_text": "*What changed*\n• a.", "url": "https://p/s#S"}
     for kw, label in (({}, "Send to the others"), ({"slack": slack}, "Approve for email")):
         _, small_h, _ = ap.approver_copy("S", HTML, "T", url="https://p/a#E", others=["a@x"], kind="weekly", **kw)
@@ -211,3 +211,32 @@ def test_a_long_email_keeps_its_button_on_top_too_so_gmail_never_hides_it():
         assert small_h.count('href="https://p/a#E"') == 1 and small_h.count(label) == 1
         assert big_h.count('href="https://p/a#E"') == 2 and big_h.count(label) == 2
         assert big_h.index('href="https://p/a#E"') < big_h.index("xxxx") < big_h.rindex('href="https://p/a#E"')
+
+
+# ── push-375 (2026-10-29): the review's two notes on the approval email ─────────────────
+def test_the_guard_counts_bytes_of_the_finished_copy():
+    """Code review of push-373, minor 2: Gmail clips on bytes, strips included; an em dash is 3."""
+    dashes = "<html><body><p>" + "—" * (ap.CLIP_SAFE_BYTES // 3 + 10) + "</p></body></html>"
+    assert len(dashes) < ap.CLIP_SAFE_BYTES < len(dashes.encode("utf-8"))
+    _, h, _ = ap.approver_copy("S", dashes, "T", url="https://p/a#E", others=["a@x"], kind="weekly")
+    assert h.count('href="https://p/a#E"') == 2, "under 90,000 characters, over 90,000 bytes: the top gets it too"
+    near = "<html><body><p>" + "x" * (ap.CLIP_SAFE_BYTES - 600) + "</p></body></html>"
+    assert len(near.encode("utf-8")) < ap.CLIP_SAFE_BYTES
+    _, h, _ = ap.approver_copy("S", near, "T", url="https://p/a#E", others=["a@x"], kind="weekly")
+    assert len(h.encode("utf-8")) > ap.CLIP_SAFE_BYTES and h.count('href="https://p/a#E"') == 2, \
+        "the strips count too"
+    _, h, _ = ap.approver_copy("S", HTML, "T", url="https://p/a#E", others=["a@x"], kind="weekly")
+    assert h.count('href="https://p/a#E"') == 1
+
+
+def test_two_decisions_only_when_there_are_two():
+    """Code review of push-373, minor 3: "Two separate decisions" showed on a quiet day."""
+    posts = {"channel": "#on-call", "wired": True, "payload_text": "*What changed*\n• a.", "url": "https://p/s#S"}
+    cases = [(posts, True), (dict(posts, wired=False), False), (dict(posts, payload_text=""), False),
+             (None, False)]
+    for slack, two in cases:
+        _, h, t = ap.approver_copy("S", HTML, "T", url="https://p/a#E", others=["a@x"], kind="daily",
+                                   slack=slack, notes=["A note for Howie."])
+        assert ("Two separate decisions" in h) is two and ("Two separate decisions" in t) is two, slack
+        assert ("One decision today: the email" in h) is not two and ("One decision today: the email" in t) is not two, slack
+        assert h.count('href="https://p/a#E"') == 1

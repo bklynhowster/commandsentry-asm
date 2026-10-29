@@ -39,6 +39,8 @@ from __future__ import annotations
 
 import json
 import re
+import sys
+import urllib.error
 import urllib.request
 
 OUT_OF_DATE = "MODERATE"
@@ -191,6 +193,26 @@ CNA_USER_AGENT = "Sentry-ASM evidence/1.0 (public CVE record)"
 _CVE_ID = re.compile(r"CVE-\d{4}-\d{4,}")
 _CNA_CACHE: dict = {}
 _CNA_READS_ON = False
+# The S1 review's follow-up (2026-10-29, minor 1: "no aggregate cap on reads"): when the CVE
+# Program's API does not answer (no network, a timeout, a 5xx or 429), every later read in this
+# run would wait its own 15 seconds for the same outcome. So the first such failure stops reads
+# for the rest of the process; every finding after it is kept as filed. A 404 or a bad answer
+# for one CVE says nothing about the service and stops nothing.
+_CNA_DOWN = ""
+
+
+def cna_reads_down() -> str:
+    """Why reads stopped for this run ("" while they have not)."""
+    return _CNA_DOWN
+
+
+def _service_failure(e: BaseException) -> str:
+    """A short reason when `e` means the service itself did not answer, else ""."""
+    if isinstance(e, urllib.error.HTTPError):
+        return f"HTTP {e.code}" if (e.code >= 500 or e.code == 429) else ""
+    if isinstance(e, (TimeoutError, OSError)):        # URLError, socket timeout, refused, reset
+        return type(e).__name__
+    return ""
 
 
 def enable_cna_reads() -> None:
@@ -205,13 +227,17 @@ def cna_record(cve_id: str | None, get=None) -> dict | None:
     """The CVE record (CVE JSON 5) for `cve_id`, as the CVE Program serves it, read once per
     CVE per process (a failure is remembered too, so one bad id never costs a timeout per
     plugin). None when reads are off, the id is malformed, the answer is not that CVE's
-    record, or anything fails. Never raises: a missing record only ever KEEPS a finding."""
+    record, or anything fails. Never raises: a missing record only ever KEEPS a finding.
+    The first time the service itself does not answer, reads stop for the run (`_CNA_DOWN`)."""
+    global _CNA_DOWN
     cid = (cve_id or "").strip().upper()
     if not _CVE_ID.fullmatch(cid):
         return None
     if cid in _CNA_CACHE:
         return _CNA_CACHE[cid]
     if get is None and not _CNA_READS_ON:
+        return None
+    if _CNA_DOWN:
         return None
     rec = None
     try:
@@ -225,8 +251,13 @@ def cna_record(cve_id: str | None, get=None) -> dict | None:
         meta = (d or {}).get("cveMetadata") if isinstance(d, dict) else None
         if isinstance(meta, dict) and str(meta.get("cveId", "")).upper() == cid:
             rec = d
-    except Exception:            # network, JSON, anything: keep the finding
+    except Exception as e:       # network, JSON, anything: keep the finding
         rec = None
+        why = _service_failure(e)
+        if why:
+            _CNA_DOWN = why
+            print(f"[evidence] CVE records: the CVE Program's API did not answer ({why}); no more "
+                  f"reads this run, every later WordPress advisory is kept as filed", file=sys.stderr)
     _CNA_CACHE[cid] = rec
     return rec
 

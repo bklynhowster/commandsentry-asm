@@ -262,3 +262,84 @@ def test_the_writer_retracts_in_its_own_transaction_after_the_upserts():
     src = inspect.getsource(run_light.write_findings_and_artifacts)
     assert src.index("cur.execute(UPSERT_FINDING_SQL, params)") < src.index("retract_cna_excluded(cur, ctx, Json)")
     assert src.index("retract_cna_excluded(cur, ctx, Json)") < src.index("for tool_name, output_format, content_str in ctx.artifacts")
+
+
+# ── push-375 (2026-10-29): the S1 review's follow-up, stop reading when the service is down ──
+import urllib.error  # noqa: E402
+
+URL_0001 = "https://cveawg.mitre.org/api/cve/CVE-2026-0001"
+
+
+@pytest.fixture(autouse=True)
+def _reads_not_down(monkeypatch):
+    monkeypatch.setattr(evidence, "_CNA_DOWN", "")
+
+
+@pytest.mark.parametrize("exc, why", [
+    (urllib.error.URLError("no route"), "URLError"),
+    (TimeoutError("timed out"), "TimeoutError"),
+    (ConnectionResetError("reset"), "ConnectionResetError"),
+    (urllib.error.HTTPError(URL_0001, 503, "Service Unavailable", None, None), "HTTP 503"),
+    (urllib.error.HTTPError(URL_0001, 429, "Too Many Requests", None, None), "HTTP 429"),
+])
+def test_the_service_not_answering_stops_reads_for_the_rest_of_the_run(monkeypatch, capsys, exc, why):
+    """Review minor 1: each distinct CVE could cost its own 15 s when the API is down. The
+    first service failure stops reads; records already read are still served; one log line."""
+    monkeypatch.setattr(evidence, "_CNA_CACHE", {"CVE-2026-6728": REC_6728})
+    calls = []
+
+    def down(url):
+        calls.append(url)
+        raise exc
+    assert evidence.cna_record("CVE-2026-0001", down) is None
+    assert evidence.cna_reads_down() == why
+    assert evidence.cna_record("CVE-2026-0002", down) is None
+    assert evidence.cna_record("CVE-2026-0003", down) is None
+    assert calls == [URL_0001], "one wait, not one per CVE"
+    assert evidence.cna_record("CVE-2026-6728", down) == REC_6728, "a record already read is still served"
+    err = capsys.readouterr().err
+    assert err.count("[evidence] CVE records:") == 1 and why in err and "kept as filed" in err
+
+
+@pytest.mark.parametrize("exc", [
+    urllib.error.HTTPError(URL_0001, 404, "Not Found", None, None),
+    ValueError("not JSON"),
+    KeyError("cveMetadata"),
+])
+def test_one_cves_bad_answer_stops_nothing(monkeypatch, exc):
+    """A 404 or a bad answer is about that one CVE: the service answered."""
+    monkeypatch.setattr(evidence, "_CNA_CACHE", {})
+    calls = []
+
+    def one_bad(url):
+        calls.append(url)
+        if url == URL_0001:
+            raise exc
+        return REC_6728
+    assert evidence.cna_record("CVE-2026-0001", one_bad) is None
+    assert evidence.cna_reads_down() == ""
+    assert evidence.cna_record("CVE-2026-6728", one_bad) == REC_6728
+    assert len(calls) == 2
+
+
+def test_the_real_read_path_trips_too_and_reads_off_still_comes_first(monkeypatch):
+    monkeypatch.setattr(evidence, "_CNA_CACHE", {})
+    calls = []
+
+    def urlopen(*a, **k):
+        calls.append(a)
+        raise urllib.error.URLError("Name or service not known")
+    monkeypatch.setattr(evidence.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(evidence, "_CNA_READS_ON", False)
+    assert evidence.cna_record("CVE-2026-0001") is None and calls == [] and evidence.cna_reads_down() == ""
+    monkeypatch.setattr(evidence, "_CNA_READS_ON", True)
+    assert evidence.cna_record("CVE-2026-0001") is None and evidence.cna_record("CVE-2026-0002") is None
+    assert len(calls) == 1 and evidence.cna_reads_down() == "URLError"
+
+
+def test_with_reads_down_the_writer_keeps_the_finding(monkeypatch):
+    """Down means no record, and no record keeps the finding (the S1 direction)."""
+    monkeypatch.setattr(evidence, "_CNA_CACHE", {})
+    monkeypatch.setattr(evidence, "_CNA_DOWN", "URLError")
+    assert evidence.cna_record("CVE-2026-6728", lambda url: REC_6728) is None
+    assert evidence.cna_leaves_out("6.7.58", None, ["sliderrevolution", "revslider"]) is None
