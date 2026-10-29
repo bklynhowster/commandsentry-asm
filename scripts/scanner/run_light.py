@@ -268,6 +268,10 @@ class ScanContext:
     # plain attributes reach the real context, the channel tech_stack uses.
     # None = httpx_tech produced no usable version list (failed or blocked).
     tech_versions: list | None = None
+    # S1 (2026-10-29): advisories this run matched but whose own published record leaves the
+    # version out. write_findings_and_artifacts retracts this writer's open row for each,
+    # in the same transaction. A plain attribute, like tech_versions.
+    cna_retractions: list = field(default_factory=list)
 
 
 # ─── Subprocess helper ──────────────────────────────────────────────────
@@ -2038,6 +2042,35 @@ def check_wpvulnerability(ctx: ScanContext) -> None:
     mark_tool_ok(ctx, "wpvulnerability")
 
 
+def _wpvuln_names(v) -> list:
+    """The names a published record may file this product under: the title's name before
+    its [slug] ("Slider Revolution [revslider] < 7.0.10" -> "Slider Revolution"), the slug,
+    and the target's name ("plugin:revslider" -> "revslider"; "core:wordpress"). S1."""
+    title = v.title or ""
+    out = [re.split(r"\s*\[|\s+[<>=]", title, maxsplit=1)[0].strip()]
+    m = re.search(r"\[([^\]]+)\]", title)
+    if m:
+        out.append(m.group(1).strip())
+    tgt = (v.affected_target or "")
+    if ":" in tgt:
+        out.append(tgt.split(":", 1)[1])
+    return [x for x in out if x]
+
+
+def _note_cna_retraction(ctx, item: dict) -> None:
+    """Record a retraction for the light writer. Under medium/heavy the phase sees a recorder
+    that forwards plain attributes to the real context, which has no such list: create it
+    there, and never let bookkeeping sink the plugin's other findings."""
+    try:
+        lst = getattr(ctx, "cna_retractions", None)
+        if lst is None:
+            setattr(ctx, "cna_retractions", [])
+            lst = getattr(ctx, "cna_retractions")
+        lst.append(item)
+    except Exception as e:
+        log(f"  wpvulnerability: could not note the retraction for {item.get('cve_id')}: {e!r}")
+
+
 def _wpvuln_emit_finding(ctx: ScanContext, v, wpc) -> int:
     """Convert a WpVulnerability into a LightFinding and append to ctx. Returns 1 if
     a finding was added, 0 if not.
@@ -2061,6 +2094,21 @@ def _wpvuln_emit_finding(ctx: ScanContext, v, wpc) -> int:
         log(f"  wpvulnerability: {v.cve_id or v.uuid or v.title}: its own text excludes "
             f"{v.affected_version} — not written")
         return 0
+    # S1 (2026-10-29): the flaw's own published record (its CNA's structured ranges) is the
+    # authority on what it affects. When it plainly leaves the version out, the match is
+    # wpvulnerability.net's wider range, not the flaw: not written, and this writer's open
+    # row for it is retracted (false_positive) at write time. A record that cannot be read,
+    # or reads unclearly, keeps the finding.
+    if v.cve_id:
+        why = evidence.cna_leaves_out(v.affected_version, evidence.cna_record(v.cve_id),
+                                      _wpvuln_names(v))
+        if why:
+            log(f"  wpvulnerability: {v.cve_id}: {why}; {v.affected_version} is outside it "
+                f"— not written")
+            _note_cna_retraction(ctx, {"check_name": f"wpvuln-{v.cve_id.lower()}",
+                                       "cve_id": v.cve_id, "version": v.affected_version,
+                                       "target": v.affected_target, "why": why})
+            return 0
     kev = bool(v.cve_id) and v.cve_id in evidence.kev_ids()
     severity = evidence.version_based_severity(kev)
     # Stable check_name keyed on CVE ID (preferred) or UUID (fallback for
@@ -3413,6 +3461,78 @@ def _sweep_fire_should_disarm(ctx: ScanContext) -> bool:
             and _enforcement_probe_fired(ctx))
 
 
+# ── S1 (2026-10-29): A PUBLISHED RECORD THAT LEAVES THE VERSION OUT RETRACTS THE ROW ──────
+# The same scan matched the advisory and read the flaw's own record, and the record plainly
+# leaves the version out: the finding's premise ("older than the fix for this flaw") was
+# never true, which is what 'false_positive' means in finding_status_t. Same shape as
+# run_heavy's 311 retraction: only this writer's own open row, an audit row and a
+# finding_history row bound to THIS scan. accepted_risk, wont_fix and the like are a
+# person's call and are never touched; remediated_at stays NULL (not a remediation).
+CNA_RETRACTION_ACTION = "cna_range_retraction"
+CNA_RETRACTION_RULE = "s1_published_record_leaves_the_version_out"
+
+RETRACT_CNA_EXCLUDED_SQL = """
+UPDATE public.findings
+   SET current_status = 'false_positive',
+       updated_at     = now()
+ WHERE finding_id = %(finding_id)s
+   AND asset_id   = %(asset_id)s
+   AND source::text = 'commandsentry_light'
+   AND current_status::text IN ('detected', 'confirmed', 'open', 'regressed')
+RETURNING severity::text AS severity
+"""
+
+CNA_RETRACTION_AUDIT_SQL = """
+INSERT INTO public.admin_audit_log
+  (actor_user_id, action, target_user_id, target_email, before_state, after_state, details)
+VALUES (NULL, %(action)s, NULL, NULL, %(before)s::jsonb, %(after)s::jsonb, %(details)s::jsonb)
+"""
+
+CNA_RETRACTION_HISTORY_SQL = """
+INSERT INTO public.finding_history
+  (finding_id, scan_id, observed_at, status, severity_at_scan, notes)
+VALUES (%(finding_id)s, %(scan_run_id)s, now(), 'false_positive'::history_status_t,
+        %(severity)s::severity_t, %(notes)s)
+"""
+
+
+def retract_cna_excluded(cur, ctx: ScanContext, Json) -> int:
+    """For each advisory this run left out on its published record (ctx.cna_retractions),
+    retract this writer's open row for it as false_positive, with an audit row and a
+    finding_history row bound to this scan. Returns how many rows it retracted. Runs in the
+    writer's cursor, so it commits or rolls back with the scan's own findings."""
+    n = 0
+    seen = set()
+    for item in (getattr(ctx, "cna_retractions", None) or []):
+        fid = f"{ctx.asset_id}:light:{item['check_name']}"
+        if fid in seen:
+            continue
+        seen.add(fid)
+        cur.execute(RETRACT_CNA_EXCLUDED_SQL, {"finding_id": fid, "asset_id": ctx.asset_id})
+        row = cur.fetchone()
+        if not row:
+            continue
+        sev = row["severity"] if isinstance(row, dict) else row[0]
+        cur.execute(CNA_RETRACTION_AUDIT_SQL, {
+            "action": CNA_RETRACTION_ACTION,
+            "before": Json({"finding_id": fid, "current_status": "open_family",
+                            "source": "commandsentry_light", "severity": sev}),
+            "after": Json({"finding_id": fid, "current_status": "false_positive"}),
+            "details": Json({"rule": CNA_RETRACTION_RULE, "asset_id": ctx.asset_id,
+                             "scan_run_id": ctx.scan_run_id, "cve_id": item.get("cve_id"),
+                             "version": item.get("version"), "target": item.get("target"),
+                             "reason": item.get("why")}),
+        })
+        cur.execute(CNA_RETRACTION_HISTORY_SQL, {
+            "finding_id": fid, "scan_run_id": ctx.scan_run_id, "severity": sev,
+            "notes": (f"retracted by run_light scan_run {ctx.scan_run_id}: {item.get('why')}; "
+                      f"{item.get('version')} is outside it"),
+        })
+        n += 1
+        log(f"  S1: retracted '{fid}' as false_positive ({item.get('why')}; audit + history rows written)")
+    return n
+
+
 def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int]:
     """Upsert findings + insert artifacts. Returns (inserted, updated).
 
@@ -3485,6 +3605,9 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
                 inserted += 1
             else:
                 updated += 1
+
+        # S1 — retract this writer's open rows the flaw's own record leaves out.
+        retract_cna_excluded(cur, ctx, Json)
 
         # 302 step 1 — keep the software versions httpx saw (own savepoint).
         software_inventory.record_from_artifacts(cur, ctx, Json, log=log)
@@ -3888,6 +4011,8 @@ def main() -> None:
     # legacy_adapter see ctx.dsn = None).
     if args.dsn:
         evidence.set_kev_fallback(evidence.db_kev_reader(args.dsn))
+    # S1: the WordPress check reads each matched flaw's published record (cveawg.mitre.org).
+    evidence.enable_cna_reads()
 
     if not args.dsn:
         print("error: --dsn or SUPABASE_DSN required", file=sys.stderr)

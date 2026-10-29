@@ -6674,6 +6674,9 @@ def main() -> None:
     # legacy_adapter see ctx.dsn = None).
     if args.dsn:
         evidence.set_kev_fallback(evidence.db_kev_reader(args.dsn))
+    # S1: the WordPress check (a light phase this run inherits) reads each matched
+    # flaw's published record (cveawg.mitre.org).
+    evidence.enable_cna_reads()
 
     if not args.dsn:
         print("error: --dsn or SUPABASE_DSN required", file=sys.stderr)
