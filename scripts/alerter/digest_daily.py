@@ -374,16 +374,18 @@ def group_problems(rows, names, prev_deep=None, hints=None, window_start=None, t
                         f"New because this was its first deep scan since {_day(min(gaps))}; "
                         f"it may have been there a while.")
         body, do, forward = w["why"], w["do"], ""
+        do_raw = False            # True: the fix is the scanner's own first step, not plain words
         if g["advs"]:
             body, do, forward = _plugin_words(g["advs"], sorted(g["sites"]), dw_words.plugin_of(g["raw"]))
         if not do:
             steps = {first_step(hints.get(f, "")) for f in g["finding_ids"]}
             if len(steps) == 1:
                 do = steps.pop()
+                do_raw = bool(do)
         items.append({
             "kind": "finding", "severity": g["severity"], "title": w["title"], "family": w["key"],
             "body": body, "sites": sorted(g["sites"]), "finding_ids": g["finding_ids"],
-            "why": note, "do": do, "who": w.get("who", "it"), "forward": forward,
+            "why": note, "do": do, "do_raw": do_raw, "who": w.get("who", "it"), "forward": forward,
             "tag": g["tag"], "fixed_words": w["fixed"],
             "headline": w.get("headline", "").replace("{where}", where_words(sorted(g["sites"]))),
         })

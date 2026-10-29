@@ -711,3 +711,67 @@ def test_a_grade_written_as_a_word_and_colon_is_stripped_too():
     html = dv.render_html(out, f, brand=BRAND, logo_cid=dd.LOGO_CID, local_end=m["local_end"],
                           portal_url="https://prodexsentry.netlify.app", product_name="PRODEXsentry")
     assert ">Moderate-high</span>" in html and "Moderate-high: the firewall" not in html and "The firewall in front of" in html
+
+
+# ── push-375 (2026-10-29): the small fixes ───────────────────────────────────────────────
+@pytest.mark.parametrize("line", [
+    "this one is on us.", "This one's on us.", "That’s on us.", "It is all on us.",
+    "The fix is on us.", "This falls on us.", "That was squarely on us."])
+def test_blame_is_still_refused_in_every_form(line):
+    """Howie 10-27 08:40: "don't say, 'This is on us.'" Narrowed, not loosened."""
+    _refused(lambda o: o.__setitem__("opening", "Here's your morning briefing. " + line), "banned word: 'on us'")
+
+
+def test_on_us_alone_no_longer_refuses_a_line():
+    """The KB 12 3l low list (3): plain "on us" refused lines that blame nobody."""
+    f = _facts()
+    o = _good(f)
+    o["opening"] = ("Here's your morning briefing. One of our boxes went quiet; the rest still rely on us "
+                    "to keep looking, and whether it comes back depends on us finding its owner.")
+    assert dv.check(o, f, portal_url="https://prodexsentry.netlify.app") == []
+
+
+RAW_FIX = "Assess: Determine what application or service is running on ph-test.prodexlabs.com and whether it reflects secrets."
+
+
+def _with_ticket(title, do, do_raw, host="ph-test.prodexlabs.com"):
+    m = _model()
+    m["ticket"] = list(m["ticket"]) + [{"kind": "finding", "severity": "MODERATE", "title": title, "family": "",
+                                        "body": "", "why": "", "do": do, "do_raw": do_raw, "sites": [host],
+                                        "finding_ids": ["p:x"], "lines": []}]
+    f = dv.facts(m, still_open=_still(), slack=_slack(), company="Prodex", day="Thursday, October 29")
+    return f, [it for it in f["items"] if host in it["hosts"] and it["section"] == "changed"][0]
+
+
+def test_the_backup_never_prints_the_scanners_own_fix_words():
+    """The KB 12 3l low list (5): the backup daily printed "Assess: Determine ..." verbatim."""
+    f, it = _with_ticket("Host serves 2xx to arbitrary paths", RAW_FIX, True)
+    assert it["fix_raw"] is True and it["fix"].startswith("Assess: Determine")
+    text = [e["text"] for e in dv.fallback(f)["email"] if e["id"] == it["id"]][0]
+    assert "Assess" not in text and "Determine" not in text and text.startswith("Host serves 2xx")
+    prompt = dv._prompt(f, "")
+    assert "Assess: Determine" in prompt, "the writer may still draw on it"
+    assert "fix_raw" not in prompt, "the writer's facts are shaped as before"
+
+
+def test_plain_fix_words_still_print_and_a_plain_row_beats_the_scanners_words():
+    f, it = _with_ticket("Host serves 2xx to arbitrary paths", "Ask the site's owner to return 404 for unknown paths.", False)
+    assert it["fix_raw"] is False
+    text = [e["text"] for e in dv.fallback(f)["email"] if e["id"] == it["id"]][0]
+    assert text.endswith("Ask the site's owner to return 404 for unknown paths.")
+    f, it = _with_ticket("BREACH attack vulnerability check — potentially VULNERABLE, gzip HTTP compression detected",
+                         RAW_FIX, True)
+    assert it["fix_raw"] is False and it["fix"].startswith("Turn compression off"), "PLAIN's own fix, not the scanner's"
+    text = [e["text"] for e in dv.fallback(f)["email"] if e["id"] == it["id"]][0]
+    assert "Turn compression off" in text and "Assess" not in text
+
+
+def test_group_problems_marks_a_fix_that_came_from_the_scanner():
+    rows = [("w1", "x.com", "No enforcing WAF in front of live application", "HIGH", "open", "commandsentry_heavy"),
+            ("a", "q.com", "Exposed panel", "HIGH", "open", "commandsentry_light")]
+    items = {i["finding_ids"][0]: i for i in dd.group_problems(rows, {"x.com", "q.com"},
+                                                                hints={"a": "1. " + RAW_FIX + "\n2. Then fix it."})}
+    assert items["a"]["do"] == RAW_FIX and items["a"]["do_raw"] is True
+    assert items["w1"]["do"].startswith("Put a web application firewall") and items["w1"]["do_raw"] is False
+    no_hint = dd.group_problems(rows[1:], {"q.com"})[0]
+    assert no_hint["do"] == "" and no_hint["do_raw"] is False

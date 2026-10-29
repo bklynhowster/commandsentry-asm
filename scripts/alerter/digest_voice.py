@@ -61,7 +61,7 @@ HOSTS_NAMED_MAX = 6                     # more than six hosts: six names, then "
 # Never in anything a person reads (Howie 09:38: "I don't want there ever to be anything in
 # this that talks about somebody getting fired"; 08:40: no blame, no ownership).
 BANNED = ("fired", "firing", "fire ", "let go", "your job", "their job", "his job", "her job",
-          "blame", "on us", "nothing for you to do", "discipline", "hr ", "vulnerable",
+          "blame", "nothing for you to do", "discipline", "hr ", "vulnerable",
           "accountable", "fault",
           # Howie 18:22: readers do not know what the scanner sends; no mechanics, no DNS talk
           "test traffic", "test request", "test requests", "attack-shaped", "give-me-a-file",
@@ -76,6 +76,14 @@ SENTENCE_MAX_WORDS = 45
 # Whole words only (Qwen, code review 12:02: "default" tripped 'fault' and "on users" tripped
 # 'on us', and one trip sends the whole day to the fallback).
 _BANNED_RE = [re.compile(r"(?<![a-z-])" + re.escape(w.strip()) + r"(?![a-z-])") for w in BANNED]
+# Howie 10-27 08:40: "don't say, 'This is on us.'" The blame is the phrase, not the two words:
+# plain "on us" also refuses lines that hand nothing out ("it depends on us", "they rely on us"),
+# and each refusal sends a line to repair or the whole day to the backup (10-29, the Prodex rerun:
+# two lines repaired for "on us"). So what is refused is something being on us: "'s / is / was /
+# are / will be (all) on us" ("this is on us", "that's on us", "the fix is on us") and "falls /
+# rests / lands on us". Still reported as 'on us'.
+_ON_US = re.compile(r"(?:'s|(?<![a-z-])(?:is|was|are|were|will be))\s+(?:all\s+|entirely\s+|squarely\s+)?on us(?![a-z-])"
+                    r"|(?<![a-z-])(?:falls|fell|rests|lands|landed)\s+(?:squarely\s+)?on us(?![a-z-])")
 EM_DASH = "—"
 SEVERITY_WORDS = {
     "CRITICAL": ("critical",), "HIGH": ("high",), "MODERATE-HIGH": ("moderate-high", "moderate high"),
@@ -227,9 +235,17 @@ def _short(host: str) -> str:
 
 def _item(iid: str, section: str, kind: str, severity: str, hosts: list, what: str, why: str,
           fix: str, text_for_dates: str, *, dates_allowed: bool = True, extra_numbers=(), detail=(),
-          family: str = "") -> dict:
+          family: str = "", fix_raw: bool = False) -> dict:
     hosts = [h for h in hosts if h]
-    what, why, fix = _plain(what or "", why or "", fix or "")
+    # A fix that is the scanner's own first step ("1. Assess: Determine what application or
+    # service is running on ...", digest_daily.first_step) is not plain words. A PLAIN row's
+    # fix wins over it; with none, the writer may still draw on it, but the backup never
+    # prints it (`fix_raw`, _para).
+    raw = (fix or "") if fix_raw else ""
+    what, why, fix = _plain(what or "", why or "", "" if raw else (fix or ""))
+    if raw and not fix:
+        fix = raw
+    fix_raw = bool(raw) and fix == raw
     what, why, fix = _clean(what), _clean(why), _clean(fix)
     detail = [_clean(d) for d in detail if d]
     text_for_dates = " ".join([_clean(text_for_dates), what, why, fix] + detail)
@@ -247,7 +263,7 @@ def _item(iid: str, section: str, kind: str, severity: str, hosts: list, what: s
     return {
         "id": iid, "section": section, "kind": kind, "severity": severity or "",
         "severity_word": _sev_word(severity), "hosts": hosts, "family": family or "",
-        "what": what, "why": why, "fix": fix,
+        "what": what, "why": why, "fix": fix, "fix_raw": fix_raw,
         "detail": detail,                            # per-host specifics, in the model's words
         "dates": _dates_in(text_for_dates) if dates_allowed else [],
         "numbers": sorted(nums),
@@ -354,7 +370,7 @@ def facts(model: dict, *, still_open=None, slack=None, sentry_only=None, company
         items.append(_item(f"c{n+1}", "changed", kind, it.get("severity", ""), hosts,
                            title, it.get("body", "") or it.get("why", ""), it.get("do", ""),
                            _text_of(it), extra_numbers=[len(lines)], detail=lines,
-                           family=it.get("family", "")))
+                           family=it.get("family", ""), fix_raw=bool(it.get("do_raw"))))
     for n, it in enumerate(model.get("done", [])):
         hosts = [ln.split(":")[0] for ln in it.get("lines", []) if ":" in ln]
         items.append(_item(f"f{n+1}", "fixed", it.get("kind", "fixed"), "", hosts,
@@ -364,7 +380,8 @@ def facts(model: dict, *, still_open=None, slack=None, sentry_only=None, company
         text = _text_of(it) + (f" {_day(since)}" if since is not None else "")
         d = _item(f"s{n+1}", "still", it.get("told_kind") or "open", it.get("severity", ""),
                   list(it.get("sites") or []), it.get("title", ""), it.get("body", ""), it.get("do", ""),
-                  text, dates_allowed=bool(it.get("recent")), family=it.get("family", ""))
+                  text, dates_allowed=bool(it.get("recent")), family=it.get("family", ""),
+                  fix_raw=bool(it.get("do_raw")))
         # a still line is ONE line (Howie 16:32); the second real morning (10-28 08:28) fell back
         # because this item alone carried the whole probe story and the writer wrote it all in.
         # Its why is one short sentence; the portal has the rest.
@@ -378,11 +395,13 @@ def facts(model: dict, *, still_open=None, slack=None, sentry_only=None, company
             lines = [_plain_quiet(ln) for ln in lines]
         items.append(_item(f"k{n+1}", "slack_changed", it.get("kind", "finding"), it.get("severity", ""),
                            list(it.get("sites") or it.get("hosts") or []), it.get("title", ""),
-                           it.get("body", ""), it.get("do", ""), _text_of(it), detail=lines))
+                           it.get("body", ""), it.get("do", ""), _text_of(it), detail=lines,
+                           fix_raw=bool(it.get("do_raw"))))
     for n, it in enumerate(slack.get("nudge", [])):
         items.append(_item(f"n{n+1}", "slack_nudge", "nudge", it.get("severity", ""),
                            list(it.get("sites") or []), it.get("title", ""), it.get("body", ""),
-                           it.get("do", ""), _text_of(it), dates_allowed=False))
+                           it.get("do", ""), _text_of(it), dates_allowed=False,
+                           fix_raw=bool(it.get("do_raw"))))
     _relate(items)
     return {
         "company": company, "day": day,
@@ -448,7 +467,8 @@ def _prompt(f: dict, previous_text: str) -> str:
     lists = (f"email: {req['email']}; fixed: {req['fixed']}; still_open: {req['still_open']}; "
              f"slack.changed: {req['slack_changed']}; slack.nudge: {req['slack_nudge']}")
     return (f"Today is {f.get('day') or 'today'}. Company: {f.get('company') or 'Prodex'}.\n\n"
-            f"FACTS (the only things you may say):\n{json.dumps(f['items'], indent=1)}\n\n"
+            f"FACTS (the only things you may say):\n"
+            f"{json.dumps([{k: v for k, v in it.items() if k != 'fix_raw'} for it in f['items']], indent=1)}\n\n"
             f"WHICH IDS GO IN WHICH LIST (exactly these, in this order; an empty list stays empty):\n{lists}\n\n"
             f"small_count: {f.get('small_count', 0)}\n\n"
             + (f"previous_text (do not reuse these sentences):\n{previous_text[:3000]}\n\n" if previous_text else "")
@@ -660,7 +680,7 @@ def check(out: dict, f: dict, *, portal_url: str = "") -> list[str]:
 
     # the line rules, each attributed to its line (so repair() can replace just that line)
     for label, t in _lines(out):
-        low = " " + t.lower() + " "
+        low = " " + t.lower().replace("\u2019", "'") + " "
         for sent in re.split(r"(?<=[.!?])\s+", t):
             n = len(sent.split())
             if n > SENTENCE_MAX_WORDS:
@@ -668,6 +688,8 @@ def check(out: dict, f: dict, *, portal_url: str = "") -> list[str]:
         for w, rx in zip(BANNED, _BANNED_RE):
             if rx.search(low):
                 problems.append(f"{label}: banned word: {w.strip()!r}")
+        if _ON_US.search(low):
+            problems.append(f"{label}: banned word: 'on us'")
         if EM_DASH in t:
             problems.append(f"{label}: em dash")
         for u in _URL.findall(t):
@@ -886,7 +908,7 @@ def _para(it: dict) -> str:
     s = f"{what}" + (f" on {w}" if w and w.lower() not in what.lower() else "") + "."
     if it["why"]:
         s += " " + it["why"].rstrip(".") + "."
-    if it["fix"]:
+    if it["fix"] and not it.get("fix_raw"):         # never the scanner's own words (10-29)
         s += " " + it["fix"].rstrip(".") + "."
     return s
 

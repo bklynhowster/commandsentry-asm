@@ -137,7 +137,14 @@ def _button_html(url: str, label: str, color: str) -> str:
 # Gmail cuts an email off at about 102 KB ("[Message clipped] View entire message"), and the
 # email's button now sits at the very end. Past this size the top strip carries the button too,
 # so it is never hidden behind that link. A daily is about 10 KB; this is for a long weekly.
-CLIP_SAFE_CHARS = 90_000
+# Gmail counts bytes of the whole HTML Howie gets, strips included, and an em dash or a bullet
+# is 3 bytes (code review of push-373, minor 2), so the guard measures the same: UTF-8 bytes of
+# the finished copy.
+CLIP_SAFE_BYTES = 90_000
+
+
+def _too_long(html: str) -> bool:
+    return len(html.encode("utf-8")) > CLIP_SAFE_BYTES
 
 
 def _top_button_row(url: str, label: str) -> str:
@@ -219,18 +226,23 @@ def approver_copy(subject: str, html: str, text: str, *, url: str, others: list[
     strip on top and the email's button under the email (10-29). With `slack` (round 5) the top
     strip carries the Slack draft and its button; `notes` are lines for the approver only
     (Sentry's own problems, a fallback reason). Neither given = the 3l strip."""
-    is_long = len(html) > CLIP_SAFE_CHARS
     if slack is None and not notes:
         label = "Send to the others"
-        return (approval_subject(subject),
-                with_bottom_html(with_strip_html(html, strip_html(url, others, kind, top_button=is_long)),
-                                 bottom_html(url, label, kind)),
+
+        def build(top: bool) -> str:
+            return with_bottom_html(with_strip_html(html, strip_html(url, others, kind, top_button=top)),
+                                    bottom_html(url, label, kind))
+        out = build(False)
+        return (approval_subject(subject), build(True) if _too_long(out) else out,
                 with_bottom_text(with_strip_text(text, strip_text(url, others, kind)), bottom_text(url, label, kind)))
     who = ", ".join(escape(a) for a in others)
-    return (approval_subject(subject),
-            with_bottom_html(with_strip_html(html, strip_html_v2(url, others, kind, slack=slack, notes=notes or [],
-                                                                 top_button=is_long)),
-                             bottom_html(url, f"Approve for email&nbsp;&nbsp;&rarr; {who}", kind)),
+
+    def build_v2(top: bool) -> str:
+        return with_bottom_html(with_strip_html(html, strip_html_v2(url, others, kind, slack=slack, notes=notes or [],
+                                                                    top_button=top)),
+                                bottom_html(url, f"Approve for email&nbsp;&nbsp;&rarr; {who}", kind))
+    out = build_v2(False)
+    return (approval_subject(subject), build_v2(True) if _too_long(out) else out,
             with_bottom_text(with_strip_text(text, strip_text_v2(url, others, kind, slack=slack, notes=notes or [])),
                              bottom_text(url, f"Approve for email ({', '.join(others)})", kind)))
 
@@ -342,6 +354,18 @@ def preview_copy(subject: str, html: str, text: str, *, slack: dict | None, note
     return subject, with_strip_html(html, strip), with_strip_text(text, "\n".join(tlines))
 
 
+def _two_decisions(slack: dict | None) -> bool:
+    """Two decisions are on the table only when there is a Slack post AND its button can post.
+    A quiet day (nothing for #on-call), a webhook not wired yet, or no Slack half at all leaves
+    one: the email (code review of push-373, minor 3: "Two separate decisions" showed anyway)."""
+    return bool(slack) and bool(slack.get("payload_text")) and bool(slack.get("wired", True))
+
+
+ONE_DECISION_HTML = "One decision today: the email. Its button is under it; nothing goes anywhere until you press it."
+TWO_DECISIONS_HTML = ("Two separate decisions. Each button sits under what it sends. Press one, both, or neither; "
+                      "nothing goes anywhere until you do.")
+
+
 def strip_html_v2(url: str, others: list[str], kind: str, *, slack: dict | None, notes: list[str],
                   top_button: bool = False) -> str:
     """The top of Howie's copy: the two decisions, then the #on-call draft with its button under
@@ -355,8 +379,7 @@ def strip_html_v2(url: str, others: list[str], kind: str, *, slack: dict | None,
         f'<tr><td style="padding:18px 24px 6px;font-family:{_FONT};font-size:17px;line-height:1.35;'
         f'font-weight:700;color:{STRIP_TEXT};">Only you have this so far.</td></tr>'
         f'<tr><td style="padding:0 24px 14px;font-family:{_FONT};font-size:14px;line-height:1.5;'
-        f'color:{STRIP_TEXT};">Two separate decisions. Each button sits under what it sends. Press one, both, or neither; '
-        'nothing goes anywhere until you do.</td></tr>'
+        f'color:{STRIP_TEXT};">{TWO_DECISIONS_HTML if _two_decisions(slack) else ONE_DECISION_HTML}</td></tr>'
         + (_top_button_row(url, "Approve for email&nbsp;&nbsp;&rarr; " + ", ".join(escape(a) for a in others))
            if top_button else "")
         + _slack_block_html(slack) + note_rows +
@@ -366,7 +389,9 @@ def strip_html_v2(url: str, others: list[str], kind: str, *, slack: dict | None,
 
 
 def strip_text_v2(url: str, others: list[str], kind: str, *, slack: dict | None, notes: list[str]) -> str:
-    lines = ["ONLY YOU HAVE THIS SO FAR. Two separate decisions; press one, both, or neither."]
+    lines = ["ONLY YOU HAVE THIS SO FAR. " + ("Two separate decisions; press one, both, or neither."
+                                              if _two_decisions(slack) else
+                                              "One decision today: the email; nothing goes anywhere until you approve it.")]
     if slack is not None:
         ch = slack.get("channel") or "#on-call"
         if not slack.get("payload_text"):
