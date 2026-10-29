@@ -68,7 +68,11 @@ BANNED = ("fired", "firing", "fire ", "let go", "your job", "their job", "his jo
           "resolve", "resolves", "dns",
           "short version")        # Howie 18:33: "you don't say 'short version'"
 OPENER = "Here's your morning briefing."   # Howie 18:33: the email opens with this, every day
-SENTENCE_MAX_WORDS = 32      # Howie 18:15: a 36-word sentence "makes your eyes go to the back of your head"; the rules say 30
+# Howie 10-27 18:15: a 36-word sentence "makes your eyes go to the back of your head"; the writer
+# is still told 30 (SYSTEM). Howie 10-29 08:33, on the writer's 42-word sentence that sent the
+# whole morning to the backup: "that text is superb ... change the application somewhat so that
+# we can have that many words." So the check refuses only past 45; the aim stays 30.
+SENTENCE_MAX_WORDS = 45
 # Whole words only (Qwen, code review 12:02: "default" tripped 'fault' and "on users" tripped
 # 'on us', and one trip sends the whole day to the fallback).
 _BANNED_RE = [re.compile(r"(?<![a-z-])" + re.escape(w.strip()) + r"(?![a-z-])") for w in BANNED]
