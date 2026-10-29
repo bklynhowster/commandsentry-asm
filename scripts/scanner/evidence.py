@@ -24,7 +24,16 @@ of `stated_ranges` (a test checks the two agree, sentence by sentence).
 
 PURE except `kev_ids()`, which reads CISA's catalog once per process and never raises, and
 falls back to the KEV list in cve_enrichments through the reader an entry point installs
-(`set_kev_fallback`, `db_kev_reader`; job 3s).
+(`set_kev_fallback`, `db_kev_reader`; job 3s); and `cna_record()` (S1, 2026-10-29), which reads
+one CVE record from the CVE Program's own API, once per CVE per process, only after an entry
+point has called `enable_cna_reads()`, and never raises.
+
+S1 (2026-10-29, Howie 17:55 "Go with number one"): the flaw's own record. wpvulnerability.net
+files CVE-2026-6728 as one range, "Slider Revolution < 7.0.10"; the record its CNA published
+(Wordfence) has two, 6.0–6.7.54 and 7.0–7.0.9, everything else "unaffected". Five Command
+sites run 6.7.58 or 6.8.1 and were told to "fix soon". `cna_leaves_out` reads the record's
+structured `affected` list and says so only when the record is plain about it; anything it
+cannot read keeps the advisory, the same direction as `range_excludes`.
 """
 from __future__ import annotations
 
@@ -174,3 +183,138 @@ def kev_ids(get=None, fallback=None) -> set:
     else:
         _KEV_CACHE = kev_fallback()
     return _KEV_CACHE
+
+
+# ── S1 (2026-10-29): the flaw's own published record ─────────────────────────────────
+CNA_RECORD_URL = "https://cveawg.mitre.org/api/cve/{}"
+CNA_USER_AGENT = "Sentry-ASM evidence/1.0 (public CVE record)"
+_CVE_ID = re.compile(r"CVE-\d{4}-\d{4,}")
+_CNA_CACHE: dict = {}
+_CNA_READS_ON = False
+
+
+def enable_cna_reads() -> None:
+    """Called ONCE per process by each entry point that runs the WordPress check
+    (run_light, run_medium, run_heavy mains). Off by default, so nothing that merely
+    imports this module (tests, the alerter) ever reaches the network."""
+    global _CNA_READS_ON
+    _CNA_READS_ON = True
+
+
+def cna_record(cve_id: str | None, get=None) -> dict | None:
+    """The CVE record (CVE JSON 5) for `cve_id`, as the CVE Program serves it, read once per
+    CVE per process (a failure is remembered too, so one bad id never costs a timeout per
+    plugin). None when reads are off, the id is malformed, the answer is not that CVE's
+    record, or anything fails. Never raises: a missing record only ever KEEPS a finding."""
+    cid = (cve_id or "").strip().upper()
+    if not _CVE_ID.fullmatch(cid):
+        return None
+    if cid in _CNA_CACHE:
+        return _CNA_CACHE[cid]
+    if get is None and not _CNA_READS_ON:
+        return None
+    rec = None
+    try:
+        url = CNA_RECORD_URL.format(cid)
+        if get is None:
+            req = urllib.request.Request(url, headers={"User-Agent": CNA_USER_AGENT})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                d = json.loads(r.read().decode("utf-8"))
+        else:
+            d = get(url)
+        meta = (d or {}).get("cveMetadata") if isinstance(d, dict) else None
+        if isinstance(meta, dict) and str(meta.get("cveId", "")).upper() == cid:
+            rec = d
+    except Exception:            # network, JSON, anything: keep the finding
+        rec = None
+    _CNA_CACHE[cid] = rec
+    return rec
+
+
+def _norm_name(s: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+_NUMERIC_TYPES = {"", "semver", "custom", "python", "maven", "rpm"}   # read as dotted numbers
+
+
+def _vcmp(a: tuple, b: tuple) -> int:
+    """Compare two dotted-number tuples, padding the shorter with zeros ("6.0" == "6.0.0")."""
+    n = max(len(a), len(b))
+    a, b = a + (0,) * (n - len(a)), b + (0,) * (n - len(b))
+    return (a > b) - (a < b)
+
+
+def _plain(v) -> tuple | None:
+    """A version we can compare: digits and dots only ("6.7.54", "7.0"). Anything else
+    ("7.0.9-beta", "6.x", "") is None, which keeps the finding."""
+    v = str(v or "").strip()
+    return tuple(int(x) for x in v.split(".")) if re.fullmatch(r"\d+(?:\.\d+)*", v) else None
+
+
+def cna_leaves_out(version: str | None, record: dict | None, names) -> str | None:
+    """S1. A short reason ("Wordfence's record: affected 6.0 to 6.7.54, 7.0 to 7.0.9") when the
+    flaw's published record leaves `version` out, and None (keep the finding) otherwise.
+    Says so only when ALL of these hold:
+      * the version is plain digits and dots;
+      * the record's CNA `affected` list has at least one entry for this product: its
+        product name, letters and digits only, equals one of `names` (the plugin's name from
+        the title, its slug) — exactly, so "Slider" never stands in for "Slider Revolution";
+      * EVERY such entry says defaultStatus "unaffected", lists at least one affected
+        version, and every affected version is a range this reads plainly: a numeric lower
+        bound ("0", "n/a" or "*" = from the start) with lessThan / lessThanOrEqual, or one
+        exact version; no `changes`, no version types it cannot compare;
+      * the version is inside none of them.
+    A product entry that does not match the names is not read at all. PURE."""
+    v = _plain(version)
+    if v is None or not isinstance(record, dict):
+        return None
+    cna = ((record.get("containers") or {}).get("cna") or {})
+    affected = cna.get("affected")
+    if not isinstance(affected, list):
+        return None
+    wanted = {n for n in (_norm_name(x) for x in (names or ())) if len(n) >= 3}
+    mine = [a for a in affected if isinstance(a, dict) and _norm_name(a.get("product")) in wanted]
+    if not mine:
+        return None
+    spans = []
+    for a in mine:
+        if a.get("defaultStatus") != "unaffected":
+            return None
+        items = [x for x in (a.get("versions") or []) if isinstance(x, dict)]
+        hits = [x for x in items if x.get("status") == "affected"]
+        if not hits:
+            return None
+        for x in hits:
+            if x.get("changes") or str(x.get("versionType") or "").lower() not in _NUMERIC_TYPES:
+                return None
+            lo_raw = str(x.get("version") or "").strip()
+            lo = None if lo_raw.lower() in ("0", "n/a", "*") else _plain(lo_raw)
+            if lo is None and lo_raw.lower() not in ("0", "n/a", "*"):
+                return None
+            if "lessThan" in x or "lessThanOrEqual" in x:
+                incl = "lessThanOrEqual" in x
+                hi_raw = str(x.get("lessThanOrEqual") if incl else x.get("lessThan")).strip()
+                if hi_raw == "*":
+                    if lo is None or _vcmp(v, lo) >= 0:
+                        return None                         # open-ended above: inside
+                    spans.append(f"{lo_raw} and later")
+                    continue
+                hi = _plain(hi_raw)
+                if hi is None:
+                    return None
+                below = lo is not None and _vcmp(v, lo) < 0
+                above = _vcmp(v, hi) > 0 if incl else _vcmp(v, hi) >= 0
+                if not below and not above:
+                    return None                             # inside this range: keep
+                spans.append(f"{'from the start' if lo is None else lo_raw} "
+                             f"{'to' if incl else 'up to, not including,'} {hi_raw}")
+            else:
+                if lo is None:
+                    return None
+                if _vcmp(v, lo) == 0:
+                    return None                             # this exact version: keep
+                spans.append(f"exactly {lo_raw}")
+    who = ((record.get("cveMetadata") or {}).get("assignerShortName") or "the CNA")
+    return f"{who}'s record: affected {', '.join(spans)}"
+
