@@ -1,32 +1,55 @@
 name: VPN egress reachability test
 
-# Probe-only workflow — NO scanning. Brings up each WireGuard region one
-# at a time, captures egress IP + target HTTP response, tears down,
-# moves on. Used to characterize whether our Mullvad US pool is on a
-# durable FortiGate ban list or just rate-limited.
+# ─────────────────────────────────────────────────────────────────────────────
+# A TEST, NOT A SCAN. Rewritten 2026-10-29 (push-372) for job 3u, "a second
+# opinion before down".
 #
-# Test protocol (per [[61 - Scan 73 Exhaustive Log Analysis]] in Obsidian):
-#   Test A — cold baseline: fire with no recent scans (12h+ since last scan)
-#   Test B — post-scan: fire immediately after a Medium scan completes
-#   Test C — recovery curve: fire at 5/10/15/20/30/60 min intervals after a scan
+# WHY: test.commandcommcentral.com went silent to Sentry on Oct 27, both to
+# GitHub's address and to the scanner's one usual Mullvad exit. On Oct 29
+# Howie reached ports 80, 443 and 8080 from a VPN address, and nothing from
+# his home address. Howie, 2026-10-29 09:28: "there are many Mullvad VPN IP
+# addresses. I want you to create a script that uses, say, eight of them and
+# attempts to connect to the box, and we see what happens." The answer says
+# whether other Mullvad exits can tell "it blocks us" apart from "it's down".
 #
-# Outcomes determine action:
-#   All regions 200 cold + 0 post-scan + recovery in <30 min → short-term rate limit
-#   All regions 0 cold → durable IP/ASN block; swap VPN provider
-#   Mixed cold → per-IP burns; regenerate Mullvad keys for affected regions
+# WHAT IT DOES:
+#   0. Waits while a Command scan holds the VPN (read only), so the test
+#      does not start a tunnel beside a scan's.
+#   1. GitHub's own address first, as a control. No tunnel.
+#   2. N Mullvad exits picked at random, a different city each where the pool
+#      allows. For each: bring the tunnel up, prove the exit address changed,
+#      try a plain TCP connect to each port (connect, then close; nothing is
+#      sent), tear the tunnel down. An exit we cannot prove is NOT tested.
+#   3. One table in the run's summary.
+#
+# HOWIE'S RULES IT KEEPS:
+#   * Extra VPN exits are used only to find out whether a port is open.
+#     Nothing is scanned through them: no requests, no logins, no payloads.
+#   * It never runs by itself. The Run button only (workflow_dispatch).
+#   * Public Actions logs: no addresses printed, not the box's and not the
+#     exits'. Each is masked the moment it is known. Routes are named by
+#     Mullvad server name and city.
+#   * The target is a fixed list, not free text: Command's own box only.
+#
+# It never uses the scanner's usual exit (the first config alphabetically).
+# The old version tried five city names (us-nyc, ...) that no longer exist;
+# the pool has been per-server configs (us-nyc-wg-001, ...) since 2026-06.
+# ─────────────────────────────────────────────────────────────────────────────
 
 on:
   workflow_dispatch:
     inputs:
       target:
-        description: 'Target hostname (no protocol)'
-        required: false
+        description: 'The box to try (Command-owned only)'
+        required: true
         default: 'test.commandcommcentral.com'
-        type: string
-      cooldown_seconds:
-        description: 'Seconds to sleep between region probes'
-        required: false
-        default: '60'
+        type: choice
+        options:
+          - test.commandcommcentral.com
+      exits:
+        description: 'How many Mullvad exits to try (1 to 12)'
+        required: true
+        default: '8'
         type: string
 
 permissions:
@@ -40,7 +63,7 @@ defaults:
 jobs:
   reach-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     container:
       image: ghcr.io/bklynhowster/commandsentry-scanner:latest
       credentials:
@@ -49,167 +72,248 @@ jobs:
       options: >-
         --cap-add=NET_ADMIN
         --device=/dev/net/tun
+    env:
+      # The three ports Howie found open from a VPN address on 2026-10-29.
+      PORTS: '80,443,8080'
+      TARGET: ${{ inputs.target }}
+      EXITS: ${{ inputs.exits }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify baked-in toolchain
+      - name: Check the inputs and the baked-in tools
         run: |
-          for t in wireguard-go wg gh curl jq python3; do
+          set -uo pipefail
+          if ! [[ "$EXITS" =~ ^[1-9][0-9]?$ ]] || (( EXITS > 12 )); then
+            echo "::error::exits must be a whole number from 1 to 12 (got '$EXITS')"; exit 1
+          fi
+          for t in wireguard-go wg gh curl python3 psql sudo; do
             command -v "$t" >/dev/null 2>&1 \
               || { echo "::error::missing baked tool: $t"; exit 1; }
           done
-          echo "✓ baked toolchain present"
+          echo "✓ inputs and tools OK — $EXITS exit(s), ports $PORTS"
 
-      - name: Fetch + patch WireGuard configs
+      # Read only. Command's scan pool is one tunnel (VPN_SLOTS_N=1). Wait for
+      # it to be free so this test does not start a tunnel beside a scan's. Same
+      # stale rule as vpn_slot.py: a slot older than 40 minutes, or held by a
+      # finished scan, counts as free. Errors are reported without the
+      # database's own text, which can carry its address.
+      - name: Wait while a Command scan holds the VPN
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          set -uo pipefail
+          SQL="select count(*) from public.vpn_slots s
+                where s.scan_run_id is not null
+                  and s.claimed_at > now() - interval '40 minutes'
+                  and not exists (select 1 from public.scan_run r
+                                   where r.scan_run_id = s.scan_run_id
+                                     and r.status in ('complete','failed','degraded'));"
+          for i in $(seq 1 40); do
+            held=$(psql "$SUPABASE_DSN" -tA -c "$SQL" 2>/dev/null) \
+              || { echo "::error::could not read the VPN slots (database error, text withheld) — stopping, nothing tested"; exit 1; }
+            held=$(printf '%s' "$held" | tr -d '[:space:]')
+            if [[ "$held" == "0" ]]; then
+              echo "no Command scan is on the VPN — going ahead"
+              exit 0
+            fi
+            echo "a Command scan is on the VPN — waiting 30s ($i/40)"
+            sleep 30
+          done
+          echo "::error::a Command scan held the VPN for 20 minutes — stopping, nothing tested. Run it again later."
+          exit 1
+
+      - name: Fetch + patch the WireGuard configs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -uo pipefail
           mkdir -p /tmp/wg-download
           gh release download vpn-tools \
             --repo bklynhowster/commandsentry-asm \
             --pattern 'mullvad-wg-configs.tar.gz' \
-            --dir /tmp/wg-download
+            --dir /tmp/wg-download \
+            || { echo "::error::could not download the WireGuard configs"; exit 1; }
           sudo mkdir -p /etc/wireguard
           sudo tar xzf /tmp/wg-download/mullvad-wg-configs.tar.gz -C /tmp/wg-download
           sudo cp /tmp/wg-download/wg-configs/*.conf /etc/wireguard/
           sudo chmod 600 /etc/wireguard/*.conf
-          sudo python3 scripts/scanner/patch_wg_configs.py
-          echo "WG configs ready:"
-          ls -la /etc/wireguard/
+          # shellcheck disable=SC2024  # the log is ours, in /tmp; only the patch needs root
+          sudo python3 scripts/scanner/patch_wg_configs.py > /tmp/patch.log 2>&1 \
+            || { echo "::error::patch_wg_configs.py failed"; exit 1; }
+          tail -1 /tmp/patch.log
+          chmod +x scripts/scanner/*.sh
+          echo "configs available: $(sudo ls /etc/wireguard/ | grep -c '\.conf$')"
 
-      - name: Make VPN scripts executable
-        run: chmod +x scripts/scanner/*.sh
-
-      - name: Reachability probe across all regions
-        env:
-          TARGET: ${{ inputs.target }}
-          COOLDOWN: ${{ inputs.cooldown_seconds }}
+      - name: Try the box from GitHub's address, then from each Mullvad exit
         run: |
-          REGIONS=(us-nyc us-chi us-atl us-dal us-lax)
-          RESULTS=/tmp/reachability.jsonl
+          set -uo pipefail
+          RESULTS=/tmp/reach.jsonl
           : > "$RESULTS"
 
-          probe_region() {
-            local region="$1"
-            local ts pre_ip up_rc egress_ip target_code target_time teardown_rc
+          # knock.py <ip> <ports> — a plain TCP connect to each port, then
+          # close. Two tries per port, 5 s each. Sends nothing. Prints only the
+          # port states, never the address.
+          cat > /tmp/knock.py <<'PY'
+          import json, socket, sys
+          ip, ports = sys.argv[1], [int(p) for p in sys.argv[2].split(",")]
+          out = {}
+          for port in ports:
+              state = "silent"
+              for _ in (1, 2):
+                  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                  s.settimeout(5)
+                  try:
+                      s.connect((ip, port))
+                      state = "open"
+                  except socket.timeout:
+                      state = "silent"
+                  except ConnectionRefusedError:
+                      state = "refused"
+                  except OSError:
+                      state = "unreachable"
+                  finally:
+                      s.close()
+                  if state in ("open", "refused"):
+                      break
+              out[str(port)] = state
+          print(json.dumps(out))
+          PY
 
-            ts=$(date -u +%FT%TZ)
-            echo "═══════════════════════════════════════════════════════"
-            echo "[$ts] probing region: $region"
-            echo "═══════════════════════════════════════════════════════"
+          # pick.py <n> — n configs at random, a different city first, never
+          # the scanner's usual exit (the first config alphabetically).
+          cat > /tmp/pick.py <<'PY'
+          import os, random, sys
+          n = int(sys.argv[1])
+          names = sorted(f[:-5] for f in os.listdir("/etc/wireguard") if f.endswith(".conf"))
+          pool = names[1:]
+          rng = random.SystemRandom()
+          rng.shuffle(pool)
+          by_city = {}
+          for name in pool:
+              by_city.setdefault("-".join(name.split("-")[:2]), []).append(name)
+          picks = [servers[0] for servers in by_city.values()][:n]
+          rest = [x for x in pool if x not in picks]
+          picks += rest[: n - len(picks)]
+          print("\n".join(picks))
+          PY
 
-            # Step 1: capture baseline (pre-VPN) egress so we know what
-            # the runner's "natural" IP is for this row.
-            pre_ip=$(curl -s --max-time 8 https://api.ipify.org 2>/dev/null || echo "<unknown>")
-            echo "  pre-VPN egress: $pre_ip"
-
-            # Step 2: chmod the config readable (per scanner.yml pattern)
-            sudo chmod 0644 "/etc/wireguard/${region}.conf"
-
-            # Step 3: bring up the tunnel via our userspace script
-            if ! sudo scripts/scanner/wg_up_userspace.sh "$region" 2>&1 | sed "s/^/  [wg-up] /"; then
-              up_rc=$?
-              echo "  ✗ wg_up_userspace.sh failed (rc=$up_rc)"
-              jq -nc \
-                --arg ts "$ts" --arg region "$region" --arg pre "$pre_ip" \
-                '{ts:$ts, region:$region, pre_vpn_ip:$pre, tunnel_up:false, egress_ip:null, target_code:null, target_time_s:null, note:"tunnel bring-up failed"}' \
-                >> "$RESULTS"
-              return
-            fi
-
-            # Step 4: confirm the tunnel routed our traffic out a new IP
-            egress_ip=$(curl -s --max-time 10 https://api.ipify.org 2>/dev/null || echo "<unknown>")
-            echo "  post-VPN egress: $egress_ip"
-
-            # Step 5: probe the target (single GET, no follow-redirects,
-            # short timeout, capture HTTP code + time)
-            local probe_out
-            probe_out=$(curl -s -o /dev/null \
-              -w '%{http_code}|%{time_total}' \
-              --max-time 15 \
-              "https://${TARGET}/" 2>/dev/null || echo "0|0")
-            target_code="${probe_out%%|*}"
-            target_time="${probe_out##*|}"
-            echo "  target ${TARGET}: HTTP $target_code in ${target_time}s"
-
-            # Step 6: teardown
-            if ! sudo scripts/scanner/vpn_teardown.sh 2>&1 | sed "s/^/  [teardown] /"; then
-              teardown_rc=$?
-              echo "  ⚠ teardown returned $teardown_rc (continuing)"
-            fi
-
-            # Step 7: log structured result
-            jq -nc \
-              --arg ts "$ts" \
-              --arg region "$region" \
-              --arg pre "$pre_ip" \
-              --arg egress "$egress_ip" \
-              --arg code "$target_code" \
-              --arg time "$target_time" \
-              '{ts:$ts, region:$region, pre_vpn_ip:$pre, tunnel_up:true, egress_ip:$egress, target_code:($code|tonumber), target_time_s:($time|tonumber)}' \
-              >> "$RESULTS"
+          exit_ip () {   # the current exit address, or empty
+            local p ip
+            for p in https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
+              ip=$(curl -s --max-time 8 "$p" 2>/dev/null | head -1 | tr -d '[:space:]' || true)
+              if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "$ip"; return; fi
+            done
+            echo ""
           }
 
-          for region in "${REGIONS[@]}"; do
-            probe_region "$region"
-            echo "  (sleeping ${COOLDOWN}s before next region)"
-            sleep "$COOLDOWN"
+          record () {   # record <n> <route> <note> <ports-json-or-empty>
+            python3 - "$1" "$2" "$3" "${4:-}" >> "$RESULTS" <<'PY'
+          import json, sys
+          n, route, note, ports = sys.argv[1:5]
+          print(json.dumps({"n": n, "route": route, "note": note,
+                            "ports": json.loads(ports) if ports else None}))
+          PY
+          }
+
+          # The box's address: resolved once, before any tunnel, masked at once.
+          TARGET_IP=$(python3 -c 'import socket,sys; print(socket.gethostbyname(sys.argv[1]))' "$TARGET" 2>/dev/null) || TARGET_IP=""
+          [[ -n "$TARGET_IP" ]] || { echo "::error::could not resolve the target — nothing tested"; exit 1; }
+          echo "::add-mask::$TARGET_IP"
+
+          BASE_IP=$(exit_ip)
+          [[ -n "$BASE_IP" ]] || { echo "::error::could not read GitHub's own address — nothing tested"; exit 1; }
+          echo "::add-mask::$BASE_IP"
+
+          echo "── control: GitHub's own address (no tunnel)"
+          ports=$(python3 /tmp/knock.py "$TARGET_IP" "$PORTS")
+          echo "   $ports"
+          record "control" "GitHub's own address" "" "$ports"
+
+          SEEN=" $BASE_IP "
+          i=0
+          for R in $(sudo python3 /tmp/pick.py "$EXITS"); do
+            i=$((i + 1))
+            echo "── exit $i: $R"
+            sudo chmod 0644 "/etc/wireguard/$R.conf"
+            # Its log names the server's address, so it stays in /tmp, unprinted.
+            # shellcheck disable=SC2024
+            if ! sudo scripts/scanner/wg_up_userspace.sh "$R" > /tmp/wgup.log 2>&1; then
+              echo "   tunnel did not come up — not tested"
+              record "$i" "$R" "tunnel did not come up" ""
+              sudo scripts/scanner/vpn_teardown.sh > /dev/null 2>&1 || true
+              continue
+            fi
+            IP=$(exit_ip)
+            if [[ -z "$IP" ]]; then
+              echo "   could not read the exit address — not tested"
+              record "$i" "$R" "could not read the exit address" ""
+            elif [[ "$IP" == "$BASE_IP" ]]; then
+              echo "   the exit did not change — not tested"
+              record "$i" "$R" "the exit did not change" ""
+            else
+              echo "::add-mask::$IP"
+              note=""
+              case "$SEEN" in *" $IP "*) note="same exit address as an earlier route" ;; esac
+              SEEN="$SEEN$IP "
+              ports=$(python3 /tmp/knock.py "$TARGET_IP" "$PORTS")
+              echo "   $ports${note:+  ($note)}"
+              record "$i" "$R" "$note" "$ports"
+            fi
+            sudo scripts/scanner/vpn_teardown.sh > /dev/null 2>&1 || true
+            sleep 3
           done
 
-          echo ""
-          echo "═══ Final reachability results (target: ${TARGET}) ═══"
-          jq -s '.' "$RESULTS"
-
-      - name: Build summary table
+      - name: Summary
         if: always()
-        env:
-          TARGET: ${{ inputs.target }}
         run: |
-          RESULTS=/tmp/reachability.jsonl
-          [[ -s "$RESULTS" ]] || { echo "no results to summarize"; exit 0; }
+          set -uo pipefail
+          [[ -s /tmp/reach.jsonl ]] || { echo "no results to summarize"; exit 0; }
+          python3 - /tmp/reach.jsonl "$PORTS" <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json, sys
+          rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+          ports = sys.argv[2].split(",")
+          CITY = {"atl": "Atlanta", "bos": "Boston", "chi": "Chicago", "dal": "Dallas",
+                  "den": "Denver", "det": "Detroit", "hou": "Houston", "lax": "Los Angeles",
+                  "mia": "Miami", "nyc": "New York", "phx": "Phoenix", "qas": "Ashburn",
+                  "rag": "Raleigh", "sea": "Seattle", "sjc": "San Jose",
+                  "slc": "Salt Lake City", "uyk": "Secaucus"}
+          def city(route):
+              parts = route.split("-")
+              if len(parts) < 2:
+                  return "—"
+              name = CITY.get(parts[1]) if parts[0] == "us" else None
+              return name or f"{parts[0].upper()} {parts[1]}"
+          def verdict(r):
+              p = r["ports"]
+              if p is None:
+                  return "not tested: " + r["note"]
+              v = list(p.values())
+              if "open" in v:
+                  return "✅ gets through"
+              if "refused" in v:
+                  return "✅ answers (port closed)"
+              return "❌ silent"
+          print("## Can other Mullvad exits reach the box?")
+          print()
+          print(f"Ports tried: {', '.join(ports)}. A plain connect, then close; nothing sent. "
+                "Addresses are not printed (public log).")
+          print()
+          print("| # | Route | City | " + " | ".join(ports) + " | Result |")
+          print("|---|---|---|" + "---|" * len(ports) + "---|")
+          for r in rows:
+              cells = [(r["ports"] or {}).get(p, "—") for p in ports]
+              where = "—" if r["n"] == "control" else city(r["route"])
+              print(f"| {r['n']} | {r['route']} | {where} | " + " | ".join(cells) + f" | {verdict(r)} |")
+          vpn = [r for r in rows if r["n"] != "control"]
+          tested = [r for r in vpn if r["ports"] is not None]
+          through = [r for r in tested if any(s in ("open", "refused") for s in r["ports"].values())]
+          print()
+          print(f"**Mullvad exits that reached the box: {len(through)} of {len(tested)} tested** "
+                f"({len(vpn) - len(tested)} could not be tested).")
+          PY
 
-          {
-            echo "## VPN egress reachability — \`${TARGET}\`"
-            echo ""
-            echo "| Region | Tunnel | Egress IP | Target HTTP | Time (s) | Verdict |"
-            echo "|---|---|---|---|---|---|"
-            jq -r '
-              [.region, (.tunnel_up|tostring), (.egress_ip//"-"),
-               (.target_code|tostring), (.target_time_s|tostring),
-               (if .target_code == 200 then "✅ REACHABLE"
-                elif .target_code == 0 then "❌ BLOCKED (HTTP 0)"
-                elif .target_code >= 400 and .target_code < 500 then "⚠ WAF (\(.target_code))"
-                else "❓ \(.target_code)" end)
-              ] | "| " + (join(" | ")) + " |"
-            ' "$RESULTS"
-            echo ""
-            echo "### Aggregate"
-            echo ""
-            UP=$(jq -s '[.[] | select(.target_code == 200)] | length' "$RESULTS")
-            BLOCKED=$(jq -s '[.[] | select(.target_code == 0)] | length' "$RESULTS")
-            WAF=$(jq -s '[.[] | select(.target_code >= 400 and .target_code < 500)] | length' "$RESULTS")
-            TOTAL=$(jq -s 'length' "$RESULTS")
-            echo "- ✅ reachable (200): **$UP / $TOTAL**"
-            echo "- ❌ blocked (HTTP 0): **$BLOCKED / $TOTAL**"
-            echo "- ⚠ WAF challenge (4xx): **$WAF / $TOTAL**"
-            echo ""
-            echo "### Diagnosis hint"
-            echo ""
-            if [[ "$UP" == "$TOTAL" ]]; then
-              echo "All regions reachable cold → no durable block. If this is **Test A**, the previous scan's bans were short-term. Proceed with rate-limit characterization."
-            elif [[ "$BLOCKED" == "$TOTAL" ]]; then
-              echo "All regions blocked cold → likely Mullvad ASN-level threat-list block. Time to evaluate ProtonVPN free swap."
-            else
-              echo "Mixed result → per-IP bans. Identify the blocked regions and rotate Mullvad keys for them, OR add new regions."
-            fi
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload reachability log as artifact
+      - name: Tear down any tunnel left up
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: reachability-${{ github.run_id }}
-          path: /tmp/reachability.jsonl
-          retention-days: 30
+        run: sudo scripts/scanner/vpn_teardown.sh > /dev/null 2>&1 || true
