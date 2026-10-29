@@ -574,22 +574,31 @@ def test_a_run_on_sentence_and_scanner_mechanics_are_refused():
     f = _facts()
     long = ("Sentry sent one plain request and then three attack-shaped ones, a SQL injection, a script injection and a "
             "give-me-a-file-off-your-disk trick, and both hosts turned the attack-shaped ones away with a block page Sentry "
-            "doesn't recognize yet.")
-    assert len(long.split()) == 36
+            "doesn't recognize yet, which we will look into again tomorrow morning when the next scan of both hosts runs.")
+    assert len(long.split()) == 52
     _refused(lambda o: o["email"].__setitem__(1, {"id": "c2", "text": "l3h-ss, prod, l3h-nh and l3h-ivs are new. " + long}),
-             "email c2: a sentence of 36 words")
+             "email c2: a sentence of 52 words")
     _refused(lambda o: o["email"].__setitem__(1, {"id": "c2", "text": "l3h-ss, prod, l3h-nh and l3h-ivs turned away our test traffic, which is good."}),
              "banned word: 'test traffic'")
     _refused(lambda o: o["email"].__setitem__(0, {"id": "c1", "text": "valorep.prodexlabs.com looks down since Oct 22 and its name doesn't resolve anymore. It drops off the portal on Nov 2."}),
              "banned word: 'resolve'")
     _refused(lambda o: o["opening"].__setitem__ if False else o.__setitem__("opening", "Here's your morning briefing. our DNS is fine and one box looks down."),
              "banned word: 'dns'")
-    # 32 words is the cap for the writer; the fallback and the careful answer sit well under it
+    # 45 words is the cap (Howie 10-29 08:33); the writer is still told 30, and the fallback and
+    # the careful answer sit well under it
+    assert dv.SENTENCE_MAX_WORDS == 45
     o = _good(f)
-    o["opening"] = dv.OPENER + " " + " ".join(["word"] * 32) + "."
+    o["opening"] = dv.OPENER + " " + " ".join(["word"] * 45) + "."
     assert dv.check(o, f, portal_url="https://prodexsentry.netlify.app") == []
-    o["opening"] = dv.OPENER + " " + " ".join(["word"] * 33) + "."
-    assert any(p.startswith("opening: a sentence of 33 words") for p in dv.check(o, f, portal_url="https://prodexsentry.netlify.app"))
+    o["opening"] = dv.OPENER + " " + " ".join(["word"] * 46) + "."
+    assert any(p.startswith("opening: a sentence of 46 words") for p in dv.check(o, f, portal_url="https://prodexsentry.netlify.app"))
+    # the writer's sentence that sent 10-29 to the backup passes now (Howie 08:33: "superb")
+    breach = ("The site compresses its pages, and someone who can watch the traffic and nudge a browser into making "
+              "requests could use that to pull a secret out of a page, a token or a session cookie, a little bit at a time.")
+    assert len(breach.split()) == 42
+    o = _good(f)
+    o["opening"] = dv.OPENER + " " + breach
+    assert dv.check(o, f, portal_url="https://prodexsentry.netlify.app") == []
     fb = dv.fallback(f)
     for e in fb["email"] + fb["still_open"] + fb["slack"]["changed"] + fb["slack"]["nudge"]:
         for sent in e["text"].split(". "):
@@ -632,7 +641,10 @@ def test_the_email_opens_with_the_morning_briefing_line_and_new_boxes_are_the_on
 def test_one_bad_line_is_replaced_and_the_rest_of_the_writers_prose_stays():
     f = _facts(); o = _good(f)
     good_opening = o["opening"]
-    long = "We send every box a few probes to check whether some kind of security device, like a web application firewall, is sitting in front of it, and here they go straight through to the site, so that firewall is watching, not blocking."
+    long = ("We send every box a few probes to check whether some kind of security device, like a web application firewall, "
+            "is sitting in front of it, and here they go straight through to the site, so that firewall is watching, not blocking, "
+            "and it has been that way all week.")
+    assert len(long.split()) > dv.SENTENCE_MAX_WORDS
     o["still_open"][0]["text"] = "[Moderate-high] The firewall in front of bitec, demo and highcom is only watching, not blocking. " + long
     probs = dv.check(o, f, portal_url="https://prodexsentry.netlify.app")
     assert probs and all(p.startswith("still_open s1: ") for p in probs), probs
@@ -642,8 +654,18 @@ def test_one_bad_line_is_replaced_and_the_rest_of_the_writers_prose_stays():
     assert o2["still_open"][0]["text"] == dv.fallback(f)["still_open"][0]["text"]
     assert dv.check(o2, f, portal_url="https://prodexsentry.netlify.app") == []
     note = dv.plain_reasons(replaced, f)
-    assert len(note) == 1 and note[0].startswith("The still-sitting-there line about bitec, demo and highcom: one sentence ran ")
-    assert "the limit is 32" in note[0] and 'It said: "[Moderate-high] The firewall in front of bitec' in note[0]
+    # a still line is ONE line: at 45 words a sentence that long trips the 240-character cap first
+    assert len(note) == 1 and note[0].startswith("The still-sitting-there line about bitec, demo and highcom: it ran ")
+    assert "the limit there is 240" in note[0] and "It said: " in note[0]
+    # an email paragraph has room (800 characters), so there the sentence limit is what refuses it
+    oe = _good(f)
+    oe["email"][1]["text"] = "l3h-ss, prod, l3h-nh and l3h-ivs are new. " + long
+    probs = dv.check(oe, f, portal_url="https://prodexsentry.netlify.app")
+    assert probs and all(p.startswith("email c2: a sentence of ") for p in probs), probs
+    oe2, replaced_e = dv.repair(oe, f, probs, portal_url="https://prodexsentry.netlify.app")
+    assert oe2 is not None and [r[0] for r in replaced_e] == ["email c2"]
+    note_e = dv.plain_reasons(replaced_e, f)
+    assert len(note_e) == 1 and "one sentence ran " in note_e[0] and "the limit is 45" in note_e[0]
     assert "still_open s1" not in note[0], "the shorthand stays in the log"
     # a free line and a Slack line too, in one go
     o3 = _good(f)
