@@ -56,19 +56,24 @@ def test_no_approver_means_nobody():
 
 
 # ── the approver's copy is the others' email plus the strip ─────────────────────────
-def test_the_approver_copy_is_the_others_email_plus_one_strip_and_a_prefix():
+def test_the_approver_copy_is_the_others_email_plus_a_strip_on_top_and_its_button_under_it():
+    """Howie 2026-10-29 08:37: "maybe we put the 'Approve for email' right under the email
+    message"; 15:51: "Push it." The note on top says who; the button sits under the email."""
     html, text = _daily_html()
     url = ap.approve_url("https://p.example", "TOKEN123")
     s, h, t = ap.approver_copy("[X] Command, Tuesday: 2 checks", html, text, url=url, others=OTHERS, kind="daily")
     assert s == "For approval: [X] Command, Tuesday: 2 checks"
-    strip = ap.strip_html(url, OTHERS, "daily")
-    assert h.count('data-approval-strip="1"') == 1
-    assert h.replace("\n" + strip, "", 1) == html, "nothing but the strip differs"
-    assert h.index(strip) > h.index("<body") and h.index(strip) < h.index("</body>")
-    assert t == ap.strip_text(url, OTHERS, "daily") + text
+    top = ap.strip_html(url, OTHERS, "daily")
+    bottom = ap.bottom_html(url, "Send to the others", "daily")
+    assert h.count('data-approval-strip="1"') == 1 and h.count('data-approval-strip="bottom"') == 1
+    assert h.replace("\n" + top, "", 1).replace(bottom + "\n", "", 1) == html, "nothing but the two strips differs"
+    assert h.index("<body") < h.index(top) < h.index(bottom) < h.rindex("</body>")
+    assert url not in top and "Send to the others" not in top, "no button on top any more"
+    assert h.rindex("</table>", 0, h.index(bottom)) > h.index(top) + len(top), "the email sits between the two"
+    assert t == ap.strip_text(url, OTHERS, "daily") + text.rstrip("\n") + "\n\n" + ap.bottom_text(url, "Send to the others", "daily") + "\n"
     for addr in OTHERS:
         assert addr in h and addr in t, "the strip says who it will go to"
-    assert "Send to the others" in h and url in t
+    assert "Send to the others" in h and t.index(url) > t.index(text.strip()[:20]), "the link comes after the email"
 
 
 def test_both_renderers_have_the_one_body_tag_the_strip_goes_after():
@@ -82,9 +87,15 @@ def test_html_without_a_body_is_refused_not_guessed():
         ap.with_strip_html("<html>no body</html>", "S")
 
 
-def test_the_strip_says_what_happens_if_you_do_nothing():
-    assert "tomorrow's email will cover today too" in ap.strip_text("u", OTHERS, "daily")
-    assert "nobody else gets this week's review" in ap.strip_text("u", OTHERS, "weekly")
+def test_the_button_says_what_happens_if_you_do_nothing():
+    assert "tomorrow's email will cover today too" in ap.bottom_text("u", "Send to the others", "daily")
+    assert "nobody else gets this week's review" in ap.bottom_text("u", "Send to the others", "weekly")
+    assert "tomorrow&#x27;s email will cover today too" in ap.bottom_html("u", "Send to the others", "daily")
+
+
+def test_html_without_a_closing_body_is_refused_not_guessed():
+    with pytest.raises(ValueError):
+        ap.with_bottom_html("<html><body>no end", "B")
 
 
 # ── the token ───────────────────────────────────────────────────────────────────────

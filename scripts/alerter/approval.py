@@ -7,8 +7,8 @@ every morning to simply approve it." 14:19: "Go."
 
 So, every scheduled daily and Monday weekly:
   1. Sentry builds the email exactly as before, and sends it ONLY to the approver
-     (repo variable ALERTER_APPROVER), with a strip on top: "Only you have this so far",
-     who it would go to, and a "Send to the others" button.
+     (repo variable ALERTER_APPROVER), with a strip on top: "Only you have this so far" and
+     who it would go to; and, under the email, a "Send to the others" button (2026-10-29).
   2. The button opens the portal's /digest/approve page; its "Send it" button marks the
      email approved (public.digest_approve, migration 20261026c).
   3. digest-send.yml (every 10 minutes, and fired by the portal at once) sends the stored
@@ -20,8 +20,13 @@ So, every scheduled daily and Monday weekly:
 Round 5 (2026-10-27, Howie 08:46–08:47): his copy carries TWO one-time buttons, "Approve for
 email" (the email, exactly as the others get it) and "Post to Slack" (a different, shorter
 piece of writing for the developers in #on-call), each its own decision; the Slack draft is
-shown under its button; the Slack button is absent on a day with nothing for a developer.
-With no Slack half given, the strip is the 3l one, byte for byte (Command stays as it is).
+shown above its button; the Slack button is absent on a day with nothing for a developer.
+With no Slack half given, the strip is the 3l one (Command's daily).
+
+2026-10-29 (Howie 08:37: "maybe we put the 'Approve for email' right under the email message";
+15:51: "Seems pretty perfect to me. Push it"): every button sits under what it sends. The top
+strip keeps the note and the #on-call draft with its button; the email's own button moves to a
+second strip right under the email (bottom_html), on both instances.
 
 PURE. No database, no network. run_alerter.py does the reading, writing and sending.
 """
@@ -110,42 +115,79 @@ def _if_not(kind: str) -> str:
     return "If you don't send it, nobody else gets it, and tomorrow's email will cover today too."
 
 
-def strip_html(url: str, others: list[str], kind: str) -> str:
-    who = ", ".join(escape(a) for a in others)
+def _box_html(attr: str, rows: str, pad: str) -> str:
+    """One yellow box, centred, 640 wide: the strip's frame, shared by the top and the bottom."""
     return (
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-        'data-approval-strip="1"><tr><td align="center" style="padding:20px 8px 0;">'
+        f'data-approval-strip="{attr}"><tr><td align="center" style="padding:{pad};">'
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
         f'bgcolor="{STRIP_BG}" style="width:100%;max-width:640px;background:{STRIP_BG};border-radius:14px;">'
+        + rows + '</table></td></tr></table>'
+    )
+
+
+def _button_html(url: str, label: str, color: str) -> str:
+    return ('<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'
+            f'<td bgcolor="{color}" style="background:{color};border-radius:8px;">'
+            f'<a href="{escape(url)}" style="display:inline-block;padding:12px 20px;font-family:{_FONT};'
+            f'font-size:15px;font-weight:700;color:#FFFFFF;text-decoration:none;">{label}</a>'
+            '</td></tr></table>')
+
+
+# Gmail cuts an email off at about 102 KB ("[Message clipped] View entire message"), and the
+# email's button now sits at the very end. Past this size the top strip carries the button too,
+# so it is never hidden behind that link. A daily is about 10 KB; this is for a long weekly.
+CLIP_SAFE_CHARS = 90_000
+
+
+def _top_button_row(url: str, label: str) -> str:
+    return f'<tr><td style="padding:0 24px 14px;">{_button_html(url, label, STRIP_BUTTON)}</td></tr>'
+
+
+def bottom_html(url: str, label: str, kind: str) -> str:
+    """Under the email (Howie 2026-10-29 08:37: "maybe we put the 'Approve for email' right
+    under the email message"; 15:51: "Push it"): the email's own button, then what happens if
+    he does nothing. Every button now sits under what it sends. `label` is HTML-safe."""
+    return _box_html(
+        "bottom",
+        f'<tr><td style="padding:18px 24px 12px;">{_button_html(url, label, STRIP_BUTTON)}</td></tr>'
+        f'<tr><td style="padding:0 24px 18px;font-family:{_FONT};font-size:13px;line-height:1.5;'
+        f'color:{STRIP_TEXT};">{escape(_if_not(kind))}</td></tr>',
+        "0 8px 32px")
+
+
+def bottom_text(url: str, label: str, kind: str) -> str:
+    return "\n".join([TEXT_RULE, f"{label}: {url}", _if_not(kind)])
+
+
+def strip_html(url: str, others: list[str], kind: str, *, top_button: bool = False) -> str:
+    who = ", ".join(escape(a) for a in others)
+    return _box_html(
+        "1",
         f'<tr><td style="padding:18px 24px 6px;font-family:{_FONT};font-size:17px;line-height:1.35;'
         f'font-weight:700;color:{STRIP_TEXT};">Only you have this so far.</td></tr>'
-        f'<tr><td style="padding:0 24px 14px;font-family:{_FONT};font-size:14px;line-height:1.5;'
+        f'<tr><td style="padding:0 24px 6px;font-family:{_FONT};font-size:14px;line-height:1.5;'
         f'color:{STRIP_TEXT};">Send it to: {who}</td></tr>'
-        '<tr><td style="padding:0 24px 12px;"><table role="presentation" cellpadding="0" cellspacing="0" '
-        f'border="0"><tr><td bgcolor="{STRIP_BUTTON}" style="background:{STRIP_BUTTON};border-radius:8px;">'
-        f'<a href="{escape(url)}" style="display:inline-block;padding:12px 20px;font-family:{_FONT};'
-        'font-size:15px;font-weight:700;color:#FFFFFF;text-decoration:none;">Send to the others</a>'
-        '</td></tr></table></td></tr>'
+        + (_top_button_row(url, "Send to the others") if top_button else "") +
         f'<tr><td style="padding:0 24px 18px;font-family:{_FONT};font-size:13px;line-height:1.5;'
-        f'color:{STRIP_TEXT};">{escape(_if_not(kind))}</td></tr>'
-        '</table></td></tr></table>'
-    )
+        f'color:{STRIP_TEXT};">Below: the email exactly as the others would get it, with its button under it.</td></tr>',
+        "20px 8px 0")
 
 
 def strip_text(url: str, others: list[str], kind: str) -> str:
     return "\n".join([
         "ONLY YOU HAVE THIS SO FAR.",
         f"Send it to: {', '.join(others)}",
-        f"Send to the others: {url}",
-        _if_not(kind),
+        "The email follows; the link to send it is at the end.",
         TEXT_RULE,
         "",
     ])
 
 
 def with_strip_html(html: str, strip: str) -> str:
-    """The approver's copy: the others' HTML with the strip right after <body>. Nothing else
-    differs, so what Howie reads is what they get."""
+    """The approver's copy: the others' HTML with the strip right after <body> (and, since
+    10-29, the email's button just before </body>). Nothing else differs, so what Howie reads
+    between the two is what they get."""
     m = _BODY_OPEN.search(html)
     if not m:
         raise ValueError("no <body> in the digest HTML")
@@ -156,18 +198,41 @@ def with_strip_text(text: str, strip: str) -> str:
     return strip + text
 
 
+_BODY_CLOSE = "</body>"
+
+
+def with_bottom_html(html: str, bottom: str) -> str:
+    """The email's button, right under the email: just before the last </body>."""
+    i = html.rfind(_BODY_CLOSE)
+    if i < 0:
+        raise ValueError("no </body> in the digest HTML")
+    return html[:i] + bottom + "\n" + html[i:]
+
+
+def with_bottom_text(text: str, bottom: str) -> str:
+    return text.rstrip("\n") + "\n\n" + bottom + "\n"
+
+
 def approver_copy(subject: str, html: str, text: str, *, url: str, others: list[str], kind: str,
                   slack: dict | None = None, notes: list[str] | None = None):
-    """(subject, html, text) for the approver, from exactly what the others will get. With
-    `slack` (round 5) the strip has two buttons and the Slack draft; `notes` are lines for the
-    approver only (Sentry's own problems, a fallback reason). Neither given = the 3l strip."""
+    """(subject, html, text) for the approver, from exactly what the others will get, with a
+    strip on top and the email's button under the email (10-29). With `slack` (round 5) the top
+    strip carries the Slack draft and its button; `notes` are lines for the approver only
+    (Sentry's own problems, a fallback reason). Neither given = the 3l strip."""
+    is_long = len(html) > CLIP_SAFE_CHARS
     if slack is None and not notes:
+        label = "Send to the others"
         return (approval_subject(subject),
-                with_strip_html(html, strip_html(url, others, kind)),
-                with_strip_text(text, strip_text(url, others, kind)))
+                with_bottom_html(with_strip_html(html, strip_html(url, others, kind, top_button=is_long)),
+                                 bottom_html(url, label, kind)),
+                with_bottom_text(with_strip_text(text, strip_text(url, others, kind)), bottom_text(url, label, kind)))
+    who = ", ".join(escape(a) for a in others)
     return (approval_subject(subject),
-            with_strip_html(html, strip_html_v2(url, others, kind, slack=slack, notes=notes or [])),
-            with_strip_text(text, strip_text_v2(url, others, kind, slack=slack, notes=notes or [])))
+            with_bottom_html(with_strip_html(html, strip_html_v2(url, others, kind, slack=slack, notes=notes or [],
+                                                                 top_button=is_long)),
+                             bottom_html(url, f"Approve for email&nbsp;&nbsp;&rarr; {who}", kind)),
+            with_bottom_text(with_strip_text(text, strip_text_v2(url, others, kind, slack=slack, notes=notes or [])),
+                             bottom_text(url, f"Approve for email ({', '.join(others)})", kind)))
 
 
 # ── round 5: two buttons ───────────────────────────────────────────────────────
@@ -277,43 +342,39 @@ def preview_copy(subject: str, html: str, text: str, *, slack: dict | None, note
     return subject, with_strip_html(html, strip), with_strip_text(text, "\n".join(tlines))
 
 
-def strip_html_v2(url: str, others: list[str], kind: str, *, slack: dict | None, notes: list[str]) -> str:
-    who = ", ".join(escape(a) for a in others)
+def strip_html_v2(url: str, others: list[str], kind: str, *, slack: dict | None, notes: list[str],
+                  top_button: bool = False) -> str:
+    """The top of Howie's copy: the two decisions, then the #on-call draft with its button under
+    it. The email's button is no longer here: bottom_html puts it under the email (10-29).
+    `url` and `others` stay in the signature so every caller is unchanged."""
     note_rows = "".join(
         f'<tr><td style="padding:0 24px 10px;font-family:{_FONT};font-size:13px;line-height:1.5;color:{STRIP_TEXT};">'
         f'{escape(n)}</td></tr>' for n in notes)
-    return (
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-        'data-approval-strip="2"><tr><td align="center" style="padding:20px 8px 0;">'
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-        f'bgcolor="{STRIP_BG}" style="width:100%;max-width:640px;background:{STRIP_BG};border-radius:14px;">'
+    return _box_html(
+        "2",
         f'<tr><td style="padding:18px 24px 6px;font-family:{_FONT};font-size:17px;line-height:1.35;'
         f'font-weight:700;color:{STRIP_TEXT};">Only you have this so far.</td></tr>'
         f'<tr><td style="padding:0 24px 14px;font-family:{_FONT};font-size:14px;line-height:1.5;'
-        f'color:{STRIP_TEXT};">Two separate decisions. Press one, both, or neither; nothing goes anywhere until you do.</td></tr>'
-        '<tr><td style="padding:0 24px 12px;"><table role="presentation" cellpadding="0" cellspacing="0" '
-        f'border="0"><tr><td bgcolor="{STRIP_BUTTON}" style="background:{STRIP_BUTTON};border-radius:8px;">'
-        f'<a href="{escape(url)}" style="display:inline-block;padding:12px 20px;font-family:{_FONT};'
-        f'font-size:15px;font-weight:700;color:#FFFFFF;text-decoration:none;">Approve for email&nbsp;&nbsp;&rarr; {who}</a>'
-        '</td></tr></table></td></tr>'
+        f'color:{STRIP_TEXT};">Two separate decisions. Each button sits under what it sends. Press one, both, or neither; '
+        'nothing goes anywhere until you do.</td></tr>'
+        + (_top_button_row(url, "Approve for email&nbsp;&nbsp;&rarr; " + ", ".join(escape(a) for a in others))
+           if top_button else "")
         + _slack_block_html(slack) + note_rows +
         f'<tr><td style="padding:0 24px 18px;font-family:{_FONT};font-size:13px;line-height:1.5;'
-        f'color:{STRIP_TEXT};">{escape(_if_not(kind))} Below this note: the email exactly as the others would get it.</td></tr>'
-        '</table></td></tr></table>'
-    )
+        f'color:{STRIP_TEXT};">Below: the email exactly as the others would get it, with its own button under it.</td></tr>',
+        "20px 8px 0")
 
 
 def strip_text_v2(url: str, others: list[str], kind: str, *, slack: dict | None, notes: list[str]) -> str:
-    lines = ["ONLY YOU HAVE THIS SO FAR. Two separate decisions; press one, both, or neither.",
-             f"Approve for email ({', '.join(others)}): {url}"]
+    lines = ["ONLY YOU HAVE THIS SO FAR. Two separate decisions; press one, both, or neither."]
     if slack is not None:
         ch = slack.get("channel") or "#on-call"
         if not slack.get("payload_text"):
             lines.append(f"Nothing for {ch} today.")
         elif slack.get("wired", True):
-            lines += [f"Post to Slack ({ch}): {slack['url']}", f"What {ch} would get:", slack["payload_text"]]
+            lines += [f"What {ch} would get:", slack["payload_text"], f"Post to Slack ({ch}): {slack['url']}"]
         else:
-            lines += [f"Post to Slack ({ch}): not wired yet, nothing can post.", f"What {ch} would get:", slack["payload_text"]]
+            lines += [f"What {ch} would get:", slack["payload_text"], f"Post to Slack ({ch}): not wired yet, nothing can post."]
     lines += list(notes)
-    lines += [_if_not(kind), TEXT_RULE, ""]
+    lines += ["The email follows; the link to approve it is at the end.", TEXT_RULE, ""]
     return "\n".join(lines)

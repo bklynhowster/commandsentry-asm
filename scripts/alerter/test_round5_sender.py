@@ -24,12 +24,16 @@ HTML = "<html><body><p>x</p></body></html>"
 
 
 # ── the copy ─────────────────────────────────────────────────────────────────────────────
-def test_with_no_slack_half_the_copy_is_the_3l_one_byte_for_byte():
-    a = ap.approver_copy("S", HTML, "T", url="https://p/digest/approve#t", others=["a@x"], kind="daily")
+def test_with_no_slack_half_the_copy_is_the_3l_one_with_its_button_under_the_email():
+    u = "https://p/digest/approve#t"
+    a = ap.approver_copy("S", HTML, "T", url=u, others=["a@x"], kind="daily")
     b = (ap.approval_subject("S"),
-         ap.with_strip_html(HTML, ap.strip_html("https://p/digest/approve#t", ["a@x"], "daily")),
-         ap.with_strip_text("T", ap.strip_text("https://p/digest/approve#t", ["a@x"], "daily")))
+         ap.with_bottom_html(ap.with_strip_html(HTML, ap.strip_html(u, ["a@x"], "daily")),
+                             ap.bottom_html(u, "Send to the others", "daily")),
+         ap.with_bottom_text(ap.with_strip_text("T", ap.strip_text(u, ["a@x"], "daily")),
+                             ap.bottom_text(u, "Send to the others", "daily")))
     assert a == b and 'data-approval-strip="1"' in a[1] and "Post to Slack" not in a[1]
+    assert a[1].index("<p>x</p>") < a[1].index(u), "the button is under the email"
 
 
 def test_with_a_slack_half_two_buttons_each_its_own_link_and_the_draft_under_it():
@@ -40,12 +44,16 @@ def test_with_a_slack_half_two_buttons_each_its_own_link_and_the_draft_under_it(
     assert 'data-approval-strip="2"' in html
     assert "Approve for email" in html and "#EMAILTOKEN" in html
     assert "Post to Slack" in html and "#SLACKTOKEN" in html
-    assert html.index("#EMAILTOKEN") < html.index("#SLACKTOKEN")
+    # Howie 2026-10-29: each button under what it sends. The Slack draft, then its button, on top;
+    # the email, then its button, below.
+    assert html.index("valorep went quiet.") < html.index("#SLACKTOKEN") < html.index("<p>x</p>") < html.index("#EMAILTOKEN")
+    assert html.count("Approve for email") == 1 and 'data-approval-strip="bottom"' in html
     assert "valorep went quiet." in html and "What #on-call would get" in html
     assert "Written from the fallback today" in html and "Written from the fallback today" in text
     assert "exactly as the others would get it" in html
     assert html.endswith("</html>") and "<p>x</p>" in html, "the email itself is untouched below the strip"
     assert "Post to Slack (#on-call): https://p/digest/approve#SLACKTOKEN" in text
+    assert text.index("#SLACKTOKEN") < text.index("\nT\n") < text.index("Approve for email (a@x, b@x): https://p/digest/approve#EMAILTOKEN")
 
 
 def test_no_post_today_and_not_wired_are_said_and_have_no_slack_button():
@@ -190,3 +198,16 @@ def test_a_host_that_stopped_answering_is_not_in_the_still_or_nudge_picks():
     quiet = {"valorep.prodexlabs.com"}
     kept = [r for r in rows if r[1] not in quiet]
     assert [r[1] for r in kept] == ["cooked.prodexlabs.com"]
+
+
+def test_a_long_email_keeps_its_button_on_top_too_so_gmail_never_hides_it():
+    """Gmail clips at about 102 KB and the email's button is at the end (10-29). A long email
+    (a big weekly) gets the button in the top strip as well; a normal daily gets it once."""
+    big = "<html><body><p>" + "x" * (ap.CLIP_SAFE_CHARS + 1) + "</p></body></html>"
+    slack = {"channel": "#on-call", "wired": True, "payload_text": "*What changed*\n• a.", "url": "https://p/s#S"}
+    for kw, label in (({}, "Send to the others"), ({"slack": slack}, "Approve for email")):
+        _, small_h, _ = ap.approver_copy("S", HTML, "T", url="https://p/a#E", others=["a@x"], kind="weekly", **kw)
+        _, big_h, _ = ap.approver_copy("S", big, "T", url="https://p/a#E", others=["a@x"], kind="weekly", **kw)
+        assert small_h.count('href="https://p/a#E"') == 1 and small_h.count(label) == 1
+        assert big_h.count('href="https://p/a#E"') == 2 and big_h.count(label) == 2
+        assert big_h.index('href="https://p/a#E"') < big_h.index("xxxx") < big_h.rindex('href="https://p/a#E"')
