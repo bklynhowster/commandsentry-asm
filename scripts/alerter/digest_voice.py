@@ -116,6 +116,12 @@ PLAIN = (
      + " So something is now standing guard in front of them, and we are still working out which product it is. "
      "That is good news.",
      ""),
+    # 3w (Howie 2026-10-30 11:58, "Perfect, book it"): a block Sentry has named. The title is
+    # the booked sentence's first half; this is its second.
+    (re.compile(r"^Google Cloud Armor, Google's web firewall, is blocking", re.I),
+     None,
+     "That's good news: it's switched on and doing its job.",
+     ""),
     (re.compile(r"^A web firewall is there, but it's only watching|^WAF detected but not blocking", re.I),
      None,
      "There is a firewall in front of it. " + THE_PROBE + " Here they go straight through to the site. "
@@ -447,7 +453,7 @@ WHO READS IT. People who are not security people. They do not know what the scan
 THE EMAIL HE APPROVED (match its rhythm and register, not its sentences; the facts differ every day):
 "Here's your morning briefing. One of our boxes looks down, and two others got some protection in front of them, which is good. valorep.prodexlabs.com looks like it's been down since Oct 22. If it doesn't come back by Nov 2, it drops off the portal on its own and we don't have to talk about it anymore. Since yesterday, l3h-ss and prod have started blocking our probes. We send every box a few probes to check whether there's some kind of security device sitting in front of it, like a WAF. Something is now standing guard in front of those two, and we're still working out which product it is. Still sitting there: the firewall in front of bitec, demo and highcom is only watching, not blocking. 4 small things also turned up, none of them need anybody, they're in the portal if you're curious."
 
-RULES THAT NEVER BEND. Say each fact once. The same problem on several hosts is ONE sentence that names the hosts (short names are fine: "bitec, demo and highcom"). EVERY entry names EVERY host in its item's "hosts" list, however short the entry: never "five of our sites", never a host left out. One sentence can carry six names. Only when an item has MORE than six hosts: name the first six, then "and N more" with N the exact remainder. Never assign blame or ownership: never "this is on us", "on you", "nothing for you to do", "somebody dropped the ball". Never mention anyone's job, being fired, HR or discipline. A box that now blocks the probes is GOOD news: something is standing guard, and we are still working out which product. Such a box is not new, it was in our fleet already; only an item titled "N new hosts found" is about new boxes, and those "joined our fleet". The probes are explained ONCE, the first time it matters (an item's "why" tells you); after that refer back to them ("the same probes"), never explain them again. When two items are about firewalls in opposite states, say so in one breath, so nobody reads them as the same story twice. Never use the word "vulnerable". Never add a date, number, host, product or severity that is not in the facts for that item, and never move one from one item to another. Severity words only as given ("Moderate", "Moderate-high", "High"); you may also just say "the most serious thing open" without a word. For a NUDGE (slack_nudge items) never say how long it has been open and never give a date.
+RULES THAT NEVER BEND. Say each fact once. The same problem on several hosts is ONE sentence that names the hosts (short names are fine: "bitec, demo and highcom"). EVERY entry names EVERY host in its item's "hosts" list, however short the entry: never "five of our sites", never a host left out. One sentence can carry six names. Only when an item has MORE than six hosts: name the first six, then "and N more" with N the exact remainder. Never assign blame or ownership: never "this is on us", "on you", "nothing for you to do", "somebody dropped the ball". Never mention anyone's job, being fired, HR or discipline. A box that now blocks the probes is GOOD news: something is standing guard, and we are still working out which product, UNLESS its item names the product (an item whose "what" starts "Google Cloud Armor"): then say that product, in those words, and never "still working out". Such a box is not new, it was in our fleet already; only an item titled "N new hosts found" is about new boxes, and those "joined our fleet". The probes are explained ONCE, the first time it matters (an item's "why" tells you); after that refer back to them ("the same probes"), never explain them again. When two items are about firewalls in opposite states, say so in one breath, so nobody reads them as the same story twice. Never use the word "vulnerable". Never add a date, number, host, product or severity that is not in the facts for that item, and never move one from one item to another. Severity words only as given ("Moderate", "Moderate-high", "High"); you may also just say "the most serious thing open" without a word. For a NUDGE (slack_nudge items) never say how long it has been open and never give a date.
 
 OUTPUT. Strict JSON, no prose around it, this shape:
 {"subject": "<5-9 words, no prefix, says the one main thing>",
@@ -895,6 +901,8 @@ def _para(it: dict) -> str:
         named = [_short(h) + (f" since {parts[h][0]}" if parts.get(h, ('', ''))[0] else "") for h in it["hosts"]]
         return (", ".join(named[:-1]) + " and " + named[-1] + " look like they're down. Any that don't come back "
                 "drop off the portal on their own, and we don't have to talk about them anymore.")
+    if it["kind"] == "guard":
+        return _guard_words(it)
     if it["kind"] == "blockpage":
         # Howie 18:33: "Did these boxes not exist before?" No: the boxes were here; what is new
         # is that they block the probes. Say that, and say "new boxes" only for the item that is.
@@ -933,10 +941,19 @@ def _names_all(text: str, hosts: list) -> bool:
     return all(h.lower() in low or _short(h).lower() in low for h in hosts)
 
 
+def _guard_words(it: dict) -> str:
+    """3w, the booked words (Howie 2026-10-30 11:58): "Google Cloud Armor, Google's web
+    firewall, is blocking our probes on uat and bitec. That's good news: it's switched on and
+    doing its job." """
+    return f"{it['what'].rstrip('.')} on {_hosts_words(it['hosts'])}. {it['why'].rstrip('.')}."
+
+
 def _fixed_line(it: dict) -> str:
     """The backup's fixed line: the title, plus its hosts when the title does not name them all
     (10-30: "Web firewalls started blocking on two sites" named neither host, so the check
     refused the backup's own line and no repair could use it)."""
+    if it["kind"] == "guard":
+        return _guard_words(it)
     text = it["what"].rstrip(".")
     if it["hosts"] and not _names_all(text, it["hosts"]):
         text += ": " + _hosts_words(it["hosts"])

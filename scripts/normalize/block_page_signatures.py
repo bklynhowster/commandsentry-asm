@@ -144,6 +144,61 @@ def annotate_fired(fired: list | None, entries: list[dict] | None = None) -> lis
     return fired or []
 
 
+# ── 3w: GOOGLE CLOUD ARMOR, NAMED FROM WHAT IT DOES (Howie, 2026-10-30) ─────────────────
+# Cloud Armor's block page names nobody (Google's 134-byte "403 Forbidden"), so the
+# library above can never match it, and wafw00f's "Google Cloud App Armor" signature is
+# ONLY the `Via: 1.1 google` header (wafw00f 2.4.2 plugins/gcparmor.py) — every site behind
+# Google's front door carries it, armored or not (note 266). Howie, 10:03: "Why aren't we
+# identifying what the damn thing is?"; 10:13 "I agree about the narrow rule"; 11:12 the
+# call is Sentry's evidence, never anyone's word. The narrow rule: ONE measurement shows all
+# three, or this says nothing:
+#   1. Google's front door answered: every denied attack response carries `via: 1.1 google`;
+#   2. the ordinary request got the real site: the benign request was served (2xx);
+#   3. the attack strings got Google's own deny page at that door: at least two classes
+#      denied (the differential's own bar), every deny a 403 whose body is exactly
+#      Google's page below.
+# Google documents the deny action as a 403/404/502 answered by the security policy, not
+# the backend (artifact_signatures.yaml `cloud_armor_edge_deny`, cited). A site whose owner
+# set 404 or 502 is not named by this: the safe direction. The page is matched exactly
+# (whitespace and case aside): if Google ever changes it, Sentry stops naming, it never
+# guesses. Howie 11:38 "A": the classifier names the product only when TWO separate deep
+# scans each pass this (device_class_runner, cloud_armor_edge_deny + _earlier).
+GOOGLE_EDGE_DENY_PAGE = ('<!doctype html><meta charset="utf-8"><meta name=viewport '
+                         'content="width=device-width, initial-scale=1"><title>403</title>403 Forbidden')
+_VIA_GOOGLE = re.compile(r"^via:[ \t]*1\.1 google[ \t]*\r?$", re.I | re.M)
+
+
+def _squash(s) -> str:
+    return re.sub(r"\s+", " ", str(s or "")).strip().lower()
+
+
+def cloud_armor_edge_deny(fired: list | None) -> bool:
+    """True iff ONE differential capture (details.fired) shows all three signs of Google
+    Cloud Armor blocking at Google's front door. Pure; the rule is in the comment above."""
+    rows = [f for f in (fired or []) if isinstance(f, dict)]
+    benign = [f for f in rows if f.get("cls") == "benign"]
+    if len(benign) != 1:
+        return False
+    try:
+        b = int(benign[0].get("status") or 0)
+    except (TypeError, ValueError):
+        return False
+    if not 200 <= b <= 299:
+        return False
+    denies = [f for f in rows if f.get("cls") != "benign" and is_deny(f.get("status"))]
+    if len(denies) < 2:
+        return False
+    page = _squash(GOOGLE_EDGE_DENY_PAGE)
+    for f in denies:
+        if str(f.get("status")) != "403":
+            return False
+        if not _VIA_GOOGLE.search(str(f.get("raw_headers") or "")):
+            return False
+        if _squash(f.get("body_head")) != page:
+            return False
+    return True
+
+
 def _selftest() -> int:
     entries = load_block_page_entries()
     names = [e["name"] for e in entries]
@@ -162,6 +217,16 @@ def _selftest() -> int:
                     {"cls": "sqli", "status": 403, "body_head": "<h1>Forbidden</h1>nothing here", "size": 90}], entries)
     if r["matched"] != ["wordfence_block_page", "automattic_sentries_block_page"] or r["unrecognized"] != [{"cls": "sqli", "status": 403, "size": 90}]:
         print(f"FAIL: scan_fired {r}"); ok = False
+    g_hdr = "HTTP/2 403 \ncontent-type: text/html; charset=UTF-8\ncontent-length: 134\nvia: 1.1 google\n"
+    g = [{"cls": "benign", "status": 200, "size": 10533}] + [
+        {"cls": c, "status": 403, "size": 134, "body_head": GOOGLE_EDGE_DENY_PAGE, "raw_headers": g_hdr}
+        for c in ("sqli", "xss", "lfi")]
+    if not cloud_armor_edge_deny(g):
+        print("FAIL: 3w the uat capture must pass"); ok = False
+    if cloud_armor_edge_deny([g[0], g[1]]) or cloud_armor_edge_deny([dict(g[0], status=301)] + g[1:]):
+        print("FAIL: 3w one deny / a redirected baseline must not pass"); ok = False
+    if cloud_armor_edge_deny(g[:3] + [dict(g[3], raw_headers="HTTP/2 403 \nserver: nginx\n")]):
+        print("FAIL: 3w a deny without Google's front door must not pass"); ok = False
     print("block_page_signatures selftest:", "PASS" if ok else "FAIL", f"({len(entries)} entries)")
     return 0 if ok else 1
 

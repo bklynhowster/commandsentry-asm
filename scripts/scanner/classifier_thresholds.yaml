@@ -22,6 +22,14 @@ signals:
     - waf_present_wafw00f              # 4.7 Q1: wafw00f detected a WAF but named no vendor — presence-only "Behind a WAF"
     - waf_present_differential         # 4.7 Cloud Armor: differential probe (>=2 payload classes block, benign passes) proves WAF presence; presence-only, NO vendor (DORMANT until Phase-B collector)
     - fortiweb_cookiesession1          # 4.7 Q2: FortiWeb cookiesession1 Set-Cookie (Fortinet primary-doc cited), independent of wafw00f
+    # ── Google Cloud Armor from what it does (KB 12 job 3w, Howie 2026-10-30) ──────────────
+    # One differential capture with all three signs (Google's front door; the ordinary
+    # request served; >=2 attack classes denied with Google's own 403 page). The newest
+    # capture shares wafw00f's dedupe_key (same Via header fact) = ONE high = suspected;
+    # an EARLIER separate capture that passed too is the second, independent high
+    # (Howie 11:38 "A": two deep scans) = confirmed. No bar is lowered.
+    - cloud_armor_edge_block           # newest differential capture shows all three signs (obs cloud_armor_edge_deny)
+    - cloud_armor_edge_block_repeat    # an earlier, separate deep scan showed them too (obs cloud_armor_edge_deny_earlier)
     # ── Discovery-tier wafw00f (Obsidian 157, 4.7 2026-07-23) ──────────────────
     # WAF verdict from the LIGHT/discovery scan (asset_surface.surface_data.subdomains[].waf),
     # NOT the heavy stack_id_wafw00f artifact. Same tool, lower operating envelope (reduced

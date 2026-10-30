@@ -142,5 +142,8 @@ def test_316_the_digest_job_installs_pyyaml():
 def test_subject_and_query_are_wired():
     src = open(ra.__file__, encoding="utf-8").read()
     assert "cur.execute(SQL_MEASURED_BLOCKS_IN_WINDOW, (window_start, window_end))" in src
-    assert "unrecognized_pages = unrecognized_block_pages(cur.fetchall())" in src
+    # 3w (2026-10-30): the call goes through measured_block_pages, which reports the
+    # unrecognized ones exactly as unrecognized_block_pages does and adds the NAMED ones.
+    assert "unrecognized_pages = measured_block_pages(cur.fetchall())" in src
+    assert "unrecognized_block_pages([r for r in rows or [] if r[0] not in named_ids])" in src
     assert src.count("unrecognized_pages=unrecognized_pages,") >= 3
