@@ -25,6 +25,9 @@ Dry-run-first. For every asset (4.7 F1-F4 corrected ordering, 2026-07-13):
      the persistent soak audit trail; "structured logs, not text") EVERY pass,
      dry-run AND --write. --write ALSO stamps assets.device_class + confidence +
      evidence + vendor_product — CLASSIFY-ONLY, changes NO routing (D4 Phase A).
+     A VENDOR verdict that moves while the class and its confidence stay put is
+     actionable too (382): it is written, and audited as CHANGE with the prior
+     vendor in prior_state. Before 382 it was computed and thrown away.
 
 Everything keys on asset_id (the hostname PK scan_run/findings reference).
 Fingerprint signals: SSH banner + cert + nuclei-Fortinet + (P1, Obsidian 146) the
@@ -463,6 +466,42 @@ def event_for(prior_class, prior_conf, new_class, new_conf) -> str | None:
     if nr < pr:
         return "TRANSITION_DOWNGRADE"
     return "CHANGE"
+
+
+# ── 382: a vendor verdict that moves on its own ──────────────────────────
+# event_for() compares the CLASS and its confidence only, and the loop used to skip
+# every asset whose event was None — so a vendor verdict that changed while the class
+# did not was computed and thrown away. 3w (push-381) named Google Cloud Armor on 12
+# Prodex sites whose class was already waf/confirmed; the 2026-10-30 18:45 UTC pass
+# computed the new vendor verdict and wrote nothing (events all 0), so the daily,
+# which names a product only at vendor_product_confidence = confirmed, never saw it.
+def vendor_state(vendor_product, confidence) -> tuple:
+    """PURE. (vendor_product, vendor_product_confidence) -> a comparable pair.
+
+    vendor_product arrives as a dict (psycopg loads jsonb), a JSON string, None, or {}.
+    None, {}, JSON null and an unparseable string are all "no vendor" (""); a dict is
+    compared by its sorted-key JSON, so key order never reads as a change. A missing
+    confidence is 'unknown', the column's own default answer."""
+    vp = vendor_product
+    if isinstance(vp, str):
+        try:
+            vp = json.loads(vp)
+        except ValueError:
+            vp = None
+    key = json.dumps(vp, sort_keys=True) if vp else ""
+    return key, (confidence or "unknown")
+
+
+def vendor_only_move(ev, decision, vendor_from, vendor_to) -> bool:
+    """PURE. True when this pass should write a vendor verdict although the class and
+    its confidence did not move: no class event, the decision already WRITES, and the
+    vendor pair differs from the stored one.
+
+    ⚠ ONLY WHEN THE DECISION WRITES. A preserve or no-write decision never reaches
+    assets, so the stored pair would never catch up and every pass would audit the
+    same "move" forever. With the gate, a vendor-only row is written once and the next
+    pass sees nothing to do."""
+    return ev is None and decision == _DECISION_WRITE and vendor_from != vendor_to
 
 
 # ── fwbbot_check corroboration gate (4.7 Q5; pure, hardcoded, anchor-tested) ──
@@ -1386,6 +1425,7 @@ def run(dsn: str, write: bool, soak_generation: int,
     m5 = {"preserve_evidence_aged": 0, "downgrade_capable_saw_weaker": 0}
     _pass_started = datetime.now(timezone.utc)
     unknown = cloud_endpoint_ct = cdn_ct = conf_subset = conf_full = 0
+    vendor_moves = 0   # 382: vendor verdicts written while the class stood still
     with conn.cursor() as cur:
         # F1/F3: classification no longer reads assets.is_cloud_endpoint/cloud_provider
         # (is_cloud_endpoint was the wrong topology key — see classify_asset). The cloud
@@ -1404,7 +1444,8 @@ def run(dsn: str, write: bool, soak_generation: int,
         # exclusions — a pass that narrows its own input without saying so cannot tell
         # you it checked less than you think.
         cur.execute("select asset_id, device_class, device_class_confidence, "
-                    "device_class_evidence, discovery_status from public.assets "
+                    "device_class_evidence, discovery_status, vendor_product, "
+                    "vendor_product_confidence from public.assets "
                     "order by asset_id")
         all_assets = cur.fetchall()
         assets = [a for a in all_assets
@@ -1542,9 +1583,19 @@ def run(dsn: str, write: bool, soak_generation: int,
                     conf_subset += 1
 
             ev = event_for(a["device_class"], a["device_class_confidence"], nc, ncf)
-            if ev is None:
+            vendor_from = vendor_state(a.get("vendor_product"), a.get("vendor_product_confidence"))
+            vendor_to = vendor_state(res["vendor_product"], vpc)
+            vendor_only = vendor_only_move(ev, decision, vendor_from, vendor_to)
+            if ev is None and not vendor_only:
                 continue
-            tally[ev] += 1
+            if vendor_only:
+                # The event_type CHECK allows six values; a vendor-only move is the
+                # lateral one, CHANGE (no new value, no migration). prior_state.vendor
+                # says what moved, and the class tally is left alone.
+                ev = "CHANGE"
+                vendor_moves += 1
+            else:
+                tally[ev] += 1
             # Was: `ncf == "confirmed"`. That measured whether the NEW class was
             # confirmed -- a dimension the N2 gate never reads -- so it was wrong
             # in BOTH directions: false on cloud_endpoint/confirmed -> unknown
@@ -1554,6 +1605,9 @@ def run(dsn: str, write: bool, soak_generation: int,
             would_reroute = _routing_bucket(a["device_class"]) != _routing_bucket(nc)
             flag = "  !! red flag (resets soak)" if ev == "TRANSITION_DOWNGRADE" else (
                    "  [would reroute]" if would_reroute else "")
+            if vendor_only:
+                flag = (f"  [vendor only: {a.get('vendor_product_confidence') or 'unknown'}"
+                        f" -> {vpc}]")
             print(f"{a['asset_id']:38.38s} "
                   f"{a['device_class']+'/'+a['device_class_confidence']:18.18s} "
                   f"{nc+'/'+ncf:18.18s} {ev}{flag}")
@@ -1580,7 +1634,10 @@ def run(dsn: str, write: bool, soak_generation: int,
                  json.dumps({"device_class": a["device_class"],
                              "confidence": a["device_class_confidence"],
                              "basis_signals": sorted(prior_sigs),
-                             **({"preserve": r5_note} if r5_note else {})}),
+                             **({"preserve": r5_note} if r5_note else {}),
+                             **({"vendor": {"vendor_product": a.get("vendor_product"),
+                                            "confidence": a.get("vendor_product_confidence")}}
+                                if vendor_only else {})}),
                  would_reroute, _latest_scan_run(cur, a["asset_id"]), soak_generation))
 
             # ⛔ THE PRESERVE GATE. A preserved row keeps its POSITIVE prior, so the
@@ -1616,6 +1673,7 @@ def run(dsn: str, write: bool, soak_generation: int,
                          "assets_evaluated": len(assets),
                          "unknown": unknown,
                          "events": tally,
+                         "vendor_only": vendor_moves,
                          "matrix_2b": m2b,
                          "matrix_r5": m5,
                          "streak_required": _DOWNGRADE_STREAK_REQUIRED,
@@ -1629,6 +1687,7 @@ def run(dsn: str, write: bool, soak_generation: int,
     print(f"\n{'WROTE' if write else 'DRY-RUN'} (soak_generation={soak_generation}, audit rows committed):")
     print(f"  events: STAMP={tally['STAMP']} CHANGE={tally['CHANGE']} "
           f"UPGRADE={tally['TRANSITION_UPGRADE']} DOWNGRADE={tally['TRANSITION_DOWNGRADE']}")
+    print(f"  vendor only (class unchanged, vendor verdict moved): {vendor_moves}")
     print(f"  2b matrix: preserve(no-collection)={m2b['preserve_no_collection']} "
           f"preserve(genuine-empty)={m2b['preserve_genuine_empty']} "
           f"downgrade(streak met)={m2b['downgrade_streak_met']} "
