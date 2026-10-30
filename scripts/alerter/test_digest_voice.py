@@ -775,3 +775,60 @@ def test_group_problems_marks_a_fix_that_came_from_the_scanner():
     assert items["w1"]["do"].startswith("Put a web application firewall") and items["w1"]["do_raw"] is False
     no_hint = dd.group_problems(rows[1:], {"q.com"})[0]
     assert no_hint["do"] == "" and no_hint["do_raw"] is False
+
+
+def test_a_fixed_item_carries_its_hosts_so_neither_the_writer_nor_the_backup_is_refused_10_30():
+    """Howie 2026-10-30 08:09: "why did the Slack go to backup again?" Prodex that morning: the
+    web firewall finding was fixed on bitec and highcom and both firewalls started blocking. The
+    'fixed' item kept its hosts only inside its title, so the check thought it had none and
+    refused every line naming bitec or highcom: the writer's (right) ones AND the backup's own.
+    With no clean line to swap in, the repair gave up and the whole morning, Slack included,
+    went to the backup. Planted bad first: the old shape is refused; then the fix passes."""
+    T30 = datetime(2026, 10, 30, 12, 3, tzinfo=UTC)
+    flips = [(f"{h}.prodexlabs.com", h, "o", T30, True, False, datetime(2026, 10, 22, tzinfo=UTC), [])
+             for h in ("bitec", "highcom")]
+    fixed = [(f"{h}:w", f"{h}.prodexlabs.com", "WAF detected but not blocking", "MODERATE-HIGH", "remediated", "commandsentry_heavy", T30)
+             for h in ("bitec", "highcom")]
+    m = dd.build_model(window_start=T30.replace(day=29), window_end=T30, new_findings=[], confirmed=[],
+                       regressed=[], high_risk=[], new_assets=[], dark_assets=[], stale_assets=[],
+                       canary_violations=[], baseline={}, brand=BRAND, fixed=fixed, enforcement_flips=flips,
+                       told={})
+    hosts = ["bitec.prodexlabs.com", "highcom.prodexlabs.com"]
+    assert [d["kind"] for d in m["done"]] == ["fixed", "blocking"]
+    assert m["done"][0]["sites"] == hosts, "the fixed item's hosts travel as data, not only in its title"
+
+    # the bad case first: the old shape (hosts only in the title) is refused, the backup's line too
+    old = copy.deepcopy(m)
+    old["done"][0].pop("sites")
+    fo = dv.facts(old, slack=ds.select(old, [], {}, T30), company="Prodex", day="Friday, October 30")
+    assert [it["hosts"] for it in fo["items"] if it["id"] == "f1"] == [[]]
+    assert any(p.startswith("fixed f1: names a host that is not its own") for p in dv.check(dv.fallback(fo), fo))
+
+    f = dv.facts(m, slack=ds.select(m, [], {}, T30), company="Prodex", day="Friday, October 30")
+    for it in f["items"]:
+        if it["section"] in ("fixed", "slack_changed"):
+            assert it["hosts"] == hosts, it["id"]
+    fb = dv.fallback(f)
+    assert dv.check(fb, f) == [], "the backup's own lines pass the check"
+    assert [e["text"] for e in fb["fixed"]] == [
+        "The web firewall now blocks our test attacks on bitec.prodexlabs.com, highcom.prodexlabs.com.",
+        "Web firewalls started blocking on two sites: bitec and highcom."]
+    assert all(t.count("bitec") == 1 for t in (e["text"] for e in fb["slack"]["changed"])), "no host named twice"
+
+    # the writer's lines from that morning, verbatim, now pass
+    out = copy.deepcopy(fb)
+    out["fixed"] = [{"id": "f1", "text": "The web firewall on bitec.prodexlabs.com and highcom.prodexlabs.com is now blocking, not just watching."},
+                    {"id": "f2", "text": "bitec.prodexlabs.com and highcom.prodexlabs.com turned our checks away on Oct 30, where the same checks got through on Oct 22."}]
+    out["slack"]["changed"] = [
+        {"id": "k1", "text": "Good news on bitec.prodexlabs.com and highcom.prodexlabs.com: the web firewall on both is now blocking, not just watching."},
+        {"id": "k2", "text": "bitec.prodexlabs.com and highcom.prodexlabs.com both turned our checks away on Oct 30. The Oct 22 run got through, so this is a real change."}]
+    assert dv.check(out, f) == []
+
+    # and one bad line in that spot now costs one line, not the morning
+    bad = copy.deepcopy(out)
+    bad["slack"]["changed"][0]["text"] = "Good news on bitec.prodexlabs.com and highcom.prodexlabs.com and the other three."
+    probs = dv.check(bad, f)
+    assert probs and all(p.startswith("slack.changed k1: ") for p in probs), probs
+    fixed_out, replaced = dv.repair(bad, f, probs)
+    assert fixed_out is not None and [r[0] for r in replaced] == ["slack.changed k1"]
+    assert fixed_out["slack"]["changed"][1] == out["slack"]["changed"][1] and fixed_out["fixed"] == out["fixed"]

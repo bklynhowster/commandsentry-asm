@@ -372,7 +372,8 @@ def facts(model: dict, *, still_open=None, slack=None, sentry_only=None, company
                            _text_of(it), extra_numbers=[len(lines)], detail=lines,
                            family=it.get("family", ""), fix_raw=bool(it.get("do_raw"))))
     for n, it in enumerate(model.get("done", [])):
-        hosts = [ln.split(":")[0] for ln in it.get("lines", []) if ":" in ln]
+        hosts = ([ln.split(":")[0] for ln in it.get("lines", []) if ":" in ln]
+                 or list(it.get("sites") or []))
         items.append(_item(f"f{n+1}", "fixed", it.get("kind", "fixed"), "", hosts,
                            it.get("title", ""), "", "", _text_of(it), detail=it.get("lines") or []))
     for n, it in enumerate(still_open or []):
@@ -905,7 +906,7 @@ def _para(it: dict) -> str:
         one = len(it["hosts"]) == 1
         return (f"{'A new box has' if one else 'Some new boxes have'} joined our fleet: {w}. "
                 f"{'It gets' if one else 'They get'} the same checks as everything else from here on.")
-    s = f"{what}" + (f" on {w}" if w and w.lower() not in what.lower() else "") + "."
+    s = f"{what}" + (f" on {w}" if w and not _names_all(what, it["hosts"]) else "") + "."
     if it["why"]:
         s += " " + it["why"].rstrip(".") + "."
     if it["fix"] and not it.get("fix_raw"):         # never the scanner's own words (10-29)
@@ -923,6 +924,23 @@ def _closing(n: int) -> str:
 def _sev_prefix(it: dict) -> str:
     """Slack lines name their grade (Howie 15:38): "[Moderate] ..."; a quiet host has none."""
     return f"[{it['severity_word']}] " if it.get("severity_word") else ""
+
+
+def _names_all(text: str, hosts: list) -> bool:
+    """True when the text already names every host (full name or short name), the same
+    test the check applies, so the backup neither leaves a host out nor names it twice."""
+    low = (text or "").lower()
+    return all(h.lower() in low or _short(h).lower() in low for h in hosts)
+
+
+def _fixed_line(it: dict) -> str:
+    """The backup's fixed line: the title, plus its hosts when the title does not name them all
+    (10-30: "Web firewalls started blocking on two sites" named neither host, so the check
+    refused the backup's own line and no repair could use it)."""
+    text = it["what"].rstrip(".")
+    if it["hosts"] and not _names_all(text, it["hosts"]):
+        text += ": " + _hosts_words(it["hosts"])
+    return text + "."
 
 
 def fallback(f: dict) -> dict:
@@ -947,7 +965,7 @@ def fallback(f: dict) -> dict:
     return {
         "subject": subject, "headline": headline, "opening": opening,
         "email": [{"id": it["id"], "text": _para(it)} for it in changed],
-        "fixed": [{"id": it["id"], "text": it["what"].rstrip(".") + "."} for it in fixed],
+        "fixed": [{"id": it["id"], "text": _fixed_line(it)} for it in fixed],
         "still_open": [{"id": it["id"], "text": _para(it)} for it in still],
         "small_line": (f"{small} small thing{'s' if small != 1 else ''} also turned up, none of them need anybody, "
                        f"they're in the portal if you're curious." if small else ""),
