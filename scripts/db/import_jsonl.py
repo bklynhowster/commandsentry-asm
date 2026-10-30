@@ -211,6 +211,16 @@ def load_scans(cur, path: Path) -> int:
     return len(rows)
 
 
+def _harm(rec: dict) -> str:
+    """D-074 (2026-10-29): the offline path obeys the same rule as the scanners: HIGH or
+    CRITICAL only when it could actually be exploited (scanner/evidence.harm_rating)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scanner"))
+    import evidence  # noqa: E402 — pure module, no network unless asked
+    sev, _why = evidence.harm_rating(rec.get("severity") or "INFO", finding_id=rec.get("finding_id") or "",
+                                     source=rec.get("source") or "", tags=rec.get("tags") or [])
+    return sev
+
+
 def load_findings(cur, path: Path) -> tuple[int, int]:
     """Load findings + their embedded history. Returns (findings, history)."""
     find_rows = []
@@ -221,7 +231,7 @@ def load_findings(cur, path: Path) -> tuple[int, int]:
             rec["finding_id"],
             rec["asset_id"],
             rec.get("title") or rec["finding_id"],
-            rec.get("severity") or "INFO",
+            _harm(rec),
             rec.get("category") or "other",
             rec.get("description"),
             rec.get("cwe") or [],

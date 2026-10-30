@@ -3193,9 +3193,10 @@ def check_smtp(ctx: ScanContext, port: int) -> None:
 
 def check_ftp(ctx: ScanContext, port: int) -> None:
     """
-    FTP service detection + anonymous-login test. If anonymous login
-    succeeds, that's HIGH — anyone on the internet can read (potentially
-    write) files via this endpoint without auth.
+    FTP service detection: the banner only. It used to try an anonymous login (USER anonymous,
+    then a password) and rate a 230 reply HIGH. Removed 2026-10-29 (job 3v): Howie's standing
+    rule is no attempted logins whatsoever, anonymous included; Sentry only reads what a
+    service shows anyone. Nothing ever recorded an anonymous-login finding (both DBs, 10-29).
     """
     ctx.tools_run.append(f"ftp-check:{port}")
 
@@ -3232,42 +3233,11 @@ def check_ftp(ctx: ScanContext, port: int) -> None:
         raw_excerpt=banner,
     ))
 
-    # Anonymous login attempt
-    transcript: list[str] = [f"banner: {banner}"]
+    # No login of any kind (job 3v, 2026-10-29): close after the banner.
     try:
-        sock.send(b"USER anonymous\r\n")
-        user_resp = sock.recv(1024).decode("utf-8", errors="replace").strip()
-        transcript.append(f"USER anonymous → {user_resp}")
-        sock.send(b"PASS commandsentry@scanner.local\r\n")
-        pass_resp = sock.recv(1024).decode("utf-8", errors="replace").strip()
-        transcript.append(f"PASS *** → {pass_resp}")
-        try:
-            sock.send(b"QUIT\r\n")
-        except Exception:
-            pass
         sock.close()
-
-        # Code 230 = User logged in. 530 = Not logged in.
-        if pass_resp.startswith("230"):
-            ctx.findings.append(LightFinding(
-                check_name=f"ftp-anonymous-login-on-port-{port}",
-                title=f"FTP anonymous login enabled on port {port}",
-                severity="HIGH",
-                category="auth",
-                description=(
-                    f"The FTP server at {ctx.hostname}:{port} accepted an "
-                    f"anonymous login. Anyone on the public internet can "
-                    f"connect and read files (and potentially write, depending "
-                    f"on filesystem permissions) without any credentials. "
-                    f"Disable anonymous access unless this is an intentional "
-                    f"public file-distribution endpoint."
-                ),
-                tags=["ftp", "anonymous", "authentication", "exposed"],
-                cwe=[287],  # Improper Authentication
-                raw_excerpt="\n".join(transcript)[:1500],
-            ))
-    except Exception as e:
-        log(f"ftp anon login attempt failed: {e}")
+    except Exception:
+        pass
 
 
 # ─── Findings upsert ────────────────────────────────────────────────────
@@ -3573,11 +3543,16 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
             else:
                 normalized_key = f.check_name
 
+            # D-074 (2026-10-29): HIGH / CRITICAL only when it could actually be exploited.
+            severity, harm_why = evidence.harm_rating(f.severity, finding_id=finding_id,
+                                                      source=source_for_tier(LIGHT), tags=f.tags)
+            if harm_why:
+                log(f"  D-074: {f.check_name}: {harm_why}")
             params = {
                 "finding_id":     finding_id,
                 "asset_id":       ctx.asset_id,
                 "title":          f.title,
-                "severity":       f.severity,
+                "severity":       severity,
                 "category":       f.category,
                 "description":    f.description,
                 "cwe":            f.cwe,

@@ -6,8 +6,8 @@ irrelevant until … we have found some type of a potential exploit." 20:34: "Th
 risks and there are things that are known, that's all." The ladder (ruled 16:02–16:05):
 
   PROVEN       seen directly: a harmless reaction, or a fact the host shows anyone.
-               Only proven can rate a site HIGH or CRITICAL. (Not decided here: every
-               writer that is not version-based keeps its own severity.)
+               Only proven can rate a site HIGH or CRITICAL, and since D-074 (2026-10-29,
+               `harm_rating` below) only when it could actually be exploited.
   OUT OF DATE  a version we SAW, inside a published flaw's affected range.
                MODERATE; MODERATE-HIGH when one of its flaws is on CISA's exploited
                list. Says "out of date … update it", never "vulnerable".
@@ -349,3 +349,79 @@ def cna_leaves_out(version: str | None, record: dict | None, names) -> str | Non
     who = ((record.get("cveMetadata") or {}).get("assignerShortName") or "the CNA")
     return f"{who}'s record: affected {', '.join(spans)}"
 
+
+# ── D-074 (2026-10-29): High and Critical mean it could actually be exploited ─────────────
+# Howie, 2026-10-29 19:30: "It has to be something that could actually be exploited." (his
+# Horizon3 NodeZero paradigm). A rating answers "how worried should you be": HIGH or CRITICAL
+# needs (1) seen directly, not a version number (job 3r, above) AND (2) a way in, or a way to
+# read or change data or take over a session, that someone on the internet could use. Seen
+# directly but not exploitable (a firewall's self-made certificate, no revocation, a long
+# certificate life, a method merely advertised, a port that is open) is MODERATE at most.
+# Applied by every writer (run_light, run_medium, run_heavy, the offline import_jsonl) to the
+# severity it is about to write, so no tool's own rating reaches the database unchecked.
+# An ALLOW-list, not a block list: a kind not named here is capped, so a tool that invents a
+# new HIGH can never slip past (the #037 ceiling's lesson, note 243).
+HARM_CAP = "MODERATE"
+_HARM_RATED = {"HIGH", "CRITICAL"}
+# testssl ids whose own test shows a flaw someone on the internet can use against the server
+# directly (no need to sit between a visitor and the site): memory read (heartbleed,
+# ticketbleed) and the RSA oracle (ROBOT). LOGJAM, BEAST, SWEET32, POODLE, CCS, old protocol
+# versions and every certificate fact need a network position or open nothing: capped.
+EXPLOITABLE_TESTSSL_IDS = frozenset({"heartbleed", "ticketbleed", "robot"})
+# Template tags (nuclei) that name a way in or a way to data, shown by the template's own
+# harmless match (D-056: detection only). A template with none of these keeps at most MODERATE.
+EXPLOITABLE_TAGS = frozenset({
+    "exposure", "takeover", "unauth", "auth-bypass", "bypass", "middleware-bypass",
+    "lfi", "file-read", "traversal", "rce", "sqli", "injection", "ssrf", "xxe", "xss", "idor",
+    "backup", "leak", "secret", "token", "keys",
+})
+
+
+def _check_of(finding_id: str) -> tuple[str, str]:
+    """('<tier or tool>', '<check>') from '<asset>:<tier>:<check>[:<hash>]'. The asset part may
+    itself hold colons (ip:1.2.3.4), so the tier is found by name, not by position."""
+    parts = (finding_id or "").split(":")
+    for i, p in enumerate(parts):
+        if p in ("light", "medium", "heavy", "exposure", "testssl", "sslyze", "commandsentry_heavy"):
+            return p, ":".join(parts[i + 1:])
+    return "", ""
+
+
+def harm_exploitable(finding_id: str, source: str = "", tags=()) -> bool:
+    """True when this kind of finding, at HIGH or CRITICAL, shows something that could
+    actually be exploited. PURE."""
+    tier, check = _check_of(finding_id)
+    low = check.lower()
+    tagset = {str(t).lower() for t in (tags or ())}
+    if tier == "light" and low.startswith("exposed-path-"):
+        # light writes HIGH here only after reading the file's content (a secret or source
+        # code anyone can download); otherwise the path is INFO or suppressed.
+        return True
+    if tier in ("testssl", "sslyze") or source in ("testssl", "sslyze"):
+        return low.split(":", 1)[0] in EXPLOITABLE_TESTSSL_IDS
+    if "waf-absent-exposed" in low:
+        # HIGH only when an open HIGH or CRITICAL sits behind the missing firewall, and after
+        # this rule that can only be an exploitable one (run_heavy._maybe_emit_exposed_finding).
+        return True
+    if tier == "medium" and low.startswith("nuclei-"):
+        return bool(tagset & EXPLOITABLE_TAGS)
+    return False
+
+
+def harm_rating(severity: str | None, *, finding_id: str = "", source: str = "",
+                tags=()) -> tuple[str | None, str | None]:
+    """(severity to write, reason or None). HIGH or CRITICAL that `harm_exploitable` doesn't
+    back becomes MODERATE, with a plain reason for the log. A hand-test entry
+    (source manual_named) keeps the rating the person gave it: Sentry never rewrites a
+    person's judgement (the same line as never auto-closing them). Everything else passes
+    unchanged. Never raises. PURE."""
+    sev = (severity or "").upper()
+    if sev not in _HARM_RATED or (source or "") == "manual_named":
+        return severity, None
+    try:
+        if harm_exploitable(finding_id, source, tags):
+            return severity, None
+    except Exception:
+        pass
+    return HARM_CAP, (f"{sev} capped to {HARM_CAP}: seen, but nothing here shows a way in "
+                      f"(D-074)")
