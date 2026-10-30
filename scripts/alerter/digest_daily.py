@@ -772,7 +772,10 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
         what = g["fixed_words"]
         line = (f"{what[0].upper() + what[1:]} on {', '.join(g['sites'])}." if what != "fixed" else
                 f"Fixed on {', '.join(g['sites'])}: {g['title']}.")
-        done.append({"kind": "fixed", "title": line, "lines": []})
+        # the hosts travel as data too, not only inside the title: the voice's check and the Slack
+        # half read them (10-30: with none, every line naming bitec/highcom was refused, the
+        # backup's own included, and the whole morning went to the backup)
+        done.append({"kind": "fixed", "title": line, "lines": [], "sites": list(g["sites"])})
     if came_back:
         done.append({"kind": "back", "title": f"{len(came_back)} host{'s' if len(came_back) != 1 else ''} answering again",
                      "lines": [f"{r[0]}: stopped answering {_day(r[4])}, answering again {_day(r[3])}"
