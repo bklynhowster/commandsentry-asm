@@ -1013,6 +1013,35 @@ def _fresh_scan_exists(cur, asset_id: str, freshness_days: int) -> bool:
     return bool(_evidence_capable_scan_runs(cur, asset_id, freshness_days))
 
 
+def _passive_cookie_names(candidates) -> list:
+    """(383) Every cookie name ANY fresh passive read saw — newest read first, each once.
+
+    ⛔ WAS `_passive_signal("set_cookie_names")`: the newest read whose list was
+    non-empty won, whole. The 09-14 merge rule ("each signal takes the newest
+    candidate that CONTAINS it") was applied to the LIST, not to the cookie, so a
+    newer light read carrying other cookies hid the deep read's cookiesession1.
+    The light read cannot see that cookie at all: it reuses httpx's GET, which
+    measured cookies=0 on commandcommcentral.com while cookiesession1 was served
+    (heavy #1061, 2026-07-19 — why run_heavy reads cookies with a browser-UA curl).
+    Seen live 2026-10-30: one scan run, both reads — heavy [.., cookiesession1],
+    light [.AspNetCore.Antiforgery..] — and on www.commandcommcentral.com /
+    enrollment2.edelivery-bessemer.com the next light scan turned FortiWeb
+    confirmed -> suspected with nothing about either host changed.
+    ⇒ a cookie name counts if any read inside the window (the gather's own
+    freshness + _PASSIVE_MERGE_DEPTH) carried it. Non-list values and non-string or
+    empty names contribute nothing; all empty -> [] (absence, not evidence of absence).
+    """
+    names: list = []
+    for cand in candidates or ():
+        val = cand.get("set_cookie_names") if isinstance(cand, dict) else None
+        if not isinstance(val, list):
+            continue
+        for n in val:
+            if isinstance(n, str) and n and n not in names:
+                names.append(n)
+    return names
+
+
 def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str) -> dict:
     obs: dict = {}
     fresh = f"now() - interval '{int(freshness_days)} days'"
@@ -1111,6 +1140,7 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
     # ⇒ each signal takes the newest candidate that actually CONTAINS it, where
     #   "contains" is PRESENT AND NON-EMPTY: {} / [] / "" / null all fall through.
     #   An empty map is ABSENCE, not evidence of absence.
+    # ⇒ (383) cookies merge per NAME, not per list — see _passive_cookie_names.
     passive_candidates = _fresh_json_many(_PASSIVE_TOOL_NAMES, limit=_PASSIVE_MERGE_DEPTH)
 
     def _passive_signal(key):
@@ -1123,8 +1153,8 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
     http_headers = http_headers_from_passive({"headers": _passive_signal("headers")})
     if http_headers:
         obs["http_headers"] = http_headers       # -> product_http_header row
-    cookie_names = _passive_signal("set_cookie_names")
-    if isinstance(cookie_names, list) and cookie_names:
+    cookie_names = _passive_cookie_names(passive_candidates)
+    if cookie_names:
         obs["set_cookie_names"] = cookie_names   # -> fortiweb_cookiesession1 (exact match)
 
     # Obsidian 310 (2026-10-13): the differential WAF probe's MEASUREMENT. The heavy tier
