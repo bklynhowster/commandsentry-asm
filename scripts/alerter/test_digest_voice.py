@@ -777,51 +777,54 @@ def test_group_problems_marks_a_fix_that_came_from_the_scanner():
     assert no_hint["do"] == "" and no_hint["do_raw"] is False
 
 
+def _oct30(fixed_hosts=("bitec", "highcom"), flip_hosts=()):
+    """Prodex, 2026-10-30: the 'WAF detected but not blocking' finding closed on these hosts,
+    and (optionally) the enforcement probe saw these hosts start blocking."""
+    t30 = datetime(2026, 10, 30, 12, 3, tzinfo=UTC)
+    flips = [(f"{h}.prodexlabs.com", h, "o", t30, True, False, datetime(2026, 10, 22, tzinfo=UTC), [])
+             for h in flip_hosts]
+    fixed = [(f"{h}:w", f"{h}.prodexlabs.com", "WAF detected but not blocking", "MODERATE-HIGH", "remediated",
+              "commandsentry_heavy", t30) for h in fixed_hosts]
+    m = dd.build_model(window_start=t30.replace(day=29), window_end=t30, new_findings=[], confirmed=[],
+                       regressed=[], high_risk=[], new_assets=[], dark_assets=[], stale_assets=[],
+                       canary_violations=[], baseline={}, brand=BRAND, fixed=fixed, enforcement_flips=flips,
+                       told={})
+    return m, t30
+
+
 def test_a_fixed_item_carries_its_hosts_so_neither_the_writer_nor_the_backup_is_refused_10_30():
     """Howie 2026-10-30 08:09: "why did the Slack go to backup again?" Prodex that morning: the
-    web firewall finding was fixed on bitec and highcom and both firewalls started blocking. The
     'fixed' item kept its hosts only inside its title, so the check thought it had none and
     refused every line naming bitec or highcom: the writer's (right) ones AND the backup's own.
     With no clean line to swap in, the repair gave up and the whole morning, Slack included,
     went to the backup. Planted bad first: the old shape is refused; then the fix passes."""
-    T30 = datetime(2026, 10, 30, 12, 3, tzinfo=UTC)
-    flips = [(f"{h}.prodexlabs.com", h, "o", T30, True, False, datetime(2026, 10, 22, tzinfo=UTC), [])
-             for h in ("bitec", "highcom")]
-    fixed = [(f"{h}:w", f"{h}.prodexlabs.com", "WAF detected but not blocking", "MODERATE-HIGH", "remediated", "commandsentry_heavy", T30)
-             for h in ("bitec", "highcom")]
-    m = dd.build_model(window_start=T30.replace(day=29), window_end=T30, new_findings=[], confirmed=[],
-                       regressed=[], high_risk=[], new_assets=[], dark_assets=[], stale_assets=[],
-                       canary_violations=[], baseline={}, brand=BRAND, fixed=fixed, enforcement_flips=flips,
-                       told={})
+    m, t30 = _oct30()
     hosts = ["bitec.prodexlabs.com", "highcom.prodexlabs.com"]
-    assert [d["kind"] for d in m["done"]] == ["fixed", "blocking"]
+    assert [d["kind"] for d in m["done"]] == ["fixed"]
     assert m["done"][0]["sites"] == hosts, "the fixed item's hosts travel as data, not only in its title"
 
     # the bad case first: the old shape (hosts only in the title) is refused, the backup's line too
     old = copy.deepcopy(m)
     old["done"][0].pop("sites")
-    fo = dv.facts(old, slack=ds.select(old, [], {}, T30), company="Prodex", day="Friday, October 30")
+    fo = dv.facts(old, slack=ds.select(old, [], {}, t30), company="Prodex", day="Friday, October 30")
     assert [it["hosts"] for it in fo["items"] if it["id"] == "f1"] == [[]]
     assert any(p.startswith("fixed f1: names a host that is not its own") for p in dv.check(dv.fallback(fo), fo))
 
-    f = dv.facts(m, slack=ds.select(m, [], {}, T30), company="Prodex", day="Friday, October 30")
+    f = dv.facts(m, slack=ds.select(m, [], {}, t30), company="Prodex", day="Friday, October 30")
     for it in f["items"]:
         if it["section"] in ("fixed", "slack_changed"):
             assert it["hosts"] == hosts, it["id"]
     fb = dv.fallback(f)
     assert dv.check(fb, f) == [], "the backup's own lines pass the check"
     assert [e["text"] for e in fb["fixed"]] == [
-        "The web firewall now blocks our test attacks on bitec.prodexlabs.com, highcom.prodexlabs.com.",
-        "Web firewalls started blocking on two sites: bitec and highcom."]
-    assert all(t.count("bitec") == 1 for t in (e["text"] for e in fb["slack"]["changed"])), "no host named twice"
+        "The web firewall now blocks our test attacks on bitec.prodexlabs.com, highcom.prodexlabs.com."]
+    assert all(e["text"].count("bitec") == 1 for e in fb["slack"]["changed"]), "no host named twice"
 
     # the writer's lines from that morning, verbatim, now pass
     out = copy.deepcopy(fb)
-    out["fixed"] = [{"id": "f1", "text": "The web firewall on bitec.prodexlabs.com and highcom.prodexlabs.com is now blocking, not just watching."},
-                    {"id": "f2", "text": "bitec.prodexlabs.com and highcom.prodexlabs.com turned our checks away on Oct 30, where the same checks got through on Oct 22."}]
+    out["fixed"] = [{"id": "f1", "text": "The web firewall on bitec.prodexlabs.com and highcom.prodexlabs.com is now blocking, not just watching."}]
     out["slack"]["changed"] = [
-        {"id": "k1", "text": "Good news on bitec.prodexlabs.com and highcom.prodexlabs.com: the web firewall on both is now blocking, not just watching."},
-        {"id": "k2", "text": "bitec.prodexlabs.com and highcom.prodexlabs.com both turned our checks away on Oct 30. The Oct 22 run got through, so this is a real change."}]
+        {"id": "k1", "text": "Good news on bitec.prodexlabs.com and highcom.prodexlabs.com: the web firewall on both is now blocking, not just watching."}]
     assert dv.check(out, f) == []
 
     # and one bad line in that spot now costs one line, not the morning
@@ -831,4 +834,39 @@ def test_a_fixed_item_carries_its_hosts_so_neither_the_writer_nor_the_backup_is_
     assert probs and all(p.startswith("slack.changed k1: ") for p in probs), probs
     fixed_out, replaced = dv.repair(bad, f, probs)
     assert fixed_out is not None and [r[0] for r in replaced] == ["slack.changed k1"]
-    assert fixed_out["slack"]["changed"][1] == out["slack"]["changed"][1] and fixed_out["fixed"] == out["fixed"]
+    assert fixed_out["fixed"] == out["fixed"] and fixed_out["headline"] == out["headline"]
+
+
+def test_a_firewall_that_started_blocking_is_said_once_not_twice_10_30():
+    """Howie 2026-10-30 08:26, on that morning's #on-call post: "you say the same line twice."
+    The closed 'WAF detected but not blocking' finding and the enforcement probe's 'started
+    blocking' are one event. The post said 'the web firewall now blocks our test attacks on
+    bitec, highcom' AND 'web firewalls started blocking on two sites on bitec and highcom'. The
+    blocking line (it carries the dates) is the one kept; the closed finding is folded into it."""
+    # the bad case first: without the fold this morning gives two lines about the same hosts
+    m, t30 = _oct30(flip_hosts=("bitec", "highcom"))
+    assert [d["kind"] for d in m["done"]] == ["blocking"], "one piece of news, not two"
+    sel = ds.select(m, [], {}, t30)
+    assert len(sel["changed"]) == 1
+    f = dv.facts(m, slack=sel, company="Prodex", day="Friday, October 30")
+    fb = dv.fallback(f)
+    assert dv.check(fb, f) == []
+    slack_lines = [e["text"] for e in fb["slack"]["changed"]]
+    assert len(slack_lines) == 1 and "bitec" in slack_lines[0] and "highcom" in slack_lines[0]
+    assert "now blocks our test attacks" not in " ".join(slack_lines + [e["text"] for e in fb["fixed"]])
+
+    # only the overlap is folded: a host that closed the finding but has no flip keeps its line
+    m2, _ = _oct30(flip_hosts=("bitec",))
+    assert [d["kind"] for d in m2["done"]] == ["fixed", "blocking"]
+    assert m2["done"][0]["sites"] == ["highcom.prodexlabs.com"] and "bitec" not in m2["done"][0]["title"]
+    assert m2["done"][1]["lines"][0].startswith("bitec.prodexlabs.com: turned our test attacks away on Oct 30")
+
+    # and a fixed finding of another family next to a flip is untouched
+    t30 = datetime(2026, 10, 30, 12, 3, tzinfo=UTC)
+    other = [("c:h", "bitec.prodexlabs.com", "Missing HTTP security headers: Content-Security-Policy", "MODERATE",
+              "remediated", "commandsentry_light", t30)]
+    m3 = dd.build_model(window_start=t30.replace(day=29), window_end=t30, new_findings=[], confirmed=[],
+                        regressed=[], high_risk=[], new_assets=[], dark_assets=[], stale_assets=[],
+                        canary_violations=[], baseline={}, brand=BRAND, fixed=other,
+                        enforcement_flips=[("bitec.prodexlabs.com", "bitec", "o", t30, True, False, None, [])], told={})
+    assert [d["kind"] for d in m3["done"]] == ["fixed", "blocking"]

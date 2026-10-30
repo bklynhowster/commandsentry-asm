@@ -768,7 +768,16 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
     # a guess that went away was never listed, so its going is not news either
     fixed_problems = [r for r in fixed if (r[3] or "").upper() not in ("INFO", "LOW")
                       and not dw_words.is_guess(r[2])]
+    # A firewall that started blocking is ONE piece of news. The enforcement flip below says it
+    # with its dates; the closed firewall finding on the same site would say it again ("the web
+    # firewall now blocks our test attacks" next to "web firewalls started blocking"). Howie
+    # 2026-10-30 08:26, on that morning's #on-call post: "you say the same line twice."
+    blocking_now = {site_of(r[0], names) for r in enforcement_flips if r[4]}
     for g in group_problems(fixed_problems, names)[:8]:
+        if g.get("family") in WAF_FAMILIES and blocking_now:
+            g = dict(g, sites=[s for s in g["sites"] if s not in blocking_now])
+            if not g["sites"]:
+                continue
         what = g["fixed_words"]
         line = (f"{what[0].upper() + what[1:]} on {', '.join(g['sites'])}." if what != "fixed" else
                 f"Fixed on {', '.join(g['sites'])}: {g['title']}.")
@@ -821,6 +830,9 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
         "told_full": told_rule.records(shown, member_sev, "daily"),
     }
 
+
+# Finding families whose going away IS a firewall starting to block (digest_words keys).
+WAF_FAMILIES = frozenset({"waf-absent", "waf-absent-signin", "waf-not-blocking", "waf-partial"})
 
 _WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
 
