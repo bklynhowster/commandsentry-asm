@@ -393,6 +393,18 @@ def group_problems(rows, names, prev_deep=None, hints=None, window_start=None, t
     return items
 
 
+# 3w: the booked words (Howie 2026-10-30 11:58, "Perfect, book it"), as one sentence with
+# the hosts after "on": "Google Cloud Armor, Google's web firewall, is blocking our probes on
+# uat and bitec. That's good news: it's switched on and doing its job." Keyed by the product
+# the classifier confirmed; only Cloud Armor is named this way today.
+GUARD_WORDS = {
+    "Google Cloud Armor": {
+        "what": "Google Cloud Armor, Google's web firewall, is blocking our probes",
+        "why": "That's good news: it's switched on and doing its job.",
+    },
+}
+
+
 def where_words(sites: list) -> str:
     """'pm.unimacgraphics.com' / 'bitec and highcom (prodexlabs.com)' / 'five sites' — short
     enough for a headline."""
@@ -742,6 +754,8 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
                                "A site's risk level is its worst open problem; on these, that got worse.",
                        "lines": lines, "sites": [], "why": "", "do": "", "tag": ""})
     for r in unrecognized_pages:
+        if len(r) > 5 and r[5]:
+            continue                     # 3w: a NAMED block is good news, said below with the rest
         ticket.append({"kind": "blockpage", "severity": "",
                        "title": f"Something unrecognized is blocking in front of {r[0]}",
                        "body": f"On {_day(r[3])} it turned away the attack-style test strings with a "
@@ -772,7 +786,16 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
     # with its dates; the closed firewall finding on the same site would say it again ("the web
     # firewall now blocks our test attacks" next to "web firewalls started blocking"). Howie
     # 2026-10-30 08:26, on that morning's #on-call post: "you say the same line twice."
-    blocking_now = {site_of(r[0], names) for r in enforcement_flips if r[4]}
+    # 3w (Howie 2026-10-30, the words booked 11:58): a block Sentry has NAMED Google Cloud
+    # Armor (run_alerter.measured_block_pages: this capture shows its three signs and an
+    # earlier deep scan did too) is one good-news line for all its sites, said once: a site in
+    # it is neither "started blocking" below nor a closed firewall finding here.
+    guard = {}
+    for r in unrecognized_pages:
+        if len(r) > 5 and r[5]:
+            guard.setdefault(r[5], {}).setdefault(site_of(r[0], names), r)
+    guarded = {s for by in guard.values() for s in by}
+    blocking_now = {site_of(r[0], names) for r in enforcement_flips if r[4]} | guarded
     for g in group_problems(fixed_problems, names)[:8]:
         if g.get("family") in WAF_FAMILIES and blocking_now:
             g = dict(g, sites=[s for s in g["sites"] if s not in blocking_now])
@@ -789,9 +812,16 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
         done.append({"kind": "back", "title": f"{len(came_back)} host{'s' if len(came_back) != 1 else ''} answering again",
                      "lines": [f"{r[0]}: stopped answering {_day(r[4])}, answering again {_day(r[3])}"
                                for r in came_back]})
+    for product, by in sorted(guard.items()):         # 3w: the named guard line (above)
+        gs = sorted(by)
+        done.append({"kind": "guard", "product": product,
+                     "title": GUARD_WORDS[product]["what"],
+                     "why": GUARD_WORDS[product]["why"],
+                     "lines": [f"{x}: turned our test attacks away on {_day(by[x][3])}" for x in gs],
+                     "sites": gs})
     started_rows = {}
     for r in enforcement_flips:
-        if r[4]:
+        if r[4] and site_of(r[0], names) not in guarded:
             started_rows.setdefault(site_of(r[0], names), r)
     if started_rows:
         def how(r):

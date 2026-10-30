@@ -70,7 +70,7 @@ from derive_device_class import (  # noqa: E402
 # precisely the defect this replaced. Deliberately NOT wrapped in try/except --
 # this is a first-party module in the same repo, and a routing metric that
 # quietly falls back to a guess is the fail-open shape being eliminated fleet-wide.
-from block_page_signatures import scan_fired  # noqa: E402  (312: the block-page library)
+from block_page_signatures import scan_fired, cloud_armor_edge_deny  # noqa: E402  (312 library; 3w rule)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "asm"))
 from cloud_ip_check import CLOUD_CLASSES  # noqa: E402
 try:  # cloud fallback re-derives from surface_data (4.7 F1/F4; E2 re-derive-every-run)
@@ -147,6 +147,9 @@ _ART_WAFW00F     = "stack_id_wafw00f"  # -> waf_vendor_from_wafw00f
 # heavy run, dry-run included, so its presence is not "this run was able to look".
 _ART_WAF_DIFFERENTIAL = "stack_id_waf_differential"
 _DIFFERENTIAL_DEPTH = 3   # newest N artifacts; the first with a non-null verdict decides
+# 3w (Howie 2026-10-30 11:38, "A"): how far back to look for the EARLIER deep scan that
+# also showed Cloud Armor's three signs. Measurements, newest first, within freshness.
+_EDGE_DENY_DEPTH = 10
 _ART_NUCLEI      = "nuclei%"           # capability marker only (see above)
 # KB 12 job 3c (2026-10-22): the light tier's VPN-gateway checks
 # (scripts/scanner/stack_fingerprint.py). TWO artifacts on purpose: the AnyConnect
@@ -463,6 +466,25 @@ def event_for(prior_class, prior_conf, new_class, new_conf) -> str | None:
 
 
 # ── fwbbot_check corroboration gate (4.7 Q5; pure, hardcoded, anchor-tested) ──
+def _edge_deny_measured(o: dict) -> bool:
+    """3w: one stack_id_waf_differential object shows Cloud Armor's three signs."""
+    return (o.get("waf_present_differential") is True
+            and cloud_armor_edge_deny((o.get("details") or {}).get("fired") or []))
+
+
+def earlier_edge_deny(runs: list) -> bool:
+    """3w, Howie 2026-10-30 11:38 "A". `runs` = [(scan_run_id, completed_at, artifact)],
+    newest first, verdict not null. True iff the NEWEST shows the three signs AND an OLDER
+    one from a DIFFERENT scan run shows them too. Pure."""
+    if not runs or not _edge_deny_measured(runs[0][2]):
+        return False
+    run0, at0 = runs[0][0], runs[0][1]
+    if run0 is None or at0 is None:
+        return False                              # cannot prove two separate scans: say nothing
+    return any(r is not None and r != run0 and at is not None and at < at0 and _edge_deny_measured(o)
+               for r, at, o in runs[1:])
+
+
 def _fwbbot_corroborated(probe: dict | None) -> bool:
     """The ONLY path that may enable the fwbbot_check signal. Fires TRUE only when the
     probe artifact recorded a CORROBORATED challenge (a redirect whose Location IS
@@ -604,6 +626,14 @@ OBSERVATION_CAPABILITY: dict[str, _Cap] = {
     # keeps it. Same depth as the measurement it travels with.
     "block_page_markers": _Cap(_CAP_JSON_KEY_NOT_NULL, (_ART_WAF_DIFFERENTIAL,),
                                field="waf_present_differential", depth=_DIFFERENTIAL_DEPTH),
+    # 3w (2026-10-30): Cloud Armor's three signs ride on the same artifact, so "we looked"
+    # is the same fact as for the block pages: the probe FIRED. A measured pass-through is a
+    # real "not blocking here now" and R5 may drop the name; a dry run keeps it. The EARLIER
+    # sign reads further back, so its capability looks as far as gather_observations does.
+    "cloud_armor_edge_deny": _Cap(_CAP_JSON_KEY_NOT_NULL, (_ART_WAF_DIFFERENTIAL,),
+                                  field="waf_present_differential", depth=_DIFFERENTIAL_DEPTH),
+    "cloud_armor_edge_deny_earlier": _Cap(_CAP_JSON_KEY_NOT_NULL, (_ART_WAF_DIFFERENTIAL,),
+                                          field="waf_present_differential", depth=_EDGE_DENY_DEPTH),
     # KB 12 job 3c. ⚠ NOT-NULL: stack_fingerprint writes a check's result as null when
     # the host gave NO answer (did not look) and as {"matched": false, ...} when it
     # answered and was not the device (a real negative R5 may act on). A timeout must
@@ -1086,7 +1116,32 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
         pages = scan_fired(fired)
         if pages["matched"]:
             obs["block_page_markers"] = list(pages["matched"])   # -> block_page_* rows (exact)
+        # 3w: the newest measurement shows Cloud Armor's three signs at Google's front door.
+        if verdict_d is True and cloud_armor_edge_deny(fired):
+            obs["cloud_armor_edge_deny"] = True              # -> cloud_armor_edge_block row
         break                                        # the newest measurement decides
+    # 3w, Howie 11:38 "A": the name needs a SECOND, separate deep scan that showed the same
+    # three signs (two measurements = two pieces of evidence, the standing bar). Read only
+    # when the newest qualified; newest first, within freshness, verdict not null.
+    if obs.get("cloud_armor_edge_deny"):
+        cur.execute(
+            f"""select r.scan_run_id::text as run, r.completed_at, a.content_jsonb::text as blob
+                  from scan_run_artifacts a join scan_run r on r.scan_run_id = a.scan_run_id
+                 where r.asset_id = %s and a.tool_name = %s
+                   and r.completed_at > {fresh}
+                   and a.content_jsonb->>'waf_present_differential' is not null
+                 order by r.completed_at desc limit {int(_EDGE_DENY_DEPTH)}""",
+            (asset_id, _ART_WAF_DIFFERENTIAL))
+        runs = []
+        for row in cur.fetchall() or []:
+            try:
+                o = json.loads(row["blob"]) if row and row.get("blob") else None
+            except Exception:
+                o = None
+            if isinstance(o, dict):
+                runs.append((row.get("run"), row.get("completed_at"), o))
+        if earlier_edge_deny(runs):
+            obs["cloud_armor_edge_deny_earlier"] = True      # -> cloud_armor_edge_block_repeat row
     # Phase D (4.7 Q5): the active-probe /fwbbot_check challenge. Freshest artifact per
     # asset, gated through _fwbbot_corroborated — emits ONLY on a corroborated challenge
     # (redirect-to-/fwbbot_check). observed-not-corroborated / banned / no-challenge /

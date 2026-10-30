@@ -155,6 +155,11 @@ _ARTIFACT_CITED_OBS = {
     # (its match_value); that entry must exist in artifact_signatures.yaml with a cited
     # url + quote and the same vendor — a deny page never names a vendor on our say-so.
     "block_page_markers": "match_values",
+    # 3w (2026-10-30): Cloud Armor named from a measured behavior. The observation IS the
+    # artifact (as fwbbot_check is): each needs a cited artifact_signatures.yaml entry
+    # under its own name, vendor Google Cloud — a behavior never names a vendor on our say-so.
+    "cloud_armor_edge_deny": "observation",
+    "cloud_armor_edge_deny_earlier": "observation",
 }
 
 

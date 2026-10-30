@@ -556,7 +556,8 @@ SELECT o.asset_id, a.name, a.organization, o.measured_at, o.blocked,
 # ---------------------------------------------------------------------------
 SQL_MEASURED_BLOCKS_IN_WINDOW = """
 SELECT r.asset_id, a.name, a.organization, r.completed_at AS measured_at,
-       art.content_jsonb->'details'->'fired' AS fired
+       art.content_jsonb->'details'->'fired' AS fired,
+       a.vendor_product, a.vendor_product_confidence
   FROM public.scan_run_artifacts art
   JOIN public.scan_run r ON r.scan_run_id = art.scan_run_id
   JOIN public.assets a ON a.asset_id = r.asset_id
@@ -612,6 +613,72 @@ def unrecognized_block_pages(rows: list[tuple]) -> list[tuple]:
             continue
         out.append((r[0], r[1], r[2], r[3], res["unrecognized"]))
     return out
+
+
+# ---------------------------------------------------------------------------
+# KB 12 job 3w (2026-10-30) — Google Cloud Armor, named. Howie 10:03: "Why aren't we
+# identifying what the damn thing is?"; 11:12: "once they are identified, yes, they should
+# totally be disclosed in the slack communique or in the morning email"; 11:38 "A"; 11:58,
+# the words, "Perfect, book it". A measured block is NAMED when (1) its own capture shows
+# Cloud Armor's three signs (block_page_signatures.cloud_armor_edge_deny) AND (2) the
+# classifier has the asset at Google Cloud Armor, CONFIRMED, which it gives only when an
+# earlier, separate deep scan showed the same three signs (device_class_runner). A named
+# block is not "unrecognized": it leaves that list and becomes its own good-news line.
+# ---------------------------------------------------------------------------
+CLOUD_ARMOR = "Google Cloud Armor"
+
+
+def _confirmed_products(vendor_product, confidence) -> set:
+    """The products the classifier holds at 'confirmed' for an asset. Single-vendor shape
+    {vendor, product} + the top-level confidence; multi-vendor {"vendors": [...]} carries a
+    confidence per entry (the top-level one is "unknown" by design, derive_device_class)."""
+    vp = vendor_product
+    if isinstance(vp, str):
+        try:
+            vp = json.loads(vp)
+        except ValueError:
+            vp = None
+    if not isinstance(vp, dict):
+        return set()
+    if isinstance(vp.get("vendors"), list):
+        return {str(e.get("product")) for e in vp["vendors"]
+                if isinstance(e, dict) and e.get("product") and e.get("confidence") == "confirmed"}
+    return {str(vp["product"])} if vp.get("product") and confidence == "confirmed" else set()
+
+
+def named_guard(row) -> str | None:
+    """'Google Cloud Armor' when this measured block (a SQL_MEASURED_BLOCKS_IN_WINDOW row)
+    is Cloud Armor by both tests above, else None. Rows without the two classifier columns
+    (older callers) are never named."""
+    if len(row) < 7:
+        return None
+    fired = row[4]
+    if isinstance(fired, str):
+        try:
+            fired = json.loads(fired)
+        except ValueError:
+            return None
+    if not isinstance(fired, list) or not _bps.cloud_armor_edge_deny(fired):
+        return None
+    return CLOUD_ARMOR if CLOUD_ARMOR in _confirmed_products(row[5], row[6]) else None
+
+
+def measured_block_pages(rows: list[tuple]) -> list[tuple]:
+    """What the daily says about measured blocks: the unrecognized ones, exactly as
+    unrecognized_block_pages reports them (5-tuples), then one NAMED 6-tuple per asset whose
+    newest block in the window is named (asset_id, name, organization, measured_at, [],
+    product). The daily's `unrecognized_pages` carries both; digest_daily tells them apart by
+    the sixth field."""
+    named, seen = [], set()
+    for r in rows or []:                 # newest first: an asset's newest block decides
+        if r[0] in seen:
+            continue
+        seen.add(r[0])
+        product = named_guard(r)
+        if product:
+            named.append((r[0], r[1], r[2], r[3], [], product))
+    named_ids = {n[0] for n in named}
+    return [u for u in unrecognized_block_pages([r for r in rows or [] if r[0] not in named_ids])] + named
 
 
 def unrecognized_words(denies: list[dict]) -> str:
@@ -2398,9 +2465,10 @@ def main() -> int:
             # Obsidian 310 — a security device starting (or stopping) to block.
             cur.execute(SQL_ENFORCEMENT_FLIPS_IN_WINDOW, (window_start, window_end))
             enforcement_flips = cur.fetchall()
-            # Obsidian 312 — a measured block whose deny page the library does not know.
+            # Obsidian 312 — a measured block whose deny page the library does not know;
+            # 3w — and a block named Google Cloud Armor (its own good-news line).
             cur.execute(SQL_MEASURED_BLOCKS_IN_WINDOW, (window_start, window_end))
-            unrecognized_pages = unrecognized_block_pages(cur.fetchall())
+            unrecognized_pages = measured_block_pages(cur.fetchall())
 
             # Watchdog v1 — pipeline health checks (added 2026-06-07); the two clocks
             # and why they are what they are: _coverage_reads.

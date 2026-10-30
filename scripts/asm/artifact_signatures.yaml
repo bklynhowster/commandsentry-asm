@@ -15,7 +15,8 @@
 # directly. This corpus is only for artifacts whose vendor meaning is a CLAIM
 # needing an external source.
 #
-# artifact_type: set_cookie_name | challenge_endpoint_path | (extend as added)
+# artifact_type: set_cookie_name | challenge_endpoint_path | response_header_token |
+#                response_body_marker | edge_deny_behavior (3w) | (extend as added)
 # Citation preference: vendor_primary_documentation > research_tool_source.
 version: 1
 
@@ -68,6 +69,51 @@ artifact_signatures:
       wafw00f_source_url: https://raw.githubusercontent.com/EnableSecurity/wafw00f/master/wafw00f/plugins/fortiweb.py
       verified_signatures: "^FORTIWAFSID= cookie + .fgd_icon + 'Web Page Blocked' template — NO /fwbbot_check reference"
       verified_at: 2026-07-20
+
+  # ── Google Cloud Armor: named from WHAT IT DOES at Google's front door (KB 12 job 3w) ──
+  # Not a self-naming page and not a header token: a BEHAVIOR, measured by the heavy
+  # differential probe (stack_id_waf_differential) and decided by the pure rule
+  # block_page_signatures.cloud_armor_edge_deny — in ONE measurement, (1) every denied
+  # attack response carries `via: 1.1 google` (Google's front door answered), (2) the
+  # ordinary request was served (2xx), (3) at least two attack classes got a 403 whose
+  # body is exactly Google's own deny page. Google documents the deny action as a
+  # 403/404/502 set by the security policy and logged as the policy's, not the site's
+  # (citation). Howie, 2026-10-30: 10:13 "I agree about the narrow rule"; 11:12 the call is
+  # Sentry's evidence, never anyone's word; 11:38 "A" — named only when TWO separate deep
+  # scans each show it (the second entry), so the standing two-pieces bar holds.
+  # wafw00f's "Google Cloud App Armor" is NOT the second piece: its signature is only the
+  # Via header (wafw00f 2.4.2 plugins/gcparmor.py), the same front-door fact as sign (1),
+  # so the device_fingerprints row for the newest measurement shares wafw00f's dedupe_key.
+  - name: cloud_armor_edge_deny
+    artifact_type: edge_deny_behavior
+    vendor: Google Cloud
+    product: Google Cloud Armor
+    vendor_unique: true
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://docs.cloud.google.com/armor/docs/manage-security-policies
+      quote: "--action=[ allow | deny-403 | deny-404 | deny-502 ]"
+      corroboration:
+        url: https://docs.cloud.google.com/armor/docs/troubleshooting
+        quote: "statusDetails: \"denied_by_security_policy\""
+        note: "Google's sample log for a request a deny rule blocked; a request the website answered is logged statusDetails: response_sent_by_backend. The block is the security policy's, at Google's load balancer, not the site's."
+      cited_at: 2026-10-30
+      quote_provenance: "Google Cloud Armor docs (Manage security policies: the gcloud --action flag; Troubleshooting: the sample deny log), read 2026-10-30 by Claude through a page-extract tool, not a browser; the reviewer re-reads both pages."
+  - name: cloud_armor_edge_deny_earlier
+    artifact_type: edge_deny_behavior
+    vendor: Google Cloud
+    product: Google Cloud Armor
+    vendor_unique: true
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://docs.cloud.google.com/armor/docs/manage-security-policies
+      quote: "--action=[ allow | deny-403 | deny-404 | deny-502 ]"
+      corroboration:
+        url: https://docs.cloud.google.com/armor/docs/troubleshooting
+        quote: "statusDetails: \"denied_by_security_policy\""
+        note: "Google's sample log for a request a deny rule blocked; a request the website answered is logged statusDetails: response_sent_by_backend. The block is the security policy's, at Google's load balancer, not the site's."
+      cited_at: 2026-10-30
+      quote_provenance: "Google Cloud Armor docs (Manage security policies: the gcloud --action flag; Troubleshooting: the sample deny log), read 2026-10-30 by Claude through a page-extract tool, not a browser; the reviewer re-reads both pages."
 
   # ── Cloud-native edges (4.7 cloud-edge phase) ─────────────────────────────
   # Each edge NAMES ITSELF in a response header it sets; the artifact is that

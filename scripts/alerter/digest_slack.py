@@ -115,7 +115,7 @@ def changed_items(model: dict, *, quiet_news=None) -> list[dict]:
         if kind in ("finding", "enforcement", "cert") and (it.get("severity") or "").upper() in MODERATE_PLUS:
             out.append(dict(it, slack_color=RED))
     for it in model.get("done", []):
-        if it.get("kind") in ("fixed", "back", "blocking"):
+        if it.get("kind") in ("fixed", "back", "blocking", "guard"):   # 3w: a named guard is good news too
             hosts = [ln.split(":")[0] for ln in it.get("lines", []) if ":" in ln]
             out.append(dict(it, sites=hosts or list(it.get("sites") or []), slack_color=GREEN))
     return out

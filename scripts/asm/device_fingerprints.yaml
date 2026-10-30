@@ -248,6 +248,9 @@ fingerprints:
   # which we never assert. Vendor attribution requires a separate self-naming tell
   # (Server header / vendor cookie / vendor challenge endpoint) under R4 citation
   # discipline. Applies identically to Azure Front Door WAF / AWS WAF.
+  # (3w, 2026-10-30: Howie ruled ONE narrow exception for Cloud Armor, measured as three
+  # first-party signs in one capture and confirmed only by a second capture — the two rows
+  # right after this one. This presence row is unchanged.)
   # Observation name differs from the signal name on purpose (the capability map is
   # keyed on observations and must never carry a signal name): the OBSERVATION is the
   # measurement (waf_differential_block = the probe's verdict was true); the SIGNAL is
@@ -258,6 +261,37 @@ fingerprints:
     device_class: waf
     evidence_class: presence_only
     vendor_product: {}
+
+  # ── Google Cloud Armor, named from what it does (KB 12 job 3w, 2026-10-30) ───────────
+  # THE ONE EXCEPTION TO THE VENDOR CEILING ABOVE, and it is narrow. The same differential
+  # capture, read by block_page_signatures.cloud_armor_edge_deny: in ONE measurement the
+  # denied attack responses carry `via: 1.1 google` (Google's front door), the ordinary
+  # request was served, and >=2 attack classes got a 403 that is exactly Google's own deny
+  # page. That is not "behavior + hosting": all three are first-party bytes from one probe,
+  # and Google documents the deny as the security policy's answer at its load balancer
+  # (artifact_signatures.yaml cloud_armor_edge_deny, cited). Howie 10:13 "I agree about the
+  # narrow rule"; 11:12 "only you can make that determination by fingerprinting it";
+  # 11:38 "A": the name needs TWO separate deep scans.
+  #   * newest measurement -> shares dedupe_key wafw00f_detection: wafw00f's Google
+  #     signature is only the Via header (plugins/gcparmor.py), the same front-door fact,
+  #     so the two count ONCE. Alone = suspected, exactly what wafw00f gives today.
+  #   * an EARLIER, separate deep scan that passed too -> its own key (a different
+  #     artifact, 4.7 R4-revised "one tool reading different artifacts across probes")
+  #     -> together 'confirmed'. A site that blocked once, or not on its newest scan,
+  #     is never named confirmed.
+  - signal: cloud_armor_edge_block
+    observation: cloud_armor_edge_deny
+    match_bool: true
+    device_class: waf
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Google Cloud, product: Google Cloud Armor}
+    dedupe_key: wafw00f_detection
+  - signal: cloud_armor_edge_block_repeat
+    observation: cloud_armor_edge_deny_earlier
+    match_bool: true
+    device_class: waf
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Google Cloud, product: Google Cloud Armor}
 
   # ── FortiWeb cookiesession1 (HIGH, vendor-identifying) — 4.7 Q2/R4 ────────
   # Fortinet's OWN docs document FortiWeb emitting the cookiesession1 Set-Cookie
