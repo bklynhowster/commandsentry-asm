@@ -3304,6 +3304,7 @@ def reopen_signin_rows_retracted_by_311(conn, ctx: HeavyScanContext, Json) -> in
         sev = emitted.get(fid)
         if not sev:
             continue
+        sev = evidence.harm_rating(sev, finding_id=fid, source="commandsentry_heavy")[0]   # D-074
         with conn.cursor() as cur:
             cur.execute(REOPEN_311_RETRACTED_SQL, {"finding_id": fid, "asset_id": ctx.asset_id,
                                                    "severity": sev,
@@ -4098,6 +4099,13 @@ def write_event_findings_and_artifacts(
     with conn.cursor() as cur:
         for ev in ctx.findings:
             category = ev.category if ev.category in KNOWN_CATEGORIES else "other"
+            # D-074 (2026-10-29): HIGH / CRITICAL only when it could actually be exploited.
+            # Light and medium phases run here carry their tags in params.legacy_tags.
+            severity, harm_why = evidence.harm_rating(
+                ev.severity, finding_id=ev.finding_id, source=ev.source,
+                tags=(ev.params or {}).get("legacy_tags") or [])
+            if harm_why:
+                log(f"  D-074: {ev.finding_id}: {harm_why}")
             params = {
                 # KEY DIFFERENCE FROM MEDIUM WRITER — read identity from
                 # the event, NOT from a hardcoded {asset_id}:{tier}:{check}
@@ -4110,7 +4118,7 @@ def write_event_findings_and_artifacts(
                 "finding_id": ev.finding_id,
                 "asset_id": ev.asset_id,
                 "title": ev.title,
-                "severity": ev.severity,
+                "severity": severity,
                 "category": category,
                 "description": ev.description,
                 "cwe": ev.cwe,

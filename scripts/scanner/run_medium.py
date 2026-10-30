@@ -5760,11 +5760,16 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
     with conn.cursor() as cur:
         for f in ctx.findings:
             finding_id = f"{ctx.asset_id}:medium:{f.check_name}"
+            # D-074 (2026-10-29): HIGH / CRITICAL only when it could actually be exploited.
+            severity, harm_why = evidence.harm_rating(f.severity, finding_id=finding_id,
+                                                      source=source_for_tier(MEDIUM), tags=f.tags)
+            if harm_why:
+                log(f"  D-074: {f.check_name}: {harm_why}")
             params = {
                 "finding_id": finding_id,
                 "asset_id": ctx.asset_id,
                 "title": f.title,
-                "severity": f.severity,
+                "severity": severity,
                 "category": f.category,
                 "description": f.description,
                 "cwe": f.cwe,
