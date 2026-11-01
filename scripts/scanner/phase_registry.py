@@ -60,6 +60,10 @@ def _register(name, tier, fn, order, **kw):
 _register("dns_posture", LIGHT, _light.check_dns_posture, ORDER_LIGHT)
 _register("tls_check", LIGHT, _light.check_tls, ORDER_LIGHT)
 _register("headers_check", LIGHT, _light.check_headers, ORDER_LIGHT)
+# KB 12 job 4f: does http:// send visitors to https? At most 3 GETs on port 80. Right after
+# headers_check (same ORDER_LIGHT band, ties keep declaration order): it reads the HSTS value
+# headers_check leaves on the context.
+_register("plain_http", LIGHT, _light.check_plain_http, ORDER_LIGHT)
 _register("common_paths", LIGHT, _light.check_common_paths, ORDER_LIGHT)
 _register("httpx_tech", LIGHT, _light.check_httpx_tech, ORDER_LIGHT)
 _register("methods_check", LIGHT, _light.check_methods, ORDER_LIGHT)

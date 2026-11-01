@@ -272,6 +272,11 @@ class ScanContext:
     # version out. write_findings_and_artifacts retracts this writer's open row for each,
     # in the same transaction. A plain attribute, like tech_versions.
     cna_retractions: list = field(default_factory=list)
+    # Job 4f (2026-11-01): the https site's Strict-Transport-Security value as check_headers
+    # saw it ("" = the header check answered and there was none; None = no answer), for
+    # check_plain_http's rating. A plain attribute, like tech_versions, so it reaches the
+    # deep scan's context too.
+    https_hsts: str | None = None
 
 
 # ─── Subprocess helper ──────────────────────────────────────────────────
@@ -337,6 +342,7 @@ import software_inventory  # noqa: E402  (302 step 1)
 import library_flaws  # noqa: E402  (302 step 3)
 import evidence  # noqa: E402  (KB 12 job 3r: proven / out of date / guess)
 import csp_policy  # noqa: E402  (job 3z: does the CSP actually limit scripts?)
+import plain_http  # noqa: E402  (job 4f: does http:// send visitors to https?)
 import stack_fingerprint  # noqa: E402  (job 3c — security-stack fingerprints)
 from tech_detect import (  # noqa: E402  (4.7 ⑭′ — shared with run_medium)
     merge_tech_detection,
@@ -358,7 +364,8 @@ def build_light_planned_steps(ctx: ScanContext) -> list[str]:
     if ctx.asset_kind in ("portal", "marketing", "vpn-endpoint", "web-app"):
         run_https = True
     if run_https:
-        steps += ["tls_check", "headers_check", "common_paths", "httpx_tech", "methods_check"]
+        steps += ["tls_check", "headers_check", "plain_http", "common_paths", "httpx_tech",
+                  "methods_check"]
     steps.append("dns_posture")  # always
     return steps
 
@@ -790,6 +797,8 @@ def check_headers(ctx: ScanContext) -> None:
     # is the one place the migration could silently invent findings.
     rec = json.loads(stdout.strip().splitlines()[0])
     headers_lc = rec.get("header") or {}
+    # Job 4f: check_plain_http rates a plain-http page higher when this is missing.
+    ctx.https_hsts = headers_lc.get(httpx_header_key("Strict-Transport-Security")) or ""
 
     # ── (c) LIGHT-TIER PASSIVE POSTURE — zero additional network requests ─────
     # The posture collector (run_heavy.run_stack_id_passive_phase) is HEAVY-only,
@@ -2294,6 +2303,49 @@ def check_stack_fingerprint(ctx: ScanContext) -> None:
     ctx.artifacts.append((stack_fingerprint.PORTAL_ARTIFACT, "json", json.dumps(portal)))
     named = stack_fingerprint.identified(hello, portal)
     log(f"  {tool}: {sent} request(s); " + ("; ".join(named) if named else "no VPN gateway named"))
+    mark_tool_ok(ctx, tool)
+
+
+def check_plain_http(ctx: ScanContext) -> None:
+    """(KB 12 job 4f) Does http://<site>/ send visitors to https? At most 3 ordinary GETs on
+    port 80 to the site's own name: the first, then only redirects that stay on plain http
+    inside the same domain. A page (or a login prompt) served over plain http is one finding:
+    LOW, or MODERATE with a password box, a login prompt, a personal-details form, or no working
+    HSTS on the https site (plain_http.py has the rules). The artifact is written every time:
+    "looked, it redirects" is a real verdict."""
+    tool = plain_http.TOOL_NAME
+    ctx.tools_run.append(tool)
+    ports = plain_http.known_ports(getattr(ctx, "open_ports", None))
+    if ports and 80 not in ports:
+        log(f"  {tool}: port 80 not open ({sorted(ports)[:8]}): nothing to ask")
+        mark_tool_skipped(ctx, tool, "port_80_closed")
+        return
+
+    def fetch(host, path):
+        return plain_http.http_get(host, path, user_agent=LIGHT_UA)
+
+    try:
+        result = plain_http.follow(ctx.hostname, fetch)
+        weak = plain_http.finding_fields(ctx.hostname, result, getattr(ctx, "https_hsts", None))
+    except Exception as e:  # noqa: BLE001 — a strange answer must never sink the scan
+        log(f"  {tool}: failed ({type(e).__name__}: {e})")
+        mark_tool_degraded(ctx, tool, f"exception:{type(e).__name__}")
+        return
+    ctx.artifacts.append((plain_http.ARTIFACT, "json",
+                          json.dumps(plain_http.artifact(ctx.hostname, result))))
+    if weak:
+        ctx.findings.append(LightFinding(
+            check_name=weak["check_name"],
+            title=weak["title"],
+            severity=weak["severity"],
+            category="tls",
+            description=weak["description"],
+            tags=weak["tags"],
+            cwe=[319],
+            raw_excerpt=weak["raw_excerpt"],
+        ))
+    log(f"  {tool}: {len(result['hops'])} request(s); {result['outcome']}"
+        + (f"; {weak['severity']} finding" if weak else ""))
     mark_tool_ok(ctx, tool)
 
 
@@ -3857,7 +3909,7 @@ def run(descriptor_path: str, dsn: str) -> int:
     # port data, or the kind override applies = the overwhelming majority);
     # build_light_planned_steps re-writes the HONEST plan right after port_scan,
     # which corrects the denominator for the rare mail-relay/443-closed case.
-    ctx.planned_steps = ["naabu", "tls_check", "headers_check", "common_paths",
+    ctx.planned_steps = ["naabu", "tls_check", "headers_check", "plain_http", "common_paths",
                          "httpx_tech", "methods_check", "dns_posture"]
     flush_planned_steps(ctx)
     log(f"asset_id={ctx.asset_id} hostname={ctx.hostname} kind={ctx.asset_kind} scan_run_id={ctx.scan_run_id}")
@@ -3901,6 +3953,8 @@ def run(descriptor_path: str, dsn: str) -> int:
             check_tls(ctx)
             log("  → check_headers")
             check_headers(ctx)
+            log("  → check_plain_http (job 4f: does http:// send visitors to https?)")
+            check_plain_http(ctx)
             # (A) relay 295 — ONE malformed GET, before the noisy path enumeration.
             # Light has no passive collector (that is heavy-only), so the ordering rule
             # maps to: after the quiet checks, before the first enumeration.

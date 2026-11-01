@@ -41,8 +41,20 @@ def test_plan_matches_what_actually_gets_credited():
     Became 22 on 2026-10-22 (KB 12 job 3c) when the light phase `stack_fingerprint`
     was added — a real credited phase (tool_status on its ok and degraded paths).
     Pinned by test_stack_fingerprint_is_planned_as_a_light_phase.
+
+    Became 23 on 2026-11-01 (KB 12 job 4f) when the light phase `plain_http` was
+    added — a real credited phase (tool_status on its ok, skipped and degraded paths).
+    Pinned by test_plain_http_is_planned_right_after_headers_check.
     """
-    assert len(build_cumulative_planned_steps(HEAVY_OWN)) == 22
+    assert len(build_cumulative_planned_steps(HEAVY_OWN)) == 23
+
+
+def test_plain_http_is_planned_right_after_headers_check():
+    """The reason the count is 23. plain_http credits tool_status on every run, and it
+    reads the HSTS value headers_check leaves on the context, so it must come after it."""
+    plan = build_cumulative_planned_steps(HEAVY_OWN)
+    assert "plain_http" in plan
+    assert plan.index("headers_check") + 1 == plan.index("plain_http")
 
 
 def test_stack_fingerprint_is_planned_as_a_light_phase():
