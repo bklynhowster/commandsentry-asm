@@ -336,6 +336,7 @@ from stack_passive import (  # noqa: E402
 import software_inventory  # noqa: E402  (302 step 1)
 import library_flaws  # noqa: E402  (302 step 3)
 import evidence  # noqa: E402  (KB 12 job 3r: proven / out of date / guess)
+import csp_policy  # noqa: E402  (job 3z: does the CSP actually limit scripts?)
 import stack_fingerprint  # noqa: E402  (job 3c — security-stack fingerprints)
 from tech_detect import (  # noqa: E402  (4.7 ⑭′ — shared with run_medium)
     merge_tech_detection,
@@ -843,6 +844,26 @@ def check_headers(ctx: ScanContext) -> None:
                 cwe=[693],
                 raw_excerpt=stdout[:1500],
             ))
+
+    # Job 3z (2026-10-31): a Content-Security-Policy that is THERE but doesn't limit scripts.
+    # The same fetch, no new request; the rule and its words are in csp_policy.py.
+    try:
+        weak = csp_policy.finding_fields(
+            ctx.hostname, headers_lc.get(httpx_header_key("Content-Security-Policy")))
+    except Exception as exc:  # noqa: BLE001 — a strange header must never cost the header check
+        log(f"  csp_policy: skipped ({exc!r})")
+        weak = None
+    if weak:
+        ctx.findings.append(LightFinding(
+            check_name=weak["check_name"],
+            title=weak["title"],
+            severity=weak["severity"],
+            category="headers",
+            description=weak["description"],
+            tags=weak["tags"],
+            cwe=[693],
+            raw_excerpt=stdout[:1500],
+        ))
 
     mark_tool_ok(ctx, "headers_check")
 
