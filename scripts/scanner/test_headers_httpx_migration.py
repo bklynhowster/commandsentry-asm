@@ -131,6 +131,9 @@ def test_all_headers_present_yields_zero_findings(monkeypatch):
     translation is broken this emits all seven."""
     rec = json.loads(json.dumps(_LIVE_SHAPE))
     rec["header"] = {httpx_header_key(n): "x" for n, _, _ in SECURITY_HEADERS}
+    # Job 3z (2026-10-31): the CSP's VALUE is now read too, and "x" sets no rule for scripts,
+    # which is a finding (csp-scripts-not-limited). A hardened host sends a real policy.
+    rec["header"]["content_security_policy"] = "default-src 'self'"
     ctx = _ctx(monkeypatch, rec)
     run_light.check_headers(ctx)
     assert [f.check_name for f in ctx.findings] == [], (
