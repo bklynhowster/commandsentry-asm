@@ -38,6 +38,7 @@ DEVELOPER_TITLES = (
     re.compile(r"^Missing security header", re.I),
     re.compile(r"^Security headers missing", re.I),
     re.compile(r"^Content-Security-Policy (does not limit scripts|allows eval)", re.I),   # job 3z
+    re.compile(r"^Plain http:// does not send visitors to https", re.I),   # job 4f
     re.compile(r"Obsolete 3DES/IDEA", re.I),
     re.compile(r"^BREACH attack", re.I),
     re.compile(r"^TLS · BEAST_CBC", re.I),
