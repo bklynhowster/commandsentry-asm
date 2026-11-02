@@ -117,7 +117,10 @@ def test_run_uses_credit_net_depth_and_never_names_fingerprintx():
 
 def test_no_fingerprintx_finding_or_artifact_is_written():
     code = "\n".join(l for _, l in _code_lines(Path(run_heavy.__file__)))
-    for s in ("fingerprintx-service-", '"fingerprintx", "json"', 'mark_tool_ok(ctx, "fingerprintx")',
+    # The service-row key 'fingerprintx-service-<port>-<proto>' is allowed since job 4k:
+    # run_greeting_phase keeps it so a service Sentry already listed is re-observed,
+    # not listed twice. What stays forbidden: fingerprintx's artifact and its credit.
+    for s in ('"fingerprintx", "json"', 'mark_tool_ok(ctx, "fingerprintx")',
               'tools_run.append("fingerprintx")'):
         assert s not in code, f"{s!r} still in run_heavy.py"
 

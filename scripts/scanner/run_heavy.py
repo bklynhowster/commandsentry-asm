@@ -190,6 +190,7 @@ from phase_source import HEAVY as TIER_HEAVY  # noqa: E402
 # Pure safe proof-of-exploitation logic (4.7 rulings, Obsidian 150 §6; build-order #2.1).
 # No I/O — run_safe_exploit_phase does the HTTP + guardrails, hands captured responses here.
 import safe_exploit as se
+import service_greeting as sg   # job 4k: each server's first line, nothing sent
 
 # Degradation primitives (SPEC_SCANNER_DEGRADATION_HARDENING.md).
 from degradation import (
@@ -370,9 +371,9 @@ class HeavyScanContext:
     # write can't see them unless they're stashed on ctx. naabu_ok defaults FALSE so a
     # crash/abort before the net-depth phase can never be read as "naabu succeeded, 0 ports"
     # (which would be a false full-coverage observation). fpx_services ({(port, proto):
-    # service}) enriched the blob's `service` field (4.7 Q2) from fingerprintx, removed
-    # 2026-11-02 (job 4l); it stays empty until a greeting reader that sends no login
-    # fills it (job 4k).
+    # service}) enriches the blob's `service` field (4.7 Q2). fingerprintx filled it until
+    # job 4l removed it (2026-11-02); run_greeting_phase fills it now (job 4k), from
+    # each server's own first line, read with nothing sent. The name is kept.
     open_ports: list[dict] = field(default_factory=list)
     naabu_ok: bool = False
     fpx_services: dict = field(default_factory=dict)
@@ -3892,8 +3893,9 @@ def _shallow_curated_probe(host: str) -> list[dict]:
 def run_naabu_phase(ctx: HeavyScanContext, work_dir: Path) -> tuple[bool, list[dict]]:
     """naabu CONNECT top-ports port discovery. Returns (naabu_ok, open_ports).
 
-    Does NOT self-register in tools_run / tool_status — run() credits the
-    net-depth PAIR (4.7 D1). Emits one INFO 'Service inventory: <port>/<proto>
+    Does NOT self-register in tools_run / tool_status — run() credits it after it
+    returns (credit_net_depth; 4.7 D1's naabu+fingerprintx pair ended when job 4l
+    removed fingerprintx). Emits one INFO 'Service inventory: <port>/<proto>
     open' FindingEvent per open port (source='commandsentry_heavy'; finding_id
     stable per (asset, source, port, proto)).
 
@@ -3982,6 +3984,70 @@ def credit_net_depth(ctx: HeavyScanContext, naabu_ok: bool) -> None:
         mark_tool_ok(ctx, "naabu")
     else:
         log("  net-depth: naabu not credited (degraded, or no proof of reachability)")
+
+
+def run_greeting_phase(ctx: HeavyScanContext, open_ports: list[dict]) -> None:
+    """Job 4k: read the first line each non-web open port sends, SENDING NOTHING.
+
+    service_greeting opens one connection per port, sends nothing (no username,
+    password, key or SSH hello), reads what the server says first, and hangs up.
+    One INFO 'Service inventory: <port>/tcp/<protocol>' FindingEvent per port that
+    greeted; where a public source ties the greeting to a product (service_greeting
+    .product_of), the title and description name it "going by its greeting" and
+    say "confirm it's patched". Never proof of the installed version, never
+    "vulnerable".
+
+    Not a credited tool: no tools_run / tool_status entry and no planned step (it
+    only adds observations, like the passive collectors), so the progress count and
+    the autocloser's producer list are unchanged.
+
+    Identity: the finding_id the fingerprintx-era service row used
+    ('fingerprintx-service-<port>-<proto>'), so a service Sentry already listed is
+    re-observed, not listed twice. Only that key is kept; fingerprintx is gone (4l).
+
+    The artifact is 'service_greeting', deliberately NOT a 'fingerprint%' name: the
+    device classifier reads 'fingerprint%' artifacts for its SSH-banner signal, and
+    its rule there reads "_openssh SCI" as a firewall, while the 4k trial and
+    Globalscape's documents show it is the EFT file-transfer server.
+    """
+    ports = sorted({p["port"] for p in (open_ports or []) if isinstance(p.get("port"), int)})
+    targets = [p for p in ports if p not in sg.SKIP_PORTS]
+    if not targets:
+        log("  greetings: no non-web open port, nothing to read")
+        return
+    try:
+        results = sg.read_greetings(ctx.hostname, targets)
+    except Exception as e:  # an observation never fails the tier
+        log(f"  greetings: skipped ({type(e).__name__})")
+        return
+    ctx.artifacts.append(("service_greeting", "json", json.dumps(results, sort_keys=True)))
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    n = 0
+    for r in results:
+        if not r.get("greeting"):
+            continue
+        port, proto = int(r["port"]), "tcp"
+        service = r.get("protocol") or "unknown"
+        ctx.fpx_services[(port, proto)] = service
+        prod = r.get("product")
+        named = sg.describe(prod)
+        mid = f"{ctx.hostname}:{port}/{proto}"
+        desc = (f"On {port}/{proto} at {ctx.hostname} the server's own greeting, read with "
+                f"nothing sent, was \"{r['greeting']}\".")
+        if prod:
+            what = prod["product"] + (" " + prod["version"] if prod.get("version") else "")
+            desc += (f" That points at {what}, going by {prod['basis']} ({prod['source']}). "
+                     "A greeting is not proof of the installed version: confirm it's patched.")
+        ctx.findings.append(FindingEvent(
+            finding_id=stable_finding_id(ctx.asset_id, "commandsentry_heavy",
+                                         f"fingerprintx-service-{port}-{proto}", mid),
+            asset_id=ctx.asset_id, scan_id=ctx.scan_run_id, source="commandsentry_heavy",
+            title=f"Service inventory: {port}/{proto}/{service}" + (f", {named}" if named else ""),
+            severity="INFO", category="recon", observed_at=now_iso, matched_at=mid,
+            description=desc, subdomain=ctx.hostname, port=port, protocol=proto,
+        ))
+        n += 1
+    log(f"  greetings: {n} of {len(results)} port(s) greeted (nothing sent)")
 
 
 # ============================================================================
@@ -4236,8 +4302,8 @@ def write_scanner_surface(conn, ctx: HeavyScanContext, tier: str, coverage: str,
     # ftp.unimacgraphics.com 3 -> 6). That inflation is STICKY because service_count is
     # GREATEST no-downgrade. Count unique ports so the column matches the blob.
     ports = sorted({p["port"] for p in (ctx.open_ports or []) if isinstance(p.get("port"), int)})
-    # 4.7 Q2 — service names enrich the blob's `service` field (empty since job 4l
-    # removed fingerprintx; 4k's greeting reader is to refill it). Keyed
+    # 4.7 Q2 — service names enrich the blob's `service` field (from each server's
+    # greeting since job 4k; fingerprintx, which filled it before, left in job 4l). Keyed
     # {(port, proto): service}; collapse to {port: {...}} for the shared builder.
     detail = {port: {"service": svc, "tls": False}
               for (port, _proto), svc in (ctx.fpx_services or {}).items()}
@@ -4593,11 +4659,11 @@ def run(descriptor_path: str, dsn: str) -> int:
         # depend on Ship 188's batch, the ROLLOUT gate does).
         #
         # ⚠ SCOPE: this runs the phases declared in phase_registry (9 light +
-        # 5 medium). Heavy's OWN phases below (testssl, httpx, gau, naabu +
-        # fingerprintx, the probes) are NOT yet registered — testssl's
+        # 5 medium). Heavy's OWN phases below (testssl, httpx, gau, naabu,
+        # the greetings, the probes) are NOT yet registered — testssl's
         # degradation is sometimes a harm-condition needing the step-3
-        # disposition wiring, and naabu/fingerprintx share all-or-nothing pair
-        # crediting that the contract has no shape for. So cumulative mode is
+        # disposition wiring, and naabu is credited by run() after it returns
+        # (credit_net_depth), which the contract has no shape for. So cumulative mode is
         # ADDITIVE to the existing block, not a replacement, until those land.
         # content_fetch is registered, so it is executed by the loop and its
         # hand-call below is skipped to avoid tripping the double-exec guard.
@@ -4703,6 +4769,9 @@ def run(descriptor_path: str, dsn: str) -> int:
         ctx.naabu_ok = bool(naabu_ok)
         ctx.open_ports = list(open_ports or [])
         credit_net_depth(ctx, naabu_ok)
+        # Job 4k: each non-web open port's own first line, nothing sent (not a credited tool).
+        if naabu_ok:
+            run_greeting_phase(ctx, open_ports)
         flush_progress(ctx)
 
         # ─── Persist + close ────────────────────────────────────────────

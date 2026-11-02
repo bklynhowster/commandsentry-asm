@@ -352,6 +352,7 @@ def build_services(work: Path, ip_cache: dict | None = None) -> list[dict]:
 
     naabu = read_jsonl(work / "naabu.json") or read_jsonl(work / "naabu_cidr.json")
     fpx   = read_jsonl(work / "fingerprintx.json")
+    greet = read_jsonl(work / "greetings.json")   # job 4k: each server's first line, nothing sent
 
     fpx_by_key: dict[tuple[str, int], dict] = {}
     for rec in fpx:
@@ -359,6 +360,11 @@ def build_services(work: Path, ip_cache: dict | None = None) -> list[dict]:
         port = rec.get("port")
         if host and port:
             fpx_by_key[(host, int(port))] = rec
+    greet_by_key: dict[tuple[str, int], dict] = {}
+    for rec in greet:
+        g_host, g_port = rec.get("host"), rec.get("port")
+        if g_host and isinstance(g_port, int) and rec.get("greeting"):
+            greet_by_key[(g_host, g_port)] = rec
 
     # 4.7 J6 verify gate — only DROP when we can trust the absence: scope on, AND
     # naabu ran clean (else its port list is untrustworthy — K1), AND fingerprintx
@@ -402,8 +408,11 @@ def build_services(work: Path, ip_cache: dict | None = None) -> list[dict]:
                 continue  # phantom — do NOT enter services[]
         metric["kept"] += 1
 
-        service_name = (fpx_rec.get("protocol") if fpx_rec else infer_service(int(port)))
-        banner = (fpx_rec or {}).get("metadata", {}).get("banner") if fpx_rec else None
+        g_rec = greet_by_key.get((host, int(port))) or greet_by_key.get((rec.get("ip"), int(port))) or {}
+        service_name = (fpx_rec.get("protocol") if fpx_rec
+                        else (g_rec.get("protocol") or infer_service(int(port))))
+        banner = ((fpx_rec or {}).get("metadata", {}).get("banner") if fpx_rec else None) \
+            or g_rec.get("greeting")
 
         svc: dict[str, Any] = {
             "ip":       host,

@@ -26,6 +26,7 @@ ASSETS_DIR="$REPO_ROOT/data/assets"
 RAW_DIR="$REPO_ROOT/data/raw"     # gitignored, raw tool outputs
 PROFILES_DIR="$SCRIPT_DIR/profiles"
 NORMALIZER="$SCRIPT_DIR/normalize.py"
+GREETER="$REPO_ROOT/scripts/scanner/service_greeting.py"   # job 4k: each server's first line, nothing sent
 CLOUD_CHECK="$REPO_ROOT/scripts/asm/cloud_ip_check.py"   # N2 (4.7 M1/M2): scan-time cloud-edge gate
 
 # ─── Helpers ───────────────────────────────────────────────────────
@@ -340,9 +341,17 @@ discover_fqdn() {
   # Service fingerprinting (fingerprintx) REMOVED 2026-11-02 (job 4l). Its SSH check
   # logs in (user admin, password admin) to see whether a server takes passwords, and
   # the standing rule is no login attempts of any kind. No fingerprintx.json is
-  # written: normalize names each service from its port number (infer_service), and
-  # the J6 phantom drop stays off (no fingerprintx entry in _probe_status, its
-  # K4-safe direction); the N1 reconfirm and N2 cloud gate above still run.
+  # written: normalize names each service from its greeting (job 4k, below) or else
+  # its port number (infer_service), and the J6 phantom drop stays off (no
+  # fingerprintx entry in _probe_status, its K4-safe direction); the N1 reconfirm
+  # and N2 cloud gate above still run.
+  # Job 4k: read each open port's first line, SENDING NOTHING (service_greeting.py:
+  # no username, password, key or hello; one connection per port; web ports skipped).
+  phase "Service greetings (read only: nothing is sent)"
+  if [[ -s "$wd/naabu.json" ]]; then
+    python3 "$GREETER" --naabu "$wd/naabu.json" > "$wd/greetings.json" 2> "$wd/greetings.err" \
+      || warn "service greetings had errors"
+  fi
 
   phase "HTTP fingerprinting (httpx)"
   echo "$target" | httpx -silent -json \
@@ -695,7 +704,13 @@ discover_ip() {
   fi
 
   # Service fingerprinting (fingerprintx) REMOVED 2026-11-02 (job 4l): see the note
-  # in the per-target flow above. Services are named from the port number.
+  # in the per-target flow above. Services are named from each greeting (job 4k,
+  # nothing sent) or else the port number.
+  phase "Service greetings (read only: nothing is sent)"
+  if [[ -s "$wd/naabu.json" ]]; then
+    python3 "$GREETER" --naabu "$wd/naabu.json" > "$wd/greetings.json" 2> "$wd/greetings.err" \
+      || warn "service greetings had errors"
+  fi
 
   phase "HTTP probe on web ports"
   if grep -qE '"port":(80|443|8080|8443)' "$wd/naabu.json" 2>/dev/null; then
