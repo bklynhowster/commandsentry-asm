@@ -5,7 +5,7 @@ run_heavy.py — Phase 4a heavy-tier scanner (v1)
 v1 SCOPE (locked per RUN_HEAVY_V1_BUILD_SPEC.md + HEAVY_TIER_READINESS_ASSESSMENT.md):
   - testssl.sh   — TLS depth (handshake-level; WAF-immune)
   - naabu        — port discovery (PENDING in this commit — P4)
-  - fingerprintx — service ID on open ports (PENDING in this commit — P4)
+  - fingerprintx — REMOVED 2026-11-02 (job 4l): its SSH check logs in as admin/admin
 
   NOT v1: nmap (v1.1, image rebuild), ZAP / Playwright DAST (v2).
 
@@ -365,12 +365,14 @@ class HeavyScanContext:
     tech_detect_status: str = ""
 
     # ── 226 — net-depth results carried to close_out_heavy for the surface write ──
-    # run_naabu_phase / run_fingerprintx_phase return their results to run() as LOCALS;
+    # run_naabu_phase returns its results to run() as LOCALS;
     # close_out_heavy only receives (conn, ctx, inserted, updated, Json), so the surface
     # write can't see them unless they're stashed on ctx. naabu_ok defaults FALSE so a
     # crash/abort before the net-depth phase can never be read as "naabu succeeded, 0 ports"
-    # (which would be a false full-coverage observation). fpx_services enriches the blob's
-    # `service` field per 4.7 Q2 — {(port, proto): service} from fingerprintx.
+    # (which would be a false full-coverage observation). fpx_services ({(port, proto):
+    # service}) enriched the blob's `service` field (4.7 Q2) from fingerprintx, removed
+    # 2026-11-02 (job 4l); it stays empty until a greeting reader that sends no login
+    # fills it (job 4k).
     open_ports: list[dict] = field(default_factory=list)
     naabu_ok: bool = False
     fpx_services: dict = field(default_factory=dict)
@@ -3787,29 +3789,26 @@ def run_safe_exploit_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
 
 
 # ============================================================================
-# Heavy Phase 1 — net depth (naabu port discovery + fingerprintx service ID)
+# Heavy Phase 1 — net depth (naabu port discovery)
 # Spec: HEAVY_PHASE1_NETDEPTH_SPEC v2 + HEAVY_PHASE1_BUILD_DELTA (4.7 D1-D5).
 #
-# These two phases are a PAIR. run() credits tools_run with BOTH 'naabu' AND
-# 'fingerprintx' ONLY when both pass their four-gate (4.7 D1 all-or-nothing
-# autoclose credit) — so, UNLIKE run_httpx_phase, they do NOT self-register in
-# tools_run / tool_status; run() does it after the pair returns. If either
-# degrades, findings still emit (observations recorded) but neither name enters
-# tools_run, so the note-127 autocloser never false-closes the OTHER tool's
-# commandsentry_heavy findings on a partial scan.
+# Job 4l (2026-11-02): fingerprintx (service ID) was removed. Its SSH check logs
+# in (user 'admin', password 'admin', then keyboard-interactive 'password') to
+# learn whether a server takes passwords; the standing rule is no login attempts
+# of any kind. naabu is now credited on its own (credit_net_depth) when it passes
+# its four-gate; a degraded naabu credits nothing, so the note-127 autocloser
+# still never reads a failed port scan as "the ports closed".
 #
 # Findings-only (4.7 D3): heavy MUST NOT write asset_surface — the discovery
 # importer owns asset_surface.service_count, which the P2 went-dark writer reads;
 # a heavy dual-writer could feed a false zero-service into that lifecycle.
-# source='commandsentry_heavy' ALWAYS (NEVER 'naabu'/'fingerprintx' — those are
-# not finding_source_t labels; emitting them fails the insert). Identity excludes
-# the service (4.7 D4): finding_id is stable per (asset, source, port, proto); the
-# service is mutable TITLE metadata so a fingerprintx flap re-observes, not churns.
+# source='commandsentry_heavy' ALWAYS (NEVER 'naabu' — not a finding_source_t
+# label; emitting it fails the insert). finding_id is stable per (asset, source,
+# port, proto).
 # ============================================================================
 
 NAABU_RATE = int(os.environ.get("NAABU_RATE") or "250")        # 4.7 D5 pilot rate; ratchet -> 500 after clean single-asset runs
 NAABU_TOP_PORTS = int(os.environ.get("NAABU_TOP_PORTS") or "1000")
-FPX_SKIP_PORTS = {80, 443}                                   # 4.7 D5: WAF L7 exposure + already covered by httpx / medium
 
 
 def _parse_naabu_ports(stdout: str) -> list[dict]:
@@ -3830,26 +3829,6 @@ def _parse_naabu_ports(stdout: str) -> list[dict]:
                     "proto": (rec.get("protocol") or "tcp").lower(),
                     "ip": rec.get("ip") or rec.get("host")})
     return out
-
-
-def _parse_fingerprintx(stdout: str) -> dict:
-    """fingerprintx --json emits one object per probed port. Return {(port, proto): service}."""
-    svc = {}
-    for line in stdout.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
-        port = rec.get("port")
-        if not isinstance(port, int):
-            continue
-        proto = (rec.get("transport") or "tcp").lower()
-        service = (rec.get("protocol") or rec.get("service") or "unknown").lower()
-        svc[(port, proto)] = service
-    return svc
 
 
 # ── N1 reconfirm + N2 cloud-edge gate for the net-depth naabu sweep ──
@@ -3987,56 +3966,22 @@ def run_naabu_phase(ctx: HeavyScanContext, work_dir: Path) -> tuple[bool, list[d
     return True, open_ports
 
 
-def run_fingerprintx_phase(ctx: HeavyScanContext, work_dir: Path,
-                           open_ports: list[dict]) -> bool:
-    """fingerprintx service ID on naabu's open ports. Returns fpx_ok.
+def credit_net_depth(ctx: HeavyScanContext, naabu_ok: bool) -> None:
+    """Credit naabu in tools_run / tool_status when it passed its four-gate.
 
-    Skips 80/443 (4.7 D5 — WAF L7 exposure; already covered by httpx / medium).
-    Does NOT self-register (run() credits the pair). Emits one INFO
-    'Service inventory: <port>/<proto>/<service>' FindingEvent per identified
-    service; finding_id stable per (asset, source, port, proto) with the service
-    in the mutable TITLE (4.7 D4 — a fingerprintx flap re-observes, never churns).
-    NOTE: the service-change WATCH alert (4.7 D4 correction) is a persist-time diff
-    (needs the prior title) — tracked as the immediate follow, not dropped.
-
-    Four-gate: rc==0 AND non-empty output (matches asm-discover K2 fpx.ok).
+    Job 4l (2026-11-02): fingerprintx is no longer run. Its SSH check logs in
+    (user 'admin', password 'admin', then keyboard-interactive 'password') to learn
+    whether a server takes passwords, and the standing rule is no login attempts
+    of any kind.
+    naabu is credited on its own; a degraded naabu credits nothing
+    (absence of evidence is not evidence of absence, 4.7 Q5). tool_status
+    is set to match tools_run so close_out_heavy's set-equality holds.
     """
-    targets = [p for p in open_ports if p["port"] not in FPX_SKIP_PORTS]
-    if not targets:
-        log("  fingerprintx: no eligible ports after 80/443 skip — nothing to probe (ok)")
-        return True
-
-    stdin = "\n".join(f"{ctx.hostname}:{p['port']}" for p in targets) + "\n"
-    rc, stdout, stderr = run_cmd(["fingerprintx", "--json"], timeout=600, input_str=stdin)
-    if stdout.strip():
-        ctx.artifacts.append(("fingerprintx", "json", stdout))
-    _log_stderr_tail(stderr, label="fingerprintx")
-
-    if rc != 0 or not stdout.strip():
-        log(f"  fingerprintx DEGRADED (not credited): rc={rc} empty={not stdout.strip()}")
-        return False
-
-    svc = _parse_fingerprintx(stdout)
-    # 226 / 4.7 Q2 — stash for the surface write so _scanner.heavy carries real service
-    # names (light leaves `service` null). Detail only: the blob's port set still comes
-    # from naabu, so a fingerprintx miss degrades the label, never the port inventory.
-    ctx.fpx_services = dict(svc)
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    for (port, proto), service in svc.items():
-        mid = f"{ctx.hostname}:{port}/{proto}"
-        ctx.findings.append(FindingEvent(
-            finding_id=stable_finding_id(ctx.asset_id, "commandsentry_heavy",
-                                         f"fingerprintx-service-{port}-{proto}", mid),
-            asset_id=ctx.asset_id, scan_id=ctx.scan_run_id, source="commandsentry_heavy",
-            title=f"Service inventory: {port}/{proto}/{service}",
-            severity="INFO", category="recon", observed_at=now_iso, matched_at=mid,
-            description=(f"fingerprintx identified '{service}' on {port}/{proto} at "
-                         f"{ctx.hostname} at scan time. Service is mutable metadata; "
-                         f"finding identity is the port, not the service."),
-            subdomain=ctx.hostname, port=port, protocol=proto,
-        ))
-    log(f"  fingerprintx OK: {len(svc)} service(s) -> {len(svc)} INFO finding(s)")
-    return True
+    if naabu_ok:
+        ctx.tools_run.append("naabu")
+        mark_tool_ok(ctx, "naabu")
+    else:
+        log("  net-depth: naabu not credited (degraded, or no proof of reachability)")
 
 
 # ============================================================================
@@ -4291,7 +4236,8 @@ def write_scanner_surface(conn, ctx: HeavyScanContext, tier: str, coverage: str,
     # ftp.unimacgraphics.com 3 -> 6). That inflation is STICKY because service_count is
     # GREATEST no-downgrade. Count unique ports so the column matches the blob.
     ports = sorted({p["port"] for p in (ctx.open_ports or []) if isinstance(p.get("port"), int)})
-    # 4.7 Q2 — fingerprintx service names enrich the blob's `service` field. Keyed
+    # 4.7 Q2 — service names enrich the blob's `service` field (empty since job 4l
+    # removed fingerprintx; 4k's greeting reader is to refill it). Keyed
     # {(port, proto): service}; collapse to {port: {...}} for the shared builder.
     detail = {port: {"service": svc, "tls": False}
               for (port, _proto), svc in (ctx.fpx_services or {}).items()}
@@ -4633,10 +4579,10 @@ def run(descriptor_path: str, dsn: str) -> int:
         # (unlike medium's tech-stack-dependent plan), so write it up front to
         # drive the portal ScanProgress card's denominator. Names MUST match the
         # tool_status keys each phase sets — testssl.sh / httpx — and the
-        # net-depth pair credit (naabu / fingerprintx). Best-effort:
+        # net-depth credit (naabu; fingerprintx removed in job 4l). Best-effort:
         # flush_planned_steps no-ops if dsn unset and swallows failures.
         ctx.planned_steps = ["testssl.sh", "httpx", "gau", "content_fetch",
-                             "naabu", "fingerprintx"]
+                             "naabu"]
         ctx.planned_steps = build_cumulative_planned_steps(ctx.planned_steps)
         flush_planned_steps(ctx)
 
@@ -4746,30 +4692,17 @@ def run(descriptor_path: str, dsn: str) -> int:
         # summary artifact; two-tier kill-switch, rate ceiling, capture-time redaction, attribution.
         run_safe_exploit_phase(ctx, work_dir)
 
-        # Phase 2 — naabu + fingerprintx net depth (Heavy Phase 1). PAIR with
-        # all-or-nothing tools_run credit (4.7 D1): both names enter tools_run
-        # (crediting the note-127 autocloser for source=commandsentry_heavy) ONLY
-        # when BOTH pass their four-gate. If either degrades, findings still emit
-        # but NEITHER is credited — so a partial net-depth scan cannot false-close
-        # the other tool's findings. tool_status is set to match tools_run so the
-        # close_out_heavy set-equality invariant holds either way (net tools are
-        # in BOTH or NEITHER). Additive: a net-depth failure never fails the tier
-        # (testssl is the reachability proof).
+        # Phase 2 — naabu net depth (Heavy Phase 1). Job 4l (2026-11-02): fingerprintx
+        # is no longer run (its SSH check logs in as admin/admin); naabu is credited on
+        # its own when it passes its four-gate (credit_net_depth). Additive: a
+        # net-depth failure never fails the tier (testssl is the reachability proof).
         naabu_ok, open_ports = run_naabu_phase(ctx, work_dir)
         # 226 — carry net-depth results to close_out_heavy's surface write (they're locals
         # here; close_out_heavy never sees run()'s frame). Stash BOTH, and stash naabu_ok
         # verbatim: it is the fail-closed gate that decides whether we write a surface at all.
         ctx.naabu_ok = bool(naabu_ok)
         ctx.open_ports = list(open_ports or [])
-        fpx_ok = run_fingerprintx_phase(ctx, work_dir, open_ports) if naabu_ok else False
-        if naabu_ok and fpx_ok:
-            ctx.tools_run.append("naabu")
-            ctx.tools_run.append("fingerprintx")
-            mark_tool_ok(ctx, "naabu")
-            mark_tool_ok(ctx, "fingerprintx")
-        else:
-            log(f"  net-depth PARTIAL (naabu_ok={naabu_ok} fpx_ok={fpx_ok}) — findings "
-                f"emitted, tools_run NOT credited (4.7 D1 all-or-nothing autoclose guard)")
+        credit_net_depth(ctx, naabu_ok)
         flush_progress(ctx)
 
         # ─── Persist + close ────────────────────────────────────────────

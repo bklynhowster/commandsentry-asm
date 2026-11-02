@@ -337,16 +337,12 @@ discover_fqdn() {
     reconfirm_naabu_opens "$wd/naabu.json"   # N1: drop phantom cloud/LB opens before they become findings
   fi
 
-  phase "Service fingerprinting (fingerprintx)"
-  local fpx_rc=0
-  if [[ -s "$wd/naabu.json" ]]; then
-    jq -r '"\(.host):\(.port)"' "$wd/naabu.json" 2>/dev/null | \
-      fingerprintx --json > "$wd/fingerprintx.json" 2> "$wd/fingerprintx.err"
-    fpx_rc=${PIPESTATUS[1]}   # 4.7 K2: fingerprintx's OWN rc (2nd stage of jq|fpx pipe)
-    [[ $fpx_rc -ne 0 ]] && warn "fingerprintx had errors (rc=$fpx_rc)"
-  else
-    echo "" > "$wd/fingerprintx.json"
-  fi
+  # Service fingerprinting (fingerprintx) REMOVED 2026-11-02 (job 4l). Its SSH check
+  # logs in (user admin, password admin) to see whether a server takes passwords, and
+  # the standing rule is no login attempts of any kind. No fingerprintx.json is
+  # written: normalize names each service from its port number (infer_service), and
+  # the J6 phantom drop stays off (no fingerprintx entry in _probe_status, its
+  # K4-safe direction); the N1 reconfirm and N2 cloud gate above still run.
 
   phase "HTTP fingerprinting (httpx)"
   echo "$target" | httpx -silent -json \
@@ -369,11 +365,8 @@ discover_fqdn() {
     else printf '"naabu":{"degraded":"naabu_rc_%s"}' "${naabu_rc:-0}"; fi
     if [[ ${httpx_rc:-0} -eq 0 ]]; then printf ',"httpx_tech":{"ok":true}'
     else printf ',"httpx_tech":{"degraded":"httpx_rc_%s"}' "${httpx_rc:-0}"; fi
-    # 4.7 K2 (J6): fingerprintx.ok = rc==0 AND non-empty output. Gates the
-    # service-verify DROP in normalize.build_services — a degraded/empty fpx run
-    # means "absence of a service ID proves nothing" → drop nothing (K4).
-    if [[ ${fpx_rc:-0} -eq 0 && -s "$wd/fingerprintx.json" ]]; then printf ',"fingerprintx":{"ok":true}'
-    else printf ',"fingerprintx":{"degraded":"fpx_rc_%s"}' "${fpx_rc:-0}"; fi
+    # (4.7 K2's fingerprintx entry is gone with fingerprintx itself, job 4l: with no
+    # "fingerprintx" ok here, normalize.build_services drops nothing — K4.)
     printf '}\n'
   } > "$wd/_probe_status.json"
 
@@ -701,11 +694,8 @@ discover_ip() {
     reconfirm_naabu_opens "$wd/naabu.json"   # N1: drop phantom cloud/LB opens before they become findings
   fi
 
-  phase "Service fingerprinting (fingerprintx)"
-  if [[ -s "$wd/naabu.json" ]]; then
-    jq -r '"\(.host):\(.port)"' "$wd/naabu.json" 2>/dev/null | \
-      fingerprintx --json > "$wd/fingerprintx.json" 2> "$wd/fingerprintx.err" || warn "fingerprintx had errors"
-  fi
+  # Service fingerprinting (fingerprintx) REMOVED 2026-11-02 (job 4l): see the note
+  # in the per-target flow above. Services are named from the port number.
 
   phase "HTTP probe on web ports"
   if grep -qE '"port":(80|443|8080|8443)' "$wd/naabu.json" 2>/dev/null; then
