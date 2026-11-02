@@ -11,18 +11,19 @@ Coverage:
                non-int ports, proto defaults.
   four-gate    run_naabu_phase — the conservative
                reachable-AND-rc0-AND-nonempty gate. The safety hinge: a
-               degraded net tool returns ok=False so run()'s all-or-nothing
-               pairing credits NEITHER tool in tools_run → the note-127
-               autocloser can't false-close the other tool's
-               commandsentry_heavy findings (4.7 D1). Absence-of-evidence
-               (rc0 + zero ports) is NOT credited (4.7 Q5).
-  identity     4.7 D4 — the service is EXCLUDED from finding_id (title only),
-               so a fingerprintx service flap re-observes rather than churns.
+               degraded naabu returns ok=False, so run() (credit_net_depth)
+               credits nothing in tools_run → the note-127 autocloser can't
+               read a failed port scan as "the ports closed" (4.7 D1).
+               Absence-of-evidence (rc0 + zero ports) is NOT credited (4.7 Q5).
+  identity     naabu's finding_id is stable per (asset, source, port, proto).
+               The service rows (job 4k's greetings) are pinned in
+               test_service_greeting_4k.py.
 
 Run with:
   cd scripts/scanner && python3 -m pytest test_heavy_netdepth.py -v
   (or plain `python3 test_heavy_netdepth.py` — main() runs the same paths
-   without pytest, matching test_run_heavy.py's convention.)
+   without pytest, matching test_run_heavy.py's convention, except the one
+   test that needs pytest's monkeypatch fixture.)
 """
 
 from __future__ import annotations
@@ -284,8 +285,8 @@ def test_naabu_rc0_with_ports_returns_true_and_emits_findings():
 
 
 def test_naabu_does_not_self_credit_tools_run():
-    """Phase functions must NOT touch tools_run — run()'s pairing owns the
-    all-or-nothing credit (4.7 D1). If a phase self-credited, a partial scan
+    """Phase functions must NOT touch tools_run — run() credits naabu after it
+    returns (credit_net_depth, 4.7 D1). If a phase self-credited, a failed scan
     could false-close."""
     ctx = _mk_ctx()
     with _StubCmd(0, json.dumps({"port": 22, "protocol": "tcp"}) + "\n"), _StubReconfirm():
