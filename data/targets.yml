@@ -49,6 +49,14 @@ targets:
       - public-facing
     notes: CMI — Command Marketing Innovations. Existed as an asset with findings since launch but ASM enumeration wasn't enabled until 2026-05-26.
     rate_limit: gentle
+  - id: commandmi
+    type: apex
+    value: commandmi.com
+    scope_verified: true
+    owner: command_marketing
+    tags: []
+    notes: CommandMI — Command Marketing Innovations (the same company as commandmarketinginnovations.com). Added 2026-11-02 on Howie's word ("That is a command company"). Sentry tracked only ftp.commandmi.com (Globalscape EFT, added by hand 2026-06-05 from the June external assessment), so discovery never looked for the domain's other names. commandmi.com and www resolve (2026-11-02), so the watchdog canary checks both.
+    rate_limit: gentle
   - id: sciimage
     type: apex
     value: sciimage.com
