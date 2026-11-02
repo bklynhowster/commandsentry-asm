@@ -2556,20 +2556,33 @@ def main() -> int:
             fct = _dv.facts(model, still_open=still, slack=selection, sentry_only=sentry_only,
                             company=brand.get("short_name", ""), day=f"{model['local_end']:%A, %B %-d}")
             out, reason, draft, replaced = None, "", None, []
+            problems, filled, wording = [], [], []
             if voice_on:
                 prev = _soft("previous digest text", SQL_PENDING_LAST_SENT_TEXT, ("daily",))
                 prev_text = prev[0][0] if prev and prev[0] and prev[0][0] else ""
                 try:
-                    out = _dv.write(fct, api_key=_env("ANTHROPIC_API_KEY", default="") or "", previous_text=prev_text)
-                    problems = _dv.check(out, fct, portal_url=portal_url)
+                    raw = _dv.write(fct, api_key=_env("ANTHROPIC_API_KEY", default="") or "", previous_text=prev_text)
+                    # 4j (Howie 2026-11-02 09:39): only a fact a line gets wrong sets that line
+                    # aside; wording is logged and never refuses; a missing entry gets the
+                    # backup's line instead of sending the morning to the backup.
+                    out, replaced, filled, dropped, wording, problems = _dv.settle(raw, fct, portal_url=portal_url)
+                    if wording:
+                        print("voice: wording kept as written (never refuses): " + "; ".join(wording[:6]))
+                    if dropped:
+                        print("voice: entries dropped (unknown, misplaced or twice): " + "; ".join(dropped[:6]))
+                    if filled:
+                        draft = raw
+                        n_ = len(filled)
+                        notes.append(f"The model left out {'one line' if n_ == 1 else str(n_) + ' lines'}; the backup's "
+                                     f"{'line is' if n_ == 1 else 'lines are'} used there ("
+                                     + "; ".join(_dv._PLACE.get(lb.split(' ')[0], lb) for lb, _w in filled) + ").")
                     if problems:
                         # Howie 10-28 08:31: one bad line replaced, the rest of the writer's prose
                         # kept; the whole fallback only when that cannot be done. The refused
                         # draft is kept in the private pending row (finalize.voice.draft) and the
                         # offending lines are quoted in Howie's note, in plain words.
-                        draft = out
+                        draft = raw
                         reason = "the check refused it: " + "; ".join(problems[:4])
-                        out, replaced = _dv.repair(out, fct, problems, portal_url=portal_url)
                         if out is not None:
                             print(f"voice: repaired, {len(replaced)} line(s) from the fallback ({'; '.join(r[0] for r in replaced)})")
                             n_ = len(replaced)
@@ -2592,7 +2605,7 @@ def main() -> int:
                 # cleaned on the way in, so this should never fire; if it does, Howie's copy
                 # says so before he approves anything (the fallback still goes to him: the
                 # alternative is no daily at all).
-                fb_problems = _dv.check(out, fct, portal_url=portal_url)
+                fb_problems = _dv.blocking(_dv.check(out, fct, portal_url=portal_url))
                 if fb_problems:
                     notes.append("The fallback itself tripped the check (" + "; ".join(fb_problems[:3])
                                  + "). Read it before approving.")
@@ -2618,7 +2631,8 @@ def main() -> int:
                                  f"Today's draft does not repeat it; if you want it posted by hand, this is what it said: "
                                  + (was.replace("\n", " / ") if was else "(no text kept)"))
             model["voice"] = {"ok": voice_on and not reason, "reason": reason, "slack": bool(slack_payload),
-                              "repaired": [r[0] for r in replaced], "draft": draft}
+                              "repaired": [r[0] for r in replaced], "draft": draft,
+                              "filled": [lb for lb, _w in filled], "wording": wording[:6]}
         if args.preview:
             subject = preview_subject(subject)
             if slack_on or notes:

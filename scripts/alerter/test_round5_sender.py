@@ -111,9 +111,9 @@ def test_with_the_switches_off_the_daily_path_never_reaches_the_voice_or_slack_c
     assert block.lstrip().startswith("voice_on, slack_on = _voice_on(), _slack_on()\n        if voice_on or slack_on:")
     for call in ("_dv.write(", "_dv.render_html(", "_ds.select(", "_ds.payload(", "SQL_OPEN_PROBLEMS", "_read_slack_told(",
                  "quiet_news=_ds.quiet_news(not_responding, window_start, window_end)",
-                 "fb_problems = _dv.check(out, fct, portal_url=portal_url)", "The fallback itself tripped the check"):
+                 "fb_problems = _dv.blocking(_dv.check(out, fct, portal_url=portal_url))", "_dv.settle(raw, fct, portal_url=portal_url)", "The fallback itself tripped the check"):
         assert call in block, call
-    assert block.index("out = _dv.fallback(fct)") < block.index("fb_problems = _dv.check(out, fct"), "the fallback is checked too (Qwen MF1)"
+    assert block.index("out = _dv.fallback(fct)") < block.index("fb_problems = _dv.blocking(_dv.check(out, fct"), "the fallback is checked too (Qwen MF1)"
     before = src[:i]
     assert "subject = _dd.subject(model, from_name)" in before and "_dd.render_html(model" in before, \
         "the 3l rendering happens first; the voice replaces it only when the switch is on"

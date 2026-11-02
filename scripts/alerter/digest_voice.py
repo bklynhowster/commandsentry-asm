@@ -739,9 +739,17 @@ def check(out: dict, f: dict, *, portal_url: str = "") -> list[str]:
         h = m.group(0).lower()
         if h not in all_hosts and _short(h) not in all_hosts:
             problems.append(f"slack.closing: names a host ({h})")
-    if _DATE.search(str(slack.get("closing", ""))) or _DATE.search(" ".join(
-            e.get("text", "") for e in slack.get("nudge", []) if isinstance(e, dict))):
-        problems.append("slack: a date in the nudge or the closing")
+    # (4j) each date rule names its own line, so repair() can set aside that line alone. The
+    # sign-off may name the day itself ("have a good Monday" on a Monday; 2026-11-02 the whole
+    # morning went to the backup over that); any other day there is a fact it gets wrong. A date
+    # in a nudge needs no rule here: a nudge item carries no dates in the sheet (facts(),
+    # dates_allowed=False), so any date the writer puts there is one the sheet cannot vouch for,
+    # and _entry_problems() sets that line aside as "a date that is not its own" (code review
+    # 2026-11-02, must-fix 1). That swaps the one line, never the morning.
+    today = set(_dates_in(str(f.get("day", "")))) | ({_today(f)} - {""})   # "Monday", "Nov 2"
+    for d in _dates_in(str(slack.get("closing", "") or "")):
+        if d not in today:
+            problems.append(f"slack.closing: a date that is not today's ({d})")
     return problems
 
 
@@ -749,6 +757,121 @@ FREE_KEYS = ("subject", "headline", "opening", "small_line")
 LISTS = {"email": "email", "fixed": "fixed", "still_open": "still_open", "slack.changed": "changed", "slack.nudge": "nudge"}
 _LABEL = re.compile(r"^(subject|headline|opening|small_line|slack\.closing|email|fixed|still_open|slack\.changed|slack\.nudge)(?: (\w+))?: ")
 _STRUCTURAL = ("not a list", "unknown item id", "belongs to another list", "twice", "has no entry", "not text")
+
+# ── what sets a line aside, and what never does (KB 12 job 4j, 2026-11-02) ──────────────────
+# Howie 09:39: "This bit with the language causing the failures is absolutely ridiculous. You know
+# what these messages are supposed to be." So only a FACT a line gets wrong sets that line aside,
+# and only that line: a host, date, number or grade that is not that item's, a host or item left
+# out, a stray URL, and "vulnerable" (his standing rule: never called vulnerable on a version
+# alone). The WORDING rules (the banned words, "on us", a line or sentence over its length, an em
+# dash, the opener, a "how long" on a nudge) are logged and never refuse anything: the writer is
+# still told them (SYSTEM), and tidy() fixes the two that code can fix. A DATE on a nudge is a
+# fact, not wording: the sheet gives a nudge no dates, so a date there is one it cannot vouch for
+# (see the end of check()).
+WORDING = ("too long", "a sentence of ", "banned word", "em dash", "a nudge says how long",
+           "does not start with")
+KEEPS_REFUSING = ("banned word: 'vulnerable'",)
+
+
+def blocking(problems: list) -> list:
+    """The problems that set a line aside: every one that is not a wording rule."""
+    out = []
+    for pr in problems:
+        m = _LABEL.match(pr)
+        why = pr[m.end():] if m else pr
+        if any(why.startswith(k) for k in KEEPS_REFUSING) or not any(why.startswith(w) for w in WORDING):
+            out.append(pr)
+    return out
+
+
+def _no_em_dash(t):
+    return re.sub(r"\s*" + EM_DASH + r"\s*", ", ", t) if isinstance(t, str) else t
+
+
+def tidy(out, f: dict):
+    """Before the check: what code can fix, fixed, and the shape made whole, so neither a
+    wording slip nor a missing or misplaced entry can send the morning to the backup.
+      * each list keeps the writer's entry for each item it should have (the first one), in the
+        sheet's order; an entry for an unknown item, another list's item or a second copy is
+        dropped; an item the writer left out gets the backup's line;
+      * a free line that is not text gets the backup's;
+      * the opening starts with the briefing line; em dashes become commas;
+      * the Slack sign-off is only ever shown under "Still sitting there" (digest_slack.payload),
+        so on a day with no nudge it is not kept: a line nobody sees is not checked.
+    Returns (out2, filled, dropped): filled = [(label, why)] lines that are now the backup's (for
+    Howie's note); dropped = [label] entries removed (for the log). Not a dict: unchanged."""
+    if not isinstance(out, dict):
+        return out, [], []
+    fb = fallback(f)
+    o = json.loads(json.dumps(out))
+    filled, dropped = [], []
+    for k in FREE_KEYS:
+        if not isinstance(o.get(k, ""), str):
+            o[k] = fb.get(k, "")
+            filled.append((k, "not text"))
+        else:
+            o[k] = o.get(k, "")
+    if not isinstance(o.get("slack"), dict):
+        o["slack"] = {}
+    slack, fbs = o["slack"], fb["slack"]
+    req = required_ids(f)
+    want = {"email": req["email"], "fixed": req["fixed"], "still_open": req["still_open"],
+            "slack.changed": req["slack_changed"], "slack.nudge": req["slack_nudge"]}
+    for where, key in LISTS.items():
+        holder = slack if where.startswith("slack.") else o
+        fb_by = {e["id"]: e for e in (fbs if where.startswith("slack.") else fb).get(key, [])}
+        got = holder.get(key, [])
+        mine = {}
+        for e in got if isinstance(got, list) else []:
+            iid = e.get("id") if isinstance(e, dict) else None
+            if iid in want[where] and iid not in mine:
+                mine[iid] = e
+            else:
+                dropped.append(f"{where} {iid}")
+        if not isinstance(got, list):
+            dropped.append(f"{where}: not a list")
+        new = []
+        for iid in want[where]:
+            if iid in mine:
+                new.append(mine[iid])
+            else:
+                new.append(dict(fb_by[iid]))
+                filled.append((f"{where} {iid}", "missing"))
+        holder[key] = new
+    if not req["slack_nudge"]:
+        slack["closing"] = ""
+    elif not isinstance(slack.get("closing", ""), str):
+        slack["closing"] = fbs.get("closing", "")
+    else:
+        slack["closing"] = slack.get("closing", "")
+    op = o.get("opening", "")
+    # the briefing line with or without its period (code review minor 4: "Here's your morning
+    # briefing:" must not become "Here's your morning briefing. Here's your morning briefing:")
+    if op.strip() and not op.strip().startswith(OPENER.rstrip(".")):
+        o["opening"] = f"{OPENER} {op.strip()}"
+    for k in FREE_KEYS:
+        o[k] = _no_em_dash(o[k])
+    slack["closing"] = _no_em_dash(slack["closing"])
+    for where, key in LISTS.items():
+        for e in (slack if where.startswith("slack.") else o)[key]:
+            if isinstance(e, dict):
+                e["text"] = _no_em_dash(e.get("text"))
+    return o, filled, dropped
+
+
+def settle(out, f: dict, *, portal_url: str = ""):
+    """write()'s answer -> what is sent. tidy(), then check(); only the facts refuse, and each
+    refused line is swapped for the backup's (repair()). Returns
+    (out2, replaced, filled, dropped, wording, refused): out2 None means the whole backup, which
+    now happens only when the answer is not an object or a swapped answer still gets a fact wrong."""
+    o, filled, dropped = tidy(out, f)
+    problems = check(o, f, portal_url=portal_url)
+    refused = blocking(problems)
+    wording = [pr for pr in problems if pr not in refused]
+    if not refused:
+        return o, [], filled, dropped, wording, []
+    o2, replaced = repair(o, f, refused, portal_url=portal_url)
+    return o2, replaced, filled, dropped, wording, refused
 
 
 def _lines(out: dict):
@@ -798,7 +921,7 @@ def repair(out: dict, f: dict, problems: list, *, portal_url: str = ""):
                 return None, []
             replaced.append((f"{label} {iid}", entry.get("text", ""), why))
             entry["text"] = fb_text
-    if not replaced or check(out2, f, portal_url=portal_url):
+    if not replaced or blocking(check(out2, f, portal_url=portal_url)):
         return None, []
     return out2, replaced
 
@@ -837,6 +960,8 @@ def plain_reasons(replaced: list, f: dict) -> list:
             reason = "it names a box that is not in the facts for that place"
         elif "does not name" in why:
             reason = "it leaves out one of the boxes it should name"
+        elif "not today's" in why:
+            reason = "it names a day that is not today"
         elif "a date" in why:
             reason = "it carries a date that is not that item's own"
         elif "severity" in why:
@@ -876,7 +1001,13 @@ def _hosts_words(hosts: list) -> str:
     return ", ".join(hs[:-1]) + " and " + hs[-1]
 
 
-def _para(it: dict) -> str:
+def _today(f: dict) -> str:
+    """The sheet's day ("Monday, November 2") as the scanner writes dates: "Nov 2"."""
+    m = re.search(r"\b([A-Z][a-z]+) (\d{1,2})\s*$", str(f.get("day", "")))
+    return f"{m.group(1)[:3]} {int(m.group(2))}" if m else ""
+
+
+def _para(it: dict, today: str = "") -> str:
     w = _hosts_words(it["hosts"])
     what = it["what"].rstrip(".")
     if it["section"] in ("still", "slack_nudge"):
@@ -895,7 +1026,8 @@ def _para(it: dict) -> str:
         if len(it["hosts"]) == 1:
             h = it["hosts"][0]
             since, leaves = parts.get(h, ("", ""))
-            when = f" by {leaves}" if leaves else " in the next few days"
+            # 4j: on the day itself, "today" (2026-11-02: "If it doesn't come back by Nov 2" on Nov 2)
+            when = " today" if leaves and leaves == today else (f" by {leaves}" if leaves else " in the next few days")
             return (f"{h} looks like it's been down{' since ' + since if since else ''}. If it doesn't come back{when}, "
                     f"it drops off the portal on its own and we don't have to talk about it anymore.")
         named = [_short(h) + (f" since {parts[h][0]}" if parts.get(h, ('', ''))[0] else "") for h in it["hosts"]]
@@ -981,13 +1113,13 @@ def fallback(f: dict) -> dict:
     small = f.get("small_count", 0)
     return {
         "subject": subject, "headline": headline, "opening": opening,
-        "email": [{"id": it["id"], "text": _para(it)} for it in changed],
+        "email": [{"id": it["id"], "text": _para(it, _today(f))} for it in changed],
         "fixed": [{"id": it["id"], "text": _fixed_line(it)} for it in fixed],
         "still_open": [{"id": it["id"], "text": _para(it)} for it in still],
         "small_line": (f"{small} small thing{'s' if small != 1 else ''} also turned up, none of them need anybody, "
                        f"they're in the portal if you're curious." if small else ""),
         "slack": {
-            "changed": [{"id": it["id"], "text": _sev_prefix(it) + _para(it)} for it in kc],
+            "changed": [{"id": it["id"], "text": _sev_prefix(it) + _para(it, _today(f))} for it in kc],
             "nudge": [{"id": it["id"], "text": _para(it)} for it in kn],
             "closing": _closing(len(kn)),
         },
