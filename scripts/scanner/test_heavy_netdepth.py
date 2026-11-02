@@ -1,14 +1,15 @@
 """
 test_heavy_netdepth.py — unit tests for Heavy Phase 1 net depth
-(naabu port discovery + fingerprintx service ID) in run_heavy.py.
+(naabu port discovery) in run_heavy.py. fingerprintx was removed in job 4l
+(2026-11-02: its SSH check logs in as admin/admin); its tests went with it and
+test_no_fingerprintx_4l.py now pins that it never comes back.
 
 Spec: HEAVY_PHASE1_NETDEPTH_SPEC v2 + HEAVY_PHASE1_BUILD_DELTA (4.7 D1–D5).
 
 Coverage:
-  parsers      _parse_naabu_ports / _parse_fingerprintx — line-JSON, blank
-               and garbage lines, non-int ports, proto defaults, service
-               fallback.
-  four-gate    run_naabu_phase / run_fingerprintx_phase — the conservative
+  parsers      _parse_naabu_ports — line-JSON, blank and garbage lines,
+               non-int ports, proto defaults.
+  four-gate    run_naabu_phase — the conservative
                reachable-AND-rc0-AND-nonempty gate. The safety hinge: a
                degraded net tool returns ok=False so run()'s all-or-nothing
                pairing credits NEITHER tool in tools_run → the note-127
@@ -35,10 +36,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import run_heavy
 from run_heavy import (
     HeavyScanContext,
-    _parse_fingerprintx,
     _parse_gau_urls,
     _parse_naabu_ports,
-    run_fingerprintx_phase,
     run_naabu_phase,
 )
 
@@ -152,34 +151,6 @@ def test_parse_naabu_default_proto_tcp():
     stdout = json.dumps({"port": 8080}) + "\n"   # no protocol field
     ports = _parse_naabu_ports(stdout)
     assert ports[0]["proto"] == "tcp", ports
-
-
-# ─── _parse_fingerprintx ────────────────────────────────────────────────
-
-def test_parse_fpx_basic():
-    stdout = (
-        json.dumps({"host": "h", "port": 22, "transport": "tcp", "protocol": "ssh"}) + "\n"
-        + json.dumps({"host": "h", "port": 3306, "transport": "tcp", "protocol": "mysql"}) + "\n"
-    )
-    svc = _parse_fingerprintx(stdout)
-    assert svc[(22, "tcp")] == "ssh", svc
-    assert svc[(3306, "tcp")] == "mysql", svc
-
-
-def test_parse_fpx_service_fallback_and_unknown():
-    stdout = (
-        json.dumps({"port": 25, "transport": "tcp", "service": "smtp"}) + "\n"  # 'service' fallback
-        + json.dumps({"port": 9999, "transport": "tcp"}) + "\n"                 # neither → unknown
-    )
-    svc = _parse_fingerprintx(stdout)
-    assert svc[(25, "tcp")] == "smtp", svc
-    assert svc[(9999, "tcp")] == "unknown", svc
-
-
-def test_parse_fpx_skips_garbage():
-    stdout = "junk\n\n" + json.dumps({"port": 22, "transport": "tcp", "protocol": "ssh"}) + "\n"
-    svc = _parse_fingerprintx(stdout)
-    assert svc == {(22, "tcp"): "ssh"}, svc
 
 
 # ─── run_naabu_phase — four-gate ────────────────────────────────────────
@@ -321,90 +292,6 @@ def test_naabu_does_not_self_credit_tools_run():
         run_naabu_phase(ctx, _DUMMY_WORK_DIR)
     assert ctx.tools_run == [], "naabu phase must not append to tools_run"
     assert ctx.tool_status == {}, "naabu phase must not touch tool_status"
-
-
-# ─── run_fingerprintx_phase — four-gate + skip-list ─────────────────────
-
-def test_fpx_skips_80_443_no_probe_returns_true():
-    """Only 80/443 open → nothing eligible after the WAF-L7 skip; return ok
-    (vacuously true) without firing fingerprintx (4.7 D5)."""
-    ctx = _mk_ctx()
-    open_ports = [{"port": 80, "proto": "tcp"}, {"port": 443, "proto": "tcp"}]
-    with _StubCmd(0, "should-not-be-used") as stub:
-        ok = run_fingerprintx_phase(ctx, _DUMMY_WORK_DIR, open_ports)
-    assert ok is True, ok
-    assert stub.calls == [], "fingerprintx must not run when all ports skipped"
-    assert ctx.findings == []
-
-
-def test_fpx_rc_nonzero_returns_false():
-    ctx = _mk_ctx()
-    open_ports = [{"port": 22, "proto": "tcp"}]
-    with _StubCmd(1, "", "err"):
-        ok = run_fingerprintx_phase(ctx, _DUMMY_WORK_DIR, open_ports)
-    assert ok is False, ok
-    assert ctx.findings == []
-
-
-def test_fpx_empty_stdout_returns_false():
-    ctx = _mk_ctx()
-    open_ports = [{"port": 22, "proto": "tcp"}]
-    with _StubCmd(0, "   \n"):
-        ok = run_fingerprintx_phase(ctx, _DUMMY_WORK_DIR, open_ports)
-    assert ok is False, "rc0 + empty output is degraded, not credited"
-    assert ctx.findings == []
-
-
-def test_fpx_rc0_with_services_true_and_service_in_title():
-    ctx = _mk_ctx()
-    open_ports = [{"port": 22, "proto": "tcp"}]
-    with _StubCmd(0, json.dumps({"port": 22, "transport": "tcp", "protocol": "ssh"}) + "\n") as stub:
-        ok = run_fingerprintx_phase(ctx, _DUMMY_WORK_DIR, open_ports)
-    assert ok is True
-    # 80/443 excluded from the stdin target list
-    assert "demo.example.com:22" in stub.calls[0]["input_str"]
-    assert len(ctx.findings) == 1
-    ev = ctx.findings[0]
-    assert ev.source == "commandsentry_heavy"
-    assert "ssh" in ev.title, "service belongs in the (mutable) title"
-
-
-# ─── 4.7 D4 identity — service EXCLUDED from finding_id ─────────────────
-
-def test_fpx_identity_excludes_service_flap():
-    """THE D4 guarantee. Same port, two different services across two scans →
-    IDENTICAL finding_id (stable per port), DIFFERENT title. A fingerprintx
-    flap re-observes; it does NOT churn the finding (which would eventually
-    feed the went-dark lifecycle a false close)."""
-    open_ports = [{"port": 22, "proto": "tcp"}]
-
-    ctx1 = _mk_ctx()
-    with _StubCmd(0, json.dumps({"port": 22, "transport": "tcp", "protocol": "ssh"}) + "\n"):
-        run_fingerprintx_phase(ctx1, _DUMMY_WORK_DIR, open_ports)
-
-    ctx2 = _mk_ctx()
-    with _StubCmd(0, json.dumps({"port": 22, "transport": "tcp", "protocol": "http"}) + "\n"):
-        run_fingerprintx_phase(ctx2, _DUMMY_WORK_DIR, open_ports)
-
-    id1, id2 = ctx1.findings[0].finding_id, ctx2.findings[0].finding_id
-    assert id1 == id2, f"service flap must NOT churn finding_id: {id1} != {id2}"
-    assert ctx1.findings[0].title != ctx2.findings[0].title, "title should reflect the service"
-
-
-def test_naabu_and_fpx_same_port_distinct_finding_ids():
-    """Existence (naabu) and service (fingerprintx) are two findings per port
-    → distinct finding_ids, so they roll up separately."""
-    ctx = _mk_ctx()
-    with _StubCmd(0, json.dumps({"port": 22, "protocol": "tcp"}) + "\n"), _StubReconfirm():
-        _, ports = run_naabu_phase(ctx, _DUMMY_WORK_DIR)
-    naabu_id = ctx.findings[0].finding_id
-
-    ctx2 = _mk_ctx()
-    with _StubCmd(0, json.dumps({"port": 22, "transport": "tcp", "protocol": "ssh"}) + "\n"):
-        run_fingerprintx_phase(ctx2, _DUMMY_WORK_DIR, [{"port": 22, "proto": "tcp"}])
-    fpx_id = ctx2.findings[0].finding_id
-
-    assert naabu_id != fpx_id, "existence and service findings must be distinct"
 
 
 def test_naabu_identity_stable_across_runs():

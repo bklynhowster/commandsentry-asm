@@ -21,7 +21,7 @@ from run_heavy import build_cumulative_planned_steps
 from phase_contract import phases_for_tier
 from phase_source import HEAVY
 
-HEAVY_OWN = ["testssl.sh", "httpx", "gau", "content_fetch", "naabu", "fingerprintx"]
+HEAVY_OWN = ["testssl.sh", "httpx", "gau", "content_fetch", "naabu"]   # fingerprintx removed, job 4l
 
 
 def test_plan_matches_what_actually_gets_credited():
@@ -45,8 +45,12 @@ def test_plan_matches_what_actually_gets_credited():
     Became 23 on 2026-11-01 (KB 12 job 4f) when the light phase `plain_http` was
     added — a real credited phase (tool_status on its ok, skipped and degraded paths).
     Pinned by test_plain_http_is_planned_right_after_headers_check.
+
+    Became 22 on 2026-11-02 (KB 12 job 4l) when fingerprintx left heavy's own
+    steps: it no longer runs or credits (its SSH check logs in as admin/admin).
+    Pinned by test_no_fingerprintx_4l.py.
     """
-    assert len(build_cumulative_planned_steps(HEAVY_OWN)) == 23
+    assert len(build_cumulative_planned_steps(HEAVY_OWN)) == 22
 
 
 def test_plain_http_is_planned_right_after_headers_check():
@@ -110,7 +114,7 @@ def test_registry_phases_come_first():
     last_registry = max(plan.index(s.name) for s in phases_for_tier(HEAVY)
                         if s.enabled)
     first_own = min(plan.index(s) for s in ("testssl.sh", "httpx", "gau",
-                                            "naabu", "fingerprintx"))
+                                            "naabu"))
     assert last_registry < first_own
 
 
@@ -143,7 +147,7 @@ def test_no_duplicates_even_though_lists_overlap():
 def test_heavy_own_steps_survive_when_not_registry_owned():
     """The filter must drop ONLY the overlap, not heavy's whole list."""
     plan = build_cumulative_planned_steps(HEAVY_OWN)
-    for own in ("testssl.sh", "httpx", "gau", "naabu", "fingerprintx"):
+    for own in ("testssl.sh", "httpx", "gau", "naabu"):
         assert own in plan
 
 
