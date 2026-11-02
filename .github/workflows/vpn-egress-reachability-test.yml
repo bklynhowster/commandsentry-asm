@@ -29,23 +29,34 @@ name: VPN egress reachability test
 #   * Public Actions logs: no addresses printed, not the box's and not the
 #     exits'. Each is masked the moment it is known. Routes are named by
 #     Mullvad server name and city.
-#   * The target is a fixed list, not free text: Command's own box only.
+#   * The target is a fixed list, not free text: Command's own hosts only.
 #
 # It never uses the scanner's usual exit (the first config alphabetically).
 # The old version tried five city names (us-nyc, ...) that no longer exist;
 # the pool has been per-server configs (us-nyc-wg-001, ...) since 2026-06.
+#
+# 2026-11-02 (push-391, job 4m): ftp.unimacgraphics.com added. Since about
+# Oct 24 every deep scan of Command's hosts on 208.199.0.x gets no answer
+# through the scanner's usual exit (Mullvad Chicago), while a light scan from
+# GitHub's own address gets in, and Howie's Mac gets in through ExpressVPN
+# from Chicago, New York and Los Angeles. Howie, 14:20: "We need to determine
+# if Mullvad is no longer a viable option, in which case we need to switch to
+# a different VPN type provider." Ports are per target: the ftp host is tried
+# on 22 and 443 (the two it answered on without the VPN), the box on 80, 443
+# and 8080 as before.
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
   workflow_dispatch:
     inputs:
       target:
-        description: 'The box to try (Command-owned only)'
+        description: 'The host to try (Command-owned only)'
         required: true
         default: 'test.commandcommcentral.com'
         type: choice
         options:
           - test.commandcommcentral.com
+          - ftp.unimacgraphics.com
       exits:
         description: 'How many Mullvad exits to try (1 to 12)'
         required: true
@@ -73,8 +84,10 @@ jobs:
         --cap-add=NET_ADMIN
         --device=/dev/net/tun
     env:
-      # The three ports Howie found open from a VPN address on 2026-10-29.
-      PORTS: '80,443,8080'
+      # Per target. The box: the three ports Howie found open from a VPN
+      # address on 2026-10-29. The ftp host: 22 and 443, the two that answered
+      # the 2026-11-02 light scan from GitHub's own address.
+      PORTS: ${{ inputs.target == 'ftp.unimacgraphics.com' && '22,443' || '80,443,8080' }}
       TARGET: ${{ inputs.target }}
       EXITS: ${{ inputs.exits }}
 
@@ -270,7 +283,7 @@ jobs:
         run: |
           set -uo pipefail
           [[ -s /tmp/reach.jsonl ]] || { echo "no results to summarize"; exit 0; }
-          python3 - /tmp/reach.jsonl "$PORTS" <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 - /tmp/reach.jsonl "$PORTS" "$TARGET" <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
           import json, sys
           rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
           ports = sys.argv[2].split(",")
@@ -297,7 +310,8 @@ jobs:
               return "❌ silent"
           print("## Can other Mullvad exits reach the box?")
           print()
-          print(f"Ports tried: {', '.join(ports)}. A plain connect, then close; nothing sent. "
+          print(f"Target: {sys.argv[3]}. "
+                f"Ports tried: {', '.join(ports)}. A plain connect, then close; nothing sent. "
                 "Addresses are not printed (public log).")
           print()
           print("| # | Route | City | " + " | ".join(ports) + " | Result |")
