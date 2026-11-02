@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-11-02T00:38:03Z_85b78817",
-    "started_at": "2026-11-02T00:38:03Z",
-    "completed_at": "2026-11-02T00:46:07Z",
-    "duration_seconds": 484,
+    "id": "scan_2026-11-02T06:31:58Z_c6d118ba",
+    "started_at": "2026-11-02T06:31:58Z",
+    "completed_at": "2026-11-02T06:39:36Z",
+    "duration_seconds": 458,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -31,7 +31,7 @@
   "summary": {
     "subdomain_count": 19,
     "live_subdomain_count": 19,
-    "host_count": 7,
+    "host_count": 6,
     "service_count": 58,
     "newest_cert_expiry_days": 47,
     "top_hosting_org": "Automattic, Inc",
@@ -46,8 +46,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -144,12 +144,12 @@
           "ns-1743.awsdns-25.co.uk"
         ],
         "txt": [
-          "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+          "MS=ms33269626",
           "k15vdsovvom4v46fi4r4rivts6",
-          "2o6gse9gno2mv04ik7f14kssfq",
           "sek942qd3nt1s4lqh1h2ovmmai",
-          "MS=ms33269626"
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+          "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
+          "2o6gse9gno2mv04ik7f14kssfq"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -256,8 +256,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:07Z",
-      "last_seen": "2026-11-02T00:46:07Z",
+      "first_discovered": "2026-11-02T06:39:36Z",
+      "last_seen": "2026-11-02T06:39:36Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -357,8 +357,8 @@
       ],
       "dns": {
         "a": [
-          "199.16.172.68",
-          "199.16.173.113"
+          "199.16.173.113",
+          "199.16.172.68"
         ],
         "aaaa": [],
         "cname": null,
@@ -390,8 +390,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:07Z",
-      "last_seen": "2026-11-02T00:46:07Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -524,8 +524,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -633,8 +633,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -742,110 +742,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
-      "tags": [],
-      "reachability": {
-        "live": true,
-        "http_status": 200,
-        "title": "Sign in to your account"
-      },
-      "probe_status": {
-        "naabu": {
-          "ok": true
-        },
-        "httpx_tech": {
-          "ok": true
-        },
-        "fingerprintx": {
-          "ok": true
-        }
-      },
-      "hosts": [
-        {
-          "ip": "40.71.11.138",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Dulles Town Center",
-          "reverse_dns": null,
-          "is_private": false
-        }
-      ],
-      "services": [
-        {
-          "ip": "40.71.11.138",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "40.71.11.138",
-          "port": 443,
-          "protocol": "tcp",
-          "service": "https",
-          "banner": null,
-          "tls": true,
-          "cert": {
-            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=WA, C=US",
-            "issuer": "CN=Microsoft TLS G2 RSA CA OCSP 16, O=Microsoft Corporation, C=US",
-            "san": [
-              "login.microsoftonline-int.com",
-              "login.microsoftonline-p.com",
-              "login.microsoftonline.com",
-              "login2.microsoftonline-int.com",
-              "login2.microsoftonline.com",
-              "loginex.microsoftonline-int.com",
-              "loginex.microsoftonline.com",
-              "stamp2.login.microsoftonline-int.com",
-              "stamp2.login.microsoftonline.com"
-            ],
-            "not_before": "2026-10-17T02:23:11Z",
-            "not_after": "2027-01-25T01:23:11Z",
-            "self_signed": false,
-            "days_to_expiry": 84
-          }
-        }
-      ],
-      "dns": {
-        "a": [
-          "40.71.11.138"
-        ],
-        "aaaa": [],
-        "cname": "axsomeumpisitesauthdev.azurewebsites.net",
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": null,
-        "platform_label": null,
-        "tech": [
-          {
-            "name": "HSTS",
-            "version": null,
-            "category": "security"
-          }
-        ]
-      },
-      "waf": {
-        "detected": true,
-        "vendor": "None",
-        "confidence": "high"
-      }
-    },
-    {
-      "name": "myordersauth.unimacgraphics.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -917,6 +815,108 @@
           "40.71.11.138"
         ],
         "aaaa": [],
+        "cname": "axsomeumpisitesauthdev.azurewebsites.net",
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": [
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          }
+        ]
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "None",
+        "confidence": "high"
+      }
+    },
+    {
+      "name": "myordersauth.unimacgraphics.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 200,
+        "title": "Sign in to your account"
+      },
+      "probe_status": {
+        "naabu": {
+          "ok": true
+        },
+        "httpx_tech": {
+          "ok": true
+        },
+        "fingerprintx": {
+          "ok": true
+        }
+      },
+      "hosts": [
+        {
+          "ip": "40.71.11.138",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Dulles Town Center",
+          "reverse_dns": null,
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "40.71.11.138",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "40.71.11.138",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=WA, C=US",
+            "issuer": "CN=Microsoft TLS G2 RSA CA OCSP 02, O=Microsoft Corporation, C=US",
+            "san": [
+              "login.microsoftonline-int.com",
+              "login.microsoftonline-p.com",
+              "login.microsoftonline.com",
+              "login2.microsoftonline-int.com",
+              "login2.microsoftonline.com",
+              "loginex.microsoftonline-int.com",
+              "loginex.microsoftonline.com",
+              "stamp2.login.microsoftonline-int.com",
+              "stamp2.login.microsoftonline.com"
+            ],
+            "not_before": "2026-10-15T23:35:34Z",
+            "not_after": "2027-01-23T22:35:34Z",
+            "self_signed": false,
+            "days_to_expiry": 82
+          }
+        }
+      ],
+      "dns": {
+        "a": [
+          "40.71.11.138"
+        ],
+        "aaaa": [],
         "cname": "axsomeumpisitesauthlive.azurewebsites.net",
         "mx": [],
         "ns": [],
@@ -946,8 +946,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1080,8 +1080,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1181,8 +1181,8 @@
       ],
       "dns": {
         "a": [
-          "199.16.172.68",
-          "199.16.173.113"
+          "199.16.173.113",
+          "199.16.172.68"
         ],
         "aaaa": [],
         "cname": null,
@@ -1214,8 +1214,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1323,8 +1323,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1344,27 +1344,17 @@
       },
       "hosts": [
         {
-          "ip": "150.171.110.151",
+          "ip": "150.171.109.73",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Washington",
-          "city": "Quincy",
+          "region": "Virginia",
+          "city": "Leesburg",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "150.171.110.152",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Washington",
-          "city": "Quincy",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "2603:1061:14:194::1",
+          "ip": "2603:1061:14:41::1",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -1374,7 +1364,7 @@
           "is_private": false
         },
         {
-          "ip": "2603:1061:14:197::1",
+          "ip": "2603:1061:14:4c::1",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -1386,7 +1376,7 @@
       ],
       "services": [
         {
-          "ip": "150.171.110.151",
+          "ip": "150.171.109.73",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -1394,7 +1384,7 @@
           "tls": false
         },
         {
-          "ip": "150.171.110.151",
+          "ip": "150.171.109.73",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
@@ -1415,10 +1405,10 @@
       ],
       "dns": {
         "a": [
-          "150.171.110.152"
+          "150.171.109.73"
         ],
         "aaaa": [
-          "2603:1061:14:197::1"
+          "2603:1061:14:41::1"
         ],
         "cname": "portal-tims-hwe9g3dbgbbnakc8.z03.azurefd.net",
         "mx": [],
@@ -1454,8 +1444,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1563,8 +1553,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1687,8 +1677,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1788,8 +1778,8 @@
       ],
       "dns": {
         "a": [
-          "199.16.172.68",
-          "199.16.173.113"
+          "199.16.173.113",
+          "199.16.172.68"
         ],
         "aaaa": [],
         "cname": null,
@@ -1821,8 +1811,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1922,8 +1912,8 @@
       ],
       "dns": {
         "a": [
-          "199.16.172.68",
-          "199.16.173.113"
+          "199.16.173.113",
+          "199.16.172.68"
         ],
         "aaaa": [],
         "cname": null,
@@ -1955,8 +1945,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -2102,8 +2092,8 @@
       ],
       "dns": {
         "a": [
-          "199.16.172.68",
-          "199.16.173.113"
+          "199.16.173.113",
+          "199.16.172.68"
         ],
         "aaaa": [],
         "cname": "unimacgraphics.com",
@@ -2115,11 +2105,11 @@
           "ns-1743.awsdns-25.co.uk"
         ],
         "txt": [
-          "k15vdsovvom4v46fi4r4rivts6",
           "sek942qd3nt1s4lqh1h2ovmmai",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
           "2o6gse9gno2mv04ik7f14kssfq",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+          "k15vdsovvom4v46fi4r4rivts6",
+          "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
           "MS=ms33269626"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
@@ -2227,8 +2217,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -2361,8 +2351,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -2462,8 +2452,8 @@
       ],
       "dns": {
         "a": [
-          "199.16.172.68",
-          "199.16.173.113"
+          "199.16.173.113",
+          "199.16.172.68"
         ],
         "aaaa": [],
         "cname": null,
@@ -2495,8 +2485,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-02T00:46:08Z",
-      "last_seen": "2026-11-02T00:46:08Z",
+      "first_discovered": "2026-11-02T06:39:37Z",
+      "last_seen": "2026-11-02T06:39:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -2602,8 +2592,39 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-11-01T18:16:55Z_cffd55d2",
+    "since_scan": "scan_2026-11-02T00:38:03Z_85b78817",
     "added": {
+      "subdomains": [],
+      "services": [
+        {
+          "subdomain": "portal-tims.unimacgraphics.com",
+          "ip": "150.171.109.73",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "portal-tims.unimacgraphics.com",
+          "ip": "150.171.109.73",
+          "port": 443,
+          "protocol": "tcp"
+        }
+      ],
+      "hosts": [
+        {
+          "subdomain": "portal-tims.unimacgraphics.com",
+          "ip": "150.171.109.73"
+        },
+        {
+          "subdomain": "portal-tims.unimacgraphics.com",
+          "ip": "2603:1061:14:41::1"
+        },
+        {
+          "subdomain": "portal-tims.unimacgraphics.com",
+          "ip": "2603:1061:14:4c::1"
+        }
+      ]
+    },
+    "removed": {
       "subdomains": [],
       "services": [
         {
@@ -2638,59 +2659,6 @@
         }
       ]
     },
-    "removed": {
-      "subdomains": [
-        "ftp.unimacgraphics.com"
-      ],
-      "services": [
-        {
-          "subdomain": "ftp.unimacgraphics.com",
-          "ip": "208.199.0.160",
-          "port": 22,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "ftp.unimacgraphics.com",
-          "ip": "208.199.0.160",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "150.171.109.77",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "150.171.109.77",
-          "port": 443,
-          "protocol": "tcp"
-        }
-      ],
-      "hosts": [
-        {
-          "subdomain": "ftp.unimacgraphics.com",
-          "ip": "208.199.0.160"
-        },
-        {
-          "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "150.171.109.74"
-        },
-        {
-          "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "150.171.109.77"
-        },
-        {
-          "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "2603:1061:14:48::1"
-        },
-        {
-          "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "2603:1061:14:4c::1"
-        }
-      ]
-    },
     "changed": {
       "fingerprint": [],
       "cert": [],
@@ -2698,168 +2666,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-10-04T08:16:47Z_ea60d1ae",
-      "started_at": "2026-10-04T08:16:47Z",
-      "completed_at": "2026-10-04T08:24:11Z",
-      "subdomain_count": 16,
-      "live_subdomain_count": 16,
-      "host_count": 7,
-      "service_count": 46,
-      "subdomain_names": [
-        "email.unimacgraphics.com",
-        "mail.unimacgraphics.com",
-        "myorders-test.unimacgraphics.com",
-        "myorders.unimacgraphics.com",
-        "myordersauth-test.unimacgraphics.com",
-        "myordersauth.unimacgraphics.com",
-        "novo.unimacgraphics.com",
-        "novo2.unimacgraphics.com",
-        "portal-test.unimacgraphics.com",
-        "portal-tims.unimacgraphics.com",
-        "portal.unimacgraphics.com",
-        "unimacgraphics.com",
-        "uoltest.unimacgraphics.com",
-        "www.unimacgraphics.com",
-        "xen.unimacgraphics.com",
-        "zoetislabs.unimacgraphics.com"
-      ],
-      "ports_by_sub": {
-        "unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "email.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "mail.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "myorders-test.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "myorders.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "myordersauth-test.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "myordersauth.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "novo.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "novo2.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "portal-test.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "portal-tims.unimacgraphics.com": {
-          "150.171.110.152": [
-            80,
-            443
-          ]
-        },
-        "portal.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "uoltest.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "www.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "xen.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "zoetislabs.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.3",
-        "Slider Revolution": "6.7.58",
-        "WPMU DEV Smush": "4.3.4",
-        "Yoast SEO": "28.6",
-        "jQuery Migrate": "3.4.1",
-        "IIS": "10.0",
-        "jQuery UI": "1.12.1"
-      }
-    },
     {
       "scan_id": "scan_2026-10-04T14:08:35Z_e34019c1",
       "started_at": "2026-10-04T14:08:35Z",
@@ -23619,6 +23425,201 @@
         },
         "portal-tims.unimacgraphics.com": {
           "150.171.110.151": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.firewall.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "www.portal.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "www.zoetislabs.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.3",
+        "Slider Revolution": "6.8.1",
+        "WPMU DEV Smush": "4.3.5",
+        "Yoast SEO": "28.8",
+        "jQuery Migrate": "3.4.1",
+        "IIS": "10.0",
+        "jQuery UI": "1.12.1"
+      }
+    },
+    {
+      "scan_id": "scan_2026-11-02T06:31:58Z_c6d118ba",
+      "started_at": "2026-11-02T06:31:58Z",
+      "completed_at": "2026-11-02T06:39:36Z",
+      "subdomain_count": 19,
+      "live_subdomain_count": 19,
+      "host_count": 6,
+      "service_count": 58,
+      "subdomain_names": [
+        "email.unimacgraphics.com",
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "myordersauth-test.unimacgraphics.com",
+        "myordersauth.unimacgraphics.com",
+        "novo.unimacgraphics.com",
+        "novo2.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal-tims.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.firewall.unimacgraphics.com",
+        "www.portal.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "www.zoetislabs.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "email.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myordersauth-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myordersauth.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "novo.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "novo2.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-tims.unimacgraphics.com": {
+          "150.171.109.73": [
             80,
             443
           ]
