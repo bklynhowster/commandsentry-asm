@@ -55,8 +55,15 @@ targets:
     scope_verified: true
     owner: command_marketing
     tags: []
-    notes: CommandMI — Command Marketing Innovations (the same company as commandmarketinginnovations.com). Added 2026-11-02 on Howie's word ("That is a command company"). Sentry tracked only ftp.commandmi.com (Globalscape EFT, added by hand 2026-06-05 from the June external assessment), so discovery never looked for the domain's other names. commandmi.com and www resolve (2026-11-02), so the watchdog canary checks both.
+    notes: CommandMI — Command Marketing Innovations (the same company as commandmarketinginnovations.com). Added 2026-11-02 on Howie's word ("That is a command company"). Sentry tracked only ftp.commandmi.com (Globalscape EFT, added by hand 2026-06-05 from the June external assessment), so discovery never looked for the domain's other names. commandmi.com and www resolve (2026-11-02); the watchdog canary checks the apex only (canary_no_www below).
     rate_limit: gentle
+    # Watchdog canary opt-out (push-393, 2026-11-02): discovery folds
+    # www.commandmi.com into commandmi.com (the importer's implicit www
+    # alias), so it never becomes its own host row, and the canary in
+    # scripts/alerter/run_alerter.py would name it MISSING every run.
+    # The apex is still checked. Interim: KB 12 job 4 (one site, not two,
+    # reopened 2026-11-02) replaces the apex/www split for every site.
+    canary_no_www: true
   - id: sciimage
     type: apex
     value: sciimage.com
