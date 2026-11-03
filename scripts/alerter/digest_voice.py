@@ -236,7 +236,10 @@ def _numbers_in(text: str) -> list[str]:
 
 
 def _short(host: str) -> str:
-    return (host or "").split(".")[0]
+    h = (host or "").strip()
+    if re.fullmatch(r"[\d.]+|[0-9A-Fa-f:]+", h) and ("." in h or ":" in h):
+        return h                     # an address has no first label ('52', not 52.119.65.6)
+    return h.split(".")[0]
 
 
 def _item(iid: str, section: str, kind: str, severity: str, hosts: list, what: str, why: str,
@@ -276,8 +279,18 @@ def _item(iid: str, section: str, kind: str, severity: str, hosts: list, what: s
     }
 
 
-_QUIET_LINE = re.compile(r"^(?P<host>\S+): no answer(?: since (?P<since>[A-Z][a-z]{2} \d{1,2}))?[^.]*\."
+# 3l 2026-11-03 (W1/W2): the daily's line may carry what is known about the host in brackets
+# after it ('test.commandcommcentral.com (52.119.65.6): no answer …'); the voice keeps only
+# the host (Howie 10-27 18:22: "It's just a quick thing").
+_QUIET_LINE = re.compile(r"^(?P<host>\S+)(?: \([^)]*\))?: no answer(?: since (?P<since>[A-Z][a-z]{2} \d{1,2}))?[^.]*\."
                          r"(?:.*?Leaves the portal on (?P<leaves>[A-Z][a-z]{2} \d{1,2})\.)?", re.S)
+_BRACKETED_HEAD = re.compile(r"^(?P<host>\S+) \([^)]*\): ")
+
+
+def _line_host(line: str) -> str:
+    """The host a daily line is about: the text before ':', without a bracketed note. PURE."""
+    m = _BRACKETED_HEAD.match(line or "")
+    return m.group("host") if m else (line or "").split(":")[0]
 _PLAIN_QUIET = re.compile(r"^(?P<host>\S+): looks down(?: since (?P<since>[A-Z][a-z]{2} \d{1,2}))?\."
                           r"(?: Drops off the portal on (?P<leaves>[A-Z][a-z]{2} \d{1,2}) if it stays down\.)?")
 
@@ -363,7 +376,7 @@ def facts(model: dict, *, still_open=None, slack=None, sentry_only=None, company
         kind = it.get("kind", "finding")
         hosts = list(it.get("sites") or [])
         if kind in ("not_responding", "assets", "dark"):
-            hosts = [ln.split(":")[0] for ln in it.get("lines", []) if ":" in ln]
+            hosts = [_line_host(ln) for ln in it.get("lines", []) if ":" in ln]
         if kind == "rating":
             hosts = _hosts_of_rating_lines(it.get("lines"))
         lines = list(it.get("lines") or [])
@@ -1317,7 +1330,7 @@ def render_text(out: dict, f: dict, *, brand: dict, local_end: datetime, portal_
         lines += [out["small_line"], ""]
     if portal_url:
         lines.append(f"Open the portal: {portal_url.rstrip('/')}")
-    lines.append(f"Sent at {local_end:%-I:%M %p}. {f.get('portal_note', '')}")
+    lines.append(f"Sentry's checks as of {local_end:%-I:%M %p}. {f.get('portal_note', '')}")   # W4 (11-03)
     return "\n".join(lines)
 
 

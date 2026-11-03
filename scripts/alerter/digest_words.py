@@ -122,6 +122,57 @@ FAMILIES = (
 FAMILY_BY_KEY = {f["key"]: f for f in FAMILIES}
 _COMPILED = [(f, re.compile(f["match"], re.I)) for f in FAMILIES]
 
+# 3l, 2026-11-03 (Howie 12:07, W3: "Yes, I like it."): the daily's "The fix" line was the
+# scanner's own FIRST step (first_step()), and for these kinds that is preparation ("Confirm
+# SPF and DKIM…", "Inventory all services…", "Identify the web server…"), so the reader never
+# saw the change itself. These are the fix in one plain sentence. A fix line ONLY: the title,
+# the family key and the grouping stay exactly as they were (say-once keys on them), so this
+# is deliberately not a FAMILIES entry. A kind with none here keeps the scanner's first step,
+# and the daily labels it "First step", not "The fix". No digits (the voice writer's numbers
+# rule). {it}: "this site" / "these sites".
+PLAIN_FIXES = (
+    (r"^Missing security header: Strict-Transport-Security",
+     "Turn on HSTS for {it}: have the web server send the Strict-Transport-Security header on every "
+     "secure (https) page, so browsers always come back over a secure connection."),
+    (r"^Missing security header: Content-Security-Policy",
+     "Add a Content-Security-Policy header on {it} that names the only places its scripts, styles "
+     "and images may load from."),
+    (r"^Content-Security-Policy does not limit scripts",
+     "Tighten the Content-Security-Policy on {it} so its script rule names only the script sources "
+     "actually in use, with no wildcards and no 'unsafe-inline'."),
+    (r"^DNS missing DMARC record",
+     "Publish a DMARC record for the domain (a TXT record named _dmarc), starting in monitor mode "
+     "(p=none) and moving to quarantine once the reports show only your own mail."),
+    (r"^DMARC policy set to p=none",
+     "Move the domain's DMARC policy from monitor mode (p=none) to quarantine, then reject, once the "
+     "reports show only your own mail is using the domain."),
+    (r"^DNS missing SPF record",
+     "Publish an SPF record (a TXT record on the domain) listing the services allowed to send its mail."),
+    (r"^Missing security header: X-Frame-Options",
+     "Have the web server on {it} send X-Frame-Options (or a Content-Security-Policy frame-ancestors "
+     "rule), so other sites can't show its pages inside theirs."),
+    (r"^Missing security header: X-Content-Type-Options",
+     "Have the web server on {it} send the header X-Content-Type-Options: nosniff."),
+    (r"^Missing security header: Referrer-Policy",
+     "Have the web server on {it} send a Referrer-Policy header (strict-origin-when-cross-origin is "
+     "the usual choice)."),
+    (r"^Missing security header: Permissions-Policy",
+     "Have the web server on {it} send a Permissions-Policy header that switches off the browser "
+     "features nobody there uses (camera, microphone, location)."),
+    (r"^Security headers missing or weak",
+     "Add the missing security headers to {it}; the portal lists which ones each site is missing."),
+)
+_PLAIN_FIXES = [(re.compile(rx, re.I), do) for rx, do in PLAIN_FIXES]
+
+
+def plain_fix(title: str | None, n_sites: int = 1) -> str:
+    """The plain fix sentence for a finding title ('' when there is none). PURE."""
+    t = unescape(title or "").strip()
+    for rx, do in _PLAIN_FIXES:
+        if rx.search(t):
+            return _fill(do, n_sites, None, t)
+    return ""
+
 # WordPress plugin advisories, in the three spellings the scanners write:
 #   "Slider Revolution [revslider] < 7.0.11"            (light, wpvulnerability lookup)
 #   "Mega Main Menu [mega_main_menu] <= 2.2.2 (unfixed)"
@@ -289,8 +340,10 @@ def words(title: str | None, n_sites: int = 1) -> dict:
                 "headline": f"ask your WordPress company to {'update' if p['fixed_in'] else 'remove'} {p['name']} on {{where}}"}
     f, m = family_of(raw)
     if not f:
-        return {"key": "", "title": raw, "why": "", "do": "", "who": "it", "fixed": "fixed", "headline": ""}
+        return {"key": "", "title": raw, "why": "", "do": plain_fix(raw, n_sites), "who": "it",
+                "fixed": "fixed", "headline": ""}
     out = {k: _fill(f[k], n_sites, m, raw) for k in ("key", "title", "why", "do", "fixed")}
+    out["do"] = out["do"] or plain_fix(raw, n_sites)       # W3: a family with no fix of its own
     out["who"] = f.get("who", "it")
     out["headline"] = _fill(f.get("headline", ""), n_sites, m, raw)
     return out
