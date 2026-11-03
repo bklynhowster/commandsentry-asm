@@ -140,7 +140,7 @@ from run_light import derive_hostname
 # collector below does the HTTP (benign baseline + payload GETs) and hands the
 # captured responses to the classifier. Same-dir module, imported like run_medium.
 from waf_differential import (classify_waf_differential, INDEPENDENT_CLASSES, baseline_served,
-                              UNDEFINED_REDIRECT, FRONT_DOOR_SIGNIN)
+                              UNDEFINED_REDIRECT, FRONT_DOOR_SIGNIN, DOOR_PASSWORD_PROMPT)
 # 315 — the capture names the block page per class (scripts/normalize, on sys.path above).
 from block_page_signatures import annotate_fired
 
@@ -347,6 +347,7 @@ class HeavyScanContext:
     # writer) read them. Default to "not detected."
     waf_detected: bool = False
     waf_kind: str | None = None
+    waf_generic_reason: dict | None = None   # 4o: run_medium._wafw00f_generic_reason
     tech_stack: set[str] = field(default_factory=set)
     # 4.7 ⑭′.4 — planned vs actual nuclei chunk counts, stamped by
     # run_nuclei_chunked and merged into the nuclei tool_status entry by
@@ -2500,6 +2501,18 @@ def _waf_redirect_target(raw_headers: str) -> str:
     return ""
 
 
+def _waf_auth_challenge(raw_headers: str) -> str:
+    """4o: the WWW-Authenticate value (scheme and realm), or "" when there is none.
+    ftp.unimacgraphics.com 2026-11-02: `WWW-Authenticate: Basic realm="ftp.unimacgraphics.com"`
+    -> 'Basic realm="ftp.unimacgraphics.com"'. It is the prompt every visitor is sent; it
+    carries no credential. The first one only; capped."""
+    for line in (raw_headers or "").splitlines():
+        s = line.strip()
+        if s.lower().startswith("www-authenticate:"):
+            return s.split(":", 1)[1].strip()[:200]
+    return ""
+
+
 def _parse_waf_probe(stdout: str, body: str, capture: bool = False) -> dict:
     """One probe response -> the classifier's shape {status, size, tokens, headers}. status
     and size come from curl's OWN -w sentinel (CS_STATUS/CS_SIZE) — ground truth, not a header
@@ -2535,6 +2548,10 @@ def _parse_waf_probe(stdout: str, body: str, capture: bool = False) -> dict:
     # the far end sends every visitor to. Read for every response, meaningful on 3xx.
     if 300 <= status < 400:
         out["redirect_to"] = _waf_redirect_target(stdout or "")
+    # 4o — on a 401, the challenge: waf_differential reads it (password_prompt) to measure a
+    # password prompt as a front door. Read for every response, meaningful on 401 only.
+    if status == 401:
+        out["challenge"] = _waf_auth_challenge(stdout or "")
     if capture:
         hdrs = "\n".join(ln for ln in (stdout or "").splitlines()
                          if not ln.startswith("CS_STATUS:"))
@@ -2726,8 +2743,24 @@ def _read_waf_exposure(ctx) -> tuple[bool, list]:
     return False, []
 
 
+def _unanswered_clause(v: dict) -> str:
+    """4o review D2: say so when an attack got no answer at all (counted neither way)."""
+    n = len((v or {}).get("unanswered") or [])
+    return f", and {n} got no answer at all (a reset or a timeout, counted neither way)" if n else ""
+
+
 def _no_waf_description(baseline: dict, verdict: dict | None = None) -> str:
     v = verdict or {}
+    if v.get("front_door") == FRONT_DOOR_SIGNIN and v.get("door_kind") == DOOR_PASSWORD_PROMPT:
+        # 4o — what was measured at a password prompt, and no more.
+        n_at = len(v.get("reached_signin") or [])
+        scheme = (v.get("challenge") or "").split(" ", 1)[0] or "an authentication"
+        return (
+            f"Differential probe: an ordinary request was answered with this host's password "
+            f"prompt (HTTP {baseline.get('status')}, {scheme} challenge). None of the "
+            f"{len(_WAF_PAYLOADS)} independent attack-payload classes tested ({_waf_classes_tested_label()}) "
+            f"was refused; {n_at} got the same password prompt as the ordinary request"
+            f"{_unanswered_clause(v)}")
     if v.get("front_door") == FRONT_DOOR_SIGNIN:
         # 351 — what was measured at a sign-in, and no more.
         n_at = len(v.get("reached_signin") or [])
@@ -2735,7 +2768,8 @@ def _no_waf_description(baseline: dict, verdict: dict | None = None) -> str:
             f"Differential probe: an ordinary request was redirected (HTTP {baseline.get('status')}) "
             f"to this host's sign-in ({v.get('redirect_to') or 'its login'}). None of the "
             f"{len(_WAF_PAYLOADS)} independent attack-payload classes tested ({_waf_classes_tested_label()}) "
-            f"was refused; {n_at} got the same redirect to the sign-in as the ordinary request")
+            f"was refused; {n_at} got the same redirect to the sign-in as the ordinary request"
+            f"{_unanswered_clause(v)}")
     return (
         f"Differential probe: a benign baseline returned HTTP {baseline.get('status')} and "
         f"all {len(_WAF_PAYLOADS)} independent attack-payload classes tested "
@@ -3480,6 +3514,11 @@ def run_waf_differential_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> N
             details["front_door"] = FRONT_DOOR_SIGNIN
             details["reached_signin"] = list(verdict.get("reached_signin") or [])
             details["baseline_redirect_to"] = verdict.get("redirect_to") or None
+            # 4o — which door: a redirect to a sign-in (351) or a password prompt; the
+            # portal words each for what it is.
+            details["door_kind"] = verdict.get("door_kind") or "redirect"
+            if verdict.get("door_kind") == DOOR_PASSWORD_PROMPT:
+                details["baseline_challenge"] = verdict.get("challenge") or None
             ctx.waf_signin_measured = True
         if waf_present is None:
             # 311 — the probe fired but measured nothing: the baseline was not a served

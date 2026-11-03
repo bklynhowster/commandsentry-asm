@@ -165,6 +165,76 @@ _SIGNIN_PATH = re.compile(r"oauth|log-?in|sign-?in|sso|saml|authorize|/auth(/|$)
 _ABS_URL = re.compile(r"^[a-z][a-z0-9+.-]*://([^/?#]+)(.*)$", re.I)
 
 
+# ── 4o (2026-11-02): A PASSWORD PROMPT IS A FRONT DOOR TOO ───────────────────────────────
+# Howie, 17:00, on ftp.unimacgraphics.com's page ("Couldn't test ... HTTP 401"): "I want to
+# be able to get a firewall and identify it and all that good stuff. I want it to be
+# properly represented on the screen because it's misleading". 18:43, D1: "Do we count a
+# password prompt as a front door? Absolutely yes." D2 (keep the probe's own name, 4.7 Q4):
+# "There's no reason to hide who we are."
+#
+# The two Globalscape EFT servers (ftp.unimacgraphics.com, ftp.commandmi.com) answer a
+# request that does not come from a browser with HTTP 401 and `WWW-Authenticate: Basic
+# realm="<host>"`. The probe says who it is, so everything it sends meets that prompt:
+# benign, sqli, xss and lfi, 401 / 102 bytes each, on 2026-10-14, 10-22 and 11-02 on both
+# hosts. That is 351's case in another form: the prompt stands in front of the host, and
+# whatever stands in front of the prompt answers an attack-shaped request first. A request
+# that got the SAME prompt (401 and the same challenge) reached it: not blocked. Anything
+# else (a 403, a block page, a reset) is read by the usual gates against the prompt.
+# Nothing sends a password; nothing gets past the prompt. A 401 WITHOUT a challenge is not
+# a prompt and stays 311's "not served".
+DOOR_REDIRECT = "redirect"
+DOOR_PASSWORD_PROMPT = "password_prompt"
+
+# ── 4o review (Qwen 3.8 Max, 2026-11-02 19:45, D1 / D2): WHAT THE DOOR CAN MEASURE ───────
+# D1: an attack that got some OTHER answer (a prompt with another realm, a redirect
+# somewhere else) is neither "reached the door" nor "refused" — it is unexplained. If
+# every attack is unexplained, the door measured nothing, and "none refused" must not
+# become a finding that says no firewall is there. So a door is measured only when at
+# least TWO independent classes got an answer the door explains (the same door as the
+# ordinary request, or a refusal), the same bar as a block (Q1). Fewer is UNDEFINED.
+# Same rule for 351's redirect door.
+# D1, Digest: a Digest challenge carries a fresh nonce on every answer, so two prompts
+# from the same server never match byte for byte. The same prompt is the same scheme and
+# realm; the other parameters (nonce, opaque, qop, ...) are not compared.
+# D2: a request that got NO answer at all (curl's status 0: a reset or a timeout — ours,
+# or theirs, and the probe cannot tell which) measured nothing. Our own failure must
+# never be recorded as the host refusing (core rule B), so it counts neither way
+# (`unanswered`), at either door.
+UNDEFINED_DOOR_NOT_MEASURED = "front_door_not_measured"
+_REALM = re.compile(r'\brealm\s*=\s*(?:"([^"]*)"|([^\s,]+))', re.I)
+
+
+def _challenge_key(challenge) -> tuple:
+    """(scheme, realm) of a WWW-Authenticate value: what makes two prompts the same
+    prompt. 'Digest realm="x", nonce="a1"' and '... nonce="b2"' -> ('digest', 'x')."""
+    s = (challenge or "").strip() if isinstance(challenge, str) else ""
+    if not s:
+        return ("", "")
+    scheme = s.split(None, 1)[0].rstrip(",").lower()
+    m = _REALM.search(s)
+    realm = (m.group(1) if m.group(1) is not None else m.group(2)) if m else ""
+    return (scheme, realm)
+
+
+def _answered(resp) -> bool:
+    """The request got an answer (any HTTP status). Status 0 = no answer at all."""
+    try:
+        return int((resp or {}).get("status") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def password_prompt(resp) -> bool:
+    """A 401 that carries an authentication challenge (the WWW-Authenticate value the
+    collector keeps as `challenge`)."""
+    r = resp or {}
+    try:
+        s = int(r.get("status") or 0)
+    except (TypeError, ValueError):
+        return False
+    return s == 401 and bool((r.get("challenge") or "").strip())
+
+
 def redirect_is_signin(target) -> bool:
     """Does this redirect target (the Location without its query string) go to a sign-in?
     True for an identity provider's host, or for a login path on any host (a relative
@@ -178,7 +248,11 @@ def redirect_is_signin(target) -> bool:
 
 
 def _reached_same_signin(baseline: dict, resp: dict) -> bool:
-    """The attack request got the same redirect as the ordinary one: it reached the login."""
+    """The attack request got the same answer at the door as the ordinary one: the same
+    redirect to the sign-in (351), or the same password prompt (4o). It reached the login."""
+    if password_prompt(baseline):
+        return (password_prompt(resp)
+                and _challenge_key(resp.get("challenge")) == _challenge_key(baseline.get("challenge")))
     try:
         s = int(resp.get("status") or 0)
     except (TypeError, ValueError):
@@ -187,14 +261,44 @@ def _reached_same_signin(baseline: dict, resp: dict) -> bool:
     return 300 <= s < 400 and bool(b) and (resp.get("redirect_to") or "").strip() == b
 
 
-def _classify_signin_front_door(baseline: dict, payloads: list, status, target: str) -> dict:
-    """351: the baseline redirected to a sign-in. Measure the front door."""
+def _classify_signin_front_door(baseline: dict, payloads: list, status, target,
+                                door: str = DOOR_REDIRECT) -> dict:
+    """351: the baseline redirected to a sign-in. 4o: or it was a password prompt.
+    Measure the front door. 4o review: a request with no answer counts neither way
+    (`unanswered`); fewer than two classes explained by the door (reached it, or refused)
+    is UNDEFINED `front_door_not_measured`, with no front-door verdict and no finding."""
     counted = [p for p in payloads if p.get("cls") in INDEPENDENT_CLASSES]
+    unanswered = sorted({p["cls"] for p in counted if not _answered(p)})
+    counted = [p for p in counted if _answered(p)]
     at_login = sorted({p["cls"] for p in counted if _reached_same_signin(baseline, p)})
     blocked = sorted({p["cls"] for p in counted
                       if not _reached_same_signin(baseline, p) and _payload_blocked(baseline, p)})
+    if len(at_login) + len(blocked) < 2:
+        where = ("a password prompt" if door == DOOR_PASSWORD_PROMPT
+                 else f"a redirect to a sign-in ({target})")
+        return {"waf_present": None, "evidence_class": "presence_only", "blocked": [],
+                "undefined": UNDEFINED_DOOR_NOT_MEASURED, "redirect_to": target or None,
+                "unanswered": unanswered,
+                "reason": (f"baseline was {where} (status={status}), but only {len(at_login)} payload "
+                           f"class(es) got the same answer and {len(blocked)} were refused "
+                           f"({len(unanswered)} got no answer) — the front door was not measured; "
+                           "not a measurement")}
     base = {"evidence_class": "presence_only", "blocked": blocked,
-            "front_door": FRONT_DOOR_SIGNIN, "redirect_to": target, "reached_signin": at_login}
+            "front_door": FRONT_DOOR_SIGNIN, "redirect_to": target, "reached_signin": at_login,
+            "door_kind": door, "unanswered": unanswered}
+    if door == DOOR_PASSWORD_PROMPT:
+        challenge = (baseline.get("challenge") or "").strip()
+        base["challenge"] = challenge
+        if len(blocked) >= 2:
+            return {**base, "waf_present": True,
+                    "reason": (f"baseline answered with a password prompt (status={status}, {challenge}); "
+                               f"{len(blocked)} independent payload classes were refused before it "
+                               f"({', '.join(blocked)})")}
+        return {**base, "waf_present": False,
+                "reason": (f"baseline answered with a password prompt (status={status}, {challenge}); the "
+                           f"front door was measured: {len(at_login)} payload class(es) got the same "
+                           f"password prompt, {len(blocked)} blocked ({', '.join(blocked) or 'none'}). "
+                           "Nothing behind the prompt was reached.")}
     if len(blocked) >= 2:
         return {**base, "waf_present": True,
                 "reason": (f"baseline redirected to a sign-in (status={status} to {target}); "
@@ -222,7 +326,13 @@ def classify_waf_differential(baseline: dict, payloads: list) -> dict:
     - front_door 'signin' (351): the baseline redirected to a sign-in, so the front door
                            was measured (True / False as above, of the door only), with
                            `redirect_to` and `reached_signin` (the classes that got the
-                           same redirect as the ordinary request).
+                           same redirect as the ordinary request). `door_kind` 'redirect'.
+                           4o: a baseline that was a password prompt (401 + a challenge)
+                           is the same door, `door_kind` 'password_prompt', with
+                           `challenge`; reached_signin = the classes that got the same
+                           prompt. 4o review: a door explained by fewer than two classes is
+                           UNDEFINED 'front_door_not_measured'; `unanswered` = classes that
+                           got no answer (status 0), counted neither way.
     `payloads` = list of {cls: 'sqli'|'xss'|'lfi', status, size, tokens, headers}.
     """
     # gate 1 — a differential is only meaningful if the BENIGN baseline was SERVED (2xx).
@@ -241,6 +351,9 @@ def classify_waf_differential(baseline: dict, payloads: list) -> dict:
                     "reason": (f"baseline redirected (status={status}"
                                f"{' to ' + target if target else ''}) — nothing to compare; "
                                "not a measurement. Test the address it redirects to.")}
+        if password_prompt(baseline):
+            return _classify_signin_front_door(baseline, payloads, status, None,
+                                               door=DOOR_PASSWORD_PROMPT)
         return {"waf_present": None, "evidence_class": "presence_only", "blocked": [],
                 "undefined": UNDEFINED_NOT_SERVED, "redirect_to": None,
                 "reason": f"baseline not served (status={status}) — nothing to compare; not a measurement"}

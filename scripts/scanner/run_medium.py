@@ -965,6 +965,8 @@ class ScanContext:
     canonical_diag: dict[str, Any] = field(default_factory=dict)
     waf_detected: bool = False
     waf_kind: str | None = None  # 'fortiweb', 'cloudflare', 'akamai', etc. — from wafw00f
+    # 4o: wafw00f's stated reason when its verdict is "generic" (_wafw00f_generic_reason).
+    waf_generic_reason: dict | None = None
     tech_stack: set[str] = field(default_factory=set)  # lowercased techs from httpx -td
     # 4.7 ⑭′.4 — what the nuclei plan COULD have been vs what it was, set at
     # plan time and merged into the nuclei tool_status entry on every outcome
@@ -3055,6 +3057,33 @@ def canonical_waf_kind(kind: str | None) -> str | None:
     return WAF_KIND_ALIASES.get(kind, kind)
 
 
+# 4o (2026-11-02): wafw00f's generic verdict comes with its reason, and one reason is not a
+# firewall. ftp.unimacgraphics.com, 2026-11-02: "Reason: The response was different when the
+# request wasn't made from a browser. Normal response code is "200", while the response code
+# to a modified request is "401"" -- the Globalscape EFT server sends file-transfer clients a
+# password prompt. The reason is kept, structured, so the classifier can tell that apart
+# from a refusal (a 403 / 406 to an attack string, a reset).
+_WAFW00F_REASON = re.compile(r"Reason:\s*(?P<text>.+?)(?:\n\s*\[|\Z)", re.S)
+_WAFW00F_CODES = re.compile(
+    r'Normal response code is "?(?P<normal>\d{3})"?,?\s+while the response code to (?P<what>.+?) is "?(?P<modified>\d{3})"?')
+
+
+def _wafw00f_generic_reason(stdout: str) -> dict | None:
+    """{text, non_browser, normal_code, modified_code} from wafw00f's generic-detection
+    reason, or None when it states none. ANSI already stripped by the caller. PURE."""
+    m = _WAFW00F_REASON.search(stdout or "")
+    if not m:
+        return None
+    text = " ".join(m.group("text").split())[:300]
+    out = {"text": text,
+           "non_browser": ("wasn't made from a browser" in text) or ("was not made from a browser" in text)}
+    c = _WAFW00F_CODES.search(text)
+    if c:
+        out["normal_code"] = int(c.group("normal"))
+        out["modified_code"] = int(c.group("modified"))
+    return out
+
+
 def _classify_wafw00f_output(ctx: ScanContext, stdout: str, rc: int) -> None:
     """The wafw00f verdict parse, extracted from detect_waf VERBATIM.
 
@@ -3125,6 +3154,7 @@ def _classify_wafw00f_output(ctx: ScanContext, stdout: str, rc: int) -> None:
     if re.search(r"seems to be behind", stdout, re.IGNORECASE):
         ctx.waf_detected = True
         ctx.waf_kind = "generic"
+        ctx.waf_generic_reason = _wafw00f_generic_reason(stdout)
         log("WAF detected: generic (wafw00f generic detection — kind unknown)")
         return
     log("no WAF detected by wafw00f")
@@ -3151,6 +3181,11 @@ def persist_stack_id_wafw00f(ctx: ScanContext) -> None:
         "wafw00f_detected": bool(ctx.waf_detected),
         "wafw00f_kind": ctx.waf_kind,   # 'fortiweb'/'cloudflare'/'generic'/None
     }
+    # 4o — on a generic verdict only, the reason wafw00f gave (additive: named and negative
+    # verdicts keep their exact shape).
+    reason = getattr(ctx, "waf_generic_reason", None)
+    if ctx.waf_kind == "generic" and reason:
+        verdict["wafw00f_generic_reason"] = reason
     ctx.artifacts.append(("stack_id_wafw00f", "json", json.dumps(verdict)))
     log(f"  stack_id_wafw00f (persist-only): detected={verdict['wafw00f_detected']} "
         f"kind={verdict['wafw00f_kind']!r}")

@@ -380,6 +380,15 @@ def extract_cert(testssl_raw: str | None) -> dict:
 # no new signal, no weight change. The runner stays "dumb": it emits the raw
 # observation and lets the registry decide what (if anything) it names. A generic
 # wafw00f verdict emits 'generic', which matches no vendor row -> no false brand.
+def _wafw00f_saw_only_a_password_prompt(verdict: dict) -> bool:
+    """4o (2026-11-02): wafw00f's generic verdict whose only stated reason is that a request
+    not made from a browser got HTTP 401 is a password prompt (the Globalscape EFT servers
+    send file-transfer clients one), not a firewall refusing anything. It adds no presence
+    signal. Any other reason (an attack string answered 403 / 406, a reset) still does. PURE."""
+    r = (verdict or {}).get("wafw00f_generic_reason") or {}
+    return bool(r.get("non_browser")) and r.get("modified_code") == 401
+
+
 def waf_vendor_from_wafw00f(verdict: dict | None) -> str | None:
     """E1's stack_id_wafw00f artifact {wafw00f_detected, wafw00f_kind} -> the
     waf_vendor observation string, or None. Only when wafw00f actually detected a
@@ -1121,7 +1130,7 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
     kind = waf_vendor_from_wafw00f(verdict)      # kind string if detected & named, else None
     if kind and kind != "generic":
         obs["waf_vendor"] = kind                 # named vendor -> wafw00f_high_confidence
-    elif verdict and verdict.get("wafw00f_detected"):
+    elif verdict and verdict.get("wafw00f_detected") and not _wafw00f_saw_only_a_password_prompt(verdict):
         # detected but named no vendor -> presence-only signal. Emitted ONLY here
         # (not alongside waf_vendor) so it never double-counts the same wafw00f run
         # against a vendor row (4.7 same-artifact test, Obsidian 146).
