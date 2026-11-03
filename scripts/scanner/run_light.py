@@ -1572,6 +1572,34 @@ def is_sending_host(hostname: str, own_spf: bool, mx_records: list[str]) -> dict
     }
 
 
+# KB 12 job 4r (2026-11-03). `dig +short MX <name>` on a name that is an ALIAS (CNAME) prints
+# the alias chain first, one bare name per line, then any real MX records of the name at the
+# end of the chain. A real MX record is "<preference> <exchange>" ("10 mx1.hc3765-17.iphmx.com.").
+# The old read counted every line as a mail server, so every aliased name became a "sending
+# host" with confidence "high" and got SPF and DMARC findings it cannot own. pay.commandmi.com
+# (an alias into GoDaddy's payment links) read mx = ["paylinks.commerce.godaddy.com.",
+# "t1k.poynt.net.", "t1kpay-hapro-….elb.us-east-1.amazonaws.com."]; on Command 12 names and
+# 24 MODERATE findings rested on that misread, each parent domain already carrying its own
+# finding for the real gap. Howie, 2026-11-03 09:36 (A-D1): only real mail-server entries
+# count as mail servers. Anything else dig prints (";; connection timed out …") is neither,
+# and so is a bare number (a preference with no host: no name has only digits).
+_MX_RECORD_RE = re.compile(r"^\d+\s+\S+$")
+_ALIAS_LINE_RE = re.compile(r"^(?=.*[A-Za-z])[A-Za-z0-9_.-]+$")
+
+
+def split_mx_answer(stdout: str) -> tuple[list[str], list[str]]:
+    """PURE. `dig +short MX` output -> (real MX records, the alias chain dig printed first)."""
+    mx: list[str] = []
+    chain: list[str] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if _MX_RECORD_RE.match(line):
+            mx.append(line)
+        elif _ALIAS_LINE_RE.match(line):
+            chain.append(line)
+    return mx, chain
+
+
 def _dkim_probe(hostname: str, mx_records: list[str]) -> list[dict]:
     """Probe DKIM selectors. Returns PRESENT keys only — never absence.
 
@@ -1658,8 +1686,15 @@ def check_dns_posture(ctx: ScanContext) -> None:
 
     # ── MX (new in A2). Serves sending-host inference AND DKIM provider hints.
     mx_rc, mx_out, _ = run_cmd(["dig", "+short", "MX", ctx.hostname], timeout=10)
-    mx_records = [l.strip() for l in mx_out.splitlines() if l.strip()]
+    # 4r: only real MX records count; an alias's chain is kept apart (see split_mx_answer).
+    mx_records, alias_chain = split_mx_answer(mx_out)
     results["mx"] = mx_records
+    results["alias_chain"] = alias_chain
+    # 4r review, must-fix 1: an MX answer that did not come back is not "no mail servers". When
+    # dig failed (rc != 0), or printed something that is neither a record nor a name, the name
+    # keeps the fail-safe direction (taken as sending, below) and the check is marked degraded.
+    mx_unread = mx_rc != 0 or (not mx_records and not alias_chain and bool(mx_out.strip()))
+    results["mx_unread"] = mx_unread
 
     # ── SPF on this exact name
     spf_rc, stdout, _ = run_cmd(["dig", "+short", "TXT", ctx.hostname], timeout=10)
@@ -1683,6 +1718,10 @@ def check_dns_posture(ctx: ScanContext) -> None:
     protected = effective in ("quarantine", "reject")
 
     sending = is_sending_host(ctx.hostname, bool(spf_lines), mx_records)
+    if mx_unread and not sending["is_sending_host"]:
+        # Fail-safe (is_sending_host's own rule): a lookup we could not read is not evidence
+        # that the name sends no mail.
+        sending = {**sending, "is_sending_host": True, "inference_confidence": "mx_unread"}
     results["sending_host"] = sending
 
     # ── (4) DKIM — EVIDENCE ONLY. Never emits a finding. See _dkim_probe.
@@ -1762,6 +1801,8 @@ def check_dns_posture(ctx: ScanContext) -> None:
     # Degraded only when the RESOLVER fails (dig non-zero). NXDOMAIN /
     # missing-record cases produce findings, not degradation.
     degraded, reason = dns_posture_is_degraded(spf_rc, dmarc_rc)
+    if not degraded and mx_unread:            # 4r review, must-fix 1
+        degraded, reason = True, "mx_query_failed"
     if degraded:
         mark_tool_degraded(ctx, "dns_posture", reason)
     else:
