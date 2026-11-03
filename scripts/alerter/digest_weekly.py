@@ -726,8 +726,7 @@ def render_weekly_text(m: dict, *, portal_url: str = "", product_name: str = "")
         for l in i.get("lines", [])[:20]:
             out.append(f"      - {l}")
         if i.get("do"):
-            who = dd.WHO_WORDS.get(i.get("who") or "", "")
-            out.append(f"      The fix{', for ' + who if who and i.get('kind') == 'finding' else ''}: {i['do']}")
+            out.append(f"      {dd.fix_label(i, kinds=('finding',))} {i['do']}")
         if i.get("forward"):
             out.append(f"      Ready to forward: {i['forward']}")
 

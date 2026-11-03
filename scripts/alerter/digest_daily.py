@@ -41,6 +41,7 @@ in both repos.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -318,6 +319,15 @@ def first_step(remediation: str | None, limit: int = 200) -> str:
 WHO_WORDS = {"it": "your IT team", "wordpress": "the company that runs your WordPress sites"}
 
 
+def fix_label(item: dict, kinds=("finding", "cert", "enforcement")) -> str:
+    """'The fix, for your IT team:' — or 'First step, for your IT team:' when the line is the
+    scanner's own first step (`do_raw`), which is often preparation, not the change itself
+    (3l, Howie 2026-11-03 12:07, W3: it must never pretend to be the whole fix). PURE."""
+    who = WHO_WORDS.get(item.get("who") or "", "")
+    head = "First step" if item.get("do_raw") else "The fix"
+    return f"{head}, for {who}:" if who and item.get("kind") in kinds else f"{head}:"
+
+
 def group_problems(rows, names, prev_deep=None, hints=None, window_start=None, tag="",
                    details=None):
     """Finding rows (finding_id, asset_id, title, severity, status, source, ts) ->
@@ -533,16 +543,122 @@ def checks_stopped_item(reach_checks, brand):
     }
 
 
-def not_responding_line(row, brand) -> str:
+# 3l, 2026-11-03 (Howie 12:00 W1, 12:06 W2): a host Sentry knows only by its address has no
+# name, so "Its name still points to an address" is wrong for it.
+ADDRESS_REASON_WORDS = {
+    "no_answer": "Nothing answers at this address.",
+    "never_answered": "Sentry has never had an answer from this address.",
+}
+
+
+def is_address(aid: str | None) -> bool:
+    """True for a bare IP address (v4 or v6). PURE."""
+    try:
+        ipaddress.ip_address((aid or "").strip())
+        return True
+    except ValueError:
+        return False
+
+
+def is_stock_name(reverse_name: str | None, address: str) -> bool:
+    """True when a reverse-lookup name is the provider's stock name built from the address
+    itself ('6.65.119.52.naturalwireless.com' for 52.119.65.6, '189d3346.cst.lightpath.net'
+    for 24.157.51.70, 'c-24-157-51-70.example.net'), or when there is none: either way it is
+    not a name anyone gave the machine. 'mail.commandweb.com' is a real name. PURE."""
+    p = (reverse_name or "").strip().lower().rstrip(".")
+    if not p:
+        return True
+    try:
+        a = ipaddress.ip_address(address.strip())
+    except ValueError:
+        return False
+    tokens = re.split(r"[.\-]", p)
+    if a.version == 4:
+        octets = [str(int(o)) for o in str(a).split(".")]
+        for seq in (octets, octets[::-1]):
+            for i in range(len(tokens) - 3):
+                if [t.lstrip("0") or "0" for t in tokens[i:i + 4]] == seq:
+                    return True
+        hexed = "".join(f"{int(o):02x}" for o in octets)
+        return any(hexed in t for t in tokens)
+    flat = a.exploded.replace(":", "")
+    return flat in p.replace(".", "").replace("-", "") or flat[::-1] in p.replace(".", "")
+
+
+def network_words(org: str | None) -> str:
+    """'Natural Wireless, LLC' -> 'Natural Wireless'; 'Cablevision Systems Corp.' ->
+    'Cablevision Systems'. PURE."""
+    o = (org or "").strip()
+    o = re.sub(r",?\s+(?:L\.?L\.?C\.?|Inc\.?|Incorporated|Corp\.?|Corporation|Ltd\.?|Limited|Co\.?)$", "",
+               o, flags=re.I)
+    return o.strip(" ,")
+
+
+def fold_quiet(rows, where) -> list:
+    """SQL_NOT_RESPONDING rows -> [(row, label, is_address)], one per machine. PURE.
+
+    `where` is SQL_QUIET_WHERE's map {asset_id: {"addresses", "names", "network",
+    "reverse_name"}}, or None when it was not read (then every host keeps its own line and no
+    claim is made about names). W1 (Howie 12:00): a silent name whose recorded address is
+    itself a silent host is ONE line, name first — 'test.commandcommcentral.com
+    (52.119.65.6)' — and the address's own line goes. They fold only when discovery recorded
+    the name pointing to that address. W2 (12:06): a lone silent address says what is known:
+    the name(s) of ours that point to it, else a real reverse-lookup name, else whose network
+    it is on and that none of our names point there."""
+    rows = list(rows or [])
+    if where is None:
+        return [(r, r[0], is_address(r[0])) for r in rows]
+    quiet = {r[0] for r in rows}
+    folded, under_a_name = {}, set()
+    for r in rows:
+        aid = r[0]
+        if is_address(aid):
+            continue
+        addrs = [a for a in ((where.get(aid) or {}).get("addresses") or [])
+                 if a in quiet and is_address(a)]
+        if addrs:
+            folded[aid] = addrs
+            under_a_name.update(addrs)
+    out = []
+    for r in rows:
+        aid = r[0]
+        if aid in folded:
+            out.append((r, f"{aid} ({', '.join(folded[aid])})", False))
+            continue
+        if aid in under_a_name:
+            continue                                   # said once, under its name
+        if not is_address(aid):
+            out.append((r, aid, False))
+            continue
+        w = where.get(aid) or {}
+        names = [n for n in (w.get("names") or []) if n and n != aid]
+        if names:
+            shown = ", ".join(names[:3]) + (" and others" if len(names) > 3 else "")
+            note = f"{shown} point{'s' if len(names) == 1 else ''} here"
+        elif w.get("reverse_name") and not is_stock_name(w["reverse_name"], aid):
+            note = f"listed as {w['reverse_name'].strip().rstrip('.')}"
+        elif network_words(w.get("network")):
+            note = f"on {network_words(w.get('network'))}'s network; none of our names point here"
+        else:
+            note = "none of our names point here"
+        out.append((r, f"{aid} ({note})", True))
+    return out
+
+
+def not_responding_line(row, brand, label: str | None = None, address: bool | None = None) -> str:
     """'valorep.prodexlabs.com: no answer since Oct 22, 2:25 PM. Its name no longer exists on
-    the internet. Leaves the portal on Nov 2.' PURE."""
+    the internet. Leaves the portal on Nov 2.' — `label` (fold_quiet) replaces the bare id at
+    the front; an address gets ADDRESS_REASON_WORDS. PURE."""
     aid, last_answer, reason, _notice, leaves_on = row[:5]
+    head_name = label or aid
+    if address is None:
+        address = is_address(aid)
     if last_answer is not None:
         t = local_time(last_answer, brand)
-        head = f"{aid}: no answer since {_day(t)}, {_clock(t)}."
+        head = f"{head_name}: no answer since {_day(t)}, {_clock(t)}."
     else:
-        head = f"{aid}: no answer from Sentry's checks."
-    words = REASON_WORDS.get(reason or "", "")
+        head = f"{head_name}: no answer from Sentry's checks."
+    words = (ADDRESS_REASON_WORDS if address else REASON_WORDS).get(reason or "", "")
     tail = f" Leaves the portal on {_day(local_time(leaves_on, brand))}." if leaves_on is not None else ""
     return head + (f" {words}" if words else "") + tail
 
@@ -553,7 +669,7 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
                 unrecognized_pages=None, sites=None, certs=None, prev_deep=None,
                 hints=None, brand=None, stale_words=None, stale_intro="",
                 stale_note="", details=None, told=None, not_responding=None,
-                reach_checks=None) -> dict:
+                reach_checks=None, quiet_where=None) -> dict:
     """Everything the two renderers need, decided once. PURE.
 
     Job 3s ("say it once"): `told` is the record of what was told ({finding_id: row});
@@ -651,12 +767,15 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
 
     # 1c. job 3t (D5): hosts that are not responding — every day until they leave
     if not_responding:
-        n = len(not_responding)
+        # W1/W2 (2026-11-03): one line per machine; `quiet_where` None = not read = no fold
+        lines = [not_responding_line(r, brand, label, addr)
+                 for r, label, addr in fold_quiet(not_responding, quiet_where)]
+        n = len(lines)
         do.append({
             "kind": "not_responding", "severity": "",
             "title": f"{n} host{' is' if n == 1 else 's are'} not responding",
             "body": NOT_RESPONDING_BODY,
-            "lines": [not_responding_line(r, brand) for r in not_responding],
+            "lines": lines,
             "note": "", "sites": [], "why": "", "do": "", "tag": "",
         })
 
@@ -1101,6 +1220,10 @@ def _card(item: dict, portal: str) -> str:
     if item.get("lines"):
         def _line(l):
             head, sep, rest = l.partition(": ")
+            m = re.match(r"^(\S+) (\([^)]*\))$", head) if sep else None
+            if m:      # W1/W2: 'name (52.119.65.6)': the name bold, what we know about it plain
+                return (f'<span style="font-weight:700;">{escape(m.group(1))}</span> '
+                        f'{escape(m.group(2))}: {escape(rest)}')
             return (f'<span style="font-weight:700;">{escape(head)}</span>: {escape(rest)}' if sep and " " not in head
                     else escape(l))
         parts.append("".join(_p(_line(l), "#2B3747", 14, "margin-top:4px;") for l in item["lines"][:12]))
@@ -1109,8 +1232,7 @@ def _card(item: dict, portal: str) -> str:
     if item.get("note"):
         parts.append(_p(escape(item["note"]), MUTED, 13))
     if item.get("do"):
-        who = WHO_WORDS.get(item.get("who") or "", "")
-        label = f"The fix, for {who}:" if who and item.get("kind") in ("finding", "cert", "enforcement") else "The fix:"
+        label = fix_label(item)
         parts.append(_p(f'<span style="font-weight:700;">{escape(label)}</span> {escape(item["do"])}', INK, 15,
                         "margin-top:10px;"))
     if item.get("forward"):
@@ -1230,8 +1352,7 @@ def render_text(model: dict, *, portal_url: str = "", product_name: str = "") ->
             if i.get("note"):
                 out.append(f"      {i['note']}")
             if i.get("do"):
-                who = WHO_WORDS.get(i.get("who") or "", "")
-                out.append(f"      The fix{', for ' + who if who and i.get('kind') in ('finding', 'cert', 'enforcement') else ''}: {i['do']}")
+                out.append(f"      {fix_label(i)} {i['do']}")
             if i.get("forward"):
                 out.append(f"      Ready to forward: {i['forward']}")
             if i.get("why"):
@@ -1256,5 +1377,7 @@ def render_text(model: dict, *, portal_url: str = "", product_name: str = "") ->
         out.append("Every scan since yesterday came back with nothing that needs anyone.")
     if portal_url:
         out.append(f"Open the portal: {portal_url.rstrip('/')}")
-    out.append(f"Sent at {_clock(end)}. Where every site stands, and why, comes in the weekly review on Monday.")
+    # W4 (Howie 2026-11-03 12:11): this is when Sentry wrote it, not when it went out (it goes
+    # out when Howie approves), so it says how fresh the facts are.
+    out.append(f"Sentry's checks as of {_clock(end)}. Where every site stands, and why, comes in the weekly review on Monday.")
     return "\n".join(out)

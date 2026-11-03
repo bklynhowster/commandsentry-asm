@@ -79,6 +79,15 @@ def merge_key(title: str | None, family: str | None) -> str:
 
 
 QUIET_AFTER = timedelta(hours=24)   # v_asset_reachability: not_responding once 24 h without an answer
+# 3l 2026-11-03 (W1/W2): a daily line may carry what is known about its host in brackets
+# ('test.commandcommcentral.com (52.119.65.6): no answer …'); the host is the part before them.
+_BRACKETED_HEAD = re.compile(r"^(?P<host>\S+) \([^)]*\): ")
+
+
+def line_host(line: str) -> str:
+    """The host a daily line is about. PURE."""
+    m = _BRACKETED_HEAD.match(line or "")
+    return m.group("host") if m else (line or "").split(":")[0]
 
 
 def quiet_news(not_responding_rows, window_start, window_end) -> set:
@@ -106,10 +115,10 @@ def changed_items(model: dict, *, quiet_news=None) -> list[dict]:
         kind = it.get("kind")                          # "coverage" (Sentry's own problems) and
         if kind == "not_responding":                   # "blockpage" are not developer news
             lines = [ln for ln in it.get("lines", []) if ":" in ln
-                     and (quiet_news is None or ln.split(":")[0] in quiet_news)]
+                     and (quiet_news is None or line_host(ln) in quiet_news)]
             if not lines:
                 continue                               # on the roster since before yesterday: told already
-            hosts = [ln.split(":")[0] for ln in lines]
+            hosts = [line_host(ln) for ln in lines]
             n = len(hosts)
             out.append(dict(it, lines=lines, sites=hosts, slack_color=RED,
                             title=f"{n} host{' is' if n == 1 else 's are'} not responding"))

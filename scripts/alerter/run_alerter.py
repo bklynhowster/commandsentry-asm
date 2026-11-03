@@ -404,6 +404,44 @@ SELECT r.asset_id, r.last_answer_at, r.reason, r.notice_since, r.leaves_on
  ORDER BY r.last_answer_at ASC NULLS FIRST, r.asset_id;
 """
 
+# 3l, 2026-11-03 (Howie 12:00 W1, 12:06 W2): what discovery recorded about each silent host,
+# so the daily says a machine once and says what is known about a bare address. Per id:
+# the addresses a NAME was recorded pointing to (A and AAAA); the OWNED names recorded
+# pointing to an ADDRESS; the address's network (asn_org) and reverse-lookup name. Read by
+# _read_quiet_where: None on any failure, so the daily folds nothing and claims nothing.
+SQL_QUIET_WHERE = """
+WITH q AS (SELECT unnest(%s::text[]) AS asset_id),
+subs AS (
+  SELECT sub FROM public.asset_surface s,
+         jsonb_array_elements(CASE WHEN jsonb_typeof(s.surface_data->'subdomains') = 'array'
+                                   THEN s.surface_data->'subdomains' ELSE '[]'::jsonb END) sub),
+recorded AS (
+  SELECT DISTINCT subs.sub->>'name' AS name, x AS address
+    FROM subs,
+         jsonb_array_elements_text(
+           (CASE WHEN jsonb_typeof(subs.sub->'dns'->'a') = 'array' THEN subs.sub->'dns'->'a' ELSE '[]'::jsonb END) ||
+           (CASE WHEN jsonb_typeof(subs.sub->'dns'->'aaaa') = 'array' THEN subs.sub->'dns'->'aaaa' ELSE '[]'::jsonb END)) x),
+hosts AS (
+  SELECT h->>'ip' AS ip, h->>'asn_org' AS org, h->>'reverse_dns' AS ptr
+    FROM subs,
+         jsonb_array_elements(CASE WHEN jsonb_typeof(subs.sub->'hosts') = 'array' THEN subs.sub->'hosts' ELSE '[]'::jsonb END) h)
+SELECT q.asset_id,
+       (SELECT array_agg(DISTINCT r.address ORDER BY r.address) FROM recorded r WHERE r.name = q.asset_id) AS addresses,
+       (SELECT array_agg(DISTINCT r.name ORDER BY r.name) FROM recorded r
+          JOIN public.assets a ON a.asset_id = r.name AND a.ownership = 'owned'
+         WHERE r.address = q.asset_id) AS names,
+       (SELECT max(h.org) FROM hosts h WHERE h.ip = q.asset_id) AS network,
+       (SELECT max(h.ptr) FROM hosts h WHERE h.ip = q.asset_id) AS reverse_name
+  FROM q;
+"""
+
+
+def quiet_where_map(rows) -> dict:
+    """SQL_QUIET_WHERE rows -> {asset_id: {...}}. PURE."""
+    return {r[0]: {"addresses": list(r[1] or []), "names": list(r[2] or []),
+                   "network": r[3], "reverse_name": r[4]} for r in rows or []}
+
+
 # Job 3t (plan v1.2): are the reachability checks running? The view's own 12-hour rule
 # (checks_fresh), so the daily and the banner can never disagree about it. One row; on an
 # instance with no owned assets, (NULL, NULL) and nothing is said.
@@ -1539,7 +1577,7 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
                   unrecognized_pages=None, sites=None, certs=None, prev_deep=None,
                   hints=None, brand=None, discovery_stale_hours=24,
                   deepscan_stale_hours=192, details=None, told=None,
-                  not_responding=None, reach_checks=None) -> dict:
+                  not_responding=None, reach_checks=None, quiet_where=None) -> dict:
     """KB 12 job 3l — every part of the old email, sorted into Do today / Worth a ticket /
     Off your plate by digest_daily.build_model. The stale-host wording stays this file's
     (stale_row_words, note 320)."""
@@ -1554,7 +1592,7 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
         stale_words=stale_row_words, stale_intro=STALE_INTRO,
         stale_note=stale_overdue_note(discovery_stale_hours, deepscan_stale_hours),
         details=details, told=told, not_responding=not_responding,
-        reach_checks=reach_checks,
+        reach_checks=reach_checks, quiet_where=quiet_where,
     )
 
 
@@ -1766,6 +1804,23 @@ def _soft_read(conn, label, sql, params=None):
     except Exception as exc:                       # pragma: no cover - live only
         print(f"  {label} read failed ({exc!r}) — digest renders without it")
         return []
+
+
+def _read_quiet_where(conn, not_responding):
+    """SQL_QUIET_WHERE as quiet_where_map, or None when it cannot be read: unlike a
+    decoration (_soft_read's []), an empty answer here would let the daily say "none of our
+    names point here" without having looked. {} when nobody is silent."""
+    ids = sorted({r[0] for r in not_responding or []})
+    if not ids:
+        return {}
+    try:
+        with conn.transaction():
+            with conn.cursor() as c2:
+                c2.execute(SQL_QUIET_WHERE, (ids,))
+                return quiet_where_map(c2.fetchall())
+    except Exception as exc:                       # pragma: no cover - live only
+        print(f"  quiet hosts' names read failed ({exc!r}) — each keeps its own line")
+        return None
 
 
 def _read_told(conn):
@@ -2497,6 +2552,7 @@ def main() -> int:
             return _soft_read(conn, label, sql, params)
         _dd.set_site_map(_read_site_map(conn))      # job 4: sites from the evidence
         not_responding = _soft("not responding", SQL_NOT_RESPONDING)   # job 3t (D5)
+        quiet_where = _read_quiet_where(conn, not_responding)          # 3l W1/W2 (2026-11-03)
         reach_checks = (_soft("reachability checks", SQL_REACH_CHECKS) or [None])[0]
         sites = _soft("site ratings", SQL_SITE_RATINGS, {"t": window_start})
         certs = _soft("expiring certificates", SQL_CERTS_EXPIRING)
@@ -2526,7 +2582,7 @@ def main() -> int:
             sites=sites, certs=certs, prev_deep=prev_deep, hints=hints, brand=brand,
             discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours,
             details=details, told=told, not_responding=not_responding,
-            reach_checks=reach_checks,
+            reach_checks=reach_checks, quiet_where=quiet_where,
         )
         subject = _dd.subject(model, from_name)
         html = _dd.render_html(model, portal_url=portal_url, product_name=from_name)
