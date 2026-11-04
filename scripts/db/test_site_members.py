@@ -409,3 +409,106 @@ def test_the_module_writes_only_site_members():
     assert set(_re.findall(_WRITE, src)) == {"site_members"}
     assert _re.findall(_WRITE, "UPDATE assets SET x=1; DELETE FROM public.findings") == ["assets", "findings"]
     assert _re.findall(_WRITE, "ON CONFLICT (k) DO UPDATE SET a = 1") == []
+
+
+# ── the site's face (KB 12 job 4 plan v1.3 step 3(a), 2026-11-04; Howie D6) ─────────────────────
+FACES = {"commandcommcentral.com": "www.commandcommcentral.com",
+         "commandcompanies.com": "commandcompanies.com",
+         "commandmarketinginnovations.com": "commandmarketinginnovations.com",
+         "unimacgraphics.com": "unimacgraphics.com",
+         "prodexlabs.com": "www.prodexlabs.com",
+         "portal.unimacgraphics.com": None, "firewall.unimacgraphics.com": None,
+         "zoetislabs.unimacgraphics.com": None}
+
+
+def _cand(p, w, z):
+    result, leg, _ = sm.decide(p, w, z)
+    return sm.face_candidate(result, leg, {"plain": sm.stored_reading(p), "www": sm.stored_reading(w)})
+
+
+def test_the_face_is_where_the_browser_lands_on_the_real_pairs():
+    """plain face from a www -> plain redirect, www face from a plain -> www redirect, www for the
+    same page on both names, none for a pair that is two sites."""
+    assert {k: _cand(p, w, z) for k, (p, w, z, _) in REAL.items()} == FACES
+
+
+def test_a_redirect_whose_destination_did_not_answer_2xx_gives_no_face():
+    p, w, _z, _ = REAL["commandcompanies.com"]
+    for bad in (dict(status=403), dict(status=302, location="https://commandcompanies.com/login"),
+                dict(http="error", status=None)):
+        dst = dict(sm.stored_reading(p), **bad)
+        assert sm.face_candidate("same_site", "redirect", {"plain": dst, "www": sm.stored_reading(w)}) is None
+    assert sm.face_candidate("unknown", "", {"plain": sm.stored_reading(p), "www": sm.stored_reading(w)}) is None
+    assert sm.face_candidate("separate", "", {"plain": sm.stored_reading(p), "www": sm.stored_reading(w)}) is None
+
+
+def test_a_face_is_set_after_two_agreeing_runs_and_changed_only_after_two():
+    ev = {}
+    assert sm.advance_face(ev, "www.x.com", "t1") is None and ev["face_pending"]["runs"] == 1
+    assert sm.advance_face(ev, None, "t2") is None                         # unknown: no change
+    assert ev["face_pending"] == {"name": "www.x.com", "runs": 1, "at": "t1"}
+    assert sm.advance_face(ev, "www.x.com", "t3") == "www.x.com"
+    assert ev["face"] == {"name": "www.x.com", "since": "t3", "previous": None} and ev["face_pending"] is None
+    assert sm.advance_face(ev, "x.com", "t4") == "www.x.com"                # one contrary run
+    assert sm.advance_face(ev, "www.x.com", "t5") == "www.x.com" and ev["face_pending"] is None
+    assert sm.advance_face(ev, "x.com", "t6") == "www.x.com"
+    assert sm.advance_face(ev, None, "t7") == "www.x.com"                   # unknown between: kept
+    assert sm.advance_face(ev, "x.com", "t8") == "x.com"
+    assert ev["face"] == {"name": "x.com", "since": "t8", "previous": "www.x.com"}
+
+
+def test_the_face_state_is_apart_from_contrary_runs():
+    """contrary_runs resets on every run that agrees with the verdict; the face keeps its own count."""
+    row = _settled("same_site")
+    assert row["contrary_runs"] == 0
+    ev = row["evidence"]
+    sm.advance_face(ev, "www.x.com", "a")
+    assert ev["face_pending"]["runs"] == 1 and row["contrary_runs"] == 0
+
+
+def test_run_writes_the_face_after_the_second_run():
+    pairs = [(w["name"], p["name"]) for p, w, _z, _ in REAL.values()]
+    reader, zone_reader = _readers()
+    first = sm.run(FakeConn(pairs), dry_run=False, now=NOW, reader=reader, zone_reader=zone_reader)
+    assert all(r["face"] is None for r in first)
+    stored = [(r["member"], r["verdict"], r["contrary_runs"], r["evidence"], r["since"]) for r in first]
+    conn = FakeConn(pairs, stored)
+    second = sm.run(conn, dry_run=False, now=NOW + timedelta(hours=6), reader=reader, zone_reader=zone_reader)
+    assert {r["site"]: r["face"] for r in second} == FACES
+    assert {p["member"]: p["face"] for s, p in conn.sql if s is sm.Q_UPSERT} == {
+        r["member"]: FACES[r["site"]] for r in second}
+    up = " ".join(sm.Q_UPSERT.split())
+    assert "since, face_asset_id) VALUES" in up and "face_asset_id = EXCLUDED.face_asset_id" in up
+
+
+def test_a_definite_separate_run_breaks_a_pending_face_change():
+    """Code review C1 (2026-11-04): candidate / definite separate / candidate must not set a face;
+    only two CONSECUTIVE same-site readings do. An unknown in between still neither counts nor
+    resets; a separate run keeps a face already held."""
+    ev = {}
+    assert sm.advance_face(ev, "www.x.com", "t1", "same_site") is None
+    assert sm.advance_face(ev, None, "t2", "separate") is None and ev["face_pending"] is None
+    assert sm.advance_face(ev, "www.x.com", "t3", "same_site") is None      # only one in a row
+    assert ev["face_pending"]["runs"] == 1
+    assert sm.advance_face(ev, "www.x.com", "t4", "same_site") == "www.x.com"
+    # a held face survives a separate run; a pending change does not
+    assert sm.advance_face(ev, "x.com", "t5", "same_site") == "www.x.com"
+    assert sm.advance_face(ev, None, "t6", "separate") == "www.x.com" and ev["face_pending"] is None
+    assert sm.advance_face(ev, "x.com", "t7", "same_site") == "www.x.com"
+    assert sm.advance_face(ev, None, "t8", "unknown") == "www.x.com" and ev["face_pending"]["runs"] == 1
+    assert sm.advance_face(ev, "x.com", "t9", "same_site") == "x.com"
+
+
+def test_check_pair_passes_the_run_result_to_the_face():
+    p, w, z, _ = REAL["prodexlabs.com"]
+    reader = {p["name"]: p, w["name"]: w}
+    first = sm.check_pair(w["name"], p["name"], None, NOW, reader=lambda n: dict(reader[n]),
+                          zone_reader=lambda m: z)
+    assert first["evidence"]["face_pending"]["name"] == "www.prodexlabs.com"
+    sep = dict(w, addrs=["1.2.3.4"])                                  # a definite 'separate' run
+    reader2 = {p["name"]: p, w["name"]: sep}
+    second = sm.check_pair(w["name"], p["name"], {"verdict": None, "contrary_runs": first["contrary_runs"],
+                           "evidence": first["evidence"], "since": None}, NOW + timedelta(hours=6),
+                           reader=lambda n: dict(reader2[n]), zone_reader=lambda m: z)
+    assert second["last_result"] == "separate" and second["evidence"]["face_pending"] is None
+

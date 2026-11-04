@@ -39,9 +39,9 @@ same main defect found by both): a failed request in a wildcard zone was 'separa
 first verdict needed one run and now needs two; a name with only IPv6 addresses read as "does not
 exist" and a permanent redirect to the same name read as evidence, and both are now 'unknown'.
 
-Writes ONLY public.site_members (migration 20261025a). Nothing reads that table until
-migration B and push B (plan v3, Design step 0): this push only gathers evidence, which is
-read back first. Never changes an asset, a finding or a scan. Env: SUPABASE_DSN or --dsn.
+Writes ONLY public.site_members (migration 20261025a; face_asset_id since migration 20261104a,
+KB 12 job 4 plan v1.3 step 3(a): see "the site's face" below). Never changes an asset, a finding
+or a scan. Env: SUPABASE_DSN or --dsn.
 """
 from __future__ import annotations
 
@@ -251,6 +251,62 @@ def advance(prev: dict | None, result: str, leg: str, reason: str, readings: dic
             "evidence": ev, "since": since, "flipped": flipped}
 
 
+# ── PURE: the site's face (KB 12 job 4, plan v1.3 step 3(a), 2026-11-04) ───────────────────────
+# Howie, 2026-11-04 (D6): "Where the browser lands (Recommended)": each site is shown and
+# deep-scanned under ONE name, the one a visitor's browser ends up on. This file already reads
+# both names with no redirect followed, so the face comes from that reading: for a pair one site
+# by a permanent redirect, the name that answered with its page (2xx), checked here on its own
+# (decide() names the redirect leg before it looks at the destination's status); for a pair one
+# site by the same page on both names, the www name (D6 picks www when both serve the page).
+# Like the verdict, a face is set, and changed, only after two definite runs in a row agree. A run
+# with no measurement (unknown, or a redirect whose destination did not answer 2xx) changes
+# nothing; a definite 'separate' run keeps the face held but breaks a pending change, so the two
+# runs that set or change a face are consecutive same-site readings (code review C1, 2026-11-04). Its state lives in the evidence ('face', 'face_pending'), apart from
+# contrary_runs, which resets on every run that agrees with the verdict (re-check pin, 2026-11-04).
+FACE_SET_AFTER = 2
+
+
+def face_candidate(result: str, leg: str, readings: dict) -> str | None:
+    """The name this run says is the site's face, or None. PURE."""
+    if result != "same_site":
+        return None
+    plain, www = readings.get("plain") or {}, readings.get("www") or {}
+    if leg == "same_page":
+        return www.get("name") or None
+    if leg != "redirect":
+        return None
+    for src, dst in ((www, plain), (plain, www)):
+        if (_answered(src) and src["status"] in PERMANENT and dst.get("name")
+                and location_host(src.get("location"), src.get("name") or "") == dst["name"].lower()):
+            if _answered(dst) and 200 <= dst["status"] < 300:
+                return dst["name"]
+            return None
+    return None
+
+
+def advance_face(evidence: dict, candidate: str | None, at: str, result: str = "unknown") -> str | None:
+    """Move the face state in `evidence` (in place) by one run; return the face now held. PURE
+    apart from updating the dict it is given. `result` is the run's own result: a definite
+    'separate' clears a pending change (code review C1); anything else without a candidate
+    leaves the state as it was."""
+    face = evidence.get("face") or None
+    pending = evidence.get("face_pending") or None
+    current = (face or {}).get("name")
+    if candidate is None:
+        if result == "separate":
+            evidence["face_pending"] = None
+        return current
+    if candidate == current:
+        evidence["face_pending"] = None
+        return current
+    runs = pending["runs"] + 1 if (pending or {}).get("name") == candidate else 1
+    if runs >= FACE_SET_AFTER:
+        evidence["face"] = {"name": candidate, "since": at, "previous": current}
+        evidence["face_pending"] = None
+        return candidate
+    evidence["face_pending"] = {"name": candidate, "runs": runs, "at": at}
+    return current
+
 # ── NETWORK (thin; patched out in tests) ─────────────────────────────────────────────────────
 def _has_ipv6(name: str) -> bool:
     try:
@@ -390,8 +446,10 @@ SELECT member_asset_id, verdict, contrary_runs, evidence, since
 
 Q_UPSERT = """
 INSERT INTO public.site_members
-  (member_asset_id, site_asset_id, verdict, last_result, contrary_runs, evidence, checked_at, since)
-VALUES (%(member)s, %(site)s, %(verdict)s, %(last_result)s, %(contrary)s, %(evidence)s, now(), %(since)s)
+  (member_asset_id, site_asset_id, verdict, last_result, contrary_runs, evidence, checked_at, since,
+   face_asset_id)
+VALUES (%(member)s, %(site)s, %(verdict)s, %(last_result)s, %(contrary)s, %(evidence)s, now(), %(since)s,
+        %(face)s)
 ON CONFLICT (member_asset_id) DO UPDATE SET
   site_asset_id = EXCLUDED.site_asset_id,
   verdict       = EXCLUDED.verdict,
@@ -399,7 +457,8 @@ ON CONFLICT (member_asset_id) DO UPDATE SET
   contrary_runs = EXCLUDED.contrary_runs,
   evidence      = EXCLUDED.evidence,
   checked_at    = EXCLUDED.checked_at,
-  since         = EXCLUDED.since
+  since         = EXCLUDED.since,
+  face_asset_id = EXCLUDED.face_asset_id
 """
 
 
@@ -411,7 +470,9 @@ def check_pair(member: str, site: str, prev: dict | None, now: datetime,
     result, leg, reason = decide(plain, www, zone)
     readings = {"plain": stored_reading(plain), "www": stored_reading(www), "zone": zone}
     row = advance(prev, result, leg, reason, readings, now)
-    row.update({"member": member, "site": site})
+    face = advance_face(row["evidence"], face_candidate(result, leg, readings),
+                        row["evidence"]["last"]["at"], result)
+    row.update({"member": member, "site": site, "face": face})
     return row
 
 
@@ -434,7 +495,8 @@ def run(conn, dry_run: bool, now: datetime | None = None, reader=read_name,
         log(f"{site} / {member}: {row['last_result']} — {row['evidence']['last']['reason']}"
             f" · stored verdict {row['verdict'] or 'none yet'}"
             + (" · FLIPPED" if row["flipped"] else "")
-            + (f" · {row['contrary_runs']} contrary run(s)" if row["contrary_runs"] else ""))
+            + (f" · {row['contrary_runs']} contrary run(s)" if row["contrary_runs"] else "")
+            + (f" · face {row['face']}" if row["face"] else ""))
     if dry_run:
         conn.rollback()
         return rows
@@ -443,7 +505,7 @@ def run(conn, dry_run: bool, now: datetime | None = None, reader=read_name,
             cur.execute(Q_UPSERT, {"member": row["member"], "site": row["site"],
                                    "verdict": row["verdict"], "last_result": row["last_result"],
                                    "contrary": row["contrary_runs"], "evidence": Json(row["evidence"]),
-                                   "since": row["since"]})
+                                   "since": row["since"], "face": row["face"]})
     conn.commit()
     return rows
 

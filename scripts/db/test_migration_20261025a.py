@@ -46,8 +46,9 @@ def test_the_columns_are_the_ones_the_writer_writes():
     assert cols == ["member_asset_id", "site_asset_id", "verdict", "last_result", "contrary_runs",
                     "evidence", "checked_at", "since"]
     up = " ".join(site_members.Q_UPSERT.split())
-    assert ("(member_asset_id, site_asset_id, verdict, last_result, contrary_runs, evidence, checked_at, since)"
-            in up)
+    # KB 12 job 4 step 3(a) (2026-11-04): face_asset_id (migration 20261104a) is written after since.
+    assert ("(member_asset_id, site_asset_id, verdict, last_result, contrary_runs, evidence, checked_at, since, "
+            "face_asset_id)" in up)
     rd = " ".join(site_members.Q_READ.split())
     assert rd.startswith("SELECT member_asset_id, verdict, contrary_runs, evidence, since FROM public.site_members")
 

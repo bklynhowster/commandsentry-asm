@@ -99,3 +99,33 @@ def test_both_digests_load_the_map_before_they_read_their_sites():
     assert i < daily.index('sites = _soft("site ratings", SQL_SITE_RATINGS')
     assert i < daily.index("model = _digest_model(")
     assert len(re.findall(r"_dd\.set_site_map\(", src)) == 2
+
+
+# ── KB 12 job 4 plan v1.3 step 3 (2026-11-04; Howie D6): a site's face may be its www name ─────
+# Migration 20261104a: v_site_of maps both names of a same_site pair to its face once
+# site_members.py writes one. SQL_SITE_MAP returns only the names that move, so with a www face
+# it returns the PLAIN name moving to www. No digest code changes; the map carries the face.
+FACED = [("www.commandcompanies.com", "commandcompanies.com"),
+         ("www.commandmarketinginnovations.com", "commandmarketinginnovations.com"),
+         ("www.unimacgraphics.com", "unimacgraphics.com"),
+         ("commandcommcentral.com", "www.commandcommcentral.com"),
+         ("prodexlabs.com", "www.prodexlabs.com")]
+
+
+def test_with_faces_both_names_of_each_site_land_on_its_face():
+    dd.set_site_map(FACED)
+    want = {"commandcompanies.com": "commandcompanies.com",
+            "commandmarketinginnovations.com": "commandmarketinginnovations.com",
+            "unimacgraphics.com": "unimacgraphics.com",
+            "commandcommcentral.com": "www.commandcommcentral.com",
+            "prodexlabs.com": "www.prodexlabs.com"}
+    for plain, face in want.items():
+        assert dd.site_of(plain, NAMES) == face
+        assert dd.site_of("www." + plain, NAMES) == face
+    for u in UNIMAC:
+        assert dd.site_of("www." + u, NAMES) == "www." + u and dd.site_of(u, NAMES) == u
+
+
+def test_a_www_face_that_is_not_a_live_asset_leaves_the_plain_name_alone():
+    dd.set_site_map([("prodexlabs.com", "www.prodexlabs.com")])
+    assert dd.site_of("prodexlabs.com", NAMES - {"www.prodexlabs.com"}) == "prodexlabs.com"

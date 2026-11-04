@@ -3403,6 +3403,14 @@ ON CONFLICT (finding_id) DO UPDATE SET
     -- re-detection flips the row back to 'detected', silently undoing the
     -- Ship A1 backfill.
     current_status = CASE
+      -- KB 12 job 4, plan v1.3 step 3(b) (2026-11-04): a row closed because its name stopped
+      -- being deep-scanned (its site is shown and deep-scanned under the other name; tagged
+      -- 'job4-name-retired' by the cleanup migration) comes back when a scan finds it again: a
+      -- deep scan someone starts by hand on that name, or a site whose face changes. Every other
+      -- closed_reclassified row stays closed exactly as before (20260827a, 20261103a).
+      WHEN findings.current_status = 'closed_reclassified'
+           AND 'job4-name-retired' = ANY (coalesce(findings.tags, '{}'::text[]))
+        THEN 'detected'
       WHEN findings.current_status IN (
              'remediated', 'validated_remediated',
              'false_positive', 'wont_fix', 'accepted_risk',
