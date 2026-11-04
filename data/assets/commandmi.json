@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-11-04T06:44:20Z_15d99a48",
-    "started_at": "2026-11-04T06:44:20Z",
-    "completed_at": "2026-11-04T06:49:50Z",
-    "duration_seconds": 330,
+    "id": "scan_2026-11-04T12:42:31Z_3abb681a",
+    "started_at": "2026-11-04T12:42:31Z",
+    "completed_at": "2026-11-04T12:47:53Z",
+    "duration_seconds": 322,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -31,7 +31,7 @@
     "live_subdomain_count": 4,
     "host_count": 5,
     "service_count": 8,
-    "newest_cert_expiry_days": 358,
+    "newest_cert_expiry_days": 357,
     "top_hosting_org": "Amazon.com, Inc.",
     "platforms": [
       "WordPress on wp.cloud (Pressable)"
@@ -43,8 +43,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-11-04T06:49:50Z",
-      "last_seen": "2026-11-04T06:49:50Z",
+      "first_discovered": "2026-11-04T12:47:53Z",
+      "last_seen": "2026-11-04T12:47:53Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -112,11 +112,11 @@
           "ns70.domaincontrol.com"
         ],
         "txt": [
-          "Sendinblue-code:d6ec6d432f5c3f2c2d3963e1b0efeb4c",
           "MS=ms11147654",
-          "google-site-verification=ZiVaKRBG6JgkKzhGYUF7YWRlYDlBj62kwdnzhnb7g0E",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
           "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all"
+          "google-site-verification=ZiVaKRBG6JgkKzhGYUF7YWRlYDlBj62kwdnzhnb7g0E",
+          "Sendinblue-code:d6ec6d432f5c3f2c2d3963e1b0efeb4c"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
         "dnssec": false
@@ -233,8 +233,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-04T06:49:50Z",
-      "last_seen": "2026-11-04T06:49:50Z",
+      "first_discovered": "2026-11-04T12:47:54Z",
+      "last_seen": "2026-11-04T12:47:54Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -290,8 +290,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-04T06:49:50Z",
-      "last_seen": "2026-11-04T06:49:50Z",
+      "first_discovered": "2026-11-04T12:47:54Z",
+      "last_seen": "2026-11-04T12:47:54Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -353,7 +353,7 @@
             "not_before": "2026-10-28T07:36:38Z",
             "not_after": "2027-10-28T07:36:38Z",
             "self_signed": false,
-            "days_to_expiry": 358
+            "days_to_expiry": 357
           }
         },
         {
@@ -380,14 +380,14 @@
             "not_before": "2026-10-28T07:36:38Z",
             "not_after": "2027-10-28T07:36:38Z",
             "self_signed": false,
-            "days_to_expiry": 358
+            "days_to_expiry": 357
           }
         }
       ],
       "dns": {
         "a": [
-          "100.49.0.246",
-          "100.49.110.141"
+          "100.49.110.141",
+          "100.49.0.246"
         ],
         "aaaa": [],
         "cname": "paylinks.commerce.godaddy.com",
@@ -413,8 +413,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-04T06:49:51Z",
-      "last_seen": "2026-11-04T06:49:51Z",
+      "first_discovered": "2026-11-04T12:47:54Z",
+      "last_seen": "2026-11-04T12:47:54Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -601,7 +601,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-11-04T00:50:30Z_690f26b5",
+    "since_scan": "scan_2026-11-04T06:44:20Z_15d99a48",
     "added": {
       "subdomains": [],
       "services": [],
@@ -609,27 +609,13 @@
     },
     "removed": {
       "subdomains": [],
-      "services": [
-        {
-          "subdomain": "ftp.commandmi.com",
-          "ip": "208.199.0.161",
-          "port": 443,
-          "protocol": "tcp"
-        }
-      ],
+      "services": [],
       "hosts": []
     },
     "changed": {
       "fingerprint": [],
       "cert": [],
-      "reachability": [
-        {
-          "subdomain": "ftp.commandmi.com",
-          "from": true,
-          "to": false,
-          "is_root": false
-        }
-      ]
+      "reachability": []
     }
   },
   "history": [
@@ -965,6 +951,59 @@
       "scan_id": "scan_2026-11-04T06:44:20Z_15d99a48",
       "started_at": "2026-11-04T06:44:20Z",
       "completed_at": "2026-11-04T06:49:50Z",
+      "subdomain_count": 4,
+      "live_subdomain_count": 4,
+      "host_count": 5,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmi.com",
+        "ftp.commandmi.com",
+        "pay.commandmi.com",
+        "www.commandmi.com"
+      ],
+      "ports_by_sub": {
+        "commandmi.com": {
+          "15.197.142.173": [
+            80
+          ],
+          "3.33.152.147": [
+            80
+          ]
+        },
+        "ftp.commandmi.com": {},
+        "pay.commandmi.com": {
+          "100.49.0.246": [
+            80,
+            443
+          ],
+          "100.49.110.141": [
+            80,
+            443
+          ]
+        },
+        "www.commandmi.com": {
+          "15.197.142.173": [
+            80
+          ],
+          "3.33.152.147": [
+            80
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.8.1",
+        "WPMU DEV Smush": "4.3.6",
+        "Yoast SEO": "28.8",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
+    },
+    {
+      "scan_id": "scan_2026-11-04T12:42:31Z_3abb681a",
+      "started_at": "2026-11-04T12:42:31Z",
+      "completed_at": "2026-11-04T12:47:53Z",
       "subdomain_count": 4,
       "live_subdomain_count": 4,
       "host_count": 5,
