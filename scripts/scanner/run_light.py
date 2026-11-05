@@ -344,6 +344,7 @@ import evidence  # noqa: E402  (KB 12 job 3r: proven / out of date / guess)
 import csp_policy  # noqa: E402  (job 3z: does the CSP actually limit scripts?)
 import plain_http  # noqa: E402  (job 4f: does http:// send visitors to https?)
 import stack_fingerprint  # noqa: E402  (job 3c — security-stack fingerprints)
+import device_clues  # noqa: E402  (job 4y — what the device behind a web address shows anyone)
 from tech_detect import (  # noqa: E402  (4.7 ⑭′ — shared with run_medium)
     merge_tech_detection,
     parse_httpx_rows,
@@ -2347,6 +2348,23 @@ def check_stack_fingerprint(ctx: ScanContext) -> None:
     mark_tool_ok(ctx, tool)
 
 
+def check_device_clues(ctx: ScanContext) -> None:
+    """(KB 12 job 4y) What the device behind each of the host's addresses shows anyone:
+    four secure handshakes, GET /, at most one same-host redirect, GET /favicon.ico, two
+    seconds apart, no cookie sent (device_clues.py has the rules; trial 4w proved them).
+    Writes one 'device_clues' artifact the device classifier reads. NOT a credited tool:
+    no tools_run / tool_status entry and no planned step (it only adds observations, like
+    the deep scan's greetings), so the progress count and the autocloser's producer list
+    are unchanged. A failure only skips it."""
+    try:
+        art, sent = device_clues.collect(ctx.hostname, "light", log=log)
+    except Exception as e:  # noqa: BLE001 — an observation never sinks the scan
+        log(f"  {device_clues.TOOL_NAME}: skipped ({type(e).__name__})")
+        return
+    ctx.artifacts.append((device_clues.TOOL_NAME, "json", json.dumps(art, sort_keys=True)))
+    log(f"  {device_clues.TOOL_NAME}: {sent} connection(s); " + device_clues.summary(art))
+
+
 def check_plain_http(ctx: ScanContext) -> None:
     """(KB 12 job 4f) Does http://<site>/ send visitors to https? At most 3 ordinary GETs on
     port 80 to the site's own name: the first, then only redirects that stay on plain http
@@ -3708,6 +3726,8 @@ def write_findings_and_artifacts(conn, ctx: ScanContext, Json) -> tuple[int, int
 
         # 302 step 1 — keep the software versions httpx saw (own savepoint).
         software_inventory.record_from_artifacts(cur, ctx, Json, log=log)
+        # Job 4y — a changed set-up, landing page or certificate per address (own savepoint).
+        device_clues.record_from_ctx(cur, ctx, "light", Json, log=log)
 
         for tool_name, output_format, content_str in ctx.artifacts:
             try:
@@ -4028,6 +4048,8 @@ def run(descriptor_path: str, dsn: str) -> int:
             check_library_flaws(ctx)
             log("  → check_stack_fingerprint (job 3c)")
             check_stack_fingerprint(ctx)
+            log("  → check_device_clues (job 4y)")
+            check_device_clues(ctx)
             log("→ check_behavioral_probes")
             check_behavioral_probes(ctx)
         else:

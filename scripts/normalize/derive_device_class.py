@@ -160,6 +160,12 @@ _ARTIFACT_CITED_OBS = {
     # under its own name, vendor Google Cloud — a behavior never names a vendor on our say-so.
     "cloud_armor_edge_deny": "observation",
     "cloud_armor_edge_deny_earlier": "observation",
+    # KB 12 job 4y (2026-11-05): the path a visitor lands on (Globalscape's EFT login page)
+    # and an SSH greeting's library string (Globalscape's "1.82_sshlib" / "_openssh") name a
+    # vendor only through a vendor's own document: each match value needs a cited entry.
+    # A regex ssh_banner row (FortiOS named literally) derives no names and is self-naming.
+    "landing_path": "match_values",
+    "ssh_banner": "match_values",
 }
 
 
@@ -589,8 +595,11 @@ def _selftest() -> int:
     fps, th = load_fingerprints(), load_thresholds()
 
     # 1) The pilot: ftp.sciimage.com / 24.157.51.76. SSH banner (high) + GoDaddy
-    #    cert (medium). Expect edge_firewall / SUSPECTED — matches our human read
-    #    (SCI edge appliance, but the banner never literally names Fortinet).
+    #    cert (medium). KB 12 job 4y (2026-11-05): the banner is Globalscape EFT's own
+    #    greeting (Globalscape KB 11439; the 4k and 4w trials), so it now reads
+    #    origin_host / SUSPECTED, Globalscape EFT. Until 4y it read edge_firewall, a
+    #    "SCI edge appliance"; the GoDaddy cert stays a presence-only medium that loses
+    #    to the high. EFT's web login (landing_path) is the second high that confirms.
     ftp = {
         "ssh_banner": "SSH-2.0-8.1.0.0_openssh SCI",
         "cert_issuer": "Go Daddy Secure Certificate Authority - G2",
@@ -624,7 +633,7 @@ def _selftest() -> int:
                     "http_headers": "server: nginx"}             #   (tiebreak: waf wins, origin_host yields)
 
     expected = {
-        "ftp": ("edge_firewall", "suspected"),
+        "ftp": ("origin_host", "suspected"),
         "waf": ("waf", "confirmed"),
         "bare": ("unknown", "unknown"),
         "pressable": ("unknown", "unknown"),

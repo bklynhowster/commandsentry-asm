@@ -79,24 +79,23 @@ version: 1
 fingerprints:
 
   # ── SSH management banner (HIGH) ─────────────────────────────────────────
-  - signal: ssh_banner_appliance_match
+  # KB 12 job 4y (2026-11-05): the row that read "SSH-2.0-8.1.0.0_openssh SCI" as an
+  # edge firewall (presence-only, managed_by SCI) is GONE. That greeting is Globalscape
+  # EFT's file-transfer server: Globalscape KB 11439 documents EFT's SSH library strings
+  # ("1.82_sshlib" before v7.4.11; "v7.7.1.0_openssh" from v7.4.11), the 4k trial read it
+  # with nothing sent, and the 4w trial found EFT's own web login on the same machines.
+  # So it is an origin server, named by its own greeting, with the citation in
+  # artifact_signatures.yaml (R4: each match_substring is a cited artifact). The SCI text
+  # is the operator's banner suffix, not a vendor, and is not kept.
+  # dedupe_key ssh_greeting: the old fingerprintx artifact and the deep scan's greeting
+  # are one fact (the server's first line), so they never count twice.
+  - signal: globalscape_eft_ssh_greeting
     observation: ssh_banner
-    match_substrings: ["_openssh sci", "8.1.0.0_openssh"]   # SCI = Command's own legacy name (see below)
-    device_class: edge_firewall
-    evidence_class: presence_only
-    # PRESENCE-ONLY, first-party. The banner ("SSH-2.0-8.1.0.0_openssh SCI")
-    # empirically proves a customized appliance firmware whose banner echoes the
-    # string "SCI". SCI (Strategic Content Imaging) is Command's OWN decades-old
-    # company name — SCI *is* Command Companies/Command Digital, the asset owner,
-    # NOT a vendor and NOT a third-party manager. So this is the owner naming
-    # itself: first-party self-identification, the most trustworthy external
-    # evidence there is — and precisely why there is no vendor to name.
-    # `family: fortinet_suspected` used to live here; it was insider knowledge,
-    # not observation, and it rendered "BEHIND FORTINET" on ftp.sciimage.com.
-    # Removed 2026-07-18. Re-earn a *vendor* only via a vendor-identifying signal
-    # (JARM/TLS fingerprint, block page, cookie name, favicon hash). managed_by
-    # stays as operator metadata (allowed under presence_only); it is NOT a vendor.
-    vendor_product: {managed_by: SCI}
+    match_substrings: ["1.82_sshlib", "_openssh"]
+    device_class: origin_host
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Globalscape, product: EFT}
+    dedupe_key: ssh_greeting
   - signal: ssh_banner_appliance_match
     observation: ssh_banner
     match_regex: "fortissh|fortios|fortigate"                # banner literally names FortiOS/FortiGate
@@ -525,6 +524,41 @@ fingerprints:
     evidence_class: vendor_identifying
     vendor_product: {vendor: Fortinet, product: FortiWeb}
     dedupe_key: wafw00f_detection
+
+  # ── What the device behind a web address shows anyone (KB 12 job 4y, 2026-11-05) ──
+  # Read by device_clues.py on the light and deep scans (trial 4w proved the requests and
+  # the reading). Every vendor claim is cited in artifact_signatures.yaml (R4) or is a
+  # certificate naming its own company. One clue alone is 'suspected'; EFT confirms only
+  # with its web login AND its SSH greeting, two different requests in two different
+  # artifacts (distinct dedupe_keys). Cisco gets no new row: the 3c rows already name it.
+  - signal: globalscape_eft_web_login_path
+    observation: landing_path
+    match_semantic: exact                                  # the whole path, element-wise
+    match_values: ["/EFTClient/Account/Login.htm", "/Web/Account/Login.htm"]
+    device_class: origin_host
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Globalscape, product: EFT}
+    dedupe_key: device_clues_landing
+  - signal: microsoft_classic_asp_session_cookie
+    observation: set_cookie_names
+    match_semantic: prefix                                 # ASPSESSIONID + 8 letters, set per site
+    match_values: ["ASPSESSIONID"]
+    device_class: origin_host
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Microsoft, product: IIS (classic ASP)}
+    dedupe_key: passive_cookies
+  # Self-naming: the certificate itself says pressable.com (no corpus entry, as R4 allows
+  # for a cert CN). Matches testssl's bare common name ("*.pressable.com") and the
+  # device clues' subject ("CN=*.pressable.com"); never a name that merely ends in it.
+  # Vendor Automattic (Pressable's owner), as the cert and x-ac rows above say, so the
+  # x-ac header is this row's second, independent tell.
+  - signal: pressable_self_named_certificate
+    observation: cert_subject
+    match_regex: "(^|[ ,=])(\\*\\.)?pressable\\.com($|[ ,])"
+    device_class: hosting_edge
+    evidence_class: vendor_identifying
+    vendor_product: {vendor: Automattic, product: Pressable}
+    dedupe_key: certificate
 
   # ── Slots to characterize as the fleet is swept ──────────────────────────
   # DEFERRED (need a citation and/or AND-matching, added when first observed):
