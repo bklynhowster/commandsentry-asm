@@ -106,7 +106,7 @@ def test_321_words_for_a_host_skipped_on_purpose():
     aid, d, s = ra.stale_row_words(_row("ns02.sciimage.com", T(2026, 10, 15, 1, 11), T(2026, 8, 27, 22, 40),
                                         35.0, 1181.0, True, False, False, skipped=True))
     assert d == "last seen Oct 15 (35 hours ago)"
-    assert s == "not full-scanned on purpose (not a website)"
+    assert s == "not given full scans on purpose: it isn't a website"     # job 4x wording
     assert "Aug" not in s and "never" not in s
 
 
@@ -136,8 +136,8 @@ def test_321_both_renderers_mark_a_skipped_host_as_not_overdue_on_scans():
     html, text = _render(stale)
     flat = " ".join(text.split())
     for out in (html, flat):
-        assert "not full-scanned on purpose (not a website)" in out
-        assert "not full-scanned on purpose (not a website) (overdue)" not in out
-        assert "last seen Oct 15 (35 hours ago) (overdue)" in out
+        assert "not given full scans on purpose: it isn&#x27;t a website" in out or "not given full scans on purpose: it isn't a website" in out
+        assert "it isn't a website, overdue" not in out and "it isn&#x27;t a website, overdue" not in out
+        assert "last seen Oct 15 (35 hours ago), overdue" in out     # job 4x: one bracket
         assert "Overdue means: not seen in a day, no full scan in 8 days, or never." in out
         assert "gives each website a full scan about once a week" in out

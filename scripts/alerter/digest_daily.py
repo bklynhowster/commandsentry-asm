@@ -507,16 +507,28 @@ def _dedupe(rows, seen: set) -> list:
     return out
 
 
-# ── KB 12 job 3t: "not responding", every morning until the host leaves ─────────
-# Howie, 2026-10-26 07:16 (D5): "The daily email gets a line when the host stops responding. It
-# continues for the amount of time that we set for 7 days, and then it's gone." So: one block,
-# every daily while the host is not responding (NOT routed through say-once, by that ruling),
-# gone once it has left the portal. Rows come from public.v_asset_reachability (migration
-# 20261026a), the same view the portal's banner reads:
+# ── KB 12 job 3t, as changed by job 4x: a host that stopped answering, said once ─────
+# D5 (Howie, 2026-10-26 07:16: "The daily email gets a line when the host stops responding. It
+# continues for ... 7 days, and then it's gone") is SUPERSEDED by job 4x (Howie, 2026-11-05
+# 07:29: "We need to kill this repetitiveness"; test.commandcommcentral.com was in 5 of 7
+# dailies). A silent host is said once, under This week, with what to do about it; again only
+# when what is known changes or after 30 days (told.decide_quiet). Rows come from
+# public.v_asset_reachability (migration 20261026a), the view the portal's banner reads:
 #   (asset_id, last_answer_at, reason, notice_since, leaves_on)
-NOT_RESPONDING_BODY = ("Sentry's checks have had no answer from these for more than a day. "
-                       "Each one leaves the portal 7 days after Sentry first flagged it, "
-                       "unless it answers again.")
+def not_responding_body(n: int) -> str:
+    """What the reader can do about it (Howie 2026-11-05: an email should say what to do)."""
+    # 11-05 09:2x: test.commandcommcentral.com was not retired; its name had moved to an address
+    # where nothing answers (Sentry's own discovery history). So the ask covers both cases.
+    if n == 1:
+        return ("Sentry has had no answer from it for more than a day. If this machine is retired, "
+                "ask your IT team to remove its name; if it is still in use, ask them to check it. "
+                "Sentry mentions it once; it drops off the portal on its own unless it answers again.")
+    return ("Sentry has had no answer from these for more than a day. If any of these machines is "
+            "retired, ask your IT team to remove its name; if it is still in use, ask them to check "
+            "it. Sentry mentions each once; each drops off the portal on its own unless it answers again.")
+
+
+NOT_RESPONDING_BODY = not_responding_body(2)      # the name job 3t's callers and tests import
 REASON_WORDS = {
     "name_gone": "Its name no longer exists on the internet.",
     "no_answer": "Its name still points to an address, but nothing answers there.",
@@ -669,7 +681,7 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
                 unrecognized_pages=None, sites=None, certs=None, prev_deep=None,
                 hints=None, brand=None, stale_words=None, stale_intro="",
                 stale_note="", details=None, told=None, not_responding=None,
-                reach_checks=None, quiet_where=None) -> dict:
+                reach_checks=None, quiet_where=None, gaps_to_approver=False) -> dict:
     """Everything the two renderers need, decided once. PURE.
 
     Job 3s ("say it once"): `told` is the record of what was told ({finding_id: row});
@@ -677,7 +689,13 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
     record, a problem is listed only when it is NEW, got WORSE or CAME BACK; anything told
     before and unchanged waits for the weekly ("Still open, no change", or its reminder).
     `told_full` lists the findings behind every problem card shown, for run_alerter to
-    record after the send."""
+    record after the send.
+
+    Job 4x (Howie 2026-11-05 07:29: "We're not telling people that our own product isn't
+    working right"): with `gaps_to_approver` (an approver is set), Sentry's own gaps (lost
+    sight of hosts, the reachability checks stopped, the inventory tripwire) go to
+    model["ours"], for the approver's strip only: never in `do`, the subject, the headline or
+    either rendering. Without an approver they stay as they were, so a gap is never lost."""
     brand = brand or dict(DEFAULT_BRAND)
     came_back = came_back or []
     fixed = fixed or []
@@ -727,7 +745,8 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
         shown.extend(keep)
         return keep
 
-    do, ticket, done = [], [], []
+    do, ticket, done, ours = [], [], [], []
+    gaps = ours if gaps_to_approver else do       # job 4x: Sentry's own gaps
 
     # Job 3t: a host that is not responding is said once in its own block below; it is not
     # also "lost sight of" (that block means a gap in OUR checking) or "stopped answering".
@@ -743,8 +762,8 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
             if stale_words:
                 aid, seen_w, scan_w = stale_words(r)
                 # notes 320/321: say which of the two checks is overdue, in words
-                seen_w += " (overdue)" if (len(r) > 5 and r[5]) else ""
-                scan_w += " (overdue)" if (len(r) > 7 and (r[6] or r[7])) else ""
+                seen_w += ", overdue" if (len(r) > 5 and r[5]) else ""     # 4x: one bracket, not two
+                scan_w += ", overdue" if (len(r) > 7 and (r[6] or r[7])) else ""
                 lines.append(f"{aid}: {seen_w}; {scan_w}")
             else:
                 lines.append(str(r[0]))
@@ -752,7 +771,7 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
             lines.append(f"{r[0]}: expected live and ours, filed as {r[1]} / {r[2]}")
         n = len(stale_assets or []) + len(canary_violations or [])
         body = stale_intro or "A gap in our own checking, not a problem found on these hosts."
-        do.append({
+        gaps.append({
             "kind": "coverage", "severity": "",
             "title": f"Sentry lost sight of {n} host{'s' if n != 1 else ''}",
             "body": body + " Until it closes, they get no new findings.",
@@ -763,21 +782,31 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
     # 1b. job 3t: the reachability checks themselves stopped (then nobody is flagged, 1c is empty)
     checks_stopped = checks_stopped_item(reach_checks, brand)
     if checks_stopped:
-        do.append(checks_stopped)
+        gaps.append(checks_stopped)
 
-    # 1c. job 3t (D5): hosts that are not responding — every day until they leave
+    # 1c. job 4x (supersedes D5): a host that stopped answering, said once, under This week
+    # (appended to `ticket` below, after the findings). `told` None = no record = said, as
+    # findings are.
+    quiet_item, quiet_told = None, []
     if not_responding:
         # W1/W2 (2026-11-03): one line per machine; `quiet_where` None = not read = no fold
-        lines = [not_responding_line(r, brand, label, addr)
-                 for r, label, addr in fold_quiet(not_responding, quiet_where)]
+        lines = []
+        for r, label, addr in fold_quiet(not_responding, quiet_where):
+            reason = (r[2] or "").upper()
+            if told is not None and told_rule.decide_quiet(r[0], reason, told, window_end)[0] != "full":
+                continue
+            lines.append(not_responding_line(r, brand, label, addr))
+            quiet_told.append((told_rule.quiet_key(r[0]), reason, "daily"))
         n = len(lines)
-        do.append({
-            "kind": "not_responding", "severity": "",
-            "title": f"{n} host{' is' if n == 1 else 's are'} not responding",
-            "body": NOT_RESPONDING_BODY,
-            "lines": lines,
-            "note": "", "sites": [], "why": "", "do": "", "tag": "",
-        })
+        if n:
+            quiet_item = {
+                "kind": "not_responding", "severity": "",
+                # the title stays job 3t's: the voice (digest_voice.PLAIN) and Slack key on it
+                "title": f"{n} host{' is' if n == 1 else 's are'} not responding",
+                "body": not_responding_body(n),
+                "lines": lines,
+                "note": "", "sites": [], "why": "", "do": "", "tag": "",
+            }
 
     # 2. findings that need you today
     do += rule(group_problems(pick(changed, DO_TODAY_SEVERITIES), names, prev_deep, hints,
@@ -852,6 +881,8 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
     ticket += rule(group_problems(pick(reconfirmed, DO_TODAY_SEVERITIES + TICKET_SEVERITIES),
                                   names, prev_deep, hints, window_start,
                                   tag="Confirmed by a second scan", details=details))
+    if quiet_item:
+        ticket.append(quiet_item)
     # Ratings that went up: only the sites today's list does not already explain (the
     # header bar says "critical 0 to 4"; repeating each site's reason under the item that
     # caused it is the noise this redesign removes).
@@ -972,11 +1003,12 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
         "sites_total": len(now_b), "counts": now_c, "counts_then": then_c,
         "bands_now": now_b, "bands_then": then_b,
         "change": change_words(now_c, then_c, now_b, then_b, "yesterday") if now_b else "",
-        "degraded": bool(stale_assets or canary_violations or checks_stopped),
+        "degraded": bool(not gaps_to_approver and (stale_assets or canary_violations or checks_stopped)),
         "headline": headline(n_do, n_ticket, do, ticket),
         "minor": minor,
         "baseline": baseline or {},
-        "told_full": told_rule.records(shown, member_sev, "daily"),
+        "told_full": told_rule.records(shown, member_sev, "daily") + quiet_told,
+        "ours": ours,
     }
 
 
@@ -1192,8 +1224,8 @@ def _card(item: dict, portal: str) -> str:
     ring = fill if sev else "#0A4595"
     if item.get("kind") == "coverage":      # our own blind spot: berry, no severity pill
         ring, tint = "#8B1A4A", "#F9E8EF"
-    if item.get("kind") == "not_responding":  # job 3t: the host stopped answering — red, no pill
-        ring, tint = "#A32D2D", "#FCEBEB"
+    # job 4x: a host that stopped answering is a This-week item, said once: the calm default
+    # colour, no longer job 3t's red (it read as an alarm every morning).
     if item.get("overdue_since"):           # job 3r: known, has a fix, sitting — calm violet
         ring, tint = OVERDUE_FILL, OVERDUE_TINT
     head = escape(item["title"])

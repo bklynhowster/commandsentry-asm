@@ -312,7 +312,7 @@ def build_weekly(*, now, window_start, window_end, days, sites, opened, closed, 
                  certs=None, open_serious=None, hints=None, stale_assets=None,
                  canary_violations=None, stale_words=None, stale_intro="", stale_note="",
                  baseline=None, brand=None, details=None, overdue=None, gaps=None,
-                 told=None, fleet_has_waf=True) -> dict:
+                 told=None, fleet_has_waf=True, gaps_to_approver=False) -> dict:
     """Everything the two weekly renderers need, decided once. PURE. `sites` are
     SQL_SITE_RATINGS rows with the rebuild taken at window_start. `overdue` are
     SQL_OPEN_OUT_OF_DATE rows (job 3r): out-of-date findings with a known fix, open
@@ -349,7 +349,8 @@ def build_weekly(*, now, window_start, window_end, days, sites, opened, closed, 
         regressed=[], high_risk=[], new_assets=[], dark_assets=[],
         stale_assets=stale_assets or [], canary_violations=canary_violations or [],
         baseline={}, brand=brand, certs=certs, stale_words=stale_words,
-        stale_intro=stale_intro, stale_note=stale_note)
+        stale_intro=stale_intro, stale_note=stale_note, gaps_to_approver=gaps_to_approver)
+    # job 4x: with an approver, Sentry's own gaps are in daily["ours"] (his strip only), not here
     do = [i for i in daily["do"] if i["kind"] in ("coverage", "cert")]
     n_certs = sum(len(i.get("sites", [])) for i in do if i["kind"] == "cert")
     # Job 3s (plan re-check MF2): ONE grouping over every open problem the week considers,
@@ -419,7 +420,8 @@ def build_weekly(*, now, window_start, window_end, days, sites, opened, closed, 
         "also": also, "quiet": quiet,
         "told_full": told_rule.records(full[:DO_MAX] + late, member_sev, "weekly"),
         "n_closed": n_closed, "n_opened": n_opened, "n_certs": n_certs,
-        "degraded": bool(stale_assets or canary_violations), "baseline": baseline or {},
+        "degraded": bool(not gaps_to_approver and (stale_assets or canary_violations)),
+        "baseline": baseline or {}, "ours": daily["ours"],
     }
     model["headline"] = weekly_headline(model)
     return model

@@ -86,10 +86,10 @@ def test_320_both_renderers_say_it_in_words():
     html, text = _render(stale)
     for out in (html, " ".join(text.split())):
         assert "lost sight of 2 hosts" in out
-        assert "This is a gap in our own checking, not a problem found on the hosts." in out
-        assert "never seen by our checks (overdue)" in out and "never had a full scan (overdue)" in out
-        assert "last seen Jun 6 (131 days ago) (overdue)" in out
-        assert "last full scan Oct 14 (42 hours ago)" in out and "42 hours ago) (overdue)" not in out
+        assert "A gap in our own checking, not a problem found on the hosts." in out     # job 4x wording
+        assert "never seen by our checks, overdue" in out and "never had a full scan, overdue" in out     # job 4x
+        assert "last seen Jun 6 (131 days ago), overdue" in out
+        assert "last full scan Oct 14 (42 hours ago)" in out and "42 hours ago), overdue" not in out
         assert "Overdue means: not seen in 9 hours, no full scan in 7 days, or never." in out
         assert "disc=" not in out and "Clock note" not in out and "assets.last_observed" not in out
         assert "PIPELINE DEGRADED" not in out

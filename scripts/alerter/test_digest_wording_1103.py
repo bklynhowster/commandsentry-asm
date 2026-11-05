@@ -56,7 +56,9 @@ def model(**over):
 
 
 def _block(m):
-    got = [i for i in m["do"] if i["kind"] == "not_responding"]
+    # job 4x (2026-11-05): the block moved from Needs you today to This week
+    got = [i for i in m["ticket"] if i["kind"] == "not_responding"]
+    assert not [i for i in m["do"] if i["kind"] == "not_responding"]
     return got[0] if got else None
 
 
@@ -70,7 +72,7 @@ def test_a_name_and_its_address_are_one_line_name_first():
 
 def test_the_top_line_counts_the_machine_once():
     m = model(not_responding=[IP_ROW, NAME_ROW], quiet_where=WHERE)
-    assert m["headline"] == "Today: 1 host is not responding."
+    assert m["headline"] == "Nothing urgent today. This week: 1 host is not responding."     # job 4x
     text = dd.render_text(m, portal_url="", product_name="COMMANDsentry")
     assert "  [ ] 1 host is not responding" in text
     assert "      - test.commandcommcentral.com (52.119.65.6): no answer since Oct 27, 9:13 AM." in text

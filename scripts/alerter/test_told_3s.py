@@ -85,7 +85,7 @@ def test_two_returns_in_a_row_each_produce_a_card():
 
 
 def test_the_cadence_by_kind_and_the_firewall_case():
-    assert T.CADENCE == {"firewall-1": 30, "firewall-2": 90, "overdue": 30, "serious": 30}
+    assert T.CADENCE == {"firewall-1": 30, "firewall-2": 90, "overdue": 30, "serious": 30, "quiet": 30}   # job 4x
     gap = _item("a.com:commandsentry_heavy:waf-absent-differential:x", family="waf-absent")
     assert T.kind_of(gap, set(), True) == "firewall-1"
     assert T.kind_of(gap, set(), False) == "firewall-2", "no firewall anywhere: a budget decision"

@@ -816,9 +816,13 @@ SQL_STALE_LIVE_ASSETS = """
 --
 -- Columns 0-8 keep their 320 positions (the renderers index 5, 6 and 7); 9 is new.
 -- deep_scan_last_seen / hours_since_deep_scan now carry the scan_run clock.
+-- 10 (job 4x, 2026-11-05): assets.last_alive_at, the last sweep that saw a live service, so
+-- a host that has been silent for months says so instead of reading as news (ns02.sciimage.com
+-- read "last seen Nov 3 (41 hours ago)" on 11-05; it had not answered since Jul 24).
 WITH c AS (
   SELECT a.asset_id,
          a.last_observed,
+         a.last_alive_at,
          a.last_probe_alive_at,
          GREATEST(a.last_observed, a.last_probe_alive_at)        AS seen_at,
          CASE WHEN a.last_probe_alive_at IS NOT NULL
@@ -854,7 +858,8 @@ SELECT
   f.never_scanned                                          AS never_deep_scanned,
   f.scan_stale                                             AS deep_scan_stale,
   f.seen_via,
-  f.skipped
+  f.skipped,
+  f.last_alive_at
 FROM f
 WHERE f.discovery_stale OR f.never_scanned OR f.scan_stale
 ORDER BY
@@ -1540,21 +1545,29 @@ def stale_row_words(r) -> tuple[str, str, str]:
     """
     aid, lo, ls, hrs_disc, hrs_deep, disc_stale, never_ds, deep_ds = r[:8]
     skipped = bool(r[9]) if len(r) > 9 else False
+    alive = r[10] if len(r) > 10 else None
     seen = "never seen by our checks" if lo is None else f"last seen {_day(lo)} ({_ago(hrs_disc)})"
     if skipped:
-        scan = "not full-scanned on purpose (not a website)"
+        scan = "not given full scans on purpose: it isn't a website"
     elif never_ds:
         scan = "never had a full scan"
     elif ls is None:
         scan = "first full scan not due yet"
     else:
         scan = f"last full scan {_day(ls)} ({_ago(hrs_deep)})"
+    # 4x: no answer to Sentry's checks for a month or more before Sentry last saw it named:
+    # say so, it is not news. Sentry's words, not a claim about the host: on 11-05 ns02's
+    # address answered a DNS question while Sentry's own check had had nothing since Jul 24.
+    # It leads the second half, so the renderer's ", overdue" stays on the sighting it marks.
+    # 30 days exactly counts (code review 10:17, minor 3: "a month or more" means >=).
+    if alive is not None and lo is not None and lo - alive >= timedelta(days=30):
+        scan = f"Sentry's checks have had no answer from it since {_day(alive)}; {scan}"
     return aid, seen, scan
 
 
 STALE_INTRO = ("Sentry looks for every host it knows about every 6 hours, and gives each website "
-               "a full scan about once a week. The hosts below have fallen behind on that. "
-               "This is a gap in our own checking, not a problem found on the hosts.")
+               "a full scan about once a week. Below: what has fallen behind on that. "
+               "A gap in our own checking, not a problem found on the hosts.")
 
 
 def _span(hours) -> str:
@@ -1577,7 +1590,8 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
                   unrecognized_pages=None, sites=None, certs=None, prev_deep=None,
                   hints=None, brand=None, discovery_stale_hours=24,
                   deepscan_stale_hours=192, details=None, told=None,
-                  not_responding=None, reach_checks=None, quiet_where=None) -> dict:
+                  not_responding=None, reach_checks=None, quiet_where=None,
+                  gaps_to_approver=False) -> dict:
     """KB 12 job 3l — every part of the old email, sorted into Do today / Worth a ticket /
     Off your plate by digest_daily.build_model. The stale-host wording stays this file's
     (stale_row_words, note 320)."""
@@ -1592,8 +1606,24 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
         stale_words=stale_row_words, stale_intro=STALE_INTRO,
         stale_note=stale_overdue_note(discovery_stale_hours, deepscan_stale_hours),
         details=details, told=told, not_responding=not_responding,
-        reach_checks=reach_checks, quiet_where=quiet_where,
+        reach_checks=reach_checks, quiet_where=quiet_where, gaps_to_approver=gaps_to_approver,
     )
+
+
+def ours_notes(items) -> list[str]:
+    """Job 4x: Sentry's own gaps, whole, for the approver's strip only: each card's title and
+    explanation, every line, and its note, one string per row of the strip. Code review
+    2026-11-05 10:17, must-fix 1: the first cut (the voice path's words since 10-25) kept the
+    title and three lines, so the explanation, the note and any fourth host never reached
+    Howie, though the plan says his box keeps them. PURE."""
+    out = []
+    for so in items or []:
+        body = (so.get("body") or "").strip()
+        out.append("Sentry's own, for you only: " + (so.get("title") or "") + (". " + body if body else ""))
+        out += ["- " + str(ln) for ln in so.get("lines") or []]
+        if so.get("note"):
+            out.append(so["note"])
+    return out
 
 
 def render_html(
@@ -1968,7 +1998,7 @@ def _open_items(rows, names, now):
     return items
 
 
-def _weekly_model(conn, *, now, brand):
+def _weekly_model(conn, *, now, brand, gaps_to_approver=False):
     """Every read the weekly needs, then digest_weekly.build_weekly. The week is the seven
     whole local days before today; `opened` / `closed` run on to now so a rating that
     moved in Monday's early hours is still explained."""
@@ -2003,7 +2033,7 @@ def _weekly_model(conn, *, now, brand):
         canary_violations=canary_violations, stale_words=stale_row_words,
         stale_intro=STALE_INTRO, stale_note=stale_overdue_note(disc_h, deep_h),
         baseline=baseline, brand=brand, overdue=overdue, gaps=gaps, told=told,
-        fleet_has_waf=fleet_has_waf,
+        fleet_has_waf=fleet_has_waf, gaps_to_approver=gaps_to_approver,
     )
 
 
@@ -2582,7 +2612,7 @@ def main() -> int:
             sites=sites, certs=certs, prev_deep=prev_deep, hints=hints, brand=brand,
             discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours,
             details=details, told=told, not_responding=not_responding,
-            reach_checks=reach_checks, quiet_where=quiet_where,
+            reach_checks=reach_checks, quiet_where=quiet_where, gaps_to_approver=gate,
         )
         subject = _dd.subject(model, from_name)
         html = _dd.render_html(model, portal_url=portal_url, product_name=from_name)
@@ -2590,6 +2620,11 @@ def main() -> int:
 
         # ── 3l round 5: the voice and the Slack half (Prodex: ALERTER_VOICE / ALERTER_SLACK) ──
         slack_payload, slack_records, notes = None, [], []
+        # Job 4x: Sentry's own gaps go to the approver's strip only (model["ours"], set when
+        # gated); the voice path's own coverage items, if any, join them.
+        sentry_only = list(model.get("ours") or []) + [i for i in model["do"] if i.get("kind") == "coverage"]
+        if gate:
+            notes += ours_notes(sentry_only)
         voice_on, slack_on = _voice_on(), _slack_on()
         if voice_on or slack_on:
             open_rows = _soft("open problems", SQL_OPEN_PROBLEMS)
@@ -2608,7 +2643,6 @@ def main() -> int:
                     _slack_told_mark_closed(conn)
                 selection = _ds.select(model, open_items, _read_slack_told(conn), window_end,
                                        quiet_news=_ds.quiet_news(not_responding, window_start, window_end))
-            sentry_only = [i for i in model["do"] if i.get("kind") == "coverage"]
             fct = _dv.facts(model, still_open=still, slack=selection, sentry_only=sentry_only,
                             company=brand.get("short_name", ""), day=f"{model['local_end']:%A, %B %-d}")
             out, reason, draft, replaced = None, "", None, []
@@ -2672,9 +2706,8 @@ def main() -> int:
                                        portal_url=portal_url, product_name=from_name, fallback_reason=reason)
                 text = _dv.render_text(out, fct, brand=brand, local_end=model["local_end"],
                                        portal_url=portal_url, product_name=from_name)
-                for so in sentry_only:
-                    notes.append("Sentry's own, for you only: " + so.get("title", "")
-                                 + (" (" + "; ".join(so.get("lines", [])[:3]) + ")" if so.get("lines") else ""))
+                if not gate:      # gated: already in `notes` above (job 4x)
+                    notes += ours_notes(sentry_only)
             if slack_on:
                 slack_payload = _ds.payload(out, selection, product_name=from_name,
                                             day_label=f"{model['local_end']:%A, %B %-d}")
@@ -2780,7 +2813,7 @@ def _run_weekly(conn, *, args, record, name, to_addrs, api_key, from_addr, from_
     now = datetime.now(tz=timezone.utc)
     if record:                                     # job 3s: real runs only, sent or not
         _told_mark_closed(conn)
-    model = _weekly_model(conn, now=now, brand=brand)
+    model = _weekly_model(conn, now=now, brand=brand, gaps_to_approver=gate)   # job 4x
     subject = _dw.weekly_subject(model, from_name)
     if args.preview:
         subject = preview_subject(subject)
@@ -2807,7 +2840,8 @@ def _run_weekly(conn, *, args, record, name, to_addrs, api_key, from_addr, from_
             finalize={"counts": [0, 0, 0], "high_risk_ids": [],
                       "told_full": model.get("told_full") or []},
             approver=list(approver), others=list(others), from_addr=from_addr,
-            from_name=from_name, api_key=api_key, portal_url=portal_url, brand=brand)
+            from_name=from_name, api_key=api_key, portal_url=portal_url, brand=brand,
+            notes=ours_notes(model.get("ours")))                              # job 4x
 
     run_id = None
     if record:
