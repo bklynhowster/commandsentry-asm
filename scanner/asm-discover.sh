@@ -28,6 +28,8 @@ PROFILES_DIR="$SCRIPT_DIR/profiles"
 NORMALIZER="$SCRIPT_DIR/normalize.py"
 GREETER="$REPO_ROOT/scripts/scanner/service_greeting.py"   # job 4k: each server's first line, nothing sent
 CLOUD_CHECK="$REPO_ROOT/scripts/asm/cloud_ip_check.py"   # N2 (4.7 M1/M2): scan-time cloud-edge gate
+KNOWN_NAMES="$SCRIPT_DIR/known_names.py"   # job 5a: source 6, every name Sentry already knows
+DNS_READER="$SCRIPT_DIR/dns_reading.py"    # job 5a: one DNS reading per name, with its health
 
 # ─── Helpers ───────────────────────────────────────────────────────
 log()   { printf "\033[1;36m[%s]\033[0m %s\n" "$(date -u +%H:%M:%S)" "$*" >&2; }
@@ -554,6 +556,20 @@ discover_apex() {
   fi
   log "  crt.sh hits: $(wc -l < "$wd/_src_crtsh.txt" | tr -d ' ')"
 
+  # ─── Source 6: every name Sentry already knows (job 5a, plan v3 A) ──
+  # Howie 2026-11-05 07:29, on ns02 dropping out on Nov 3: "There should be some type of
+  # fail-safe where we recheck it." Sources 1-5 are rebuilt each run; a known name was looked
+  # up only when an outside source happened to list it again. This hands back every name the
+  # previous saved copy knew (and, with SUPABASE_DSN, every owned name the database holds under
+  # this apex). Read only; names outside the apex are dropped by the merge filter below.
+  phase "Subdomain enum source 6/6: names Sentry already knows"
+  : > "$wd/_src_known.txt"
+  python3 "$KNOWN_NAMES" --apex "$apex" \
+    --previous "$ASSETS_DIR/$(cat "$wd/_target_id" 2>/dev/null || echo none).json" \
+    --out "$wd/_src_known.txt" 2> "$wd/known_names.err" \
+    || { warn "known-names source had errors (non-fatal; sources 1-5 still count)"; : > "$wd/_src_known.txt"; }
+  log "  known names: $(wc -l < "$wd/_src_known.txt" | tr -d ' ')"
+
   # ─── Merge + dedupe across all sources ────────────────────
   {
     cat "$wd/_src_passive.txt"
@@ -561,6 +577,7 @@ discover_apex() {
     cat "$wd/_src_wordlist.txt"
     cat "$wd/_src_cert_sans.txt"
     cat "$wd/_src_crtsh.txt"
+    cat "$wd/_src_known.txt"
     echo "$apex"
   } | tr '[:upper:]' '[:lower:]' \
     | grep -E "(^|\.)${apex}$" \
@@ -568,7 +585,7 @@ discover_apex() {
 
   local sub_count
   sub_count=$(wc -l < "$wd/_subdomains.txt" | tr -d ' ')
-  log "Multi-source enum total: $sub_count unique candidates (passive=$(wc -l < "$wd/_src_passive.txt" | tr -d ' '), dns=$(wc -l < "$wd/_src_dns_derived.txt" | tr -d ' '), wordlist=$(wc -l < "$wd/_src_wordlist.txt" | tr -d ' '), certSAN=$(wc -l < "$wd/_src_cert_sans.txt" | tr -d ' '), crtsh=$(wc -l < "$wd/_src_crtsh.txt" | tr -d ' '))"
+  log "Multi-source enum total: $sub_count unique candidates (passive=$(wc -l < "$wd/_src_passive.txt" | tr -d ' '), dns=$(wc -l < "$wd/_src_dns_derived.txt" | tr -d ' '), wordlist=$(wc -l < "$wd/_src_wordlist.txt" | tr -d ' '), certSAN=$(wc -l < "$wd/_src_cert_sans.txt" | tr -d ' '), crtsh=$(wc -l < "$wd/_src_crtsh.txt" | tr -d ' '), known=$(wc -l < "$wd/_src_known.txt" | tr -d ' '))"
 
   phase "Liveness check (httpx) on all subdomains"
   httpx -list "$wd/_subdomains.txt" -silent -json \
@@ -586,6 +603,8 @@ discover_apex() {
   #      this source upstream so this won't flood with phantoms.
   #   5. Cert SAN hits — names the TLS cert advertises = names the operator
   #      explicitly intended to serve. High signal even if HTTP probe fails.
+  #   6. Names Sentry already knows (job 5a, source 6) — owned names that once answered;
+  #      a name that stops answering HTTP must not drop out of sight for that alone.
   jq -r 'select(.status_code != null) | (.input // .host // .url)' "$wd/httpx_apex.json" 2>/dev/null \
     | sed -E 's#https?://##; s#/.*##' \
     | sort -u > "$wd/_live_subdomains.txt"
@@ -593,6 +612,7 @@ discover_apex() {
   [[ -s "$wd/_src_dns_derived.txt" ]] && cat "$wd/_src_dns_derived.txt" >> "$wd/_live_subdomains.txt"
   [[ -s "$wd/_src_wordlist.txt"    ]] && cat "$wd/_src_wordlist.txt"    >> "$wd/_live_subdomains.txt"
   [[ -s "$wd/_src_cert_sans.txt"   ]] && cat "$wd/_src_cert_sans.txt"   >> "$wd/_live_subdomains.txt"
+  [[ -s "$wd/_src_known.txt"       ]] && grep -E "(^|\.)${apex}$" "$wd/_src_known.txt" >> "$wd/_live_subdomains.txt"
   sort -u -o "$wd/_live_subdomains.txt" "$wd/_live_subdomains.txt"
 
   # ─── Tier 2 phantom defense — DNS resolution gate ───────────────────
@@ -637,6 +657,20 @@ discover_apex() {
   resolved_count=$(wc -l < "$wd/_resolved_subdomains.txt" | tr -d ' ')
   phantom_count=$(wc -l < "$wd/_phantom_subdomains.txt" | tr -d ' ')
   log "  DNS gate: $resolved_count resolved, $phantom_count phantom (CT-log artifacts suspected)"
+
+  # ─── DNS readings with health (job 5a, plan v3 section 0) ───────────
+  # Every resolved name and every known name, each record type read with how the lookup went
+  # (ok / nxdomain / failed), so a later comparison never reads a timeout as a removal. Plain
+  # DNS questions only, no zone transfer. A failed reader writes NO file (it writes all or
+  # nothing), and with no readings the importer compares nothing this run and keeps the last
+  # good readings as the baseline.
+  phase "DNS readings with health (job 5a): every resolved and every known name"
+  cat "$wd/_resolved_subdomains.txt" "$wd/_src_known.txt" 2>/dev/null \
+    | grep -E "(^|\.)${apex}$" | sort -u > "$wd/_reading_names.txt" || true
+  rm -f "$wd/dns_readings.json"
+  python3 "$DNS_READER" --names "$wd/_reading_names.txt" --apex "$apex" \
+    --out "$wd/dns_readings.json" 2> "$wd/dns_readings.err" \
+    || warn "DNS readings had errors (non-fatal: no DNS change is compared this run)"
 
   # Replace the merged candidate list with the resolved-only list. The
   # phantom list lives in _phantom_subdomains.txt for the normalizer to
