@@ -26,7 +26,34 @@ SEV_RANK = {"CRITICAL": 1, "HIGH": 2, "MODERATE-HIGH": 3, "MODERATE": 4, "LOW": 
 OPEN_STATUSES = ("detected", "confirmed", "open", "regressed")
 
 # Cadence in days — starting numbers (Howie, 2026-10-22 20:02 and 2026-10-23 07:25, 13:50).
-CADENCE = {"firewall-1": 30, "firewall-2": 90, "overdue": 30, "serious": 30}
+CADENCE = {"firewall-1": 30, "firewall-2": 90, "overdue": 30, "serious": 30, "quiet": 30}
+
+# KB 12 job 4x (Howie 2026-11-05 07:29, on the test host in 5 of 7 dailies: "We need to kill
+# this repetitiveness ... we would give a reminder after a certain amount of time. That has
+# to happen."). Supersedes D5 (2026-10-26: "continues for ... 7 days"): a host that stops
+# answering is said ONCE; again only when what is known about it changes (its reason: the
+# name went away, it never answered) or after CADENCE["quiet"] days (a host that flickers on
+# and off). Recorded in the same table as findings, under its own key (digest_told.finding_id
+# is free text with no link to findings; SQL_TOLD_MARK_CLOSED joins findings, so it never
+# touches these rows); the reason rides in last_full_severity, the column a telling records.
+QUIET_PREFIX = "host-quiet:"
+
+
+def quiet_key(asset_id: str) -> str:
+    return QUIET_PREFIX + (asset_id or "")
+
+
+def decide_quiet(asset_id: str, reason: str | None, told: dict, now):
+    """('full', 'new' | 'changed' | 'due') or ('quiet', None) for one silent host. PURE."""
+    r = told.get(quiet_key(asset_id))
+    if not r:
+        return "full", "new"
+    if (r.get("last_full_severity") or "") != (reason or "").upper():
+        return "full", "changed"
+    last = r.get("last_full_at")
+    if last is None or now >= last + timedelta(days=CADENCE["quiet"]):
+        return "full", "due"
+    return "quiet", None
 
 FIREWALL_FAMILIES = ("waf-absent", "waf-not-blocking", "waf-partial")
 # a firewall is there by definition: the case cannot flip when another gap closes

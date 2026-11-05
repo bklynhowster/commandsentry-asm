@@ -15,7 +15,7 @@ from __future__ import annotations
 import inspect
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -45,7 +45,9 @@ def model(**over):
 
 
 def _block(m):
-    got = [i for i in m["do"] if i["kind"] == "not_responding"]
+    # job 4x (2026-11-05): the block lives under This week now, never Needs you today
+    assert not [i for i in m["do"] if i["kind"] == "not_responding"]
+    got = [i for i in m["ticket"] if i["kind"] == "not_responding"]
     assert len(got) <= 1
     return got[0] if got else None
 
@@ -61,17 +63,20 @@ def test_the_line_says_when_why_and_when_it_leaves_in_plain_words():
         "nothing answers there.")
 
 
-def test_the_block_is_in_needs_you_today_right_after_our_own_coverage():
+def test_the_block_is_under_this_week_with_what_to_do():
+    """Job 4x (Howie 2026-11-05 07:29): not a Needs-you-today alarm; it says what to do."""
     stale = [("lost.example", "a", "b", None, None)]
     m = model(not_responding=[VALOREP, SILENT], stale_assets=stale,
               stale_words=lambda r: (r[0], "last seen Oct 20", "last full scan Oct 1"))
-    kinds = [i["kind"] for i in m["do"]]
-    assert kinds[:2] == ["coverage", "not_responding"], kinds
+    assert [i["kind"] for i in m["do"]] == ["coverage"]
     b = _block(m)
     assert b["title"] == "2 hosts are not responding"
     assert b["severity"] == "" and b["lines"][0].startswith("valorep.prodexlabs.com: ")
-    assert "7 days" in b["body"] and "unless it answers again" in b["body"]
-    assert _block(model(not_responding=[VALOREP]))["title"] == "1 host is not responding"
+    assert "ask your IT team to remove its name" in b["body"] and "unless it answers again" in b["body"]
+    one = _block(model(not_responding=[VALOREP]))
+    assert one["title"] == "1 host is not responding"
+    assert one["body"].startswith("Sentry has had no answer from it for more than a day. If this machine is retired")
+    assert " these " not in one["body"]
 
 
 def test_no_rows_no_block():
@@ -80,14 +85,36 @@ def test_no_rows_no_block():
     assert _block(model(not_responding=None)) is None
 
 
-def test_it_repeats_every_day_and_is_not_said_once():
-    """D5 exempts it from say-once: a full told record changes nothing about the block."""
-    told = {"f-1": {"finding_id": "f-1", "first_told_at": W0, "last_full_at": W0,
-                    "last_full_severity": "HIGH", "last_full_in": "daily", "reminders": 0,
-                    "closed_seen_at": None}}
-    a, b = _block(model(not_responding=[VALOREP])), _block(model(not_responding=[VALOREP], told=told))
-    assert a == b and a is not None
-    assert "told_rule" not in inspect.getsource(dd.not_responding_line)
+def _told(key, reason, at):
+    return {key: {"finding_id": key, "first_told_at": at, "last_full_at": at, "last_full_severity": reason,
+                  "last_full_in": "daily", "reminders": 0, "closed_seen_at": None}}
+
+
+def test_it_is_said_once_then_left_alone_supersedes_d5():
+    """Job 4x (Howie 2026-11-05 07:29: "We need to kill this repetitiveness"): D5's
+    every-day block is gone. Said once; again when what is known changes or after 30 days."""
+    key = "host-quiet:valorep.prodexlabs.com"
+    # no record at all (table unreadable) = said, as findings are; an empty record = new
+    assert _block(model(not_responding=[VALOREP])) is not None
+    m = model(not_responding=[VALOREP], told={})
+    assert _block(m) is not None and (key, "NAME_GONE", "daily") in m["told_full"]
+    # told yesterday, same reason: not said again, not recorded again
+    m = model(not_responding=[VALOREP], told=_told(key, "NAME_GONE", W0))
+    assert _block(m) is None and not [r for r in m["told_full"] if r[0] == key]
+    assert m["headline"] == "Nothing needs you today."
+    # what is known changed (it was told as merely not answering; now its name is gone)
+    assert _block(model(not_responding=[VALOREP], told=_told(key, "NO_ANSWER", W0))) is not None
+    # 30 days on (a host that flickers on and off): told again
+    old = W1 - timedelta(days=30)
+    assert _block(model(not_responding=[VALOREP], told=_told(key, "NAME_GONE", old))) is not None
+    assert _block(model(not_responding=[VALOREP], told=_told(key, "NAME_GONE", old + timedelta(minutes=1)))) is None
+    # one host told, one new: only the new one, counted alone
+    b = _block(model(not_responding=[VALOREP, SILENT], told=_told(key, "NAME_GONE", W0)))
+    assert b["title"] == "1 host is not responding" and b["lines"][0].startswith("mail.commandweb.com")
+    # a finding's record never silences a host, and a host's never touches a finding
+    f1 = {"f-1": {"finding_id": "f-1", "first_told_at": W0, "last_full_at": W0, "last_full_severity": "HIGH",
+                  "last_full_in": "daily", "reminders": 0, "closed_seen_at": None}}
+    assert _block(model(not_responding=[VALOREP], told=f1)) is not None
 
 
 def test_a_not_responding_host_is_not_also_lost_sight_of_or_stopped_answering():
@@ -95,7 +122,7 @@ def test_a_not_responding_host_is_not_also_lost_sight_of_or_stopped_answering():
     dark = [("valorep.prodexlabs.com", "valorep", "prodex", W1, {"last_seen": "Oct 22"})]
     m = model(not_responding=[VALOREP], stale_assets=stale, dark_assets=dark,
               stale_words=lambda r: (r[0], "x", "y"))
-    assert [i["kind"] for i in m["do"]] == ["not_responding"]
+    assert [i["kind"] for i in m["do"]] == [] and _block(m) is not None
     assert not any(i["kind"] == "dark" for i in m["ticket"])
     assert m["degraded"] is False, "a host that is down is not a gap in OUR checking"
     # a different host stays where it was
@@ -106,14 +133,15 @@ def test_a_not_responding_host_is_not_also_lost_sight_of_or_stopped_answering():
 
 def test_the_subject_and_headline_count_it():
     m = model(not_responding=[VALOREP])
-    assert m["headline"] == "Today: 1 host is not responding."
-    assert dd.subject(m, "PRODEXsentry").endswith(": 1 for today")
+    assert m["headline"] == "Nothing urgent today. This week: 1 host is not responding."     # job 4x
+    assert dd.subject(m, "PRODEXsentry").endswith(": nothing urgent, 1 this week")
 
 
 def test_both_renderings_carry_it():
     m = model(not_responding=[VALOREP, SILENT])
     html = dd.render_html(m, portal_url="https://portal.example", product_name="PRODEXsentry")
-    assert "2 hosts are not responding" in html and "#FCEBEB" in html and "#A32D2D" in html
+    # job 4x: a This-week item in the calm default colour, no longer an alarm red
+    assert "2 hosts are not responding" in html and "#FCEBEB" not in html and "#A32D2D" not in html
     assert '<span style="font-weight:700;">valorep.prodexlabs.com</span>: no answer since Oct 22' in html
     text = dd.render_text(m, portal_url="", product_name="PRODEXsentry")
     assert "  [ ] 2 hosts are not responding" in text
