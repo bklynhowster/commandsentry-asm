@@ -235,6 +235,40 @@ jobs:
           echo "Running with: ${ARGS[*]:-(no args — defaults: all thin findings)}"
           python scripts/backfill/synthesize_finding_descriptions.py "${ARGS[@]}"
 
+      # ── KB 12 job 4u (2026-11-04): a plain-English explanation of each finding ──
+      # Howie, 12:33: "we need to have an AI explanatory area. This is hard for a
+      # non-expert to understand." The dashboard's "What does this mean?" box shows
+      # these saved words. Runs after D-029's worker so a section it just wrote
+      # feeds the words, and whatever that worker did (!cancelled): a failed or
+      # skipped D-029 run must not hold the plain words back. Writes only the
+      # plain_* columns; never a switched-off finding (plain_rejected_at); at most
+      # plain_words.PER_RUN_LIMIT findings a run, and the log says when it hit it.
+      - name: Set up Python for the plain words
+        if: ${{ !cancelled() && steps.precheck.outputs.should_run == 'false' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the plain words' packages
+        if: ${{ !cancelled() && steps.precheck.outputs.should_run == 'false' }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'anthropic<1.0' supabase
+
+      - name: Write plain words (job 4u)
+        if: ${{ !cancelled() }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: "https://hdygktppfvuspnumpfuq.supabase.co"
+        run: |
+          set -euo pipefail
+          ARGS=()
+          if [[ -n "${{ github.event.inputs.finding_id }}" ]]; then
+            ARGS+=(--finding-id "${{ github.event.inputs.finding_id }}")
+          fi
+          python scripts/backfill/plain_words.py "${ARGS[@]}"
+
       - name: Summarize
         if: always()
         run: |
