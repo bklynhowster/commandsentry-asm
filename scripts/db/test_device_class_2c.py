@@ -394,7 +394,12 @@ def test_the_2b_tuple_and_the_capability_map_differ_only_by_the_known_delta():
     # Obsidian 310: stack_id_waf_differential joins the delta on the SAME reasoning as
     # fwbbot — the artifact is written on every heavy run, dry-run included, so its
     # presence is not "this run was able to look" and must not make a run 2b-capable.
-    assert delta == {"stack_id_fwbbot_check", "stack_id_waf_differential"}, (
+    # KB 12 job 4y (2026-11-05), the same reasoning again, decided in the 4y plan and code
+    # review: device_clues is written on every light HTTPS pass and deep scan, even when no
+    # address answered, and service_greeting whenever naabu found a non-web port, greeted or
+    # not. Their presence is not "this run was able to look", so 2b's rule is unchanged.
+    assert delta == {"stack_id_fwbbot_check", "stack_id_waf_differential",
+                     "device_clues", "service_greeting"}, (
         f"the 2b/capability delta changed: {sorted(delta)}. If that is intended, it is "
         f"a change to a shipped rule and belongs in a relay turn, not in this assert.")
 

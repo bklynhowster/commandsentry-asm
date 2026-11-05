@@ -15,7 +15,7 @@ version: 1
 # --- Signals, by independent strength --------------------------------------
 signals:
   high:
-    - ssh_banner_appliance_match       # SSH banner matches a known appliance fingerprint (e.g. "8.1.0.0_openssh SCI")
+    - ssh_banner_appliance_match       # SSH banner names an appliance (e.g. FortiOS / FortiGate); the EFT greeting is its own row (4y)
     - product_http_header              # distinct product header (Server: FortiADC, X-FortiGate-Firmware, ...)
     - fortiweb_challenge_endpoint_fwbbot_check   # 4.7 Q1: active-probe observes FortiWeb's /fwbbot_check challenge (dormant until Phase B/D)
     - wafw00f_high_confidence          # wafw00f positively NAMES a vendor (fortiweb/cloudflare) at high confidence
@@ -74,6 +74,14 @@ signals:
     - cisco_asa_anyconnect_hello       # AnyConnect hello answered with config-auth (+ version)
     - cisco_asa_webvpn_login_page      # the ASA's own /+CSCOE+/logon.html WebVPN page
     - fortigate_sslvpn_landing         # FortiGate SSL-VPN landing (top.location=/remote/login)
+    # ── What the device behind a web address shows anyone (KB 12 job 4y, 2026-11-05) ──
+    # Each names a vendor from a cited artifact or a self-naming certificate. One alone is
+    # 'suspected'; EFT's two (web login + SSH greeting) are different requests in different
+    # artifacts, so together they are 'confirmed'. No bar is lowered.
+    - globalscape_eft_web_login_path   # landing path /EFTClient/ or /Web/Account/Login.htm (Globalscape manual)
+    - globalscape_eft_ssh_greeting     # SSH greeting "1.82_sshlib" or "<n>_openssh" (Globalscape KB 11439)
+    - microsoft_classic_asp_session_cookie  # ASPSESSIONID... session cookie (Microsoft)
+    - pressable_self_named_certificate # the certificate names pressable.com itself
   medium:
     - cert_issuer_subject_pattern      # e.g. a GoDaddy wildcard cert, or a vendor-named cert CN
     # ip_in_vendor_mgmt_range DELETED 2026-07-18 (4.7 R1): an IP range attributes a

@@ -191,6 +191,7 @@ from phase_source import HEAVY as TIER_HEAVY  # noqa: E402
 # No I/O — run_safe_exploit_phase does the HTTP + guardrails, hands captured responses here.
 import safe_exploit as se
 import service_greeting as sg   # job 4k: each server's first line, nothing sent
+import device_clues             # job 4y: what the device behind each address shows anyone
 
 # Degradation primitives (SPEC_SCANNER_DEGRADATION_HARDENING.md).
 from degradation import (
@@ -4025,6 +4026,25 @@ def credit_net_depth(ctx: HeavyScanContext, naabu_ok: bool) -> None:
         log("  net-depth: naabu not credited (degraded, or no proof of reachability)")
 
 
+def run_device_clues_phase(ctx: HeavyScanContext) -> None:
+    """Job 4y: what the device behind each of the host's addresses shows anyone, through
+    the scan's own VPN (so Command's 208.199.0.x addresses get clues too): four secure
+    handshakes, GET /, at most one same-host redirect, GET /favicon.ico, two seconds apart,
+    no cookie sent (device_clues.py has the rules; trial 4w proved them). Quiet requests,
+    so it runs beside the passive collector, before anything that could earn a ban.
+
+    Not a credited tool (the greetings' rule): no tools_run / tool_status entry and no
+    planned step, so the progress count and the autocloser's producer list are unchanged.
+    One 'device_clues' artifact; a failure only skips it."""
+    try:
+        art, sent = device_clues.collect(ctx.hostname, "heavy", log=log)
+    except Exception as e:  # an observation never fails the tier
+        log(f"  device_clues: skipped ({type(e).__name__})")
+        return
+    ctx.artifacts.append((device_clues.TOOL_NAME, "json", json.dumps(art, sort_keys=True)))
+    log(f"  device_clues: {sent} connection(s); " + device_clues.summary(art))
+
+
 def run_greeting_phase(ctx: HeavyScanContext, open_ports: list[dict]) -> None:
     """Job 4k: read the first line each non-web open port sends, SENDING NOTHING.
 
@@ -4044,10 +4064,11 @@ def run_greeting_phase(ctx: HeavyScanContext, open_ports: list[dict]) -> None:
     ('fingerprintx-service-<port>-<proto>'), so a service Sentry already listed is
     re-observed, not listed twice. Only that key is kept; fingerprintx is gone (4l).
 
-    The artifact is 'service_greeting', deliberately NOT a 'fingerprint%' name: the
-    device classifier reads 'fingerprint%' artifacts for its SSH-banner signal, and
-    its rule there reads "_openssh SCI" as a firewall, while the 4k trial and
-    Globalscape's documents show it is the EFT file-transfer server.
+    The artifact is 'service_greeting', deliberately NOT a 'fingerprint%' name. Job 4y
+    (2026-11-05): the device classifier now reads it for its SSH-banner signal, beside the
+    old 'fingerprint%' artifacts, because the rule that read "_openssh SCI" as a firewall
+    is gone: an EFT greeting now names Globalscape EFT (Globalscape KB 11439), as the 4k
+    trial and Globalscape's documents show.
     """
     ports = sorted({p["port"] for p in (open_ports or []) if isinstance(p.get("port"), int)})
     targets = [p for p in ports if p not in sg.SKIP_PORTS]
@@ -4206,6 +4227,10 @@ def write_event_findings_and_artifacts(
         software_inventory.record_from_artifacts(cur, ctx, Json, log=log)
 
         if write_artifacts:
+            # Job 4y — a changed set-up, landing page or certificate per address (own
+            # savepoint). Only when this run's artifacts are kept, so the change rows and
+            # the stored artifacts they compare against never disagree.
+            device_clues.record_from_ctx(cur, ctx, "heavy", Json, log=log)
             for tool_name, output_format, content_str in ctx.artifacts:
                 try:
                     content_obj = json.loads(content_str)
@@ -4732,6 +4757,8 @@ def run(descriptor_path: str, dsn: str) -> int:
         #
         # This is why wafw00f sits at ORDER_BAN_DETECT. Same reasoning, same place.
         run_stack_id_passive_phase(ctx, work_dir)
+        # Job 4y: the device clues are quiet requests too, so they also go before the noise.
+        run_device_clues_phase(ctx)
 
         cumulative_abort = None
         import phase_registry  # noqa: F401  — import registers the phases

@@ -373,3 +373,86 @@ artifact_signatures:
       cited_at: 2026-10-14
       note: "⚠ Upgrade to the F5 knowledge article on the default ASM blocking response page when it can be fetched. wafw00f's f5bigipasm plugin matches this page too — dedupe_key wafw00f_detection."
       quote_provenance: "F5 DevCentral thread 'ASM blocking request' (2013), the default blocking page reproduced verbatim; surfaced via web search 2026-10-14"
+
+  # ── What the device behind a web address shows anyone (KB 12 job 4y, 2026-11-05) ──
+  # Read by device_clues.py (light and deep scans) and the deep scan's greetings
+  # (service_greeting.py, job 4k). Each entry is a public vendor document; the 4w trial
+  # (2026-11-05) found these on Sentry's own targets. Quotes copied from the live pages
+  # 2026-11-05 (Claude, read only).
+
+  # ── Globalscape EFT: the web client's login page (PRIMARY vendor doc) ───────
+  # Where EFT's web client sends a visitor. The deep scan and light scan read it as the
+  # path GET / lands on (one same-host redirect at most). Two spellings, one product:
+  # older EFT uses /EFTClient/, newer /Web/ (ftp.unimacgraphics.com and ftp.sciimage.com).
+  - name: /EFTClient/Account/Login.htm
+    artifact_type: landing_path
+    vendor: Globalscape
+    product: EFT
+    vendor_unique: true
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://hstechdocs.helpsystems.com/manuals/globalscape/arcus811/mergedprojects/admin/end-user_login_in_to_eft_server.htm
+      quote: "For example, https://mycompany.com/EFTClient/Account/Login.htm Or https://mycompany.com/Web/Account/Login.htm."
+      cited_at: 2026-11-05
+      quote_provenance: "Globalscape (HelpSystems/Fortra) manual, End-User Login In to EFT (Arcus 8.1.1); read 2026-11-05"
+  - name: /Web/Account/Login.htm
+    artifact_type: landing_path
+    vendor: Globalscape
+    product: EFT
+    vendor_unique: true
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://hstechdocs.helpsystems.com/manuals/globalscape/arcus811/mergedprojects/admin/end-user_login_in_to_eft_server.htm
+      quote: "For example, https://mycompany.com/EFTClient/Account/Login.htm Or https://mycompany.com/Web/Account/Login.htm."
+      cited_at: 2026-11-05
+      quote_provenance: "Globalscape (HelpSystems/Fortra) manual, End-User Login In to EFT (Arcus 8.1.1); read 2026-11-05"
+
+  # ── Globalscape EFT: its SSH library's name in the greeting (PRIMARY vendor KB) ──
+  # The first line EFT's SSH server sends: "SSH-2.0-1.82_sshlib ..." (the Bitvise library,
+  # before v7.4.11) or "SSH-2.0-<n>_openssh ..." (v7.4.11 and later). Read with nothing
+  # sent (job 4k). Note the order: OpenSSH itself says "OpenSSH_<n>", never "_openssh".
+  - name: 1.82_sshlib
+    artifact_type: ssh_greeting
+    vendor: Globalscape
+    product: EFT
+    vendor_unique: true
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://kb.globalscape.com/Print11439.aspx
+      quote: "Prior to this update, EFT used 1.82_sshlib (Bitvise)."
+      corroboration:
+        - https://kb.globalscape.com/KnowledgebaseArticle11439.aspx
+      cited_at: 2026-11-05
+      quote_provenance: "Globalscape KB 11439, Switch to Legacy (Bitvise) SSH Library; read 2026-11-05"
+  - name: _openssh
+    artifact_type: ssh_greeting
+    vendor: Globalscape
+    product: EFT
+    vendor_unique: true
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://kb.globalscape.com/Print11439.aspx
+      quote: "EFT v7.4.11 and later use an updated SSH library, v7.7.1.0_openssh."
+      corroboration:
+        - https://kb.globalscape.com/KnowledgebaseArticle11439.aspx
+      cited_at: 2026-11-05
+      quote_provenance: "Globalscape KB 11439, Switch to Legacy (Bitvise) SSH Library; read 2026-11-05"
+
+  # ── Microsoft IIS, classic ASP: the session cookie (PRIMARY vendor doc) ─────
+  # Classic ASP's session cookie is ASPSESSIONID followed by 8 letters (insite.sciimage.com
+  # sets ASPSESSIONIDCECCAQAT). ASP.NET's is ASP.NET_SessionId, a different name. The row
+  # matches the prefix; the product named is the platform, never an application on it.
+  - name: ASPSESSIONID
+    artifact_type: set_cookie_name
+    vendor: Microsoft
+    product: IIS (classic ASP)
+    vendor_unique: true
+    citation:
+      source_type: vendor_primary_documentation
+      url: https://learn.microsoft.com/en-us/previous-versions/office/developer/server-technologies/ms972338(v=msdn.10)
+      quote: "Later, when a cookie is received, the Session ID can be restored from the 16-character cookie string (ASPSESSIONID)."
+      corroboration:
+        - https://learn.microsoft.com/en-us/archive/blogs/jaskis/securing-session-id-aspasp-net
+      cited_at: 2026-11-05
+      note: "The corroborating Microsoft post shows the header as classic ASP sends it: 'Set-Cookie: ASPSESSIONIDQSSTSAAB=...; path=/'."
+      quote_provenance: "Microsoft, ASP and Web Session Management (MSDN, previous versions); read 2026-11-05"

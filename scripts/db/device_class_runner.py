@@ -160,6 +160,16 @@ _ART_NUCLEI      = "nuclei%"           # capability marker only (see above)
 # two independent tells (4.7 R4-revised: independence = different artifact).
 _ART_VPN_HELLO   = "stack_id_vpn_hello"
 _ART_VPN_PORTAL  = "stack_id_vpn_portal"
+# KB 12 job 4y (2026-11-05). The deep scan's greetings (job 4k, service_greeting.py: the
+# first line a server sends, nothing sent) feed ssh_banner beside the old fingerprintx
+# artifacts, now that the row reading "_openssh SCI" as a firewall is gone. And the light
+# and deep scans' device clues (device_clues.py: handshakes, GET /, one same-host redirect,
+# the icon) feed landing_path, and are a second source for cert_subject and
+# set_cookie_names. Neither joins EVIDENCE_ARTIFACT_PATTERNS (2b's "a run that could
+# look"): both are written on passes that may have got no answer at all, the fwbbot /
+# differential reasoning; test_device_class_2c pins the delta.
+_ART_GREETING    = "service_greeting"
+_ART_DEVICE_CLUES = "device_clues"
 # Not a registry observation: version / firmware build date read by the same checks,
 # attached to vendor_product when the winning vendor/product is the one they name.
 APPLIANCE_DETAILS = "_appliance_details"
@@ -372,6 +382,42 @@ def extract_cert(testssl_raw: str | None) -> dict:
     if subject:
         out["cert_subject"] = subject
     return out
+
+
+def _clues_obj(raw) -> dict | None:
+    if isinstance(raw, dict):
+        return raw
+    try:
+        obj = json.loads(raw) if raw else None
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def clues_cert_subject(raw) -> str | None:
+    """Job 4y: the device_clues artifact's certificate subject (the first answering
+    address's, "C=US, O=..., CN=..."), or None. Not testssl's shape: a device_clues
+    artifact is a JSON object with a top-level cert_subject. PURE."""
+    obj = _clues_obj(raw)
+    v = obj.get("cert_subject") if obj else None
+    return v if isinstance(v, str) and v else None
+
+
+def clues_landing_paths(raw) -> list | None:
+    """Job 4y: the paths a visitor lands on across the host's answering addresses, or None
+    when no address answered GET / (did not look). PURE."""
+    obj = _clues_obj(raw)
+    v = obj.get("landing_paths") if obj else None
+    if not isinstance(v, list):
+        return None
+    paths = [p for p in v if isinstance(p, str) and p]
+    return paths or None
+
+
+def cert_subject_from(raw) -> str | None:
+    """cert_subject from either source: testssl's commonName / SAN, else device_clues'
+    subject. PURE (the capability extractor; gather_observations keeps testssl first)."""
+    return extract_cert(raw if isinstance(raw, str) else None).get("cert_subject") or clues_cert_subject(raw)
 
 
 # ── P1 (Obsidian 146): the two persisted stack-id artifacts -> observations ───
@@ -628,11 +674,13 @@ class _Cap(NamedTuple):
 
 
 OBSERVATION_CAPABILITY: dict[str, _Cap] = {
-    "ssh_banner":   _Cap(_CAP_TEXT_EXTRACT, (_ART_FINGERPRINT,), extract=extract_ssh_banner),
+    # 4y: the deep scan's greetings are a second producer (their JSON text carries the
+    # "SSH-2.0-..." line the same extractor finds).
+    "ssh_banner":   _Cap(_CAP_TEXT_EXTRACT, (_ART_FINGERPRINT, _ART_GREETING), extract=extract_ssh_banner),
     "cert_issuer":  _Cap(_CAP_TEXT_EXTRACT, (_ART_TESTSSL,),
                          extract=lambda raw: extract_cert(raw).get("cert_issuer")),
-    "cert_subject": _Cap(_CAP_TEXT_EXTRACT, (_ART_TESTSSL,),
-                         extract=lambda raw: extract_cert(raw).get("cert_subject")),
+    # 4y: device_clues is a second source (the subject of the first answering address).
+    "cert_subject": _Cap(_CAP_TEXT_EXTRACT, (_ART_TESTSSL, _ART_DEVICE_CLUES), extract=cert_subject_from),
     # ⚠ KEY-PRESENT, NOT NON-EMPTY, AND THE DIFFERENCE IS LOAD-BEARING.
     # `wafw00f_detected: false` is a REAL verdict — wafw00f ran, probed five ways,
     # and found no WAF. Testing it for truthiness would call every genuine negative
@@ -647,8 +695,9 @@ OBSERVATION_CAPABILITY: dict[str, _Cap] = {
     # satisfies it, exactly as either can supply the signal.
     "http_headers":     _Cap(_CAP_JSON_NONEMPTY, _PASSIVE_TOOL_NAMES, field="headers",
                              depth=_PASSIVE_MERGE_DEPTH),
-    "set_cookie_names": _Cap(_CAP_JSON_NONEMPTY, _PASSIVE_TOOL_NAMES, field="set_cookie_names",
-                             depth=_PASSIVE_MERGE_DEPTH),
+    # 4y: device_clues carries a top-level set_cookie_names too (every name any address set).
+    "set_cookie_names": _Cap(_CAP_JSON_NONEMPTY, _PASSIVE_TOOL_NAMES + (_ART_DEVICE_CLUES,),
+                             field="set_cookie_names", depth=_PASSIVE_MERGE_DEPTH),
     # nuclei: the ARTIFACT is the capability marker, the FINDING is the evidence, and
     # they live in different tables — see EVIDENCE_ARTIFACT_PATTERNS for why both
     # halves are needed.
@@ -690,6 +739,11 @@ OBSERVATION_CAPABILITY: dict[str, _Cap] = {
     "asa_logon_page": _Cap(_CAP_JSON_KEY_NOT_NULL, (_ART_VPN_PORTAL,), field="asa_logon"),
     "fortigate_sslvpn_page": _Cap(_CAP_JSON_KEY_NOT_NULL, (_ART_VPN_PORTAL,),
                                   field="fortigate_sslvpn"),
+    # KB 12 job 4y. ⚠ NOT-NULL, the 3c reasoning: device_clues writes landing_paths as null
+    # when no address answered GET / (did not look), and as a list when one did (a real
+    # answer, so a page that is not EFT's is a measured "no" R5 may act on). A timeout never
+    # strips a class. Depth 1 = the newest artifact, exactly what gather_observations reads.
+    "landing_path": _Cap(_CAP_JSON_KEY_NOT_NULL, (_ART_DEVICE_CLUES,), field="landing_paths"),
 }
 
 # Registry observations with NO producer in gather_observations. DECLARED, not
@@ -1054,12 +1108,13 @@ def _passive_cookie_names(candidates) -> list:
 def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str) -> dict:
     obs: dict = {}
     fresh = f"now() - interval '{int(freshness_days)} days'"
+    # 4y: the newest of the old fingerprintx artifacts and the deep scan's greetings.
     cur.execute(
         f"""select coalesce(a.content_jsonb->>'raw', a.content_jsonb::text) as raw
               from scan_run_artifacts a join scan_run r on r.scan_run_id = a.scan_run_id
-             where r.asset_id = %s and a.tool_name ilike %s
+             where r.asset_id = %s and (a.tool_name ilike %s or a.tool_name = %s)
                and r.completed_at > {fresh}
-             order by r.completed_at desc limit 1""", (asset_id, _ART_FINGERPRINT))
+             order by r.completed_at desc limit 1""", (asset_id, _ART_FINGERPRINT, _ART_GREETING))
     row = cur.fetchone()
     banner = extract_ssh_banner(row["raw"] if row else None)
     if banner:
@@ -1151,6 +1206,9 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
     #   An empty map is ABSENCE, not evidence of absence.
     # ⇒ (383) cookies merge per NAME, not per list — see _passive_cookie_names.
     passive_candidates = _fresh_json_many(_PASSIVE_TOOL_NAMES, limit=_PASSIVE_MERGE_DEPTH)
+    # 4y: the device clues' cookie names merge in per NAME (383's rule), newest first, to the
+    # same depth. They feed set_cookie_names only: the artifact has no top-level "headers".
+    clue_candidates = _fresh_json_many((_ART_DEVICE_CLUES,), limit=_PASSIVE_MERGE_DEPTH)
 
     def _passive_signal(key):
         for cand in passive_candidates:
@@ -1162,7 +1220,7 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
     http_headers = http_headers_from_passive({"headers": _passive_signal("headers")})
     if http_headers:
         obs["http_headers"] = http_headers       # -> product_http_header row
-    cookie_names = _passive_cookie_names(passive_candidates)
+    cookie_names = _passive_cookie_names(passive_candidates + clue_candidates)
     if cookie_names:
         obs["set_cookie_names"] = cookie_names   # -> fortiweb_cookiesession1 (exact match)
 
@@ -1248,6 +1306,18 @@ def gather_observations(cur, asset_id: str, freshness_days: int, nuclei_re: str)
             details["fortinet/fortigate"] = {"release_date": fgt["release_date"]}
     if details:
         obs[APPLIANCE_DETAILS] = details
+
+    # KB 12 job 4y (2026-11-05): the device clues. The newest artifact decides, as for the VPN
+    # checks; null landing_paths (no address answered GET /) emits nothing and, by the
+    # NOT-NULL capability above, cannot demote either.
+    clues = _fresh_json(_ART_DEVICE_CLUES) or {}
+    paths = clues_landing_paths(clues)
+    if paths:
+        obs["landing_path"] = paths                  # -> globalscape_eft_web_login_path (exact)
+    if not obs.get("cert_subject"):                  # testssl's reading first, when there is one
+        subject = clues_cert_subject(clues)
+        if subject:
+            obs["cert_subject"] = subject            # -> the self-named certificate rows
 
     # 157 (4.7 Q1/Q2): discovery-tier wafw00f from asset_surface (light scan), distinct
     # from the heavy stack_id_wafw00f above. Registry dedupes the two (dedupe_key) so heavy

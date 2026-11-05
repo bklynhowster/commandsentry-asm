@@ -218,7 +218,9 @@ def test_deep_scan_service_rows(monkeypatch=None):
     assert ev.finding_id == old_key, "the fingerprintx-era service row must be re-observed, not duplicated"
     assert ctx.fpx_services == {(22, "tcp"): "ssh"}, ctx.fpx_services
     assert [a[0] for a in ctx.artifacts] == ["service_greeting"]
-    assert not "service_greeting".startswith("fingerprint"), "the classifier must not read greetings yet"
+    # Job 4y: the classifier now reads greetings by their own name (device_class_runner
+    # _ART_GREETING), not through the old 'fingerprint%' pattern.
+    assert not "service_greeting".startswith("fingerprint"), "greetings keep their own artifact name"
     assert ctx.tools_run == [] and ctx.tool_status == {}, "not a credited tool"
 
 
