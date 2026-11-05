@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-11-05T18:20:53Z_d97dd3b1",
-    "started_at": "2026-11-05T18:20:53Z",
-    "completed_at": "2026-11-05T18:28:57Z",
-    "duration_seconds": 484,
+    "id": "scan_2026-11-05T20:32:39Z_1b563660",
+    "started_at": "2026-11-05T20:32:39Z",
+    "completed_at": "2026-11-05T20:42:12Z",
+    "duration_seconds": 573,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -31,7 +31,7 @@
     "subdomain_count": 20,
     "live_subdomain_count": 20,
     "host_count": 7,
-    "service_count": 59,
+    "service_count": 58,
     "newest_cert_expiry_days": 43,
     "top_hosting_org": "Automattic, Inc",
     "platforms": [
@@ -45,8 +45,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -127,8 +127,8 @@
       ],
       "dns": {
         "a": [
-          "199.16.172.68",
-          "199.16.173.113"
+          "199.16.173.113",
+          "199.16.172.68"
         ],
         "aaaa": [],
         "cname": null,
@@ -140,12 +140,12 @@
           "ns-1743.awsdns-25.co.uk"
         ],
         "txt": [
-          "k15vdsovvom4v46fi4r4rivts6",
           "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
-          "sek942qd3nt1s4lqh1h2ovmmai",
+          "2o6gse9gno2mv04ik7f14kssfq",
+          "k15vdsovvom4v46fi4r4rivts6",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "MS=ms33269626",
-          "2o6gse9gno2mv04ik7f14kssfq"
+          "sek942qd3nt1s4lqh1h2ovmmai",
+          "MS=ms33269626"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -252,8 +252,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:57Z",
-      "last_seen": "2026-11-05T18:28:57Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -316,7 +316,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         },
         {
@@ -344,7 +344,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         }
       ],
@@ -383,13 +383,13 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:57Z",
-      "last_seen": "2026-11-05T18:28:57Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
-        "live": true,
-        "http_status": 200,
-        "title": "Server Login"
+        "live": false,
+        "http_status": null,
+        "title": null
       },
       "probe_status": {
         "naabu": {
@@ -411,28 +411,7 @@
           "is_private": false
         }
       ],
-      "services": [
-        {
-          "ip": "208.199.0.160",
-          "port": 443,
-          "protocol": "tcp",
-          "service": "https",
-          "banner": null,
-          "tls": true,
-          "cert": {
-            "subject": "CN=*.unimacgraphics.com",
-            "issuer": "CN=GoDaddy TLS Intermediate CA DV - R1v1, O=GoDaddy.com, C=US",
-            "san": [
-              "*.unimacgraphics.com",
-              "unimacgraphics.com"
-            ],
-            "not_before": "2026-09-25T18:01:02Z",
-            "not_after": "2027-04-11T18:01:02Z",
-            "self_signed": false,
-            "days_to_expiry": 156
-          }
-        }
-      ],
+      "services": [],
       "dns": {
         "a": [
           "208.199.0.160"
@@ -448,18 +427,12 @@
       "fingerprint": {
         "server": null,
         "platform_label": null,
-        "tech": [
-          {
-            "name": "jQuery",
-            "version": "1.4.2",
-            "category": "frontend"
-          }
-        ]
+        "tech": []
       },
       "waf": {
-        "detected": true,
-        "vendor": "Generic",
-        "confidence": "high"
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
       }
     },
     {
@@ -467,8 +440,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:57Z",
-      "last_seen": "2026-11-05T18:28:57Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -531,7 +504,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         },
         {
@@ -559,7 +532,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         }
       ],
@@ -598,8 +571,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:57Z",
-      "last_seen": "2026-11-05T18:28:57Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -704,8 +677,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -810,8 +783,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -855,9 +828,10 @@
           "banner": null,
           "tls": true,
           "cert": {
-            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=WA, C=US",
-            "issuer": "CN=Microsoft TLS G2 RSA CA OCSP 04, O=Microsoft Corporation, C=US",
+            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
             "san": [
+              "stamp2.login.microsoftonline.com",
               "login.microsoftonline-int.com",
               "login.microsoftonline-p.com",
               "login.microsoftonline.com",
@@ -865,13 +839,12 @@
               "login2.microsoftonline.com",
               "loginex.microsoftonline-int.com",
               "loginex.microsoftonline.com",
-              "stamp2.login.microsoftonline-int.com",
-              "stamp2.login.microsoftonline.com"
+              "stamp2.login.microsoftonline-int.com"
             ],
-            "not_before": "2026-10-15T15:30:15Z",
-            "not_after": "2027-01-23T14:30:15Z",
+            "not_before": "2026-10-17T00:00:00Z",
+            "not_after": "2027-01-25T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 78
+            "days_to_expiry": 81
           }
         }
       ],
@@ -909,8 +882,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -954,9 +927,10 @@
           "banner": null,
           "tls": true,
           "cert": {
-            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=WA, C=US",
-            "issuer": "CN=Microsoft TLS G2 RSA CA OCSP 04, O=Microsoft Corporation, C=US",
+            "subject": "CN=stamp2.login.microsoftonline.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
             "san": [
+              "stamp2.login.microsoftonline.com",
               "login.microsoftonline-int.com",
               "login.microsoftonline-p.com",
               "login.microsoftonline.com",
@@ -964,13 +938,12 @@
               "login2.microsoftonline.com",
               "loginex.microsoftonline-int.com",
               "loginex.microsoftonline.com",
-              "stamp2.login.microsoftonline-int.com",
-              "stamp2.login.microsoftonline.com"
+              "stamp2.login.microsoftonline-int.com"
             ],
-            "not_before": "2026-10-15T15:30:15Z",
-            "not_after": "2027-01-23T14:30:15Z",
+            "not_before": "2026-10-17T00:00:00Z",
+            "not_after": "2027-01-25T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 78
+            "days_to_expiry": 81
           }
         }
       ],
@@ -1008,8 +981,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1072,7 +1045,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         },
         {
@@ -1100,14 +1073,14 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         }
       ],
       "dns": {
         "a": [
-          "199.16.172.68",
-          "199.16.173.113"
+          "199.16.173.113",
+          "199.16.172.68"
         ],
         "aaaa": [],
         "cname": null,
@@ -1139,8 +1112,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1203,7 +1176,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         },
         {
@@ -1231,7 +1204,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         }
       ],
@@ -1270,8 +1243,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1376,8 +1349,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1394,7 +1367,17 @@
       },
       "hosts": [
         {
-          "ip": "150.171.109.67",
+          "ip": "150.171.110.152",
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation",
+          "country": "US",
+          "region": "Washington",
+          "city": "Quincy",
+          "reverse_dns": null,
+          "is_private": false
+        },
+        {
+          "ip": "2603:1061:14:194::1",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -1404,17 +1387,7 @@
           "is_private": false
         },
         {
-          "ip": "150.171.109.71",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Washington",
-          "city": "Redmond",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "2603:1061:14:42::1",
+          "ip": "2603:1061:14:196::1",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
@@ -1426,7 +1399,7 @@
       ],
       "services": [
         {
-          "ip": "150.171.109.67",
+          "ip": "150.171.110.152",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -1434,7 +1407,7 @@
           "tls": false
         },
         {
-          "ip": "150.171.109.67",
+          "ip": "150.171.110.152",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
@@ -1455,10 +1428,10 @@
       ],
       "dns": {
         "a": [
-          "150.171.109.71"
+          "150.171.110.152"
         ],
         "aaaa": [
-          "2603:1061:14:42::1"
+          "2603:1061:14:194::1"
         ],
         "cname": "portal-tims-hwe9g3dbgbbnakc8.z03.azurefd.net",
         "mx": [],
@@ -1494,8 +1467,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1600,8 +1573,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1721,8 +1694,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1785,7 +1758,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         },
         {
@@ -1813,7 +1786,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         }
       ],
@@ -1852,8 +1825,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -1916,7 +1889,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         },
         {
@@ -1944,7 +1917,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         }
       ],
@@ -1983,8 +1956,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -2127,8 +2100,8 @@
       ],
       "dns": {
         "a": [
-          "199.16.172.68",
-          "199.16.173.113"
+          "199.16.173.113",
+          "199.16.172.68"
         ],
         "aaaa": [],
         "cname": "unimacgraphics.com",
@@ -2140,11 +2113,11 @@
           "ns-1743.awsdns-25.co.uk"
         ],
         "txt": [
-          "MS=ms33269626",
-          "sek942qd3nt1s4lqh1h2ovmmai",
           "2o6gse9gno2mv04ik7f14kssfq",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
+          "MS=ms33269626",
           "k15vdsovvom4v46fi4r4rivts6",
+          "sek942qd3nt1s4lqh1h2ovmmai",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
           "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
@@ -2252,8 +2225,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -2316,7 +2289,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         },
         {
@@ -2344,7 +2317,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         }
       ],
@@ -2383,8 +2356,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -2447,7 +2420,7 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         },
         {
@@ -2475,14 +2448,14 @@
             "not_before": "2026-09-27T19:45:14Z",
             "not_after": "2026-12-26T19:45:13Z",
             "self_signed": false,
-            "days_to_expiry": 51
+            "days_to_expiry": 50
           }
         }
       ],
       "dns": {
         "a": [
-          "199.16.172.68",
-          "199.16.173.113"
+          "199.16.173.113",
+          "199.16.172.68"
         ],
         "aaaa": [],
         "cname": null,
@@ -2514,8 +2487,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-05T18:28:58Z",
-      "last_seen": "2026-11-05T18:28:58Z",
+      "first_discovered": "2026-11-05T20:42:13Z",
+      "last_seen": "2026-11-05T20:42:13Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -2618,11 +2591,40 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-11-05T12:22:52Z_a4f1d4e0",
+    "since_scan": "scan_2026-11-05T18:20:53Z_d97dd3b1",
     "added": {
-      "subdomains": [
-        "ftp.unimacgraphics.com"
+      "subdomains": [],
+      "services": [
+        {
+          "subdomain": "portal-tims.unimacgraphics.com",
+          "ip": "150.171.110.152",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "portal-tims.unimacgraphics.com",
+          "ip": "150.171.110.152",
+          "port": 443,
+          "protocol": "tcp"
+        }
       ],
+      "hosts": [
+        {
+          "subdomain": "portal-tims.unimacgraphics.com",
+          "ip": "150.171.110.152"
+        },
+        {
+          "subdomain": "portal-tims.unimacgraphics.com",
+          "ip": "2603:1061:14:194::1"
+        },
+        {
+          "subdomain": "portal-tims.unimacgraphics.com",
+          "ip": "2603:1061:14:196::1"
+        }
+      ]
+    },
+    "removed": {
+      "subdomains": [],
       "services": [
         {
           "subdomain": "ftp.unimacgraphics.com",
@@ -2645,10 +2647,6 @@
       ],
       "hosts": [
         {
-          "subdomain": "ftp.unimacgraphics.com",
-          "ip": "208.199.0.160"
-        },
-        {
           "subdomain": "portal-tims.unimacgraphics.com",
           "ip": "150.171.109.67"
         },
@@ -2662,206 +2660,20 @@
         }
       ]
     },
-    "removed": {
-      "subdomains": [],
-      "services": [
-        {
-          "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "150.171.110.195",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "150.171.110.195",
-          "port": 443,
-          "protocol": "tcp"
-        }
-      ],
-      "hosts": [
-        {
-          "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "150.171.109.183"
-        },
-        {
-          "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "150.171.110.195"
-        },
-        {
-          "subdomain": "portal-tims.unimacgraphics.com",
-          "ip": "2603:1061:14:1c2::1"
-        }
-      ]
-    },
     "changed": {
       "fingerprint": [],
       "cert": [],
-      "reachability": []
+      "reachability": [
+        {
+          "subdomain": "ftp.unimacgraphics.com",
+          "from": true,
+          "to": false,
+          "is_root": false
+        }
+      ]
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-10-08T06:40:51Z_57891936",
-      "started_at": "2026-10-08T06:40:51Z",
-      "completed_at": "2026-10-08T06:48:14Z",
-      "subdomain_count": 16,
-      "live_subdomain_count": 16,
-      "host_count": 7,
-      "service_count": 46,
-      "subdomain_names": [
-        "email.unimacgraphics.com",
-        "mail.unimacgraphics.com",
-        "myorders-test.unimacgraphics.com",
-        "myorders.unimacgraphics.com",
-        "myordersauth-test.unimacgraphics.com",
-        "myordersauth.unimacgraphics.com",
-        "novo.unimacgraphics.com",
-        "novo2.unimacgraphics.com",
-        "portal-test.unimacgraphics.com",
-        "portal-tims.unimacgraphics.com",
-        "portal.unimacgraphics.com",
-        "unimacgraphics.com",
-        "uoltest.unimacgraphics.com",
-        "www.unimacgraphics.com",
-        "xen.unimacgraphics.com",
-        "zoetislabs.unimacgraphics.com"
-      ],
-      "ports_by_sub": {
-        "unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "email.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "mail.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "myorders-test.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "myorders.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "myordersauth-test.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "myordersauth.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "novo.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "novo2.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "portal-test.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "portal-tims.unimacgraphics.com": {
-          "150.171.109.149": [
-            80,
-            443
-          ]
-        },
-        "portal.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "uoltest.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        },
-        "www.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "xen.unimacgraphics.com": {
-          "199.16.172.68": [
-            80,
-            443
-          ],
-          "199.16.173.113": [
-            80,
-            443
-          ]
-        },
-        "zoetislabs.unimacgraphics.com": {
-          "40.71.11.138": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.3",
-        "Slider Revolution": "6.7.58",
-        "WPMU DEV Smush": "4.3.4",
-        "Yoast SEO": "28.6",
-        "jQuery Migrate": "3.4.1",
-        "IIS": "10.0",
-        "jQuery UI": "1.12.1"
-      }
-    },
     {
       "scan_id": "scan_2026-10-08T12:36:00Z_be3b2d2f",
       "started_at": "2026-10-08T12:36:00Z",
@@ -24252,6 +24064,1582 @@
         "IIS": "10.0",
         "jQuery UI": "1.12.1"
       }
+    },
+    {
+      "scan_id": "scan_2026-11-05T20:32:39Z_1b563660",
+      "started_at": "2026-11-05T20:32:39Z",
+      "completed_at": "2026-11-05T20:42:12Z",
+      "subdomain_count": 20,
+      "live_subdomain_count": 20,
+      "host_count": 7,
+      "service_count": 58,
+      "subdomain_names": [
+        "email.unimacgraphics.com",
+        "ftp.unimacgraphics.com",
+        "mail.unimacgraphics.com",
+        "myorders-test.unimacgraphics.com",
+        "myorders.unimacgraphics.com",
+        "myordersauth-test.unimacgraphics.com",
+        "myordersauth.unimacgraphics.com",
+        "novo.unimacgraphics.com",
+        "novo2.unimacgraphics.com",
+        "portal-test.unimacgraphics.com",
+        "portal-tims.unimacgraphics.com",
+        "portal.unimacgraphics.com",
+        "unimacgraphics.com",
+        "uoltest.unimacgraphics.com",
+        "www.firewall.unimacgraphics.com",
+        "www.portal.unimacgraphics.com",
+        "www.unimacgraphics.com",
+        "www.zoetislabs.unimacgraphics.com",
+        "xen.unimacgraphics.com",
+        "zoetislabs.unimacgraphics.com"
+      ],
+      "ports_by_sub": {
+        "unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "email.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "ftp.unimacgraphics.com": {},
+        "mail.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "myorders-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myorders.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myordersauth-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "myordersauth.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "novo.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "novo2.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "portal-test.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "portal-tims.unimacgraphics.com": {
+          "150.171.110.152": [
+            80,
+            443
+          ]
+        },
+        "portal.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "uoltest.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        },
+        "www.firewall.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "www.portal.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "www.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "www.zoetislabs.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "xen.unimacgraphics.com": {
+          "199.16.172.68": [
+            80,
+            443
+          ],
+          "199.16.173.113": [
+            80,
+            443
+          ]
+        },
+        "zoetislabs.unimacgraphics.com": {
+          "40.71.11.138": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.3",
+        "Slider Revolution": "6.8.1",
+        "WPMU DEV Smush": "4.3.6",
+        "Yoast SEO": "28.8",
+        "jQuery Migrate": "3.4.1",
+        "IIS": "10.0",
+        "jQuery UI": "1.12.1"
+      }
     }
-  ]
+  ],
+  "dns_readings": {
+    "email.unimacgraphics.com": {
+      "name": "email.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1778,
+          "values": [
+            "199.16.172.68",
+            "199.16.173.113"
+          ]
+        },
+        "aaaa": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "mx": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "199.16.172.68": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        },
+        "199.16.173.113": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        }
+      }
+    },
+    "ftp.unimacgraphics.com": {
+      "name": "ftp.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 578,
+          "values": [
+            "208.199.0.160"
+          ]
+        },
+        "aaaa": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "mx": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "208.199.0.160": {
+          "asn": "AS701",
+          "asn_org": "Verizon Business"
+        }
+      }
+    },
+    "mail.unimacgraphics.com": {
+      "name": "mail.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1798,
+          "values": [
+            "199.16.172.68",
+            "199.16.173.113"
+          ]
+        },
+        "aaaa": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "mx": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "199.16.172.68": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        },
+        "199.16.173.113": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        }
+      }
+    },
+    "myorders-test.unimacgraphics.com": {
+      "name": "myorders-test.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "cname_chain": [
+            "axsomeumpisitesdev.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 8,
+          "values": [
+            "40.71.11.138"
+          ]
+        },
+        "aaaa": {
+          "cname_chain": [
+            "axsomeumpisitesdev.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 8,
+          "values": [
+            "axsomeumpisitesdev.azurewebsites.net"
+          ]
+        },
+        "mx": {
+          "cname_chain": [
+            "axsomeumpisitesdev.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "cname_chain": [
+            "axsomeumpisitesdev.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "cname_chain": [
+            "axsomeumpisitesdev.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "40.71.11.138": {
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation"
+        }
+      }
+    },
+    "myorders.unimacgraphics.com": {
+      "name": "myorders.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "cname_chain": [
+            "axsomeumpisiteslive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 8,
+          "values": [
+            "40.71.11.138"
+          ]
+        },
+        "aaaa": {
+          "cname_chain": [
+            "axsomeumpisiteslive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 8,
+          "values": [
+            "axsomeumpisiteslive.azurewebsites.net"
+          ]
+        },
+        "mx": {
+          "cname_chain": [
+            "axsomeumpisiteslive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "cname_chain": [
+            "axsomeumpisiteslive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "cname_chain": [
+            "axsomeumpisiteslive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "40.71.11.138": {
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation"
+        }
+      }
+    },
+    "myordersauth-test.unimacgraphics.com": {
+      "name": "myordersauth-test.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "cname_chain": [
+            "axsomeumpisitesauthdev.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 8,
+          "values": [
+            "40.71.11.138"
+          ]
+        },
+        "aaaa": {
+          "cname_chain": [
+            "axsomeumpisitesauthdev.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 8,
+          "values": [
+            "axsomeumpisitesauthdev.azurewebsites.net"
+          ]
+        },
+        "mx": {
+          "cname_chain": [
+            "axsomeumpisitesauthdev.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "cname_chain": [
+            "axsomeumpisitesauthdev.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "cname_chain": [
+            "axsomeumpisitesauthdev.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "40.71.11.138": {
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation"
+        }
+      }
+    },
+    "myordersauth.unimacgraphics.com": {
+      "name": "myordersauth.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "cname_chain": [
+            "axsomeumpisitesauthlive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 9,
+          "values": [
+            "40.71.11.138"
+          ]
+        },
+        "aaaa": {
+          "cname_chain": [
+            "axsomeumpisitesauthlive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 38,
+          "values": [
+            "axsomeumpisitesauthlive.azurewebsites.net"
+          ]
+        },
+        "mx": {
+          "cname_chain": [
+            "axsomeumpisitesauthlive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "cname_chain": [
+            "axsomeumpisitesauthlive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "cname_chain": [
+            "axsomeumpisitesauthlive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "40.71.11.138": {
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation"
+        }
+      }
+    },
+    "novo.unimacgraphics.com": {
+      "name": "novo.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1798,
+          "values": [
+            "199.16.172.68",
+            "199.16.173.113"
+          ]
+        },
+        "aaaa": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "mx": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "199.16.172.68": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        },
+        "199.16.173.113": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        }
+      }
+    },
+    "novo2.unimacgraphics.com": {
+      "name": "novo2.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1798,
+          "values": [
+            "199.16.172.68",
+            "199.16.173.113"
+          ]
+        },
+        "aaaa": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "mx": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "199.16.172.68": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        },
+        "199.16.173.113": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        }
+      }
+    },
+    "portal-test.unimacgraphics.com": {
+      "name": "portal-test.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "cname_chain": [
+            "umpisites.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 9,
+          "values": [
+            "40.71.11.138"
+          ]
+        },
+        "aaaa": {
+          "cname_chain": [
+            "umpisites.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 8,
+          "values": [
+            "umpisites.azurewebsites.net"
+          ]
+        },
+        "mx": {
+          "cname_chain": [
+            "umpisites.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "cname_chain": [
+            "umpisites.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "cname_chain": [
+            "umpisites.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "40.71.11.138": {
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation"
+        }
+      }
+    },
+    "portal-tims.unimacgraphics.com": {
+      "name": "portal-tims.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "cname_chain": [
+            "portal-tims-hwe9g3dbgbbnakc8.z03.azurefd.net",
+            "mr-z03.tm-azurefd.net"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 9,
+          "values": [
+            "150.171.110.149"
+          ]
+        },
+        "aaaa": {
+          "cname_chain": [
+            "portal-tims-hwe9g3dbgbbnakc8.z03.azurefd.net",
+            "mr-z03.tm-azurefd.net"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 9,
+          "values": [
+            "2603:1061:14:193::1"
+          ]
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 9,
+          "values": [
+            "portal-tims-hwe9g3dbgbbnakc8.z03.azurefd.net"
+          ]
+        },
+        "mx": {
+          "cname_chain": [
+            "portal-tims-hwe9g3dbgbbnakc8.z03.azurefd.net",
+            "mr-z03.tm-azurefd.net"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "cname_chain": [
+            "portal-tims-hwe9g3dbgbbnakc8.z03.azurefd.net",
+            "mr-z03.tm-azurefd.net"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "cname_chain": [
+            "portal-tims-hwe9g3dbgbbnakc8.z03.azurefd.net",
+            "mr-z03.tm-azurefd.net"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0
+    },
+    "portal.unimacgraphics.com": {
+      "name": "portal.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "cname_chain": [
+            "umpisiteslive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 9,
+          "values": [
+            "40.71.11.138"
+          ]
+        },
+        "aaaa": {
+          "cname_chain": [
+            "umpisiteslive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 8,
+          "values": [
+            "umpisiteslive.azurewebsites.net"
+          ]
+        },
+        "mx": {
+          "cname_chain": [
+            "umpisiteslive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "cname_chain": [
+            "umpisiteslive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "cname_chain": [
+            "umpisiteslive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "40.71.11.138": {
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation"
+        }
+      }
+    },
+    "unimacgraphics.com": {
+      "name": "unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1778,
+          "values": [
+            "199.16.172.68",
+            "199.16.173.113"
+          ]
+        },
+        "aaaa": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "dmarc": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "mx": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1762,
+          "values": [
+            "10 mx1.hc3765-17.iphmx.com",
+            "20 mx2.hc3765-17.iphmx.com"
+          ]
+        },
+        "ns": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 3,
+          "values": [
+            "ns-1356.awsdns-41.org",
+            "ns-1743.awsdns-25.co.uk",
+            "ns-847.awsdns-41.net",
+            "ns-95.awsdns-11.com"
+          ]
+        },
+        "txt": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1763,
+          "values": [
+            "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
+            "2o6gse9gno2mv04ik7f14kssfq",
+            "MS=ms33269626",
+            "k15vdsovvom4v46fi4r4rivts6",
+            "sek942qd3nt1s4lqh1h2ovmmai",
+            "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
+          ]
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "199.16.172.68": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        },
+        "199.16.173.113": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        }
+      }
+    },
+    "uoltest.unimacgraphics.com": {
+      "name": "uoltest.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "cname_chain": [
+            "uoltest.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 9,
+          "values": [
+            "40.71.11.138"
+          ]
+        },
+        "aaaa": {
+          "cname_chain": [
+            "uoltest.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 9,
+          "values": [
+            "uoltest.azurewebsites.net"
+          ]
+        },
+        "mx": {
+          "cname_chain": [
+            "uoltest.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "cname_chain": [
+            "uoltest.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "cname_chain": [
+            "uoltest.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "40.71.11.138": {
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation"
+        }
+      }
+    },
+    "www.firewall.unimacgraphics.com": {
+      "name": "www.firewall.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1799,
+          "values": [
+            "199.16.172.68",
+            "199.16.173.113"
+          ]
+        },
+        "aaaa": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "mx": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "199.16.172.68": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        },
+        "199.16.173.113": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        }
+      }
+    },
+    "www.portal.unimacgraphics.com": {
+      "name": "www.portal.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1799,
+          "values": [
+            "199.16.172.68",
+            "199.16.173.113"
+          ]
+        },
+        "aaaa": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "mx": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "199.16.172.68": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        },
+        "199.16.173.113": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        }
+      }
+    },
+    "www.unimacgraphics.com": {
+      "name": "www.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "cname_chain": [
+            "unimacgraphics.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1778,
+          "values": [
+            "199.16.172.68",
+            "199.16.173.113"
+          ]
+        },
+        "aaaa": {
+          "cname_chain": [
+            "unimacgraphics.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1778,
+          "values": [
+            "unimacgraphics.com"
+          ]
+        },
+        "mx": {
+          "cname_chain": [
+            "unimacgraphics.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1762,
+          "values": [
+            "10 mx1.hc3765-17.iphmx.com",
+            "20 mx2.hc3765-17.iphmx.com"
+          ]
+        },
+        "ns": {
+          "cname_chain": [
+            "unimacgraphics.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 3,
+          "values": [
+            "ns-1356.awsdns-41.org",
+            "ns-1743.awsdns-25.co.uk",
+            "ns-847.awsdns-41.net",
+            "ns-95.awsdns-11.com"
+          ]
+        },
+        "txt": {
+          "cname_chain": [
+            "unimacgraphics.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1763,
+          "values": [
+            "0ed1fe018aac4d05e88dc74bd3846c05d7d9dc66d1",
+            "2o6gse9gno2mv04ik7f14kssfq",
+            "MS=ms33269626",
+            "k15vdsovvom4v46fi4r4rivts6",
+            "sek942qd3nt1s4lqh1h2ovmmai",
+            "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all"
+          ]
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "199.16.172.68": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        },
+        "199.16.173.113": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        }
+      }
+    },
+    "www.zoetislabs.unimacgraphics.com": {
+      "name": "www.zoetislabs.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1799,
+          "values": [
+            "199.16.172.68",
+            "199.16.173.113"
+          ]
+        },
+        "aaaa": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "mx": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "199.16.172.68": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        },
+        "199.16.173.113": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        }
+      }
+    },
+    "xen.unimacgraphics.com": {
+      "name": "xen.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 1799,
+          "values": [
+            "199.16.172.68",
+            "199.16.173.113"
+          ]
+        },
+        "aaaa": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "mx": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "199.16.172.68": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        },
+        "199.16.173.113": {
+          "asn": "AS2635",
+          "asn_org": "Automattic, Inc"
+        }
+      }
+    },
+    "zoetislabs.unimacgraphics.com": {
+      "name": "zoetislabs.unimacgraphics.com",
+      "name_status": "exists",
+      "read_at": "2026-11-05T20:33:47Z",
+      "records": {
+        "a": {
+          "cname_chain": [
+            "zoetislive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 9,
+          "values": [
+            "40.71.11.138"
+          ]
+        },
+        "aaaa": {
+          "cname_chain": [
+            "zoetislive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "cname": {
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": 9,
+          "values": [
+            "zoetislive.azurewebsites.net"
+          ]
+        },
+        "mx": {
+          "cname_chain": [
+            "zoetislive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "ns": {
+          "cname_chain": [
+            "zoetislive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        },
+        "txt": {
+          "cname_chain": [
+            "zoetislive.azurewebsites.net",
+            "waws-prod-blu-157.sip.azurewebsites.windows.net",
+            "waws-prod-blu-157.eastus.cloudapp.azure.com"
+          ],
+          "health": "ok",
+          "status": "NOERROR",
+          "ttl": null,
+          "values": []
+        }
+      },
+      "nx_streak": 0,
+      "owners": {
+        "40.71.11.138": {
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation"
+        }
+      }
+    }
+  }
 }
