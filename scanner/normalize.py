@@ -464,6 +464,70 @@ def build_dns(work: Path) -> dict:
             out["spf"] = txt
     return out
 
+# ─── Job 5a: DNS readings with health (plan v3 section 0) ─────────────────────
+# scanner/dns_reading.py writes work/dns_readings.json (all or nothing) for every resolved and
+# every known name: each record type with how the lookup went (ok / nxdomain / failed). Here,
+# against the previous saved copy's readings, three things are added so BOTH copies (the git
+# copy and the database blob the importer stores) carry the same baseline:
+#   * carried: a record type whose lookup FAILED this run keeps the last good record, marked
+#     carried, so the next comparison is against the last thing actually seen (a failed lookup
+#     is never a removal, and never resets the baseline). No file at all = every reading carried.
+#   * nx_streak: consecutive runs in which the name itself got NXDOMAIN. An unknown reading
+#     neither advances nor resets it (fail closed). "Gone" needs 2 (surface_diff).
+#   * owners: who holds each address, from this run's own ipinfo read (hosts[]); never a new
+#     lookup. Unknown stays unknown.
+DNS_RECORD_KEYS = ("a", "aaaa", "cname", "ns", "mx", "txt", "dmarc")
+
+
+def build_dns_readings(work: Path, subdomains: list[dict], prev_readings) -> dict | None:
+    prev_readings = prev_readings if isinstance(prev_readings, dict) else {}
+    doc = read_json(work / "dns_readings.json")
+    fresh = doc.get("readings") if isinstance(doc, dict) else None
+    if not isinstance(fresh, dict):
+        if not prev_readings:
+            return None
+        carried = {}
+        for n, r in prev_readings.items():
+            if isinstance(r, dict):
+                c = json.loads(json.dumps(r))
+                c["carried"] = True
+                carried[n] = c
+        return carried
+    hosts_by_name = {s.get("name"): (s.get("hosts") or []) for s in subdomains if isinstance(s, dict)}
+    out: dict[str, dict] = {}
+    for n, r in sorted(fresh.items()):
+        if not isinstance(r, dict):
+            continue
+        r = json.loads(json.dumps(r))
+        p = prev_readings.get(n) if isinstance(prev_readings.get(n), dict) else {}
+        recs = r.setdefault("records", {})
+        addr_carried = False
+        for k in DNS_RECORD_KEYS:
+            cur, old = recs.get(k), (p.get("records") or {}).get(k)
+            if (isinstance(cur, dict) and cur.get("health") == "failed"
+                    and isinstance(old, dict) and old.get("health") in ("ok", "nxdomain")):
+                keep = dict(old)
+                keep["carried"] = True
+                recs[k] = keep
+                addr_carried = addr_carried or k in ("a", "aaaa")
+        st = r.get("name_status")
+        streak = int(p.get("nx_streak") or 0)
+        r["nx_streak"] = streak + 1 if st == "nxdomain" else (streak if st != "exists" else 0)
+        if addr_carried:
+            if p.get("owners"):
+                r["owners"] = p["owners"]
+        else:
+            addrs = (set((recs.get("a") or {}).get("values") or [])
+                     | set((recs.get("aaaa") or {}).get("values") or []))
+            owners = {h["ip"]: {"asn": h.get("asn"), "asn_org": h.get("asn_org")}
+                      for h in hosts_by_name.get(n, [])
+                      if isinstance(h, dict) and h.get("ip") in addrs and (h.get("asn") or h.get("asn_org"))}
+            if owners:
+                r["owners"] = owners
+        out[n] = r
+    return out
+
+
 def build_fingerprint(work: Path) -> dict:
     httpx_records = read_jsonl(work / "httpx.json")
     out: dict[str, Any] = {"server": None, "platform_label": None, "tech": []}
@@ -893,6 +957,11 @@ def main():
             print(f"WARN: previous asset JSON unreadable: {e}", file=sys.stderr)
 
     asset_json["deltas"] = compute_deltas(prev, asset_json)
+
+    # Job 5a: DNS readings with health, against the previous copy's (see build_dns_readings).
+    dns_readings = build_dns_readings(work, subdomains, (prev or {}).get("dns_readings"))
+    if dns_readings is not None:
+        asset_json["dns_readings"] = dns_readings
 
     # ─── History: 30-day rolling window of scan summaries + per-host port lists ─
     # Each entry captures enough state to reconstruct "what was open on which

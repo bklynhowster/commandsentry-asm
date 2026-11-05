@@ -354,6 +354,10 @@ from surface_diff import (  # noqa: E402
     _record_service,
     _subdomain_naabu_ok,
     compute_events,
+    dns_changes,
+    dns_event_rows,
+    moved_names,
+    ports_by_name,
 )
 
 
@@ -1041,6 +1045,138 @@ def route_subdomains_to_assets(
     return buckets
 
 
+# ---------------------------------------------------------------------------
+# Job 5a — DNS changes (plan v3 B/C; KB 12 5a). Computed ONCE per apex from discovery's OWN
+# previous readings (kept on the apex's surface blob: the apex bucket alone carries
+# dns_readings) and this run's (asm_doc["dns_readings"], written by scanner/dns_reading.py and
+# the normalizer). The rows go into asset_surface_event and NOWHERE else this push: they are
+# NOT added to the run's real-time fan-out (no email until the alerter push), and the portal
+# shows only the event kinds it already knows (the portal filter push, 2026-11-05).
+#
+# ALL OR NOTHING, BEFORE THE BUCKETS (code review 2026-11-05 14:33, must-fix): read the
+# previous readings, find the changes, write their rows, all under ONE savepoint, before any
+# bucket is written. Only when that succeeds do the moved names' port events stay silent and
+# the run's readings become the new baseline. If ANY of it fails, it rolls back to the
+# savepoint (the importer holds ONE transaction for every file, so nothing else is touched),
+# the port events are written exactly as before 5a, and the apex blob KEEPS the previous
+# readings, so the next run compares against them again and the change is found then: a
+# failed write can delay a DNS change, never erase it.
+# ---------------------------------------------------------------------------
+DNS_SAVEPOINT = "dns_5a"
+
+# The old address of a move is described from its OWN record only when it is itself an owned
+# asset (it is scanned as its own target); nothing is probed for this (plan v3 C, must-fix 1).
+OWNED_ADDRESS_NOW_SQL = """
+SELECT a.asset_id, s.service_count, s.last_seen
+  FROM public.assets a
+  JOIN public.asset_surface s ON s.asset_id = a.asset_id
+ WHERE a.asset_id = ANY(%s) AND a.ownership = 'owned'
+"""
+
+DNS_ASSETS_SQL = """
+SELECT asset_id, is_cloud_endpoint, cloud_provider::text
+  FROM public.assets WHERE asset_id = ANY(%s)
+"""
+
+
+def dns_before_buckets(conn, asm_doc: dict, dns_new: dict, apex_asset_id: str, aliases,
+                       source_tag: str) -> dict:
+    """The whole DNS step, under its own savepoint, before any bucket is written.
+
+    Returns {"found": changes, "moved": names whose port events stay silent, "written": rows,
+    "keep_readings": the previous readings to store instead of this run's (None = store this
+    run's)}. On success `keep_readings` is None. On failure nothing is silenced and, when the
+    previous readings were read, they are kept as the baseline."""
+    out = {"found": [], "moved": frozenset(), "written": 0, "keep_readings": None}
+    made, prior_readings = False, None
+    with conn.cursor() as cur:
+        try:
+            cur.execute(f"SAVEPOINT {DNS_SAVEPOINT}")
+            made = True
+            cur.execute("SELECT surface_data FROM public.asset_surface WHERE asset_id = %s",
+                        (apex_asset_id,))
+            row = cur.fetchone()
+            prior = row[0] if row and isinstance(row[0], dict) else {}
+            prior_readings = prior.get("dns_readings") or {}
+            ids_all = sorted({dns_asset_id(n, apex_asset_id, aliases) for n in dns_new})
+            cur.execute(DNS_ASSETS_SQL, (ids_all,))
+            asset_rows = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+            cloud = dns_cloud_view(asm_doc, dns_new, asset_rows, apex_asset_id, aliases)
+            found = dns_changes(prior_readings, dns_new, cloud, apex=apex_asset_id)
+            rows: list[dict] = []
+            if found:
+                moved = moved_names(found)
+                ids = {c["name"]: dns_asset_id(c["name"], apex_asset_id, aliases) for c in found}
+                have = set(asset_rows)
+                # the old ports: each moved name's own bucket blob, discovery's own previous write
+                ports_old: dict = {}
+                if moved:
+                    cur.execute("SELECT asset_id, surface_data FROM public.asset_surface WHERE asset_id = ANY(%s)",
+                                (sorted({ids[n] for n in moved}),))
+                    old_blobs = {r[0]: r[1] for r in cur.fetchall()}
+                    for n in moved:
+                        ports_old.update(ports_by_name(old_blobs.get(ids[n]), {n}))
+                old_ips = sorted({ip for c in found if c["kind"] == "address"
+                                  for ip in (c.get("old") or {}).get("values") or []})
+                now_map = {}
+                if old_ips:
+                    cur.execute(OWNED_ADDRESS_NOW_SQL, (old_ips,))
+                    for aid, svc, seen in cur.fetchall():
+                        now_map[aid] = {"owned_asset": True, "service_count": svc,
+                                        "last_seen": seen.isoformat() if hasattr(seen, "isoformat") else seen}
+                rows = dns_event_rows(
+                    found, lambda n: ids.get(n) if ids.get(n) in have else None,
+                    source_tag, json_wrap=Json, ports_old=ports_old,
+                    ports_new=ports_by_name(asm_doc, moved),
+                    old_seen_at=(prior.get("scan") or {}).get("completed_at"), old_address_now=now_map,
+                )
+                if rows:
+                    cur.executemany(INSERT_EVENT, rows)
+            cur.execute(f"RELEASE SAVEPOINT {DNS_SAVEPOINT}")
+            out.update(found=found, moved=moved_names(found), written=len(rows))
+            return out
+        except Exception as e:  # noqa: BLE001
+            if made:
+                try:
+                    cur.execute(f"ROLLBACK TO SAVEPOINT {DNS_SAVEPOINT}")
+                except Exception:  # noqa: BLE001
+                    pass
+            out["keep_readings"] = prior_readings or None   # nothing to keep: this run becomes the first
+            kept = "the previous readings stay the baseline" if prior_readings else \
+                "no previous readings to keep"
+            print(f"  ! DNS step for {apex_asset_id} failed (non-fatal; ports as before 5a; {kept}): {e}",
+                  file=sys.stderr)
+            return out
+
+
+def dns_asset_id(name: str, apex_asset_id: str, aliases) -> str:
+    """The asset a name's events belong to: the same routing as route_subdomains_to_assets."""
+    n = (name or "").strip().lower()
+    apex_l = (apex_asset_id or "").lower()
+    if n == apex_l or n in set(aliases or ()) or n == f"www.{apex_l}":
+        return apex_asset_id
+    return n
+
+
+def dns_cloud_view(asm_doc: dict, readings: dict, asset_rows: dict, apex_asset_id: str, aliases) -> dict:
+    """{name: {"old": (is_cloud, provider), "new": (is_cloud, provider)}}. old = the asset row as
+    it stands before this run's upsert; new = this run's classification of the name's own
+    subdomain entry (the same classifier the upsert uses), else the old value. PURE."""
+    subs = {(s.get("name") or "").strip().lower(): s
+            for s in (asm_doc.get("subdomains") or []) if isinstance(s, dict)}
+    out = {}
+    for name in readings or {}:
+        row = asset_rows.get(dns_asset_id(name, apex_asset_id, aliases)) or (False, None)
+        old = (bool(row[0]), row[1])
+        new = old
+        sub = subs.get(name)
+        if sub is not None and _classify_cloud is not None and _CLOUD_REGISTRY is not None:
+            r = _classify_cloud(sub, _CLOUD_REGISTRY)
+            new = (bool(r.get("is_cloud_endpoint")), r.get("cloud_provider")) if r else (False, None)
+        out[name] = {"old": old, "new": new}
+    return out
+
+
 def ensure_www_alias_recorded(conn, apex_asset_id: str) -> None:
     """If www.<apex> was discovered in this scan, make sure it's recorded
     in the apex's aliases[] column so future runs are explicit, not
@@ -1427,9 +1563,22 @@ def import_one(
     assets_inserted = 0
     surfaces_written = 0
 
+    # Job 5a: the whole DNS step, all or nothing, BEFORE the buckets (see DNS_SAVEPOINT).
+    dns_new = asm_doc.get("dns_readings") if isinstance(asm_doc.get("dns_readings"), dict) else None
+    dns = {"found": [], "moved": frozenset(), "written": 0, "keep_readings": None}
+    if not skip_events and dns_new:
+        dns = dns_before_buckets(conn, asm_doc, dns_new, apex_asset_id, aliases, source_tag)
+        if dns["keep_readings"] is not None:
+            asm_doc = dict(asm_doc)                       # never change the caller's copy
+            asm_doc["dns_readings"] = dns["keep_readings"]
+    dns_moved = dns["moved"]
+
     for bucket_id, sub_list in buckets.items():
         is_apex = bucket_id == apex_asset_id
         sliced = build_sliced_doc(asm_doc, sub_list)
+        if not is_apex:
+            # Job 5a: the apex's blob alone carries the readings (one baseline per apex).
+            sliced.pop("dns_readings", None)
         bucket_convenience = derive_convenience(sliced)
         bucket_lifecycle = derive_lifecycle(sliced)
 
@@ -1602,7 +1751,7 @@ def import_one(
                 try:
                     bucket_events = compute_events(
                         bucket_id, existing_blob, sliced, source_tag,
-                        json_wrap=Json,
+                        json_wrap=Json, skip_port_names=dns_moved,
                     )
                     if bucket_events:
                         cur.executemany(INSERT_EVENT, bucket_events)
@@ -1662,6 +1811,9 @@ def import_one(
         "phantoms_inserted": phantom_inserted,
         "events": all_events,
         "events_emitted": len(all_events),
+        "dns_changes_found": len(dns["found"]),
+        "dns_events_written": dns["written"],
+        "dns_baseline_kept": dns["keep_readings"] is not None,
     }
 
 
