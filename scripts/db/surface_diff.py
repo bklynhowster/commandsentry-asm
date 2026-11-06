@@ -367,6 +367,36 @@ def _summary(reading: dict) -> dict:
     return {"read_at": (reading or {}).get("read_at"), "name_status": (reading or {}).get("name_status")}
 
 
+# The apex's name servers (job 5a, 2026-11-06; Howie 14:42: "I authorize discovery to query or ask
+# each name server directly"). discovery keeps the set it last COUNTED (ns_counted), which moves
+# only when every name server, asked directly, gives the same new set (scanner/dns_reading.py).
+# A change is the counted set moving, never the everyday answer flipping. Both readings must
+# carry ns_counted: the first run under this rule sets the baseline quietly (its previous reading
+# holds only the everyday answer, which may be one side of a flip), and a counted set that is not
+# known yet (None: no readable previous copy, or the servers never agreed) is never compared, nor
+# is a count set from scratch on the run that set it (ns_counted_fresh; code review 2026-11-06).
+# Readings with no ns_counted on either side (the saved copies before this rule, the history
+# load) keep the everyday comparison.
+def _counted(reading: dict):
+    c = (reading or {}).get("ns_counted")
+    return (_norm_values(c) or None) if isinstance(c, list) else None
+
+
+def _counted_ns_change(name: str, o: dict, n: dict) -> dict | None:
+    if "ns_counted" not in o or "ns_counted" not in n:
+        return None
+    if n.get("ns_counted_fresh"):        # set from scratch this run: never compared (review 2026-11-06)
+        return None
+    ov, nv = _counted(o), _counted(n)
+    if ov is None or nv is None or ov == nv:
+        return None
+    servers = {s: e.get("values") for s, e in sorted(((n.get("ns_check") or {}).get("servers") or {}).items())}
+    return {"name": name, "kind": "ns",
+            "old": {**_summary(o), "values": list(ov), "ttl": (_rec(o, "ns") or {}).get("ttl")},
+            "new": {**_summary(n), "values": list(nv), "ttl": (_rec(n, "ns") or {}).get("ttl"),
+                    "servers": servers}}
+
+
 def dns_changes(old_readings: dict | None, new_readings: dict | None, cloud: dict | None = None,
                 apex: str = "") -> list[dict]:
     """The significant DNS changes between discovery's previous readings and this run's. PURE.
@@ -407,6 +437,11 @@ def dns_changes(old_readings: dict | None, new_readings: dict | None, cloud: dic
         for kind in ("cname", "ns", "mx"):
             if kind == "ns" and apex_l and name != apex_l:
                 continue
+            if kind == "ns" and apex_l and ("ns_counted" in o or "ns_counted" in n):
+                ns = _counted_ns_change(name, o, n)
+                if ns:
+                    out.append(ns)
+                continue
             ov, nv = _values_if_observed(o, kind), _values_if_observed(n, kind)
             if ov is not None and nv is not None and ov != nv:
                 out.append({"name": name, "kind": kind,
@@ -436,6 +471,7 @@ def change_fingerprint(change: dict) -> str:
         side.pop("ttl", None)
         side.pop("owners", None)
         side.pop("nx_streak", None)
+        side.pop("servers", None)        # the direct answers are evidence, not identity
         return side
     blob = _json.dumps([change.get("kind"), change.get("name"), core(change.get("old")), core(change.get("new"))],
                        sort_keys=True, default=str)

@@ -664,11 +664,15 @@ discover_apex() {
   # DNS questions only, no zone transfer. A failed reader writes NO file (it writes all or
   # nothing), and with no readings the importer compares nothing this run and keeps the last
   # good readings as the baseline.
+  # The previous saved copy goes in so the apex's name servers are compared with the set Sentry
+  # last counted; when the everyday answer differs, each name server is asked directly (job 5a,
+  # Howie 2026-11-06 14:42).
   phase "DNS readings with health (job 5a): every resolved and every known name"
   cat "$wd/_resolved_subdomains.txt" "$wd/_src_known.txt" 2>/dev/null \
     | grep -E "(^|\.)${apex}$" | sort -u > "$wd/_reading_names.txt" || true
   rm -f "$wd/dns_readings.json"
   python3 "$DNS_READER" --names "$wd/_reading_names.txt" --apex "$apex" \
+    --previous "$ASSETS_DIR/$(cat "$wd/_target_id" 2>/dev/null || echo none).json" \
     --out "$wd/dns_readings.json" 2> "$wd/dns_readings.err" \
     || warn "DNS readings had errors (non-fatal: no DNS change is compared this run)"
 
