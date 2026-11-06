@@ -481,6 +481,30 @@ jobs:
           python3 -m pip install --break-system-packages --quiet 'psycopg[binary]==3.3.4' pyyaml
           python3 scripts/db/import_asm_to_surface.py --source-tag asm_cron
 
+      - name: Load the DNS history once (job 5a push 2; once loaded, each run only checks)
+        # Howie, 2026-11-05 13:30, on loading the DNS changes since May: "Yes." Reads ONLY this
+        # repo's own git history of data/assets/<apex>.json (no lookups, nothing sent anywhere)
+        # and writes each past change into asset_surface_event with the importer's own pipeline,
+        # dated by its copy, source_tag 'dns_backfill', in ONE transaction. It ends at each apex's
+        # first copy with dns_readings, where the live importer (the step above) takes over.
+        # Writes nothing while an enabled apex has no such copy yet, or on a shallow checkout
+        # (this job checks out with fetch-depth 0), and stops after one query on every run once
+        # loaded (a history with no change at all writes nothing, so it is read again each run).
+        # The portal shows no dns_ rows (push-413); no email reads them yet.
+        # continue-on-error: the history is never worth failing discovery over; a failure writes
+        # nothing and the next run tries again. See scripts/db/load_dns_history.py.
+        if: success() && steps.targets.outputs.mode != 'skipped'
+        continue-on-error: true
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+        run: |
+          if [[ -z "${SUPABASE_DSN}" ]]; then
+            echo "::warning::SUPABASE_DSN secret not set; skipping the DNS history load."
+            exit 0
+          fi
+          python3 -m pip install --break-system-packages --quiet 'psycopg[binary]==3.3.4' pyyaml
+          python3 scripts/db/load_dns_history.py
+
       - name: Liveness probe worker (161 — writes asset_liveness_verdict; consumers dry-run)
         # Probes every confirmed_live asset once/sweep and writes ONE asset_liveness_verdict row
         # per asset (Obsidian 161 step 2, 4.7 Q2/Q4/Q7). PURE observation — writes ONLY to the new
