@@ -198,9 +198,16 @@ def in_scope(name: str, apex: str) -> bool:
 # everyday answer matches the counted set, nothing is asked: no extra traffic on a quiet run.
 # With no readable previous copy the count is unknown and nothing is asked: asked alone, a server
 # agrees with itself (code review 2026-11-06, must-fix 1).
+# Every count says where it came from (ns_counted_basis): "agreed" (the servers, asked directly,
+# agreed on it) or "everyday" (copied from the everyday answer, on the first run under this rule).
+# A copied count was never checked: the first run after push-418 copied sciimage.com's last
+# everyday answer, ns01 + ns02, while commandcommcentral.com's servers, asked, both said ns01
+# only. A change is written only between two agreed counts, so the first agreement after a copied
+# count sets it quietly (read-back 2026-11-06 16:28; Howie 16:51 "yes", push-419).
 # Plain NS questions about the apex only; no zone transfer, ever.
 NS_ASK_MAX = 13                      # the most name servers asked about one zone in one run
 NS_AGREE, NS_DISAGREE, NS_INCOMPLETE = "agree", "disagree", "incomplete"
+BASIS_AGREED, BASIS_EVERYDAY = "agreed", "everyday"
 _FLAGS = re.compile(r";;\s*flags:([^;]*);")
 
 
@@ -266,20 +273,41 @@ def ask_name_servers(apex: str, servers, server_runner=None) -> dict:
     return {"servers": asked, "verdict": verdict, "set": agreed}
 
 
+def counted_basis(reading) -> str | None:
+    """Where a reading's count came from: "agreed", "everyday", or None (no count). A reading
+    written by push-418, before the basis was kept, is "agreed" only when its own run asked the
+    servers and they agreed on that very set. PURE."""
+    if not isinstance(reading, dict):
+        return None
+    c = reading.get("ns_counted")
+    if not isinstance(c, list) or not normalize_values("NS", c):
+        return None
+    b = reading.get("ns_counted_basis")
+    if b in (BASIS_AGREED, BASIS_EVERYDAY):
+        return b
+    chk = reading.get("ns_check") if isinstance(reading.get("ns_check"), dict) else {}
+    if chk.get("verdict") == NS_AGREE and normalize_values("NS", chk.get("set")) == normalize_values("NS", c):
+        return BASIS_AGREED
+    return BASIS_EVERYDAY
+
+
 def prev_ns_state(prev_reading) -> tuple:
-    """(the set last counted, the disagreement kept) from the previous saved reading. A reading
-    written before this rule has no ns_counted: its last good everyday answer is the counted set."""
+    """(the set last counted, the disagreement kept, where the count came from) from the previous
+    saved reading. A reading written before this rule has no ns_counted: its last good everyday
+    answer is the count, copied ("everyday"), never checked."""
     if not isinstance(prev_reading, dict):
-        return None, None
+        return None, None, None
     dis = prev_reading.get("ns_disagreement")
     dis = dis if isinstance(dis, dict) else None
     if "ns_counted" in prev_reading:
         c = prev_reading.get("ns_counted")
-        return (normalize_values("NS", c) or None) if isinstance(c, list) else None, dis
+        counted = (normalize_values("NS", c) or None) if isinstance(c, list) else None
+        return counted, dis, (counted_basis(prev_reading) if counted else None)
     rec = (prev_reading.get("records") or {}).get("ns")
     if isinstance(rec, dict) and rec.get("health") == HEALTH_OK:
-        return normalize_values("NS", rec.get("values")) or None, dis
-    return None, dis
+        counted = normalize_values("NS", rec.get("values")) or None
+        return counted, dis, (BASIS_EVERYDAY if counted else None)
+    return None, dis, None
 
 
 def _last_everyday(prev_reading) -> list:
@@ -299,9 +327,9 @@ def ns_fields(prev_reading, resolver_rec, apex: str, server_runner=None, now: st
     asked too, and a count set from scratch is marked ns_counted_fresh: it is never compared on
     the run that set it."""
     if not isinstance(prev_reading, dict):
-        return {"ns_counted": None, "ns_disagreement": None}
-    counted, dis = prev_ns_state(prev_reading)
-    out = {"ns_counted": counted, "ns_disagreement": dis}
+        return {"ns_counted": None, "ns_counted_basis": None, "ns_disagreement": None}
+    counted, dis, basis = prev_ns_state(prev_reading)
+    out = {"ns_counted": counted, "ns_counted_basis": basis, "ns_disagreement": dis}
     if not isinstance(resolver_rec, dict) or resolver_rec.get("health") != HEALTH_OK:
         return out                                   # no everyday answer: nothing to go on
     everyday = normalize_values("NS", resolver_rec.get("values"))
@@ -316,6 +344,7 @@ def ns_fields(prev_reading, resolver_rec, apex: str, server_runner=None, now: st
     out["ns_check"] = check
     if check["verdict"] == NS_AGREE:
         out["ns_counted"], out["ns_disagreement"] = check["set"], None
+        out["ns_counted_basis"] = BASIS_AGREED      # checked now, even when the set did not move
         if counted is None:
             out["ns_counted_fresh"] = True
     elif check["verdict"] == NS_DISAGREE:

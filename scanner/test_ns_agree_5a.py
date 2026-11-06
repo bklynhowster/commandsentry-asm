@@ -70,6 +70,7 @@ def prev(counted=None, raw=None, dis=None, key=True):
 
 SPLIT = {NS1: ns_out(servers=(NS1,), ttl=7200), NS2: ns_out(servers=(NS1, NS2), ttl=1800)}
 BOTH = {NS1: ns_out(servers=(NS1, NS2)), NS2: ns_out(servers=(NS1, NS2))}
+ONE_NS1 = {NS1: ns_out(servers=(NS1,)), NS2: ns_out(servers=(NS1,))}
 
 
 # ── parsing the direct answer ───────────────────────────────────────────────────────────────────
@@ -209,7 +210,7 @@ def test_no_previous_reading_leaves_the_count_unknown_and_asks_nothing():
     for table in (BOTH, SPLIT):
         s = Servers(table)
         got = dr.ns_fields(None, everyday(NS1), APEX, s, "T")
-        assert s.asked == [] and got == {"ns_counted": None, "ns_disagreement": None}
+        assert s.asked == [] and got == {"ns_counted": None, "ns_counted_basis": None, "ns_disagreement": None}
 
 
 def test_an_unknown_count_asks_the_previous_everyday_answers_servers_too():
@@ -226,6 +227,29 @@ def test_a_count_set_from_scratch_is_marked_fresh_and_only_then():
     assert "ns_counted_fresh" not in nxt and nxt["ns_counted"] == [NS1, NS2]
     moved = dr.ns_fields(prev([NS1]), everyday(NS1, NS2), APEX, Servers(BOTH), "T3")
     assert moved["ns_counted"] == [NS1, NS2] and "ns_counted_fresh" not in moved
+
+
+# ── where a count came from (push-419, read-back 2026-11-06 16:28) ──────────────────────────────
+def test_a_count_copied_from_a_pre_rule_reading_is_everyday_and_stays_so_until_checked():
+    got = dr.ns_fields(prev(raw=[NS1, NS2], key=False), everyday(NS1, NS2), APEX, Servers(SPLIT), "T1")
+    assert got["ns_counted"] == [NS1, NS2] and got["ns_counted_basis"] == "everyday" and "ns_check" not in got
+    held = dr.ns_fields({**prev(raw=[NS1, NS2], key=False), **got}, everyday(NS1), APEX, Servers(SPLIT), "T2")
+    assert held["ns_check"]["verdict"] == "disagree" and held["ns_counted_basis"] == "everyday"
+
+
+def test_an_agreement_checks_the_count_even_when_the_set_does_not_move():
+    p = {**prev([NS1]), "ns_counted_basis": "everyday"}
+    got = dr.ns_fields(p, everyday(NS1, NS2), APEX, Servers(ONE_NS1), "T")
+    assert got["ns_counted"] == [NS1] and got["ns_counted_basis"] == "agreed"
+
+
+def test_a_push_418_reading_is_agreed_only_when_its_own_servers_agreed_on_that_set():
+    base = prev([NS1])
+    assert dr.counted_basis(base) == "everyday"
+    assert dr.counted_basis({**base, "ns_check": {"verdict": "agree", "set": [NS1]}}) == "agreed"
+    assert dr.counted_basis({**base, "ns_check": {"verdict": "agree", "set": [NS1, NS2]}}) == "everyday"
+    assert dr.counted_basis({**base, "ns_check": {"verdict": "disagree", "set": None}}) == "everyday"
+    assert dr.counted_basis({**base, "ns_counted": None}) is None
 
 
 # ── wiring ──────────────────────────────────────────────────────────────────────────────────────
