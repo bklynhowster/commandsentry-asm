@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-11-06T13:31:11Z_d5fafcd8",
-    "started_at": "2026-11-06T13:31:11Z",
-    "completed_at": "2026-11-06T13:37:10Z",
-    "duration_seconds": 359,
+    "id": "scan_2026-11-06T18:41:06Z_1aeb4ee9",
+    "started_at": "2026-11-06T18:41:06Z",
+    "completed_at": "2026-11-06T18:47:11Z",
+    "duration_seconds": 365,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -43,8 +43,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-11-06T13:37:10Z",
-      "last_seen": "2026-11-06T13:37:10Z",
+      "first_discovered": "2026-11-06T18:47:11Z",
+      "last_seen": "2026-11-06T18:47:11Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -112,11 +112,11 @@
           "ns70.domaincontrol.com"
         ],
         "txt": [
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
           "MS=ms11147654",
           "google-site-verification=ZiVaKRBG6JgkKzhGYUF7YWRlYDlBj62kwdnzhnb7g0E",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
-          "Sendinblue-code:d6ec6d432f5c3f2c2d3963e1b0efeb4c",
-          "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca"
+          "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca",
+          "Sendinblue-code:d6ec6d432f5c3f2c2d3963e1b0efeb4c"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
         "dnssec": false
@@ -233,8 +233,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-06T13:37:10Z",
-      "last_seen": "2026-11-06T13:37:10Z",
+      "first_discovered": "2026-11-06T18:47:11Z",
+      "last_seen": "2026-11-06T18:47:11Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -290,8 +290,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-06T13:37:10Z",
-      "last_seen": "2026-11-06T13:37:10Z",
+      "first_discovered": "2026-11-06T18:47:11Z",
+      "last_seen": "2026-11-06T18:47:11Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -413,8 +413,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-06T13:37:10Z",
-      "last_seen": "2026-11-06T13:37:10Z",
+      "first_discovered": "2026-11-06T18:47:11Z",
+      "last_seen": "2026-11-06T18:47:11Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -482,11 +482,11 @@
           "ns70.domaincontrol.com"
         ],
         "txt": [
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
           "Sendinblue-code:d6ec6d432f5c3f2c2d3963e1b0efeb4c",
           "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca",
           "MS=ms11147654",
-          "google-site-verification=ZiVaKRBG6JgkKzhGYUF7YWRlYDlBj62kwdnzhnb7g0E",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all"
+          "google-site-verification=ZiVaKRBG6JgkKzhGYUF7YWRlYDlBj62kwdnzhnb7g0E"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
         "dnssec": false
@@ -601,7 +601,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-11-06T06:45:07Z_96764409",
+    "since_scan": "scan_2026-11-06T13:31:11Z_d5fafcd8",
     "added": {
       "subdomains": [],
       "services": [],
@@ -1534,18 +1534,71 @@
         "jQuery Migrate": "3.4.1",
         "punycode": "1.0.0"
       }
+    },
+    {
+      "scan_id": "scan_2026-11-06T18:41:06Z_1aeb4ee9",
+      "started_at": "2026-11-06T18:41:06Z",
+      "completed_at": "2026-11-06T18:47:11Z",
+      "subdomain_count": 4,
+      "live_subdomain_count": 4,
+      "host_count": 5,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmi.com",
+        "ftp.commandmi.com",
+        "pay.commandmi.com",
+        "www.commandmi.com"
+      ],
+      "ports_by_sub": {
+        "commandmi.com": {
+          "15.197.142.173": [
+            80
+          ],
+          "3.33.152.147": [
+            80
+          ]
+        },
+        "ftp.commandmi.com": {},
+        "pay.commandmi.com": {
+          "100.49.0.246": [
+            80,
+            443
+          ],
+          "100.49.110.141": [
+            80,
+            443
+          ]
+        },
+        "www.commandmi.com": {
+          "15.197.142.173": [
+            80
+          ],
+          "3.33.152.147": [
+            80
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.8.1",
+        "WPMU DEV Smush": "4.3.6",
+        "Yoast SEO": "28.8",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
     }
   ],
   "dns_readings": {
     "commandmi.com": {
       "name": "commandmi.com",
       "name_status": "exists",
-      "read_at": "2026-11-06T13:32:40Z",
+      "read_at": "2026-11-06T18:42:41Z",
       "records": {
         "a": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 541,
+          "ttl": 536,
           "values": [
             "15.197.142.173",
             "3.33.152.147"
@@ -1566,7 +1619,7 @@
         "dmarc": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1742,
+          "ttl": 1736,
           "values": [
             "v=DMARC1; p=none; pct=100; rua=mailto:dkimreport@commandcompanies.com; ruf=mailto:dkimalert@commandcompanies.com"
           ]
@@ -1574,7 +1627,7 @@
         "mx": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1740,
+          "ttl": 1736,
           "values": [
             "10 mx1.hc3765-17.iphmx.com",
             "20 mx2.hc3765-17.iphmx.com"
@@ -1583,7 +1636,7 @@
         "ns": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1495,
+          "ttl": 604,
           "values": [
             "ns69.domaincontrol.com",
             "ns70.domaincontrol.com"
@@ -1592,7 +1645,7 @@
         "txt": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1741,
+          "ttl": 1736,
           "values": [
             "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca",
             "MS=ms11147654",
@@ -1617,12 +1670,12 @@
     "ftp.commandmi.com": {
       "name": "ftp.commandmi.com",
       "name_status": "exists",
-      "read_at": "2026-11-06T13:32:40Z",
+      "read_at": "2026-11-06T18:42:41Z",
       "records": {
         "a": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1742,
+          "ttl": 1737,
           "values": [
             "208.199.0.161"
           ]
@@ -1669,7 +1722,7 @@
     "pay.commandmi.com": {
       "name": "pay.commandmi.com",
       "name_status": "exists",
-      "read_at": "2026-11-06T13:32:40Z",
+      "read_at": "2026-11-06T18:42:41Z",
       "records": {
         "a": {
           "cname_chain": [
@@ -1699,7 +1752,7 @@
         "cname": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 59,
+          "ttl": 39,
           "values": [
             "paylinks.commerce.godaddy.com"
           ]
@@ -1753,7 +1806,7 @@
     "www.commandmi.com": {
       "name": "www.commandmi.com",
       "name_status": "exists",
-      "read_at": "2026-11-06T13:32:40Z",
+      "read_at": "2026-11-06T18:42:41Z",
       "records": {
         "a": {
           "cname_chain": [
@@ -1761,7 +1814,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 541,
+          "ttl": 536,
           "values": [
             "15.197.142.173",
             "3.33.152.147"
@@ -1779,7 +1832,7 @@
         "cname": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 541,
+          "ttl": 536,
           "values": [
             "commandmi.com"
           ]
@@ -1790,7 +1843,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1740,
+          "ttl": 1736,
           "values": [
             "10 mx1.hc3765-17.iphmx.com",
             "20 mx2.hc3765-17.iphmx.com"
@@ -1802,7 +1855,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1495,
+          "ttl": 604,
           "values": [
             "ns69.domaincontrol.com",
             "ns70.domaincontrol.com"
@@ -1814,7 +1867,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1742,
+          "ttl": 1736,
           "values": [
             "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca",
             "MS=ms11147654",
