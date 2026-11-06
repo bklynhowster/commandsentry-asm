@@ -377,15 +377,35 @@ def _summary(reading: dict) -> dict:
 # is a count set from scratch on the run that set it (ns_counted_fresh; code review 2026-11-06).
 # Readings with no ns_counted on either side (the saved copies before this rule, the history
 # load) keep the everyday comparison.
+# A change is written only between two AGREED counts (ns_counted_basis; readings written by
+# push-418 before the basis was kept are agreed only when their own run's servers agreed on that
+# set). A count copied from the everyday answer on the first run was never checked: the first
+# agreement after it sets the count quietly (read-back 2026-11-06 16:28; Howie 16:51, push-419).
 def _counted(reading: dict):
     c = (reading or {}).get("ns_counted")
     return (_norm_values(c) or None) if isinstance(c, list) else None
+
+
+def _ns_basis(reading: dict):
+    """"agreed" / "everyday" / None, as scanner/dns_reading.py counted_basis. PURE."""
+    r = reading if isinstance(reading, dict) else {}
+    c = _norm_values(r.get("ns_counted")) if isinstance(r.get("ns_counted"), list) else ()
+    if not c:
+        return None
+    if r.get("ns_counted_basis") in ("agreed", "everyday"):
+        return r["ns_counted_basis"]
+    chk = r.get("ns_check") if isinstance(r.get("ns_check"), dict) else {}
+    if chk.get("verdict") == "agree" and _norm_values(chk.get("set")) == c:
+        return "agreed"
+    return "everyday"
 
 
 def _counted_ns_change(name: str, o: dict, n: dict) -> dict | None:
     if "ns_counted" not in o or "ns_counted" not in n:
         return None
     if n.get("ns_counted_fresh"):        # set from scratch this run: never compared (review 2026-11-06)
+        return None
+    if _ns_basis(o) != "agreed" or _ns_basis(n) != "agreed":   # a copied count is never compared (push-419)
         return None
     ov, nv = _counted(o), _counted(n)
     if ov is None or nv is None or ov == nv:

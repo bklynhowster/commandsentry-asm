@@ -74,8 +74,8 @@ def replay(baseline, steps):
 
 # ── the comparison ──────────────────────────────────────────────────────────────────────────────
 def test_counted_against_counted_one_change_with_the_servers_as_evidence():
-    old = {**raw([NS1], "T1"), "ns_counted": [NS1]}
-    new = {**raw([NS1, NS2], "T2"), "ns_counted": [NS1, NS2],
+    old = {**raw([NS1], "T1"), "ns_counted": [NS1], "ns_counted_basis": "agreed"}
+    new = {**raw([NS1, NS2], "T2"), "ns_counted": [NS1, NS2], "ns_counted_basis": "agreed",
            "ns_check": {"servers": {NS1: {"values": [NS1, NS2]}, NS2: {"values": [NS1, NS2]}}}}
     got = ns_changes(old, new)
     assert len(got) == 1 and got[0]["old"]["values"] == [NS1] and got[0]["new"]["values"] == [NS1, NS2]
@@ -111,17 +111,19 @@ def test_a_name_inside_the_zone_never_gives_a_name_server_change():
 
 
 def test_the_servers_answers_are_not_part_of_the_changes_identity():
-    old = {**raw([NS1], "T1"), "ns_counted": [NS1]}
-    a = {**raw([NS1, NS2], "T2"), "ns_counted": [NS1, NS2], "ns_check": {"servers": {NS1: {"values": [NS1, NS2]}}}}
-    b = {**raw([NS1, NS2], "T3"), "ns_counted": [NS1, NS2], "ns_check": {"servers": {NS2: {"values": [NS1, NS2]}}}}
+    old = {**raw([NS1], "T1"), "ns_counted": [NS1], "ns_counted_basis": "agreed"}
+    a = {**raw([NS1, NS2], "T2"), "ns_counted": [NS1, NS2], "ns_counted_basis": "agreed",
+         "ns_check": {"servers": {NS1: {"values": [NS1, NS2]}}}}
+    b = {**raw([NS1, NS2], "T3"), "ns_counted": [NS1, NS2], "ns_counted_basis": "agreed",
+         "ns_check": {"servers": {NS2: {"values": [NS1, NS2]}}}}
     ca, cb = ns_changes(old, a)[0], ns_changes(old, b)[0]
     assert ca["new"]["servers"] != cb["new"]["servers"], "the evidence differs between the two runs"
     assert sd.change_fingerprint(ca) == sd.change_fingerprint(cb)
 
 
 def test_the_event_row_carries_the_counted_sets_and_the_servers():
-    old = {**raw([NS1], "T1"), "ns_counted": [NS1]}
-    new = {**raw([NS1, NS2], "T2"), "ns_counted": [NS1, NS2],
+    old = {**raw([NS1], "T1"), "ns_counted": [NS1], "ns_counted_basis": "agreed"}
+    new = {**raw([NS1, NS2], "T2"), "ns_counted": [NS1, NS2], "ns_counted_basis": "agreed",
            "ns_check": {"servers": {NS1: {"values": [NS1, NS2]}, NS2: {"values": [NS1, NS2]}}}}
     rows = sd.dns_event_rows(ns_changes(old, new), lambda n: n, "asm_cron")
     assert len(rows) == 1 and rows[0]["event_type"] == "dns_ns_changed" and rows[0]["host"] == APEX
@@ -153,15 +155,25 @@ def test_the_old_rule_would_have_written_the_false_rows():
 
 
 def test_a_real_change_in_the_middle_of_flips_is_counted_once():
+    # From a checked count of ns01, the servers come to agree on ns01 + ns02: one change.
     steps = [([NS1, NS2], SPLIT), ([NS1], SPLIT), ([NS1, NS2], BOTH), ([NS1, NS2], BOTH), ([NS1], SPLIT)]
-    found, last = replay(raw([NS1], "T0"), steps)
+    found, last = replay({**raw([NS1], "T0"), "ns_counted": [NS1], "ns_counted_basis": "agreed"}, steps)
     assert len(found) == 1 and found[0]["old"]["values"] == [NS1] and found[0]["new"]["values"] == [NS1, NS2]
     assert last["ns_counted"] == [NS1, NS2]
 
 
+def test_the_first_agreement_after_a_copied_count_is_quiet_and_later_changes_count():
+    # The same story from a pre-rule reading of ns01 (a copied count, never checked): the first
+    # agreement sets ns01 + ns02 quietly; a later agreed move back to ns01 is a change.
+    steps = [([NS1, NS2], SPLIT), ([NS1], SPLIT), ([NS1, NS2], BOTH), ([NS1, NS2], BOTH), ([NS1], ONE)]
+    found, last = replay(raw([NS1], "T0"), steps)
+    assert [(c["old"]["values"], c["new"]["values"]) for c in found] == [([NS1, NS2], [NS1])]
+    assert last["ns_counted"] == [NS1] and last["ns_counted_basis"] == "agreed"
+
+
 def test_a_real_change_back_is_counted_when_the_servers_agree_again():
     steps = [([NS1, NS2], BOTH), ([NS1], ONE)]
-    found, _ = replay({**raw([NS1], "T0"), "ns_counted": [NS1]}, steps)
+    found, _ = replay({**raw([NS1], "T0"), "ns_counted": [NS1], "ns_counted_basis": "agreed"}, steps)
     assert [(c["old"]["values"], c["new"]["values"]) for c in found] == [([NS1], [NS1, NS2]), ([NS1, NS2], [NS1])]
 
 
@@ -179,7 +191,7 @@ def test_a_count_set_from_scratch_is_not_compared_on_the_run_that_set_it():
     # The database is a run behind (its write failed) and still holds ns01 + ns02; the saved copy
     # holds an unknown count. The servers agree on ns01: the count is set, marked fresh, and not
     # compared. The next run compares counted with counted again.
-    db_prior = {**raw([NS1, NS2], "T0"), "ns_counted": [NS1, NS2]}
+    db_prior = {**raw([NS1, NS2], "T0"), "ns_counted": [NS1, NS2], "ns_counted_basis": "agreed"}
     git_prev = {**raw([NS1, NS2], "T1"), "ns_counted": None, "ns_disagreement": None}
     cur = run(git_prev, [NS1], ONE, "T2")
     assert cur["ns_counted"] == [NS1] and cur["ns_counted_fresh"] is True
@@ -189,6 +201,48 @@ def test_a_count_set_from_scratch_is_not_compared_on_the_run_that_set_it():
     later = run(nxt, [NS1, NS2], BOTH, "T4")
     got = ns_changes(nxt, later)
     assert [(c["old"]["values"], c["new"]["values"]) for c in got] == [([NS1], [NS1, NS2])]
+
+
+def push418_reading(counted, everyday, check=None):
+    """A reading as push-418 wrote it: ns_counted, no ns_counted_basis."""
+    r = {**raw(everyday, "T1"), "ns_counted": counted, "ns_disagreement": None}
+    if check:
+        r["ns_check"] = check
+    return r
+
+
+def test_a_count_push_418_copied_is_not_compared_when_the_servers_first_agree():
+    # Read back 2026-11-06 16:28: push-418's first run copied sciimage.com's last everyday answer,
+    # ns01 + ns02, unasked. Then the everyday answer says ns01 and the servers, asked, agree on ns01.
+    old = push418_reading([NS1, NS2], [NS1, NS2])
+    cur = run(old, [NS1], ONE, "T2")
+    assert cur["ns_counted"] == [NS1] and cur["ns_counted_basis"] == "agreed"
+    assert ns_changes(old, cur) == [], "a copied count is not a baseline to compare against"
+    later = run(cur, [NS1, NS2], BOTH, "T3")
+    assert [(c["old"]["values"], c["new"]["values"]) for c in ns_changes(cur, later)] == [([NS1], [NS1, NS2])]
+
+
+def test_a_count_push_418_checked_counts_as_agreed():
+    # Read back 2026-11-06 16:28: commandcommcentral.com's run asked both servers and they agreed
+    # on ns01, the count it already held: that count was checked.
+    old = push418_reading([NS1], [NS1, NS2], {"verdict": "agree", "set": [NS1],
+                                              "servers": {NS1: {"values": [NS1]}, NS2: {"values": [NS1]}}})
+    assert sd._ns_basis(old) == "agreed"
+    cur = run(old, [NS1, NS2], BOTH, "T2")
+    assert [(c["old"]["values"], c["new"]["values"]) for c in ns_changes(old, cur)] == [([NS1], [NS1, NS2])]
+
+
+def test_the_reader_and_the_comparison_agree_on_where_a_count_came_from():
+    cases = [push418_reading([NS1, NS2], [NS1, NS2]),
+             push418_reading([NS1], [NS1, NS2], {"verdict": "agree", "set": [NS1]}),
+             push418_reading([NS1], [NS1, NS2], {"verdict": "agree", "set": [NS1, NS2]}),
+             push418_reading([NS1], [NS1, NS2], {"verdict": "disagree", "set": None}),
+             {**raw([NS1], "T"), "ns_counted": [NS1], "ns_counted_basis": "everyday"},
+             {**raw([NS1], "T"), "ns_counted": [NS1], "ns_counted_basis": "agreed"},
+             {**raw([NS1], "T"), "ns_counted": None}, raw([NS1], "T")]
+    for c in cases:
+        if "ns_counted" in c:
+            assert sd._ns_basis(c) == dr.counted_basis(c), c
 
 
 def test_servers_that_cannot_be_reached_never_produce_a_change():
