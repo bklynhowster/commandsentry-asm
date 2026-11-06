@@ -109,7 +109,11 @@ SECURITY_HEADERS = [
     # (header_name, severity, why_it_matters_one_liner)
     ("Strict-Transport-Security",       "MODERATE",
      "Browsers may attempt HTTP connections instead of upgrading to HTTPS"),
-    ("Content-Security-Policy",         "MODERATE",
+    # LOW, not MODERATE (KB 12 job 5c, Howie 2026-11-06 11:40: "Yes, recategorize them as low for the
+    # emails, please."): with no policy a script that another flaw puts into a page is not stopped;
+    # the missing policy lets nothing in by itself. The same reasoning as job 4v for a policy that
+    # does not limit scripts (csp_policy.py), which is LOW too.
+    ("Content-Security-Policy",         "LOW",
      "No server-side defense against XSS / inline-script injection"),
     ("X-Frame-Options",                 "LOW",
      "Page can be framed, enabling clickjacking attacks"),
@@ -2454,6 +2458,14 @@ def check_methods(ctx: ScanContext) -> None:
     mark_tool_ok(ctx, "methods_check")
 
 
+# STATIC_NONCE_NOTE. Both static-nonce findings (check_csp_nonce, probe_static_csp_nonces_per_directive)
+# are LOW, not MODERATE (KB 12 job 5c; Howie, 2026-11-06 by 11:44, "Yes, include them", with a missing
+# Content-Security-Policy): a nonce that never changes makes the policy's nonce rule stop nothing,
+# so it is the same kind of weakness as a policy that does not limit scripts (job 4v, LOW). It lets
+# nothing in by itself; it matters only if another flaw puts a script into a page. A person's
+# hand-entered finding of this class (CCC M-02) keeps its own rating.
+
+
 def check_csp_nonce(ctx: ScanContext) -> None:
     """Fetch / 5 times, extract CSP script-src nonce values, flag if static.
     Caught CCC M-02. This is one of the cheapest, highest-signal Light checks.
@@ -2491,7 +2503,7 @@ def check_csp_nonce(ctx: ScanContext) -> None:
             ctx.findings.append(LightFinding(
                 check_name="csp-static-nonce",
                 title="CSP script-src nonce is static across requests",
-                severity="MODERATE",
+                severity="LOW",  # KB 12 job 5c (Howie 2026-11-06, by 11:44): see STATIC_NONCE_NOTE
                 category="headers",  # enum remap: 'csp' isn't a valid finding_category_t (CSP IS a header)
                 description=f"Five consecutive requests to {ctx.hostname} returned "
                             f"identical CSP script-src nonces ('{list(unique)[0][:16]}...'). "
@@ -2791,7 +2803,7 @@ def probe_static_csp_nonces_per_directive(ctx: ScanContext) -> None:
             check_name=f"csp-static-nonce-{directive.replace('-', '_')}",
             title=(f"CSP {directive} nonce is static across requests "
                    f"({len(static_nonces)} value(s) repeated)"),
-            severity="MODERATE",
+            severity="LOW",  # KB 12 job 5c (Howie 2026-11-06, by 11:44): see STATIC_NONCE_NOTE
             category="headers",
             description=(
                 f"The Content-Security-Policy {directive} directive on "
