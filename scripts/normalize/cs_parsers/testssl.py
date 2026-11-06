@@ -256,6 +256,32 @@ KEEP_MEDIUM_IDS = {
 }
 
 
+# KB 12 job 4v (ruled 2026-11-04, built 2026-11-06) — COMPRESSED PAGES ALONE ARE LOW.
+# testssl's BREACH check sees only that the home page comes back compressed ("potentially
+# VULNERABLE, gzip HTTP compression detected - only supplied '/' tested"). The attack it is
+# named after also needs a secret in a page that echoes what the visitor sent, and an attacker
+# who can watch the traffic and make the visitor's browser send many requests; testssl tests
+# none of that. It kept MEDIUM (MODERATE) above because it carries a CWE. Howie, 2026-11-04
+# 15:32: "It's a misnomer. It's going to freak people out, and it's just the wrong way to
+# present the information." 15:33: "Change it to a low. I agree with you." An exception, for
+# this one check, to "trust testssl's severity". "Compression alone" means the WHOLE text is
+# testssl's compression-only line: the compression methods it names (gzip, deflate, compress,
+# br, zstd), then "HTTP compression detected - only supplied '<path>' tested". Any other BREACH
+# wording, including one that says compression AND something more, keeps testssl's rating
+# (code review 2026-11-06, must-fix 1). finding_id does not include the severity, so the
+# existing rows are rewritten in place, never doubled; the open ones are lowered once by
+# migration 20261106a, whose test holds its pattern equal to this one.
+_COMPRESSION_METHOD = r"(?:gzip|deflate|compress|br|zstd)"
+BREACH_COMPRESSION_ONLY = re.compile(
+    rf"potentially VULNERABLE, {_COMPRESSION_METHOD}(?: {_COMPRESSION_METHOD})* HTTP compression "
+    r"detected +- only supplied (?:'[^']*'|\"[^\"]*\") tested")
+
+
+def breach_is_compression_only(grouped_id: str, finding_text: str) -> bool:
+    return (grouped_id == "BREACH"
+            and BREACH_COMPRESSION_ONLY.fullmatch((finding_text or "").strip()) is not None)
+
+
 # Dedupe map: when multiple testssl IDs report what's clearly the SAME root
 # issue (just reported from different angles), collapse them into one. The
 # canonical ID is the one operators will recognize; the others are folded in.
@@ -604,6 +630,10 @@ def parse_testssl_file(
         #   missing CSP/X-Frame → clickjacking, XSS, MIME-sniffing).
         # - CWE-tagged findings (real named attacks) keep MEDIUM/HIGH.
         if canonical_sev == "MODERATE" and not rec.get("cwe") and grouped_id not in KEEP_MEDIUM_IDS:
+            canonical_sev = "LOW"
+
+        # Job 4v — compressed pages alone are LOW (see breach_is_compression_only).
+        if canonical_sev == "MODERATE" and breach_is_compression_only(grouped_id, rec.get("finding") or ""):
             canonical_sev = "LOW"
 
         # #037 — cert-hygiene ceiling. Runs AFTER the calibration above so it

@@ -14,6 +14,10 @@ Pins:
   * the quick scan's SHIPPED check_headers emits one finding, from the fetch it already made,
     and a strange header never costs the header check;
   * the daily's Slack post puts the new titles on the developer side, like the header rows.
+
+Job 4v (2026-11-06, Howie 08:03 "yes"): both findings are LOW. The verdict now names the check
+that fires ('weakness'); the rating lives only in finding_fields. test_two_checks_low_4v.py pins
+the change.
 """
 import json
 import os
@@ -67,17 +71,17 @@ SCIIMAGE_VPN = ("default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; f
 
 
 def _sev(v):
-    return cp.script_weakness(v)["severity"] if cp.script_weakness(v) else None
+    return cp.script_weakness(v)["weakness"] if cp.script_weakness(v) else None
 
 
 # ── the fleets, 2026-10-31 ──────────────────────────────────────────────────────────────
 def test_the_prodex_fleet_22_app_sites_and_docs_are_weak_link_is_tight():
     app = cp.script_weakness(PRODEX_APP)
-    assert app["severity"] == "MODERATE" and app["rule"] == "script-src" and app["eval"]
+    assert app["weakness"] == cp.CHECK_NOT_LIMITED and app["rule"] == "script-src" and app["eval"]
     assert app["reasons"] == ["scripts written straight into the page ('unsafe-inline')"]
     assert len(PRODEX_APP_SITES) == 22
     docs = cp.script_weakness(DOCS)
-    assert docs["severity"] == "MODERATE" and docs["eval"]
+    assert docs["weakness"] == cp.CHECK_NOT_LIMITED and docs["eval"]
     assert docs["reasons"] == ["scripts written straight into the page ('unsafe-inline')",
                                "scripts from any https website ('https:')"]
     assert cp.script_weakness(LINK) is None, "a hash-only script rule is tight"
@@ -89,7 +93,7 @@ def test_the_command_fleet_five_weak_the_nonce_and_self_policies_tight():
                       ("ftp.sciimage.com (nonce)", FTP_SCIIMAGE), ("geisinger (nonces)", GEISINGER)):
         assert cp.script_weakness(pol) is None, name
     prin = cp.script_weakness(PRINERGY)       # insite.sciimage.com and 24.157.51.70
-    assert prin["severity"] == "MODERATE" and prin["rule"] == "script-src" and prin["eval"]
+    assert prin["weakness"] == cp.CHECK_NOT_LIMITED and prin["rule"] == "script-src" and prin["eval"]
     vpn = cp.script_weakness(SCIIMAGE_VPN)     # vpn, vpn2.sciimage.com and 24.157.51.84
     assert vpn["rule"] == "default-src", "no script-src: default-src governs (the F-04 case)"
     assert vpn["reasons"] == ["scripts written straight into the page ('unsafe-inline')",
@@ -111,7 +115,7 @@ def test_any_site_is_not_a_limit_unless_strict_dynamic_drops_the_list():
     for src, why in (("*", "('*')"), ("https:", "('https:')"), ("http:", "('http:')"),
                      ("https://*", "('https://*')"), ("data:", "('data:')")):
         v = cp.script_weakness(f"script-src 'self' {src}")
-        assert v["severity"] == "MODERATE" and why in v["reasons"][0], src
+        assert v["weakness"] == cp.CHECK_NOT_LIMITED and why in v["reasons"][0], src
     assert cp.script_weakness("script-src 'self' https: 'strict-dynamic' 'nonce-q'") is None
     assert cp.script_weakness("script-src 'self' *.example.com https://cdn.example.com") is None, \
         "a named host or a subdomain wildcard is a limit"
@@ -119,21 +123,21 @@ def test_any_site_is_not_a_limit_unless_strict_dynamic_drops_the_list():
 
 def test_no_rule_for_scripts_is_a_finding_and_script_src_wins_over_default_src():
     v = cp.script_weakness("frame-ancestors 'self'; object-src 'none'")
-    assert v["severity"] == "MODERATE" and v["rule"] is None and "no rule for scripts" in v["reasons"][0]
+    assert v["weakness"] == cp.CHECK_NOT_LIMITED and v["rule"] is None and "no rule for scripts" in v["reasons"][0]
     assert cp.script_weakness("default-src *; script-src 'self'") is None, "script-src governs scripts"
     assert cp.script_weakness("script-src 'self'; script-src *") is None, "the first directive wins"
 
 
-def test_eval_alone_is_low_and_case_and_spacing_do_not_matter():
+def test_eval_alone_is_its_own_check_and_case_and_spacing_do_not_matter():
     v = cp.script_weakness("script-src 'self' 'unsafe-eval'")
-    assert v["severity"] == "LOW" and v["reasons"] == [] and v["eval"]
-    assert _sev("SCRIPT-SRC 'SELF' 'UNSAFE-INLINE'") == "MODERATE"
+    assert v["weakness"] == cp.CHECK_EVAL_ONLY and v["reasons"] == [] and v["eval"]
+    assert _sev("SCRIPT-SRC 'SELF' 'UNSAFE-INLINE'") == cp.CHECK_NOT_LIMITED
     assert _sev("  script-src   'self'  ;;  ") is None
 
 
 def test_several_policies_the_tightest_wins_and_odd_shapes_are_safe():
     assert cp.script_weakness(PRODEX_APP + ", script-src 'self'") is None, "both apply: the tight one wins"
-    assert _sev("script-src * , script-src 'self' 'unsafe-eval'") == "LOW"
+    assert _sev("script-src * , script-src 'self' 'unsafe-eval'") == cp.CHECK_EVAL_ONLY
     assert _sev([PRODEX_APP, "script-src 'self'"]) is None, "a repeated header, listed"
     for v in (None, "", " , ,"):
         assert cp.script_weakness(v) is None, repr(v)
@@ -141,7 +145,7 @@ def test_several_policies_the_tightest_wins_and_odd_shapes_are_safe():
 
 def test_the_finding_words():
     f = cp.finding_fields("uat.prodexlabs.com", PRODEX_APP)
-    assert f["check_name"] == "csp-scripts-not-limited" and f["severity"] == "MODERATE"
+    assert f["check_name"] == "csp-scripts-not-limited" and f["severity"] == "LOW"
     assert f["title"] == "Content-Security-Policy does not limit scripts"
     assert f["description"].startswith("The Content-Security-Policy header from uat.prodexlabs.com allows "
                                        "scripts written straight into the page ('unsafe-inline') and "
@@ -177,7 +181,7 @@ def test_check_headers_emits_one_finding_from_the_fetch_it_already_made(monkeypa
     weak = [f for f in ctx.findings if f.check_name.startswith("csp-")]
     assert len(calls) == 1, "no new request"
     assert [(f.check_name, f.severity, f.category) for f in weak] == [
-        ("csp-scripts-not-limited", "MODERATE", "headers")]
+        ("csp-scripts-not-limited", "LOW", "headers")]
     assert "missing-header-content-security-policy" not in {f.check_name for f in ctx.findings}
     assert ok == ["headers_check"]
 

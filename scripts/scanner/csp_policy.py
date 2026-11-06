@@ -19,10 +19,18 @@ THE RULE. Scripts are governed by `script-src`, or by `default-src` when there i
   * allows any site: `*`, `https:`, `http:`, `https://*`, `http://*`, or `data:` URLs
     (ignored when 'strict-dynamic' is present: CSP3 browsers then drop host and scheme lists);
   * does not exist (neither directive).
-That is rated MODERATE, the same as a missing Content-Security-Policy, because it protects as
-much as no policy. 'unsafe-eval' on a rule that is otherwise tight is LOW. 'style-src' is not
-judged (little harm, very common). Precedent: ftp.sciimage.com F-04, kept MODERATE on 2026-05-25
-("Trust ZAP"), which was exactly the default-src fallback case.
+'unsafe-eval' on a rule that is otherwise tight is its own, smaller finding. 'style-src' is not
+judged (little harm, very common).
+
+THE RATING: both findings are LOW (KB 12 job 4v, 2026-11-06). The Prodex and Command dailies led
+with this check day after day; Howie, 07:38: "its too unimportant and repetitive", and 08:03:
+"yes" (rate it Low, with the compressed-pages check, one job). A rule that does not limit
+scripts lets nothing in by itself: it only fails to stop a script that some other flaw has
+already put into a page, and that flaw, when found, is its own finding. From job 3z (2026-10-31)
+until then the not-limited case was MODERATE, the same as a missing Content-Security-Policy, on
+the precedent of ftp.sciimage.com F-04 (kept MODERATE 2026-05-25, "Trust ZAP"); that hand-entered
+row keeps its own rating (Sentry never rewrites a person's rating). The two cases still rank
+apart for the several-policies rule below: _RANK says how weak, not how serious.
 
 Several policies in one header (comma-joined) must ALL allow a script for it to run, so the
 verdict is the TIGHTEST policy's.
@@ -33,8 +41,7 @@ them, read 2026-10-31), a policy set in a <meta> tag, and Content-Security-Polic
 """
 import re
 
-MODERATE = "MODERATE"
-LOW = "LOW"
+LOW = "LOW"          # both findings (job 4v)
 
 CHECK_NOT_LIMITED = "csp-scripts-not-limited"
 CHECK_EVAL_ONLY = "csp-allows-eval"
@@ -70,11 +77,13 @@ def directives(policy):
 
 def assess_policy(policy):
     """One policy -> None (scripts are limited, eval not allowed) or
-    {'severity', 'reasons', 'eval', 'rule', 'sources'}."""
+    {'weakness', 'reasons', 'eval', 'rule', 'sources'}; 'weakness' is the check that fires
+    (CHECK_NOT_LIMITED or CHECK_EVAL_ONLY)."""
     d = directives(policy)
     rule = "script-src" if "script-src" in d else ("default-src" if "default-src" in d else None)
     if rule is None:
-        return {"severity": MODERATE, "reasons": [_NO_RULE], "eval": False, "rule": None, "sources": []}
+        return {"weakness": CHECK_NOT_LIMITED, "reasons": [_NO_RULE], "eval": False, "rule": None,
+                "sources": []}
     sources = d[rule]
     low = [s.lower() for s in sources]
     strict_dynamic = "'strict-dynamic'" in low
@@ -89,13 +98,16 @@ def assess_policy(policy):
                 reasons.append(why)
     allows_eval = "'unsafe-eval'" in low
     if reasons:
-        return {"severity": MODERATE, "reasons": reasons, "eval": allows_eval, "rule": rule, "sources": sources}
+        return {"weakness": CHECK_NOT_LIMITED, "reasons": reasons, "eval": allows_eval, "rule": rule,
+                "sources": sources}
     if allows_eval:
-        return {"severity": LOW, "reasons": [], "eval": True, "rule": rule, "sources": sources}
+        return {"weakness": CHECK_EVAL_ONLY, "reasons": [], "eval": True, "rule": rule, "sources": sources}
     return None
 
 
-_RANK = {None: 0, LOW: 1, MODERATE: 2}
+# How weak, not how serious: both findings are LOW (job 4v), but a policy that does not limit
+# scripts is weaker than one that only allows eval(), and the tightest policy must still win.
+_RANK = {None: 0, CHECK_EVAL_ONLY: 1, CHECK_NOT_LIMITED: 2}
 
 
 def script_weakness(header_value):
@@ -110,7 +122,7 @@ def script_weakness(header_value):
     if not policies:
         return None
     verdicts = [assess_policy(p) for p in policies]
-    return min(verdicts, key=lambda v: _RANK[v["severity"] if v else None])
+    return min(verdicts, key=lambda v: _RANK[v["weakness"] if v else None])
 
 
 def _join(items):
@@ -126,17 +138,18 @@ def finding_fields(hostname, header_value):
     if v is None:
         return None
     rule_text = f"{v['rule']} {' '.join(v['sources'])}".strip() if v["rule"] else "(no script rule)"
-    if v["severity"] == MODERATE:
+    if v["weakness"] == CHECK_NOT_LIMITED:
         allows = list(v["reasons"]) + ([_EVAL] if v["eval"] else [])
         return {
             "check_name": CHECK_NOT_LIMITED,
             "title": TITLE_NOT_LIMITED,
-            "severity": MODERATE,
+            "severity": LOW,
             "description": (
                 f"The Content-Security-Policy header from {hostname} allows {_join(allows)}. "
-                f"A policy like this stops about as few injected scripts as no policy at all, so it "
-                f"is rated the same as a missing Content-Security-Policy. The rule that governs "
-                f"scripts: {rule_text}"),
+                f"A policy like this stops about as few injected scripts as no policy at all. It "
+                f"lets nothing in by itself: it matters only if some other flaw lets someone put a "
+                f"script into a page, so it is a smaller weakness. The rule that governs scripts: "
+                f"{rule_text}"),
             "tags": ["headers", "csp", "csp-weak", v["rule"] or "no-script-rule"],
         }
     return {
