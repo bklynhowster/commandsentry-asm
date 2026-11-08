@@ -107,15 +107,16 @@ class GateResult:
     asset_id: str
     intensity: str
     ownership: Optional[str]
-    reason: str  # 'ownership_not_allowed' | 'asset_not_found' | 'db_unreadable'
+    # 'ownership_not_allowed' | 'asset_retired' | 'asset_not_found' | 'db_unreadable'
+    reason: str
     message: str
 
     def is_routine_refusal(self) -> bool:
-        """True for the policy-compliant refusal case (ownership_not_allowed).
-        False for the fail-closed-on-uncertainty cases (asset_not_found,
+        """True for the policy-compliant refusals (ownership_not_allowed; asset_retired,
+        job 4 step 5). False for the fail-closed-on-uncertainty cases (asset_not_found,
         db_unreadable) which indicate a broken gate state and should bubble up
         as a failed workflow run."""
-        return self.reason == "ownership_not_allowed"
+        return self.reason in ("ownership_not_allowed", "asset_retired")
 
 
 # ══ THE DELIBERATE-REFUSAL INVENTORY (relay 295, Howie's R30 ruling) ═════════
@@ -341,6 +342,103 @@ def check_ownership_or_block(
         return result
 
     # Allowlisted — proceed. Light short-circuit happened above.
+    return None
+
+
+# ══ RETIRED MEANS RETIRED (KB 12 job 4 step 5, plan v4.1 C5, 2026-11-08) ══════════
+# A retired name (assets.discovery_status = 'retired': the three www.<sub>.unimacgraphics.com
+# names only the zone's wildcard DNS answers, once the job 4 cleanup retires them) is never
+# scanned — at ANY intensity, light included, and whoever queued it (the sweep, Scan Now, a
+# hand-made row). The portal shows no Scan Now on a retired name and its triggerScan refuses
+# one (push-422); this is the backstop on the scanner's side, the first thing each runner does
+# after reading its descriptor, before anything is sent to the target.
+#
+# Same shape as the ownership check above: one read with the SAFETY retry budget; a real
+# answer is never retried; unreadable or a missing row FAILS CLOSED (exit 1, the run goes red)
+# — we do not scan a target whose status we could not read. 'retired' is a routine refusal
+# (exit 0): the scan_run and scan_queue rows are stamped failed with a plain message (the
+# portal prints it as written: no exit names, no addresses, lesson 114). No alert email: a
+# retired name refused is the system doing its job, not an ROE event.
+RETIRED_STATUS = "retired"
+
+
+def check_retired_or_block(
+    conn,
+    asset_id: str,
+    intensity: str,
+    scan_run_id: str,
+    queue_id: str,
+) -> Optional[GateResult]:
+    """None = proceed. A GateResult = refused (rows already stamped failed).
+
+    Every intensity. Fails CLOSED: unreadable status or a missing asset row refuses."""
+
+    def _lookup() -> Verdict:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT discovery_status FROM public.assets WHERE asset_id = %s",
+                    (asset_id,),
+                )
+                return Verdict(True, "row_read", payload=cur.fetchone())
+        except Exception as e:  # noqa — driver error taxonomy varies
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise TransportFailure(repr(e)) from e
+
+    v = run_with_transport_retry(
+        _lookup,
+        SAFETY,
+        on_retry=lambda n, e, back: print(
+            f"::warning::retired check lookup attempt {n}/{SAFETY.attempts} "
+            f"failed ({e}) — retrying in {back}s",
+            file=sys.stderr,
+        ),
+    )
+
+    if v.unreadable:
+        result = GateResult(
+            asset_id=asset_id,
+            intensity=intensity,
+            ownership=None,
+            reason="db_unreadable",
+            message=(
+                f"retired_check: discovery_status UNREADABLE for {asset_id} after "
+                f"{v.attempts} attempts — the scan did not start (nothing was sent)."
+            ),
+        )
+        _stamp_failed(conn, scan_run_id, queue_id, result.message)
+        return result
+
+    row = v.payload
+    if row is None:
+        result = GateResult(
+            asset_id=asset_id,
+            intensity=intensity,
+            ownership=None,
+            reason="asset_not_found",
+            message=f"retired_check: asset {asset_id} not found in inventory — the scan did not start.",
+        )
+        _stamp_failed(conn, scan_run_id, queue_id, result.message)
+        return result
+
+    status = row["discovery_status"] if isinstance(row, dict) else row[0]
+    if status == RETIRED_STATUS:
+        result = GateResult(
+            asset_id=asset_id,
+            intensity=intensity,
+            ownership=None,
+            reason="asset_retired",
+            message=(
+                f"retired_block: {asset_id} is retired, so Sentry no longer scans it. "
+                f"Nothing was sent to it."
+            ),
+        )
+        _stamp_failed(conn, scan_run_id, queue_id, result.message)
+        return result
+
     return None
 
 
