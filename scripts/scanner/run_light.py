@@ -4001,6 +4001,41 @@ def run(descriptor_path: str, dsn: str) -> int:
         log(f"DB connect failed: {e}")
         return 1
 
+    # ─── KB 12 job 4 step 5 (plan v4.1 C5): retired means retired ───────────
+    # The light tier has no ROE gate (passive), but a retired name is never scanned at any
+    # intensity. First thing after the connection, before port_scan: nothing has been sent to
+    # the target yet. Fails closed like the ROE gate (unreadable or missing row → exit 1);
+    # a retired name is a routine refusal (exit 0). Rows stamped failed by the gate.
+    try:
+        from roe_gate import check_retired_or_block
+        block = check_retired_or_block(
+            conn=conn,
+            asset_id=descriptor["asset_id"],
+            intensity=descriptor["intensity"],
+            scan_run_id=descriptor["scan_run_id"],
+            queue_id=descriptor["queue_id"],
+        )
+    except Exception as e:
+        log(f"FATAL: retired check raised: {e!r} — aborting (fail-closed, exit 1)")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return 1
+    if block is not None:
+        log(f"RETIRED CHECK — asset={block.asset_id} intensity={block.intensity} reason={block.reason}")
+        log(f"  message: {block.message}")
+        log("  zero target-bound tools ran. scan_run + scan_queue stamped failed.")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        if block.is_routine_refusal():
+            log("  routine refusal — exit 0 (workflow stays green).")
+            return 0
+        log("  gate failed closed on uncertainty — exit 1 (workflow goes red).")
+        return 1
+
     try:
         # ─── Port scan preflight (M3 revision) ─────────────────────────
         # Discover what's actually listening before dispatching checks.

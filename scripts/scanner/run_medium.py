@@ -6517,7 +6517,7 @@ def run(descriptor_path: str, dsn: str) -> int:
     # asset we're being asked to scan, we run it here, before any
     # network op of any kind.
     try:
-        from roe_gate import check_ownership_or_block
+        from roe_gate import check_ownership_or_block, check_retired_or_block
     except ImportError as e:
         log(f"FATAL: roe_gate module not importable: {e!r} — aborting (fail-closed, exit 1)")
         return 1
@@ -6559,6 +6559,16 @@ def run(descriptor_path: str, dsn: str) -> int:
             github_run_url=gh_run_url,
             queue_source=queue_source,
         )
+        if block is None:
+            # KB 12 job 4 step 5 (plan v4.1 C5): retired means retired. Same gate
+            # connection, still before anything is sent to the target.
+            block = check_retired_or_block(
+                conn=gate_conn,
+                asset_id=descriptor["asset_id"],
+                intensity=descriptor["intensity"],
+                scan_run_id=descriptor["scan_run_id"],
+                queue_id=descriptor["queue_id"],
+            )
     except Exception as e:
         log(f"FATAL: ROE gate raised: {e!r} — aborting (fail-closed, exit 1)")
         try:

@@ -63,6 +63,7 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from confirmation_thresholds import CONFIRMATION_THRESHOLDS  # noqa: E402
 import asset_liveness  # noqa: E402  # Obsidian 161 step 3 — shared liveness (dark-signal gate + heal)
+import wildcard_www  # noqa: E402  # KB 12 job 4 step 5 C2 — wildcard-only www names are never live
 
 
 # ---------------------------------------------------------------------------
@@ -1638,6 +1639,13 @@ def import_one(
             # between "discovery said live" and "a scan said live" (Obsidian 224).
             disc = asset_liveness.discovery_status_from_service_count(
                 svc_count, host_count=host_count, is_apex=is_apex)
+            # KB 12 job 4 step 5 (plan v4.1 C2, 2026-11-08): a www.<sub> name that only the zone's
+            # wildcard DNS answers is never made a live asset. `disc_seen` is what discovery saw
+            # (it drives the alive clock, unchanged); `disc` is what is written (see wildcard_www).
+            disc_seen = disc
+            if not is_apex:
+                disc = wildcard_www.importer_status(bucket_id, apex_asset_id, sub_list, disc,
+                                                    logfn=print)
             if is_apex:
                 cur.execute(UPSERT_ASSET, {
                     "asset_id": bucket_id,
@@ -1688,7 +1696,7 @@ def import_one(
             # this sweep's last_seen and later stamps only bump forward (never
             # regress). Scoped to confirmed_live: dns_only/ct_ghost never had a live
             # service, so they can't "go dark". No demotion writer exists yet (P2).
-            if disc == "confirmed_live":
+            if disc_seen == "confirmed_live":
                 cur.execute(
                     "UPDATE public.assets "
                     "SET last_alive_at = GREATEST(last_alive_at, %s) "
@@ -1715,7 +1723,9 @@ def import_one(
                 # writer were SKIPPED — i.e. the dark gate flipped live hours earlier
                 # silently stopped running. The no-op-for-non-dark-assets guard is INSIDE
                 # resurrect_if_dark, so it could never protect a name resolved at the call.
-                resurrect_if_dark(cur, bucket_id, logfn=print)
+                # C2 (2026-11-08): a wildcard-only www name is never brought back from dark.
+                if disc == "confirmed_live":
+                    resurrect_if_dark(cur, bucket_id, logfn=print)
             # 2b. cloud_drift audit (4.7 E7): the UPSERT flags cloud_drift=true when a
             #     sticky manual flag disagreed with the fresh derived value. Record the
             #     temporal trail (the boolean column drives the portal chip).
