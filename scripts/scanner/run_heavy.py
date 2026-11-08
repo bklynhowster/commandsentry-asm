@@ -114,6 +114,8 @@ from run_medium import (
     run_cmd,
     capture_egress_ip,
     capture_vpn_config_used,
+    start_reachability_check,
+    start_check_summary,
     get_scanner_version,
     derive_validation_status,
     flush_progress,
@@ -302,6 +304,9 @@ class HeavyScanContext:
     healthcheck_failures: list[dict] = field(default_factory=list)
     rotation_count: int = 0
     rotation_storm: bool = False
+    # push-421 — the start-of-scan reachability check's trail (one entry per
+    # exit tried), carried into rotation_log by build_rotation_log.
+    start_check: list[dict] = field(default_factory=list)
     # Live scan progress (note 103). flush_progress reads dsn to open
     # short-lived autocommit conns. None elsewhere → no-op.
     dsn: str | None = None
@@ -4704,6 +4709,18 @@ def run(descriptor_path: str, dsn: str) -> int:
         # DegradedRunError lands in the except branch below and routes
         # cleanly through degraded_out_heavy.
         assert_validate_mode_target_allowed(ctx.hostname, skip_vpn)
+
+        # Phase 0c — start-of-scan reachability check (push-421). Before the
+        # passive collector and every other target-bound phase: if the start
+        # exit can't reach the target but cnn.com can, try up to 2 backup
+        # exits; the first that answers carries the scan (and becomes
+        # egress_ip_initial / vpn_config_used, which the firewall test's
+        # same-address rule reads). None answers → stop here, degraded. It
+        # knocks the asset's own hostname, as medium does.
+        start_ok, start_reason = start_reachability_check(ctx, ctx.hostname)
+        if not start_ok:
+            raise DegradedRunError(start_reason,
+                                   start_check_summary(ctx.start_check))
 
         # Live scan progress (note 103, #46): heavy's phase list is static
         # (unlike medium's tech-stack-dependent plan), so write it up front to

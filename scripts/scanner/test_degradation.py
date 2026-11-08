@@ -46,6 +46,9 @@ from degradation import (  # noqa: E402
     healthcheck_with_retry,
     is_tool_output_degraded,
     SCAN_UNREACHED,
+    ASSET_UNREACHABLE_ALL_EXITS,
+    parse_fallback_regions,
+    select_start_backups,
     PROBE_HTTP,
     PROBE_REFUSED,
     PROBE_RESET,
@@ -2959,3 +2962,80 @@ def test_delta_close_eligible_reads_the_ok_VALUE_not_the_key():
          "y": {"ok": False, "partial": True,
                "reason": "wall_clock_cut_180s", "coverage": "unknown"}}
     ) is False
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# push-421 — start-of-scan reachability: fallback-exit SELECTION (pure)
+# parse_fallback_regions + select_start_backups. Ruling D2′ (2026-11-07):
+# (a) try the exits Howie listed in SCANNER_VPN_FALLBACKS, in order, the
+# current exit skipped, configs with no .conf dropped; (b) empty list →
+# random from the pool.
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_parse_fallback_regions_comma_and_space():
+    """Commas, spaces, or both separate the config names; order kept."""
+    raw = "us-qas-wg-302, us-lax-wg-701  us-slc-wg-302"
+    assert parse_fallback_regions(raw) == [
+        "us-qas-wg-302", "us-lax-wg-701", "us-slc-wg-302"]
+
+
+def test_parse_fallback_regions_empty_and_none():
+    """Unset or blank → [] so the caller falls back to a random pick."""
+    assert parse_fallback_regions("") == []
+    assert parse_fallback_regions(None) == []
+    assert parse_fallback_regions("   ") == []
+
+
+def test_parse_fallback_regions_dedups_keeps_first():
+    """A name repeated in the variable is kept once, in first position."""
+    assert parse_fallback_regions("a, b, a, c") == ["a", "b", "c"]
+
+
+def test_select_start_backups_listed_order_skips_current_and_missing():
+    """(a) the listed exits that exist, in order, minus the current one. A
+    listed config with no .conf on the runner is dropped."""
+    fallbacks = ["us-qas-wg-302", "us-lax-wg-701", "us-gone-wg-999",
+                 "us-slc-wg-302"]
+    available = ["us-qas-wg-302", "us-lax-wg-701", "us-slc-wg-302",
+                 "us-chi-wg-304"]
+    # current = us-qas-wg-302 → skipped; us-gone... missing → dropped.
+    got = select_start_backups(fallbacks, "us-qas-wg-302", available,
+                               max_n=2)
+    assert got == ["us-lax-wg-701", "us-slc-wg-302"]
+
+
+def test_select_start_backups_caps_at_max_n():
+    fallbacks = ["a", "b", "c", "d"]
+    available = ["a", "b", "c", "d"]
+    assert select_start_backups(fallbacks, None, available, max_n=2) == [
+        "a", "b"]
+
+
+def test_select_start_backups_empty_list_random_from_pool():
+    """(b) empty variable → a random sample from the pool, current excluded."""
+    class _FixedRng:
+        def shuffle(self, seq):
+            seq.reverse()  # deterministic stand-in for random.shuffle
+    available = ["a", "b", "cur", "d"]
+    got = select_start_backups([], "cur", available, max_n=2, rng=_FixedRng())
+    # pool minus "cur" = [a,b,d]; reversed = [d,b,a]; capped to 2.
+    assert got == ["d", "b"]
+    assert "cur" not in got
+
+
+def test_select_start_backups_only_start_exit_available_gives_nothing():
+    """Nothing to try when the only config present is the current exit."""
+    assert select_start_backups(["cur"], "cur", ["cur"], max_n=2) == []
+    assert select_start_backups([], "cur", ["cur"], max_n=2) == []
+
+
+def test_select_start_backups_next_after_current_wrapping():
+    """D2′ (a), as ruled: "the next exit tried is the next in the list after
+    the current one". Current in the middle: the ones after it, then wrap."""
+    listed = ["a", "b", "c", "d"]
+    assert select_start_backups(listed, "c", listed, max_n=2) == ["d", "a"]
+
+
+def test_select_start_backups_current_last_wraps_to_top():
+    listed = ["a", "b", "c", "d"]
+    assert select_start_backups(listed, "d", listed, max_n=2) == ["a", "b"]
