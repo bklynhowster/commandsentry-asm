@@ -108,9 +108,12 @@ from degradation import (
     PRE_ROTATE_RETRY_ATTEMPTS,
     PRE_ROTATE_RETRY_DELAY_S,
     VALIDATION_TARGETS,
+    ASSET_UNREACHABLE_ALL_EXITS,
     assert_tool_status_invariant,
     assert_validate_mode_target_allowed,
     scan_unreached_reason,
+    parse_fallback_regions,
+    select_start_backups,
     cap_aware_append_ban,
     cap_aware_append_healthcheck_failure,
     delta_close_eligible,
@@ -1015,6 +1018,10 @@ class ScanContext:
     # every "why didn't this find X" to re-read the GH Actions log.
     egress_ip_initial: str | None = None     # first egress observed post-bringup
     vpn_config_used: str | None = None       # initial WireGuard region/config
+    # push-421 — one entry per exit the start-of-scan reachability check
+    # tried (the start exit, then each backup), written into rotation_log so
+    # the forensics read shows WHICH exit finally carried the scan.
+    start_check: list[dict] = field(default_factory=list)
     healthcheck_failures: list[dict] = field(default_factory=list)
     rotation_storm: bool = False             # tripped when ban_events or
                                              # healthcheck_failures hits 500 cap
@@ -2121,6 +2128,10 @@ def build_rotation_log(ctx: ScanContext) -> dict:
         "ban_events": list(ctx.ban_events),
         "healthcheck_failures": list(ctx.healthcheck_failures),
         "rotation_storm": ctx.rotation_storm,
+        # push-421 — the start-of-scan reachability check's trail (empty when
+        # the start exit answered first try, as it does on a healthy scan).
+        # getattr keeps heavy's slimmer context safe if the field is absent.
+        "start_check": list(getattr(ctx, "start_check", [])),
     }
 
 
@@ -2803,6 +2814,199 @@ def detect_ffuf_catchall_redirect(ctx: ScanContext) -> str | None:
     """
     redirect, _, _, _, _ = detect_ffuf_catchall(ctx)
     return redirect
+
+
+def start_exit_answers(host: str, ports: tuple[int, ...] = (443, 80)) -> tuple[bool, dict]:
+    """push-421 — the start-of-scan knock. A plain TCP connect to each of
+    `host`'s ports, nothing sent, exactly push-420's test knock. "Answered"
+    means the host spoke at the TCP layer: an open port (reset above it) OR a
+    refusal (RST on connect) both count — the box is up and reachable through
+    this exit. Only a timeout/error on EVERY port is "no answer".
+
+    Returns (answered, dispositions) where dispositions maps port→slug for the
+    record. Pure except for the sockets tcp_probe_disposition opens; sends no
+    bytes beyond the handshake (same as healthcheck's TCP classifier).
+    """
+    dispositions: dict[str, str] = {}
+    answered = False
+    for port in ports:
+        disp = tcp_probe_disposition(host, port)
+        dispositions[str(port)] = disp
+        if disp in (PROBE_REFUSED, PROBE_RESET):
+            answered = True
+    return answered, dispositions
+
+
+def bring_up_named_exit(ctx: ScanContext, config_name: str) -> str | None:
+    """push-421 — bring up a SPECIFIC WireGuard exit by config name and return
+    its new egress IP (or None on failure). Mirrors rotate_vpn's vpn_rotate.sh
+    call but targets a chosen exit and does NOT touch region_idx / rotation_count
+    — this is start-of-scan exit selection, not a mid-run rotation, so it must
+    not inflate the rotation counters the forensics read on.
+
+    Best-effort: a missing script or a non-zero rc returns None and the caller
+    moves to the next backup.
+    """
+    if ctx.validate_mode:
+        log("bring_up_named_exit: validate_mode — no tunnel to bring up")
+        return None
+    script = Path(__file__).parent / "vpn_rotate.sh"
+    if not script.exists():
+        log(f"  vpn_rotate.sh not found at {script} — cannot switch exit")
+        return None
+    rc, _stdout, stderr = run_cmd([str(script), config_name], timeout=120)
+    if rc != 0:
+        log(f"  ✗ could not bring up {config_name} (rc={rc}): {stderr.strip()[:200]}")
+        return None
+    new_ip = capture_egress_ip()
+    if new_ip and new_ip not in ctx.egress_ips_seen:
+        ctx.egress_ips_seen.append(new_ip)
+    log(f"  ✓ brought up {config_name} — egress {new_ip or '<unknown>'}")
+    return new_ip
+
+
+def start_reachability_check(
+    ctx: ScanContext, host: str, max_backup_exits: int = 2
+) -> tuple[bool, str]:
+    """push-421 (job 4z) — run ONCE at the start of a scan, after the tunnel
+    is up and before any target-bound step.
+
+    What it does (Howie's rulings D1′/D2′, 2026-11-07):
+      1. Knock the target on 443/80 through the start exit. If it answers,
+         the scan runs as today — (True, "").
+      2. If it does NOT answer but cnn.com does (the internet works, the
+         target doesn't through THIS exit), try up to `max_backup_exits`
+         other exits from SCANNER_VPN_FALLBACKS — in order, the current exit
+         skipped, configs with no .conf dropped; an empty variable falls back
+         to a random pick from the pool. The first exit whose knock answers
+         carries the whole scan: its address becomes the scan's first exit
+         (egress_ip_initial / vpn_config_used), so the firewall test's
+         same-address rule stays honest.
+      3. If no exit answers → (False, ASSET_UNREACHABLE_ALL_EXITS). The caller
+         stops the scan before any step; it is recorded degraded, never clean.
+      4. If the target doesn't answer AND cnn.com doesn't either through the
+         start exit, this is a dead-exit / runner problem, NOT "all exits blind
+         to the target" — leave it to today's mid-run machinery and proceed
+         (True, "egress_suspect"); the first phase's ensure_healthy_egress owns
+         that case. push-421 changes nothing there.
+
+    Validate-mode: no tunnel to switch, so this is a no-op that always proceeds
+    — (True, "validate_mode").
+
+    Every exit tried is appended to ctx.start_check for the rotation_log.
+    """
+    if ctx.validate_mode:
+        return True, "validate_mode"
+
+    start_config = ctx.vpn_config_used
+    if not start_config:
+        # No WireGuard interface detected — the scan isn't on a tunnel (a
+        # bring-up that didn't take). Switching exits would bring a tunnel UP
+        # where none is running; never do that from here. Proceed as today.
+        log("start reachability: no active tunnel detected — not switching "
+            "exits; scan proceeds as today")
+        ctx.start_check.append({"stage": "start_exit", "config": None,
+                                "skipped": "no_tunnel"})
+        return True, "no_tunnel"
+    answered, dispositions = start_exit_answers(host)
+    ctx.start_check.append({
+        "stage": "start_exit",
+        "config": start_config,
+        "answered": answered,
+        "dispositions": dispositions,
+    })
+    if answered:
+        log(f"start reachability: {host} answered through the start exit "
+            f"{start_config or '<unknown>'} — scan proceeds")
+        return True, ""
+
+    # Target silent through the start exit. Is it the exit, or the target?
+    if not control_probe_reachable():
+        # cnn.com didn't answer either — the exit itself / the runner's path
+        # is suspect. Not push-421's case; let the first phase's
+        # ensure_healthy_egress handle a dead exit as it does today.
+        log(f"start reachability: {host} silent AND cnn.com silent through "
+            f"{start_config or '<unknown>'} — dead-exit path, leaving to "
+            f"mid-run machinery (unchanged)")
+        ctx.start_check[-1]["control"] = "silent"
+        return True, "egress_suspect"
+
+    ctx.start_check[-1]["control"] = "answered"
+    log(f"start reachability: {host} silent but cnn.com answered through "
+        f"{start_config or '<unknown>'} — trying backup exits (push-421)")
+
+    available = _load_rotation_regions(shuffle=False)
+    raw_fallbacks = os.environ.get("SCANNER_VPN_FALLBACKS", "")
+    fallbacks = parse_fallback_regions(raw_fallbacks)
+    if fallbacks:
+        missing = [c for c in fallbacks if c not in available]
+        if missing:
+            log(f"  SCANNER_VPN_FALLBACKS lists {len(missing)} exit(s) with no "
+                f"config on the runner (dropped): {missing}")
+    backups = select_start_backups(
+        fallbacks, start_config, available, max_backup_exits
+    )
+    if not backups:
+        log("  no backup exits available to try "
+            "(empty list and empty pool, or only the start exit) — stopping")
+        return False, ASSET_UNREACHABLE_ALL_EXITS
+
+    log(f"  backup exits to try (in order): {backups}")
+    for config_name in backups:
+        new_ip = bring_up_named_exit(ctx, config_name)
+        if not new_ip:
+            ctx.start_check.append({
+                "stage": "backup",
+                "config": config_name,
+                "answered": False,
+                "bringup": "failed",
+            })
+            continue
+        answered, dispositions = start_exit_answers(host)
+        ctx.start_check.append({
+            "stage": "backup",
+            "config": config_name,
+            "egress_ip": new_ip,
+            "answered": answered,
+            "dispositions": dispositions,
+        })
+        if answered:
+            # This exit carries the scan. Make it the scan's first exit so the
+            # firewall test's same-address rule and the forensics read agree.
+            ctx.egress_ip_initial = new_ip
+            ctx.vpn_config_used = config_name
+            log(f"start reachability: {host} answered through backup exit "
+                f"{config_name} ({new_ip}) — scan proceeds on this exit")
+            return True, ""
+        # Silent through this backup too. Ask cnn.com on it, for the record
+        # only (the flow is the same either way): it tells "this exit can't
+        # reach the target" from "this exit passes nothing at all".
+        ctx.start_check[-1]["control"] = (
+            "answered" if control_probe_reachable() else "silent")
+        log(f"  backup {config_name} ({new_ip}): {host} still silent "
+            f"(cnn.com {ctx.start_check[-1]['control']})")
+
+    log(f"start reachability: {host} answered no exit tried — "
+        f"{start_check_summary(ctx.start_check)} — "
+        f"stopping the scan before any step")
+    return False, ASSET_UNREACHABLE_ALL_EXITS
+
+
+def start_check_summary(start_check: list[dict]) -> str:
+    """push-421 — the plain sentence recorded in scan_run.error_message when
+    the start check stops a scan. Counts only, NO exit names: the portal
+    prints error_message to everyone who opens the asset, and which Mullvad
+    exits Sentry tried is Sentry's own business (ruling D3′: told to Howie
+    alone). The names stay in rotation_log.start_check, which the portal does
+    not read. Pure (reads only the list the check built)."""
+    reached = [e for e in start_check if e.get("bringup") != "failed"]
+    failed = len(start_check) - len(reached)
+    cnn_ok = sum(1 for e in reached if e.get("control") == "answered")
+    s = (f"no answer from {len(reached)} exit(s) at the start of the scan; "
+         f"cnn.com answered through {cnn_ok} of them")
+    if failed:
+        s += f"; {failed} more could not be brought up"
+    return s
 
 
 def ensure_healthy_egress(
@@ -6498,10 +6702,29 @@ def run(descriptor_path: str, dsn: str) -> int:
         if skip_vpn:
             log(f"validate_mode pre-flight OK — {ctx.hostname!r} in allowlist")
 
+        # ─── Phase 0a′: start-of-scan reachability check (push-421) ───
+        # The FIRST step that touches the target: after the tunnel is up,
+        # before resolve_web_host's canonical probe. If the start exit can't
+        # reach the target but the internet can, try up to 2 backup exits;
+        # if none answers, stop here recorded degraded (never clean). It
+        # knocks ctx.hostname, the asset itself, so resolve_web_host then runs
+        # on the exit that settled (on a blind exit its probe would get
+        # nothing and the scan would lose its canonical host). A canonical
+        # host is accepted either on the hostname's own addresses (then the
+        # knock reached the same boxes) or as another owned asset (then its
+        # own reachability is left to the mid-run checks, as before this
+        # push) — canonical_host.redirect_target_authorized. Inside the try so the
+        # raise lands in `except DegradedRunError` → degraded_out. Mid-run
+        # rotation (ensure_healthy_egress, D1) is unchanged.
+        start_ok, start_reason = start_reachability_check(ctx, ctx.hostname)
+        if not start_ok:
+            raise DegradedRunError(start_reason,
+                                   start_check_summary(ctx.start_check))
+
         # ─── Phase 0b: canonical-host resolution (4.7 rulings 77-79) ───
-        # Runs AFTER the VPN is up (so the probe shares the scan's egress)
-        # and BEFORE detect_waf — the first target-bound op — because every
-        # HTTP-layer phase downstream reads ctx.web_host.
+        # Runs AFTER the VPN is up and the start check has settled the exit
+        # (so the probe shares the scan's egress) and BEFORE detect_waf,
+        # because every HTTP-layer phase downstream reads ctx.web_host.
         #
         # NOTE the allowlist assert above deliberately stays on ctx.hostname:
         # validate-mode is a safety allowlist about which ASSET may be

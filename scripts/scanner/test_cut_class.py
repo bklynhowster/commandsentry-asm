@@ -185,6 +185,7 @@ DOCUMENTED_SLUGS: dict[str, str] = {
     "vpn_bringup_failed":                          D.CUT_TRANSPORT,
     "asset_pre_flight_unreachable":                D.CUT_TRANSPORT,
     "scan_unreached":                               D.CUT_TRANSPORT,
+    "asset_unreachable_all_exits":                  D.CUT_TRANSPORT,
 }
 
 

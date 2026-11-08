@@ -679,6 +679,9 @@ jobs:
           # DegradedRunError, scan_run.status='degraded', exit 1.
           # NEVER manually fire skip_vpn=true on a client/owned asset.
           SKIP_VPN: ${{ github.event.inputs.skip_vpn || 'false' }}
+          # push-421: backup exits for the start-of-scan reachability check
+          # (config names, comma/space separated; empty = random from the pool).
+          SCANNER_VPN_FALLBACKS: ${{ vars.SCANNER_VPN_FALLBACKS || '' }}
           # When threshold_probe_mode workflow input is true, run_medium.py
           # uses a per-chunk rate ladder + post-chunk healthchecks to map
           # the rate-to-ban threshold (skips nikto/ffuf for isolation).
@@ -728,6 +731,9 @@ jobs:
           # this instance's asset data to another instance's portal.
           PORTAL_BASE_URL: ${{ vars.PORTAL_BASE_URL }}
           SKIP_VPN: ${{ github.event.inputs.skip_vpn || 'false' }}
+          # push-421: backup exits for the start-of-scan reachability check
+          # (config names, comma/space separated; empty = random from the pool).
+          SCANNER_VPN_FALLBACKS: ${{ vars.SCANNER_VPN_FALLBACKS || '' }}
           # testssl wall raised to 30 min (was 600s default). The 10-min cap was
           # marginal over Mullvad latency — api.ccc completed at 557s (93% of cap)
           # and vpn.sciimage hit wall_timeout only ~1/3 done. Ceiling only: fast

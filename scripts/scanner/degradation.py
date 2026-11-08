@@ -47,6 +47,7 @@ Design notes (per advisor rulings 2026-06-12):
 """
 from __future__ import annotations
 
+import random
 import re
 import sys
 from typing import Optional
@@ -131,6 +132,7 @@ class DegradedRunError(Exception):
       - "asset_pre_flight_unreachable"  — pre-first-chunk probe failed
       - "no_tls_handshake"              — connected + probed but no TLS handshake completed (egress reset / decommissioned / absent TLS)
       - "scan_unreached"                — job 4c: probe didn't get through to the host while cnn.com answered through the same exit (default: fault on Sentry's side)
+      - "asset_unreachable_all_exits"   — push-421: at the START of a scan the target answered no exit tried (the start exit plus up to 2 backups), while cnn.com answered through the start exit (each backup's own cnn.com answer is recorded in rotation_log.start_check). The scan stops before any step — never clean, never complete.
     """
 
     def __init__(self, reason: str, context: str = "") -> None:
@@ -342,6 +344,12 @@ PROBE_TIMEOUT = "timeout"  # nothing came back — suspect Sentry's side first (
 # skipped_target_unreachable / egress_unstable.
 SCAN_UNREACHED = "scan_unreached"  # probe didn't get through; cnn.com answered
 
+# push-421 (job 4z) — the start-of-scan reachability check. When the start
+# exit gets no answer from the target but cnn.com answers through it, the
+# scan tries up to 2 backup exits before any step. This slug means none of
+# them reached the target either: the scan stops, recorded degraded.
+ASSET_UNREACHABLE_ALL_EXITS = "asset_unreachable_all_exits"
+
 
 def egress_failure_reason(probe_codes: list[int]) -> str:
     """Classify why an ensure_healthy_egress loop ended without a
@@ -394,6 +402,66 @@ def scan_unreached_reason(disposition: str, code: int) -> str:
     if disposition == PROBE_TIMEOUT:
         return SCAN_UNREACHED
     return SCAN_UNREACHED
+
+
+def parse_fallback_regions(raw: str | None) -> list[str]:
+    """push-421 — parse the SCANNER_VPN_FALLBACKS repo variable into an
+    ordered, de-duplicated list of WireGuard config names.
+
+    The variable is a plain list of config stems (no .conf), separated by
+    commas and/or whitespace — e.g. "us-qas-wg-302, us-lax-wg-701". Order
+    is kept (D2′ (a): the backups are tried in the order Howie listed them).
+    Blank/unset → [] so the caller falls back to a random pick (D2′ (b)).
+
+    Pure — no I/O, no environment read; the caller passes os.environ.get(...).
+    """
+    if not raw:
+        return []
+    out: list[str] = []
+    for name in re.split(r"[,\s]+", raw.strip()):
+        name = name.strip()
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def select_start_backups(
+    fallbacks: list[str],
+    current: str | None,
+    available: list[str],
+    max_n: int,
+    rng=None,
+) -> list[str]:
+    """push-421 — the ordered list of up to `max_n` backup exits to try at
+    the start of a scan, after the start exit got no answer (D2′).
+
+    - `fallbacks` non-empty (D2′ (a)): "the next exit tried is the next in
+      the list after the current one" — so when the current exit is listed,
+      the ones after it come first, wrapping around to the top; when it is
+      not listed, the list from the top. A listed config with no .conf on
+      the runner is dropped (it can't be brought up) — the caller logs which.
+    - `fallbacks` empty (D2′ (b)): a random sample from `available`, minus
+      the current exit.
+
+    `current` is excluded either way (no point re-trying the exit that just
+    failed). `max_n` caps the result. Pure given `rng` (defaults to the
+    module's random, shuffled copy so the live call varies).
+    """
+    avail = [c for c in available if c and c != current]
+    if fallbacks:
+        # de-dup while keeping order
+        seen: set[str] = set()
+        listed = [c for c in fallbacks if not (c in seen or seen.add(c))]
+        if current in listed:
+            i = listed.index(current)
+            listed = listed[i + 1:] + listed[:i]   # after the current one, wrapping
+        picked = [c for c in listed if c in avail and c != current]
+        return picked[:max_n]
+    # empty list → random from the pool
+    pool = list(avail)
+    r = rng or random
+    r.shuffle(pool)
+    return pool[:max_n]
 
 
 def healthcheck_with_retry(
@@ -729,6 +797,7 @@ _CUT_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
     ("rotation_exhausted",          CUT_FILTER),     # no egress IP passed the probe (classed here historically; suspect Sentry's side first)
     ("output_stderr_contains_unreachable_pattern", CUT_TRANSPORT),
     ("asset_pre_flight_unreachable", CUT_TRANSPORT),
+    ("asset_unreachable_all_exits", CUT_TRANSPORT),  # push-421: no exit tried at the start reached the target; cnn.com answered through the start exit
     ("vpn_bringup_failed",          CUT_TRANSPORT),
     ("tool_startup_failure",        CUT_TOOL),
     ("validate_mode_target_not_allowlisted", CUT_POLICY),
