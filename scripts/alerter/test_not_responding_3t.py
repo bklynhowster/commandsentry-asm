@@ -101,7 +101,7 @@ def test_it_is_said_once_then_left_alone_supersedes_d5():
     # told yesterday, same reason: not said again, not recorded again
     m = model(not_responding=[VALOREP], told=_told(key, "NAME_GONE", W0))
     assert _block(m) is None and not [r for r in m["told_full"] if r[0] == key]
-    assert m["headline"] == "Nothing needs you today."
+    assert m["headline"].startswith("Nothing new since ")
     # what is known changed (it was told as merely not answering; now its name is gone)
     assert _block(model(not_responding=[VALOREP], told=_told(key, "NO_ANSWER", W0))) is not None
     # 30 days on (a host that flickers on and off): told again

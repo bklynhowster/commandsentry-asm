@@ -43,6 +43,29 @@ def quiet_key(asset_id: str) -> str:
     return QUIET_PREFIX + (asset_id or "")
 
 
+# KB 12, the Command daily (Howie 2026-11-09 08:23): the "still open" lines run every day, and a
+# problem named there is not named there again for STILL_GAP_DAYS. Each finding behind a line is
+# recorded after the email goes out under its own key (like host-quiet:), so the weekly's own
+# told rows for that finding are untouched and SQL_TOLD_MARK_CLOSED (it joins findings) never
+# touches these.
+STILL_PREFIX = "still-open:"
+STILL_GAP_DAYS = 7
+
+
+def still_key(finding_id: str) -> str:
+    return STILL_PREFIX + (finding_id or "")
+
+
+def named_lately(item: dict, told: dict, now, days: int = STILL_GAP_DAYS) -> bool:
+    """True when any finding behind the item was named in a 'still open' line inside the gap. PURE."""
+    for f in item.get("finding_ids") or []:
+        r = (told or {}).get(still_key(f))
+        last = r.get("last_full_at") if r else None
+        if last is not None and now < last + timedelta(days=days):
+            return True
+    return False
+
+
 def decide_quiet(asset_id: str, reason: str | None, told: dict, now):
     """('full', 'new' | 'changed' | 'due') or ('quiet', None) for one silent host. PURE."""
     r = told.get(quiet_key(asset_id))

@@ -83,6 +83,7 @@ import digest_weekly as _dw  # noqa: E402 — KB 12 job 3l slice 2: the Monday w
 import approval as _ap  # noqa: E402 — job 3l: Howie approves before anyone else gets it
 import digest_voice as _dv  # noqa: E402 — 3l round 5: the daily in Howie's voice
 import digest_slack as _ds  # noqa: E402 — 3l round 5: the #on-call post
+import told as _told  # noqa: E402 — job 3s: say it once; the Command daily's 7-day gap
 from datetime import datetime, timedelta, timezone
 from html import escape, unescape
 
@@ -1986,6 +1987,45 @@ def _still_open_picks(open_items, changed_ids, now, told):
     return picks[:_dv.STILL_OPEN_MAX]
 
 
+# KB 12, the Command daily (Howie 2026-11-09 08:23; 13 - Digests, Command daily 3): every day, the
+# two or three worst open problems that are not today's news, one sentence each, in Sentry's own
+# voice. Only what a scan confirmed: the hand-entered findings (source manual_named, entered last
+# spring) stay out until the re-check confirms them, and a row no scan has seen in STILL_FRESH_DAYS
+# is not called open today. Not the web firewall items: they have their own 30/90-day cadence in
+# the weekly (3s, Oct 22 20:01: "might get sick of hearing it"). A problem named here is not
+# named here again for told.STILL_GAP_DAYS (7). Nudges stay in the weekly (Overdue, 30 days).
+STILL_FRESH_DAYS = 30
+
+# The saved plain words (4u) for the findings behind the lines; switched-off rows carry none.
+SQL_PLAIN_WHAT = """
+SELECT finding_id, plain_what FROM public.findings
+ WHERE finding_id = ANY(%s) AND plain_what IS NOT NULL AND plain_rejected_at IS NULL
+"""
+
+
+def _still_open_daily(open_rows, names, changed_ids, now, told, quiet_hosts=frozenset()):
+    """The Command daily's 'still open' picks. PURE: `open_rows` are SQL_OPEN_PROBLEMS rows."""
+    fresh_since = now - timedelta(days=STILL_FRESH_DAYS)
+    rows = [r for r in open_rows or []
+            if (r[5] or "") != "manual_named"
+            and r[1] not in quiet_hosts
+            and r[6] is not None and r[6] >= fresh_since]
+    picks = []
+    for it in _open_items(rows, names, now):
+        if (it.get("severity") or "").upper() not in _ds.MODERATE_PLUS:
+            continue
+        if any(f in changed_ids for f in it.get("finding_ids", [])):
+            continue
+        if _told.is_firewall(it):
+            continue
+        if _told.named_lately(it, told or {}, now):
+            continue
+        picks.append(it)
+    picks.sort(key=lambda g: (_ds.SEV_RANK.get((g.get("severity") or "").upper(), 9), g.get("since") or now,
+                              g.get("title", "")))
+    return picks[:_dd.STILL_OPEN_MAX]
+
+
 def _open_items(rows, names, now):
     """group_problems over the open Moderate+ rows, each item with `since` = its earliest
     first sighting (column 9)."""
@@ -2614,6 +2654,17 @@ def main() -> int:
             details=details, told=told, not_responding=not_responding,
             reach_checks=reach_checks, quiet_where=quiet_where, gaps_to_approver=gate,
         )
+        # KB 12, the Command daily: its own "still open" lines, in Sentry's voice (the voice path,
+        # Prodex, has its own "Still sitting there" below and is not changed here).
+        if not _voice_on():
+            quiet_hosts = {r[0] for r in (not_responding or [])}
+            rows_ = _soft("open problems (still open)", SQL_OPEN_PROBLEMS)
+            names_ = {r[0] for r in sites} | {r[1] for r in rows_}
+            changed_ = {f for i in model["do"] + model["ticket"] for f in i.get("finding_ids", [])}
+            picks = _still_open_daily(rows_, names_, changed_, window_end, told, quiet_hosts)
+            ids_ = sorted({f for i in picks for f in i.get("finding_ids", [])})
+            plain = dict(_soft("plain words", SQL_PLAIN_WHAT, (ids_,))) if ids_ else {}
+            model = _dd.with_still_open(model, picks, plain)
         subject = _dd.subject(model, from_name)
         html = _dd.render_html(model, portal_url=portal_url, product_name=from_name)
         text = _dd.render_text(model, portal_url=portal_url, product_name=from_name)

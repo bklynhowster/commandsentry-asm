@@ -118,4 +118,4 @@ def test_subject_counts_flips():
               high_risk=[], new_assets=[], dark_assets=[], stale_assets=[], canary_violations=[],
               baseline=BASE)
     assert dd.subject(ra._digest_model(enforcement_flips=[REVERSE], **kw), "X").endswith(": 1 for today")
-    assert dd.subject(ra._digest_model(enforcement_flips=[UAT], **kw), "X").endswith(": nothing needs you")
+    assert dd.subject(ra._digest_model(enforcement_flips=[UAT], **kw), "X").endswith(": nothing new")

@@ -70,7 +70,7 @@ def test_with_an_approver_our_gaps_never_reach_the_others():
                  dict(stale_assets=[NS02], canary_violations=CANARY, reach_checks=STOPPED)):
         m = model(gaps_to_approver=True, **over)
         assert m["do"] == [] and m["ours"] and all(i["kind"] == "coverage" for i in m["ours"]), over
-        assert m["degraded"] is False and m["headline"] == "Nothing needs you today."
+        assert m["degraded"] is False and m["headline"].startswith("Nothing new since ")
         subj, html, text = rendered(m)
         assert "(!)" not in subj and "Coverage gap" not in subj
         for out in (html, text):
@@ -235,4 +235,4 @@ def test_the_email_held_on_nov_5_reads_as_planned():
     told = {"host-quiet:test.commandcommcentral.com": {"last_full_at": W1, "last_full_severity": "NO_ANSWER"}}
     nxt = model(window_start=W1, window_end=W1 + timedelta(days=1), not_responding=[TEST_ADDR, TEST_NAME],
                 quiet_where=WHERE, gaps_to_approver=True, told=told)
-    assert nxt["ticket"] == [] and nxt["headline"] == "Nothing needs you today."
+    assert nxt["ticket"] == [] and nxt["headline"].startswith("Nothing new since ")

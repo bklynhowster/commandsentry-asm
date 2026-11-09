@@ -156,6 +156,90 @@ def _day(dt: datetime) -> str:
     return f"{dt:%b} {dt.day}"
 
 
+# ── KB 12, the Command daily (Howie 2026-11-09 08:23; 13 - Digests, Command daily 1-4) ─────────
+# The window is everything since the last daily that went out, so on a morning after one or more
+# that were not approved it is longer than a day: "since yesterday" would be untrue.
+def since_words(window_start, window_end, brand: dict) -> str:
+    """'yesterday' (a day or so), 'Friday' (within the week), 'Nov 2' (longer). PURE."""
+    if window_start is None or window_end is None:
+        return "yesterday"
+    if window_end - window_start <= timedelta(hours=30):
+        return "yesterday"
+    start = local_time(window_start, brand)
+    if window_end - window_start < timedelta(days=6):
+        return f"{start:%A}"
+    return _day(start)
+
+
+def weekly_words(local_end) -> str:
+    """Where the standing picture comes from. On Monday the weekly is built minutes after the
+    daily, so it is today's, not 'Monday'. PURE."""
+    if local_end is not None and local_end.weekday() == 0:
+        return "Where every site stands, and why, comes in today's weekly review."
+    return "Where every site stands, and why, comes in the weekly review on Monday."
+
+
+STILL_OPEN_MAX = 3
+
+
+def _first_sentence(text: str) -> str:
+    t = " ".join((text or "").split())
+    for stop in (". ", "? ", "! "):
+        i = t.find(stop)
+        if 0 < i:
+            return t[: i + 1]
+    return t if not t or t[-1] in ".?!" else t + "."
+
+
+_VERB = re.compile(r"This site (is|has|uses|allows|runs|shows|serves|accepts|offers|lets|sends|returns|reveals|"
+                   r"answers|loads|lists|exposes|redirects|supports) (.*)$", re.S)
+
+
+_THIS_SITE = re.compile(r"\b([Tt])his site('s)?\b")
+
+
+def still_who(sites) -> tuple:
+    """The sites, named (round 5 and 5b: one sentence naming the sites): up to three by name,
+    plain names before deeper ones and addresses; past three, 'and N other sites'. PURE."""
+    s = sorted(set(sites or []), key=lambda x: (x.count("."), x))
+    if len(s) <= 3:
+        return where_words(sorted(s)), len(s)
+    return f"{s[0]}, {s[1]}, {s[2]} and {_n(len(s) - 3)} other sites", len(s)
+
+
+def _plural(verb: str) -> str:
+    return {"is": "are", "has": "have"}.get(verb, verb[:-1] if verb.endswith("s") else verb)
+
+
+def still_line(item: dict, plain: dict | None = None) -> str:
+    """One sentence for an open problem that is not today's news, naming where it is, in the
+    saved plain words (4u, 'the daily email's words come in line with the panel's) when the
+    finding has them, else the alerter's own plain title. PURE."""
+    plain = plain or {}
+    who, n = still_who(item.get("sites") or [])
+    # among the item's findings, prefer words that start from the site ("This site is ...")
+    said = [_first_sentence(plain[f]) for f in item.get("finding_ids", []) if plain.get(f)]
+    what = next((w for w in said if _VERB.match(w) or w.startswith("This site's ")), said[0] if said else "")
+    if not what:
+        t = (item.get("title") or "").strip().rstrip(".")
+        return f"{t} ({'on ' if n else ''}{who})." if who else f"{t}."
+    m = _VERB.match(what)
+    if m:
+        verb = m.group(1) if n == 1 else _plural(m.group(1))
+        return f"{who} {verb} {m.group(2)}"           # a site name keeps its own case
+    if what.startswith("This site's "):
+        rest = what[len("This site's "):]
+        return f"{who}'s {rest}" if n == 1 else f"On {who}, the {rest}"
+    # "this site" elsewhere in the sentence (review, push-424): one site is named in its place;
+    # several become "each of these sites" (it keeps the singular verb), named after the sentence
+    if who and _THIS_SITE.search(what):
+        if n == 1:
+            return _THIS_SITE.sub(lambda m: who + (m.group(2) or ""), what)
+        each = _THIS_SITE.sub(lambda m: ("Each" if m.group(1) == "T" else "each") + (" site's" if m.group(2) else " of these sites"), what)
+        return f"{each[:-1]} ({who})."
+    return f"{what[:-1]} (on {who})." if who else what
+
+
 # ── sites: from the evidence (KB 12 job 4, push B) ────────────────────────────
 # Howie, 2026-10-24 21:44: "it's the same damn box it's the same site." Ruled 2026-10-25
 # 08:46 (D1): a www name and its plain name are one site only on evidence seen on both
@@ -1002,9 +1086,11 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
         "do": do, "ticket": ticket, "done": done, "low": low, "info": info,
         "sites_total": len(now_b), "counts": now_c, "counts_then": then_c,
         "bands_now": now_b, "bands_then": then_b,
-        "change": change_words(now_c, then_c, now_b, then_b, "yesterday") if now_b else "",
+        "since": since_words(window_start, window_end, brand),
+        "change": change_words(now_c, then_c, now_b, then_b, since_words(window_start, window_end, brand)) if now_b else "",
         "degraded": bool(not gaps_to_approver and (stale_assets or canary_violations or checks_stopped)),
-        "headline": headline(n_do, n_ticket, do, ticket),
+        "headline": headline(n_do, n_ticket, do, ticket, since=since_words(window_start, window_end, brand)),
+        "still_open": [],
         "minor": minor,
         "baseline": baseline or {},
         "told_full": told_rule.records(shown, member_sev, "daily") + quiet_told,
@@ -1046,7 +1132,7 @@ def minor_words(minor: list) -> str:
     return f"Also found today: {len(minor)} minor issues, no action needed. They're listed in the portal."
 
 
-def headline(n_do: int, n_ticket: int, do=None, ticket=None) -> str:
+def headline(n_do: int, n_ticket: int, do=None, ticket=None, still=None, since: str = "yesterday") -> str:
     """The first thing read says what to do. One item: name it (Howie, 10-22, on "One thing
     for today. That's it." above a block of numbers: "What do I have to do with this?")."""
     def first(items):
@@ -1063,7 +1149,29 @@ def headline(n_do: int, n_ticket: int, do=None, ticket=None) -> str:
     if n_ticket:
         return (f"Nothing urgent today. {_n(n_ticket).capitalize()} thing{'s' if n_ticket != 1 else ''} "
                 f"for this week.")
-    return "Nothing needs you today."
+    # Never "Nothing needs you" while problems are open (round 4, Oct 25; Command daily 1).
+    if still:
+        n = len(still)
+        return (f"Nothing new since {since}. {_n(n).capitalize()} thing{'s' if n != 1 else ''} "
+                f"still open, below.")
+    return f"Nothing new since {since}."
+
+
+def with_still_open(model: dict, picks: list, plain: dict | None = None) -> dict:
+    """Adds the 'still open' lines (Command daily 3: every day, worst first, one sentence each) to
+    a built model, re-says the headline, and records each finding behind a line under its own
+    told key once the email goes out (the 7-day gap is read from those rows). PURE."""
+    lines = [{"text": still_line(i, plain), "severity": i.get("severity"),
+              "finding_ids": list(i.get("finding_ids") or [])} for i in (picks or [])[:STILL_OPEN_MAX]]
+    model["still_open"] = lines
+    model["headline"] = headline(len(model["do"]), len(model["ticket"]), model["do"], model["ticket"],
+                                 still=lines, since=model.get("since", "yesterday"))
+    # "daily": digest_told.last_full_in admits only 'daily' and 'weekly' (20261023c); the key's
+    # still-open: prefix is what keeps these rows apart.
+    model["told_full"] = list(model.get("told_full") or []) + [
+        (told_rule.still_key(f), (l.get("severity") or "").upper(), "daily")
+        for l in lines for f in l["finding_ids"]]
+    return model
 
 
 def subject(model: dict, product_name: str) -> str:
@@ -1079,8 +1187,10 @@ def subject(model: dict, product_name: str) -> str:
         what = f"{n_do} for today"
     elif n_ticket:
         what = f"nothing urgent, {n_ticket} this week"
+    elif model.get("still_open"):
+        what = f"nothing new, {len(model['still_open'])} still open"
     else:
-        what = "nothing needs you"
+        what = "nothing new"
     prefix = f"[{product_name}] " if product_name else ""
     gap = "(!) Coverage gap. " if model["degraded"] else ""
     return f"{prefix}{gap}{b.get('short_name', 'Sentry')}, {day}: {what}"
@@ -1317,13 +1427,16 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
         rows.append(_h2("This week"))
         rows += [_card(i, portal) for i in model["ticket"]]
     if model["done"]:
-        rows.append(_h2("Fixed since yesterday"))
+        rows.append(_h2(f"Fixed since {model.get('since', 'yesterday')}"))
         rows += [_done_row(i) for i in model["done"]]
+    if model.get("still_open"):
+        rows.append(_h2("Still open"))
+        rows.append(f'<tr><td class="px" style="padding:0 32px 4px;">'
+                    + "".join(_p(escape(l["text"]), "#2B3747", 15, "margin-top:8px;") for l in model["still_open"])
+                    + '</td></tr>')
     quiet = []
     if model.get("minor"):
         quiet.append(minor_words(model["minor"]))
-    if not (model["do"] or model["ticket"] or model["done"]):
-        quiet.append("Every scan since yesterday came back with nothing that needs anyone.")
     if quiet:
         rows.append(f'<tr><td class="px" style="padding:18px 32px 0;">{"".join(_p(escape(q), MUTED, 14) for q in quiet)}</td></tr>')
     if portal:
@@ -1334,7 +1447,7 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
             f'font-size:15px;font-weight:600;color:#FFFFFF;text-decoration:none;">Open the portal</a>'
             f'</td></tr></table></td></tr>')
     footer = (f"Sent by {escape(product_name or b['short_name'])} at {_clock(end)}. "
-              f"Where every site stands, and why, comes in the weekly review on Monday.")
+              f"{weekly_words(end)}")
     rows.append(f'<tr><td bgcolor="#F4F7FB" class="px" style="background:#F4F7FB;border-radius:0 0 14px 14px;padding:14px 32px;'
                 f'font-family:{FONT};font-size:12px;line-height:1.5;color:{MUTED};">{footer}</td></tr>')
 
@@ -1397,19 +1510,22 @@ def render_text(model: dict, *, portal_url: str = "", product_name: str = "") ->
     block("Needs you today", model["do"])
     block("This week", model["ticket"])
     if model["done"]:
-        out.append("FIXED SINCE YESTERDAY")
+        out.append(f"FIXED SINCE {model.get('since', 'yesterday').upper()}")
         for i in model["done"]:
             out.append(f"  [x] {i['title']}")
             for l in i.get("lines", [])[:10]:
                 out.append(f"      - {l}")
         out.append("")
+    if model.get("still_open"):
+        out.append("STILL OPEN")
+        for l in model["still_open"]:
+            out.append(f"  - {l['text']}")
+        out.append("")
     if model.get("minor"):
         out.append(minor_words(model["minor"]))
-    if not (model["do"] or model["ticket"] or model["done"]):
-        out.append("Every scan since yesterday came back with nothing that needs anyone.")
     if portal_url:
         out.append(f"Open the portal: {portal_url.rstrip('/')}")
     # W4 (Howie 2026-11-03 12:11): this is when Sentry wrote it, not when it went out (it goes
     # out when Howie approves), so it says how fresh the facts are.
-    out.append(f"Sentry's checks as of {_clock(end)}. Where every site stands, and why, comes in the weekly review on Monday.")
+    out.append(f"Sentry's checks as of {_clock(end)}. {weekly_words(end)}")
     return "\n".join(out)

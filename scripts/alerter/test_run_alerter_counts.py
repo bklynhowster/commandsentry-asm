@@ -189,8 +189,9 @@ def test_zero_new_findings_does_not_invent_a_section():
     """A quiet night reads as quiet — no empty panel."""
     html, text = _render()
     assert "Needs you today" not in html and "This week<" not in html
-    assert "Nothing needs you today." in html and "Nothing needs you today." in text
-    assert "came back with nothing that needs anyone" in html
+    # Command daily 1 (Howie 2026-11-09): a true headline, and no blanket "every scan came back clean"
+    assert "Nothing new since " in html and "Nothing new since " in text
+    assert "Nothing needs you" not in html + text and "came back with nothing that needs anyone" not in html + text
 
 # ---------------------------------------------------------------------------
 # (2) first-EVER vs first-per-producer
