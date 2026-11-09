@@ -170,7 +170,7 @@ def test_a_guess_is_not_listed_counted_or_mentioned():
     for out in (html, text):
         assert "FortiWeb" not in out and "WordPress" not in out
         assert "guess" not in out.lower() and "version" not in out.lower()
-    assert m["headline"] == "Nothing needs you today."
+    assert m["headline"] == "Nothing new since yesterday."  # Command daily 1 (Howie 2026-11-09): never "Nothing needs you"
 
 
 def test_first_deep_scan_since_and_first_ever_and_unknown_says_nothing():
@@ -245,7 +245,7 @@ def test_headline_words():
     assert dd.headline(1, 0) == "One thing for today."
     assert dd.headline(0, 3) == "Nothing urgent today. Three things for this week."
     assert dd.headline(0, 1) == "Nothing urgent today. One thing for this week."
-    assert dd.headline(0, 0) == "Nothing needs you today."
+    assert dd.headline(0, 0) == "Nothing new since yesterday."  # Command daily 1 (Howie 2026-11-09): never "Nothing needs you"
     assert dd.headline(12, 0) == "12 things for today."
     job = [{"title": "Renew the certificate on pm.u.com", "headline": ""}]
     assert dd.headline(1, 0, job) == "Today: renew the certificate on pm.u.com."
@@ -259,7 +259,7 @@ def test_subject_keeps_the_filter_prefix_and_says_what_you_will_do():
     mod = F("m", "b.example", "Missing CSP", "MODERATE")
     assert dd.subject(model(new_findings=[hot, mod]), "COMMANDsentry") == \
         "[COMMANDsentry] Command, Thursday: 1 for today, 1 this week"
-    assert dd.subject(model(), "COMMANDsentry") == "[COMMANDsentry] Command, Thursday: nothing needs you"
+    assert dd.subject(model(), "COMMANDsentry") == "[COMMANDsentry] Command, Thursday: nothing new"
     stale = [("lost.example", None, None, None, None, True, True, False)]
     assert dd.subject(model(stale_assets=stale), "P").startswith("[P] (!) Coverage gap. Command, Thursday: 1 for today")
 

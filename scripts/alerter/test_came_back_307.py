@@ -81,5 +81,5 @@ def test_subject_counts_comebacks():
     m = ra._digest_model(window_start=W0, window_end=W1, new_findings=[], confirmed=[], regressed=[],
                          high_risk=[], new_assets=[], dark_assets=[], stale_assets=[],
                          canary_violations=[], baseline=BASE, came_back=[ROW])
-    assert dd.subject(m, "X").endswith(": nothing needs you")
+    assert dd.subject(m, "X").endswith(": nothing new")  # Command daily 1 (Howie 2026-11-09): never "Nothing needs you"
     assert m["done"][0]["kind"] == "back"
