@@ -193,6 +193,7 @@ from phase_source import HEAVY as TIER_HEAVY  # noqa: E402
 # No I/O — run_safe_exploit_phase does the HTTP + guardrails, hands captured responses here.
 import safe_exploit as se
 import service_greeting as sg   # job 4k: each server's first line, nothing sent
+import cisa_mirror as cm        # Prodex plan 2026-11-10: an address swept the way CISA sweeps it
 import device_clues             # job 4y: what the device behind each address shows anyone
 
 # Degradation primitives (SPEC_SCANNER_DEGRADATION_HARDENING.md).
@@ -3951,6 +3952,15 @@ def run_naabu_phase(ctx: HeavyScanContext, work_dir: Path) -> tuple[bool, list[d
     false-close prior port findings on a silent naabu failure (absence-of-evidence
     != evidence-of-absence). CONNECT scan: no raw sockets over the WireGuard tunnel.
     """
+    # Prodex plan 2026-11-10: an address on CISA's Cyber Hygiene list (poll_queue sets
+    # 'cisa_mirror' in the descriptor for those only) is swept the way CISA sweeps it:
+    # CISA's ping first, every TCP port only if the ping says up, no cloud gate. It goes
+    # BEFORE the web reachability gate below: CISA needs no web service, and an address
+    # with only, say, SSH open must still get the ping and the sweep (Kimi addr1 MF2).
+    # Every other asset goes on below, unchanged.
+    if ctx.descriptor.get("cisa_mirror"):
+        return run_cisa_mirror_sweep(ctx)
+
     if not ctx.target_proven_reachable:
         log("  naabu SKIP — testssl did not prove reachability (no egress proof); not credited")
         return False, []
@@ -4011,6 +4021,175 @@ def run_naabu_phase(ctx: HeavyScanContext, work_dir: Path) -> tuple[bool, list[d
         ))
     log(f"  naabu OK: {len(open_ports)} open port(s) -> {len(open_ports)} INFO finding(s)")
     return True, open_ports
+
+
+# ─── Prodex plan 2026-11-10: the sweep CISA's Cyber Hygiene scan does ─────────────────
+# CISA: nmap ping (ICMP, then a TCP knock on 30 ports, then 970 more), every TCP port on an
+# address that answered, -sV names, Nessus on what is open (cisa_mirror.py has the sources).
+# Here: the same ping and the same every-port sweep, by CONNECT (the VPN carries no raw
+# packets), each open port re-checked from the same exit. What one pass lists (what CISA's
+# report will list) and what answers again are both kept; only what answers again becomes
+# a finding. Nothing is sent to any port: a connection opens and closes.
+CISA_SWEEP_TIMEOUT_S = int(os.environ.get("CISA_SWEEP_TIMEOUT_S") or "1200")   # 65,535 ports at 250/s is ~262 s
+CISA_KNOCK_TIMEOUT_S = float(os.environ.get("CISA_KNOCK_TIMEOUT_S") or "2")
+CISA_KNOCK_WORKERS = 32
+
+
+def _knock_state(host: str, port: int, timeout: float = CISA_KNOCK_TIMEOUT_S) -> str:
+    """'open' (the handshake completed), 'refused' (a reset: nmap's TCP ping counts it as
+    an answer) or 'silent'. One connection, nothing sent."""
+    s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect((host, int(port)))
+        return "open"
+    except ConnectionRefusedError:
+        return "refused"
+    except Exception:
+        return "silent"
+    finally:
+        s.close()
+
+
+def _knock(host: str, ports) -> dict:
+    with ThreadPoolExecutor(max_workers=CISA_KNOCK_WORKERS) as ex:
+        futs = {ex.submit(_knock_state, host, p): p for p in ports}
+        return {futs[f]: f.result() for f in as_completed(futs)}
+
+
+def _icmp_answers(host: str) -> bool:
+    """One ICMP echo round (iputils ping, in the image). A failure is just 'no reply'.
+    CISA's ping also sends an ICMP timestamp request (nmap -PP); nothing in the scanner
+    image sends one, so it isn't sent: an address that answers ONLY a timestamp request
+    would look down here and up to CISA (cisa_mirror.py, "Sentry's differences")."""
+    try:
+        rc, _out, _err = run_cmd(["ping", "-c", "2", "-W", "2", "-n", host], timeout=15)
+        return rc == 0
+    except Exception:
+        return False
+
+
+def run_cisa_mirror_sweep(ctx: HeavyScanContext) -> tuple[bool, list[dict]]:
+    """CISA's ping, then every TCP port. Same contract as run_naabu_phase: (ok, open
+    ports), and not credited on a failed or empty sweep (absence of evidence)."""
+    host = ctx.hostname
+    icmp = _icmp_answers(host)
+    knock = _knock(host, cm.PING_PORTS_FIRST)
+    if not cm.cisa_sees_up(icmp, knock):
+        knock.update(_knock(host, cm.PING_PORTS_SECOND))
+    up = cm.cisa_sees_up(icmp, knock)
+    states = Counter(knock.values())
+    pointing = (ctx.descriptor.get("cisa_mirror") or {}).get("pointing") or []
+
+    if not up:
+        # CISA does not port-scan an address its ping calls down (Kimi addr1 MF1). Nothing
+        # answered here either; whether that means "down" depends on this scan's exit
+        # working at all. With proof it works (the exit address was read at the start, or
+        # testssl reached the target), it is down, the way CISA would record it. Without
+        # proof it is unknown (None): the schedule counts the scan but doesn't move the
+        # priority on it, so a broken exit can't push an address toward the 90-day rest.
+        exit_proven = bool(ctx.target_proven_reachable or ctx.egress_ip_initial)
+        record = {
+            "plan": "Prodex plan 2026-11-10: scanned the way CISA's Cyber Hygiene scan does",
+            "address": host, "names_pointing": pointing, "icmp_answered": icmp,
+            "ping_ports_knocked": len(knock),
+            "ping_answers": {"open": states.get("open", 0), "refused": states.get("refused", 0),
+                             "silent": states.get("silent", 0)},
+            "cisa_sees_up": False if exit_proven else None,
+            "exit_proven": exit_proven,
+            "swept": "not swept: CISA's ping would call it down, and CISA does not port-scan it",
+            "rate_per_s": NAABU_RATE, "sweep_rc": None,
+            "one_pass": [], "reanswered": [], "phantom": [],
+        }
+        ctx.artifacts.append(("cisa_mirror", "json", json.dumps(record, sort_keys=True)))
+        log(f"  cisa_mirror: DOWN to CISA's ping (icmp={icmp}, nothing answered on {len(knock)} ping ports; "
+            f"exit {'proven' if exit_proven else 'NOT proven: counted as unknown'}); not swept, not credited")
+        return False, []
+
+    rc, stdout, stderr = run_cmd(cm.sweep_command(host, NAABU_RATE), timeout=CISA_SWEEP_TIMEOUT_S)
+    if stdout.strip():
+        ctx.artifacts.append(("naabu", "json", stdout))
+    _log_stderr_tail(stderr, label="naabu")
+    raw = _parse_naabu_ports(stdout) if rc == 0 else []
+    again = [p for p in raw if _reconfirm_port(host, p["port"])]
+    split = cm.split_ports([p["port"] for p in raw], [p["port"] for p in again])
+    record = {
+        "plan": "Prodex plan 2026-11-10: scanned the way CISA's Cyber Hygiene scan does",
+        "address": host,
+        "names_pointing": pointing,
+        "icmp_answered": icmp,
+        "ping_ports_knocked": len(knock),
+        "ping_answers": {"open": states.get("open", 0), "refused": states.get("refused", 0),
+                         "silent": states.get("silent", 0)},
+        "cisa_sees_up": up,
+        "swept": "1-65535/tcp CONNECT",
+        "rate_per_s": NAABU_RATE,
+        "sweep_rc": rc,
+        **split,
+    }
+    ctx.artifacts.append(("cisa_mirror", "json", json.dumps(record, sort_keys=True)))
+    log(f"  cisa_mirror: ping {'up' if up else 'DOWN to CISA'} (icmp={icmp}, "
+        f"{states.get('open', 0)} open / {states.get('refused', 0)} refused of {len(knock)} knocked); "
+        f"every port: {len(split['one_pass'])} on one pass, {len(split['reanswered'])} answered again, "
+        f"{len(split['phantom'])} phantom")
+    if rc != 0:
+        log(f"  cisa_mirror sweep DEGRADED (not credited, absence-of-evidence): rc={rc}")
+        return False, []
+    if not again:
+        log("  cisa_mirror sweep: nothing answered again — NOT credited")
+        return False, []
+
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for p in again:
+        port, proto = p["port"], p["proto"]
+        mid = f"{host}:{port}/{proto}"
+        ctx.findings.append(FindingEvent(
+            finding_id=stable_finding_id(ctx.asset_id, "commandsentry_heavy",
+                                         f"naabu-open-port-{port}-{proto}", mid),
+            asset_id=ctx.asset_id, scan_id=ctx.scan_run_id, source="commandsentry_heavy",
+            title=f"Service inventory: {port}/{proto} open",
+            severity="INFO", category="recon", observed_at=now_iso, matched_at=mid,
+            description=(f"naabu observed {port}/{proto} open on {host} at scan time and it "
+                         f"answered again on a re-check (CONNECT, every TCP port, rate {NAABU_RATE})."),
+            subdomain=host, port=port, protocol=proto,
+        ))
+    log(f"  cisa_mirror sweep OK: {len(again)} open port(s) -> {len(again)} INFO finding(s)")
+    return True, again
+
+
+def run_cisa_mirror_risky(ctx: HeavyScanContext, open_ports: list[dict]) -> int:
+    """CISA lists some services as potentially risky just for being open (RDP, Telnet,
+    SMB, ...). One INFO finding per such port that answered again, named the way nmap
+    would name it: by a greeting the server sent unasked, else by its port."""
+    greeted = {}
+    for name, _kind, body in ctx.artifacts:
+        if name == "service_greeting":
+            try:
+                for r in json.loads(body):
+                    if r.get("greeting"):
+                        greeted[int(r.get("port"))] = sg.protocol_of(r.get("greeting"), int(r.get("port")))
+            except Exception:
+                pass
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    n = 0
+    for p in open_ports or []:
+        port = p.get("port")
+        if not isinstance(port, int):
+            continue
+        f = cm.risky_service_finding(ctx.hostname, port, greeted.get(port))
+        if not f:
+            continue
+        mid = f"{ctx.hostname}:{port}/tcp"
+        ctx.findings.append(FindingEvent(
+            finding_id=stable_finding_id(ctx.asset_id, "commandsentry_heavy", f["key"], mid),
+            asset_id=ctx.asset_id, scan_id=ctx.scan_run_id, source="commandsentry_heavy",
+            title=f["title"], severity=f["severity"], category=f["category"],
+            observed_at=now_iso, matched_at=mid, description=f["description"],
+            subdomain=ctx.hostname, port=port, protocol="tcp", normalized_key=f["key"],
+        ))
+        n += 1
+    log(f"  cisa_mirror: {n} service(s) CISA lists as potentially risky")
+    return n
 
 
 def credit_net_depth(ctx: HeavyScanContext, naabu_ok: bool) -> None:
@@ -4865,6 +5044,9 @@ def run(descriptor_path: str, dsn: str) -> int:
         # Job 4k: each non-web open port's own first line, nothing sent (not a credited tool).
         if naabu_ok:
             run_greeting_phase(ctx, open_ports)
+            # Prodex plan 2026-11-10: CISA's risky services, after the greetings name them.
+            if ctx.descriptor.get("cisa_mirror"):
+                run_cisa_mirror_risky(ctx, open_ports)
         flush_progress(ctx)
 
         # ─── Persist + close ────────────────────────────────────────────

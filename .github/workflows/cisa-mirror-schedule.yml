@@ -1,0 +1,64 @@
+name: CISA mirror schedule
+
+# Prodex plan 2026-11-10 ("a separate address area in PRODEXsentry, scanned the way CISA
+# does", Howie 10:48-10:49, go 12:27). CISA's rescan schedule for the addresses on ProDex's
+# CISA Cyber Hygiene list (public.cisa_mirror_addresses, migration 20261110b).
+#
+# Every three hours: each address's CISA priority moves once per finished deep scan, and an
+# address that is due (12 hours with a Critical or a Known Exploited Vulnerability open, 24
+# with a High, 4 days with a Medium, 6 with a Low, 7 days with nothing, out to 90 days for an
+# address that never answers) gets a light and a deep scan queued, at most 5 addresses a
+# run. The Scanner drains the queue as it does for every other scan, and refuses an address
+# when no name on its list points at it any more (poll_queue.cisa_mirror_block).
+#
+# On Command the table is empty, so every run reads one row count and exits. On Prodex,
+# nothing is queued until the addresses are in data/targets.yml (a later push). Sends
+# nothing to anyone: no email, no Slack. Writes only scan_queue rows and the table's own
+# schedule columns. Byte-identical in both repos. workflow_dispatch defaults to a dry run.
+
+on:
+  schedule:
+    - cron: "41 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Read and report only, write nothing"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cisa-mirror-schedule
+  cancel-in-progress: false
+
+jobs:
+  schedule:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'psycopg[binary]==3.3.4'
+
+      - name: Move CISA's priorities and queue what is due
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python scripts/scanner/cisa_mirror_schedule.py --dry-run
+          else
+            python scripts/scanner/cisa_mirror_schedule.py
+          fi
