@@ -145,7 +145,8 @@ PLAIN = (
      "Old weak ciphers (3DES) still offered",
      "3DES is a 1990s cipher; a long capture of traffic can be broken. Modern browsers never pick it, old tools might.",
      "Drop 3DES and the other legacy ciphers from the TLS settings."),
-    (re.compile(r"^TLS · BEAST", re.I),
+    # push-426: the BEAST cipher line's title before 426 and its plain title from 426.
+    (re.compile(r"^(TLS · BEAST|BEAST attack possible on TLS)", re.I),
      "Old CBC ciphers (BEAST) still offered",
      "Browsers have worked around BEAST for years; offering those ciphers at all is a legacy setting.",
      "Prefer the AES-GCM and ChaCha20 cipher suites and drop the CBC ones."),

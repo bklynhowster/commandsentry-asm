@@ -1,12 +1,14 @@
-"""Tests for #36 — cross-source semantic dedup (DMARC + OCSP).
+"""Tests for #36 — cross-source semantic dedup (DMARC + OCSP; push-426 added
+HSTS-missing and BEAST, tested in test_twins_once_426.py).
 
 Three test classes, mirroring the spec:
   1. Map correctness — (source, title) → expected canonical_key; non-matching
      titles → None (unchanged).
   2. Idempotency — applying the map twice produces the same result; no churn.
   3. NEVER-MERGE regression guard — locks the conservative scope. Cipher,
-     HSTS-present, HSTS-missing, CSRF, and nuclei `dmarc-detect` all keep
-     their own keys (apply_cross_source_equivalence returns None for them).
+     HSTS-present, CSRF, and nuclei `dmarc-detect` all keep their own keys
+     (apply_cross_source_equivalence returns None for them). HSTS-missing has
+     an entry since push-426, for two exact titles only (see below).
      Future broadening of the map would have to break a test before it could
      ship.
 
@@ -147,9 +149,11 @@ def test_hsts_present_does_NOT_map():
 
 
 def test_hsts_missing_does_NOT_map_under_dmarc_or_ocsp_keys():
-    """HSTS-missing is a real finding, but it's NOT in the curated map (only
-    DMARC + OCSP are). Confirm it stays unmapped — would only get pulled in
-    if a future entry earns its way in.
+    """HSTS-missing earned an entry in push-426 (Howie 2026-11-09 14:20: "Once,
+    higher wins."), for two exact titles only: the quick scan's "Missing
+    security header: Strict-Transport-Security" and testssl's "HSTS not
+    enabled" (test_twins_once_426.py). Any other wording, like the made-up
+    titles here, still maps to nothing: the entry is anchored, not a keyword.
     """
     for src in ("testssl", "commandsentry_light", "manual_named"):
         assert apply_cross_source_equivalence(src, "HSTS header missing") is None
@@ -225,13 +229,16 @@ def test_apply_returns_none_for_none_inputs():
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def test_map_has_exactly_two_canonical_classes():
-    """Two and only two canonical keys in the map: dns-missing-dmarc and
-    tls-ocsp-stapling-missing. Adding a third entry requires updating this
-    test, which forces a deliberate decision rather than a silent expansion.
+def test_map_has_exactly_four_canonical_classes():
+    """Four and only four canonical keys in the map: dns-missing-dmarc and
+    tls-ocsp-stapling-missing (#36), missing-header-strict-transport-security
+    and tls-beast (push-426, Howie 2026-11-09 14:20: "Once, higher wins.").
+    Adding a fifth entry requires updating this test, which forces a
+    deliberate decision rather than a silent expansion.
     """
     canonical_keys = {entry["canonical_key"] for entry in CROSS_SOURCE_EQUIVALENCE}
-    assert canonical_keys == {"dns-missing-dmarc", "tls-ocsp-stapling-missing"}
+    assert canonical_keys == {"dns-missing-dmarc", "tls-ocsp-stapling-missing",
+                              "missing-header-strict-transport-security", "tls-beast"}
 
 
 def test_dmarc_entry_has_exactly_two_sources():

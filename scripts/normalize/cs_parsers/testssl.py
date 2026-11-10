@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Optional
 
 from .common import (
+    apply_cross_source_equivalence,
     canonical_asset_id,
     is_fqdn_in_scope,
     FindingEvent,
@@ -321,6 +322,11 @@ TITLE_LABELS = {
     "ROBOT":                       "ROBOT attack vulnerability",
     "CCS":                         "OpenSSL CCS injection (CVE-2014-0224)",
     "BEAST":                       "BEAST attack vulnerability",
+    # push-426 (2026-11-09): the cipher record of the same BEAST test. Its title was the raw
+    # "TLS · BEAST_CBC_TLS1: <ciphers>"; when it and the verdict above merge into one row
+    # (common.CROSS_SOURCE_EQUIVALENCE, tls-beast) the row shows the higher one's words,
+    # which are these. digest_slack and digest_voice match both forms.
+    "BEAST_CBC_TLS1":              "BEAST attack possible on TLS 1.0",
     "FREAK":                       "FREAK attack — export-grade RSA",
     "LOGJAM":                      "LOGJAM attack — weak DH params",
     "DROWN":                       "DROWN attack — SSLv2 enabled",
@@ -536,6 +542,16 @@ def _category_for_id(testssl_id: str) -> str:
     if "protocol" in tid or tid.startswith("tls_") or tid.startswith("ssl_"):
         return "tls"
     return "tls"  # everything testssl reports is TLS-related
+
+
+def shared_key_for_port(key: Optional[str], port: Optional[int]) -> Optional[str]:
+    """push-426: the same-fact key, kept to its service. The site's own https port (443, or no
+    port in the record, which testssl only omits for the default) shares the key with the quick
+    scan's row and the other test's; any other port gets the key with its port, so 443 and 8443
+    never merge into one row (they are two services, as the finding_id already says)."""
+    if key is None or port in (None, 443):
+        return key
+    return f"{key}:port-{port}"
 
 
 def parse_testssl_file(
@@ -770,6 +786,13 @@ def parse_testssl_file(
         # asset (e.g., 443 vs 8443).
         ev = FindingEvent(
             finding_id=stable_finding_id(event_asset_id, "testssl", grouped_id, f"port-{port}"),
+            # push-426 (Howie 2026-11-09 14:20: "Once, higher wins."): the curated same-fact map,
+            # applied here so live deep-scan rows get the shared key (before 426 only the offline
+            # importer applied it). None when no entry matches: the row stands alone, as before.
+            # The identity (finding_id above) is unchanged. Scoped to the port (code review
+            # 2026-11-09, must-fix): the identity keeps the port because two ports are two
+            # services, so only the site's own https port shares the key with the quick scan.
+            normalized_key=shared_key_for_port(apply_cross_source_equivalence("testssl", title), port),
             asset_id=event_asset_id,
             scan_id=scan_id,
             source="testssl",

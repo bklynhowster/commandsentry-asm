@@ -43,6 +43,7 @@ DEVELOPER_TITLES = (
     re.compile(r"^BREACH attack", re.I),
     re.compile(r"^TLS · BEAST_CBC", re.I),
     re.compile(r"^TLS · BEAST", re.I),
+    re.compile(r"^BEAST attack possible on TLS", re.I),   # push-426: the same cipher line's plain title
     re.compile(r"(admin|debug|phpinfo|\.git|\.env)\b.*(exposed|reachable|accessible|public)", re.I),
     re.compile(r"(exposed|reachable|accessible|public)\b.*(admin|debug|phpinfo|\.git|\.env)", re.I),
     re.compile(r"^Runs .+: out of date", re.I),
@@ -50,7 +51,8 @@ DEVELOPER_TITLES = (
 # Same-condition pairs that must read as one line (the review's M2: 5 hosts carry both)
 MERGE_GROUPS = (
     ("security headers", (re.compile(r"^Missing security header", re.I), re.compile(r"^Security headers missing", re.I))),
-    ("weak ciphers", (re.compile(r"Obsolete 3DES/IDEA", re.I), re.compile(r"^TLS · BEAST", re.I))),
+    ("weak ciphers", (re.compile(r"Obsolete 3DES/IDEA", re.I),
+                      re.compile(r"^(TLS · BEAST|BEAST attack possible on TLS)", re.I))),   # push-426: both titles
 )
 
 RED, YELLOW, GREEN = "#C43B3B", "#D9A400", "#2E8B57"

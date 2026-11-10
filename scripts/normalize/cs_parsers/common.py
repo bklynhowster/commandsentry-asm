@@ -419,9 +419,37 @@ def resolve_finding_asset_id(target_dirname: str, *url_candidates: Optional[str]
 # (v_open_findings_dedup, grouped on (asset_id, normalized_key)) sees ONE
 # group instead of N.
 #
-# SCOPE — DO NOT BROADEN. Two classes only. Each entry must be EARNED with
-# evidence that the matched (source, title) pairs describe the SAME single
-# fact — not just topically related, not opposite states, not multi-issue.
+# SCOPE — DO NOT BROADEN. Four classes only (two from #36, June; two from
+# push-426, below). Each entry must be EARNED with evidence that the matched
+# (source, title) pairs describe the SAME single fact — not just topically
+# related, not opposite states, not multi-issue.
+#
+# push-426 (2026-11-09; Howie 14:20, five-visitor item 7: "Once, higher wins."
+# Two scans filing the same problem on one name at different severities are
+# one row, at the higher severity, naming both scans, counted once):
+#   • missing-header-strict-transport-security — the quick scan's own key
+#     (run_light: check_name) for "Missing security header: Strict-Transport-
+#     Security" (MODERATE), and testssl's "HSTS not enabled" (LOW): both say the
+#     site sends no Strict-Transport-Security header. HSTS that IS sent but is
+#     weak ("HSTS max-age too short", "HSTS preload not set", ...) is a
+#     different fact and never matches: every pattern is anchored. A title is
+#     the label, the label + " — <testssl's text>", or the label + "  (N
+#     reports)" when testssl printed the record more than once (testssl.py).
+#   • tls-beast — testssl's BEAST test prints two records, the verdict
+#     ("BEAST attack vulnerability", LOW: "likely mitigated") and the CBC
+#     ciphers behind it ("BEAST_CBC_TLS1", MODERATE). One test, one fact.
+#     The cipher line matches in its stored words ("TLS · BEAST_CBC_...",
+#     before 426) and its plain ones ("BEAST attack possible on TLS 1.0",
+#     testssl.TITLE_LABELS from 426), so old and new rows meet. LUCKY13 and
+#     the obsoleted-CBC cipher list stay apart (never-merge, below).
+#   Checked and left out (push-426 plan v3): 3DES vs SWEET32 (two tests; the
+#   3DES/IDEA list covers more than 3DES); testssl "Security headers missing
+#   or weak" (one row for several headers, no detail).
+#
+# Until push-426 only the OFFLINE importer applied this map (run_normalize,
+# import_jsonl), so live deep-scan rows never got these keys (Command had 23
+# open testssl OCSP rows without one). The live TLS parser
+# (cs_parsers/testssl.py::parse_testssl_file) now applies it to every event.
 #
 # NEVER MERGE (and the negative-test fixture in test_cross_source_equivalence.py
 # locks these in as regression guards):
@@ -439,10 +467,11 @@ def resolve_finding_asset_id(target_dirname: str, *url_candidates: Optional[str]
 # which are multi-issue findings that would wrongly fold SPF/DKIM into the
 # DMARC dedup group.
 #
-# Mirrors migration 20260618a_cross_source_dedup_dmarc_ocsp.sql exactly —
-# both the (source, pattern) → canonical_key map AND the never-merge list.
-# Any edit here MUST land in the SQL migration too (or the next normalize
-# pass diverges from the backfilled DB state).
+# Mirrors migration 20260618a_cross_source_dedup_dmarc_ocsp.sql (DMARC, OCSP)
+# and 20261109b_twins_counted_once.sql (HSTS, BEAST, and the OCSP rows the
+# live path never keyed) — both the (source, pattern) → canonical_key map AND
+# the never-merge list. Any edit here MUST land in a SQL migration too (or the
+# next normalize pass diverges from the backfilled DB state).
 CROSS_SOURCE_EQUIVALENCE: list[dict] = [
     {
         "canonical_key": "dns-missing-dmarc",
@@ -456,6 +485,22 @@ CROSS_SOURCE_EQUIVALENCE: list[dict] = [
         "patterns": [
             ("manual_named", re.compile(r"no ocsp stapling", re.IGNORECASE)),
             ("testssl",      re.compile(r"ocsp stapling not enabled", re.IGNORECASE)),
+        ],
+    },
+    # push-426 — see the block comment above.
+    {
+        "canonical_key": "missing-header-strict-transport-security",
+        "patterns": [
+            ("commandsentry_light", re.compile(r"^missing security header: strict-transport-security$", re.IGNORECASE)),
+            ("testssl",             re.compile(r"^hsts not enabled(?: — .*|  \(\d+ reports\))?$", re.IGNORECASE)),
+        ],
+    },
+    {
+        "canonical_key": "tls-beast",
+        "patterns": [
+            ("testssl", re.compile(r"^beast attack vulnerability(?: — .*|  \(\d+ reports\))?$", re.IGNORECASE)),
+            ("testssl", re.compile(r"^tls · beast_cbc_", re.IGNORECASE)),
+            ("testssl", re.compile(r"^beast attack possible on tls 1\.0(?: — .*|  \(\d+ reports\))?$", re.IGNORECASE)),
         ],
     },
 ]
