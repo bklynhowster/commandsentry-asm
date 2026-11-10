@@ -100,6 +100,11 @@ from gate_retry import (  # noqa: E402
     run_with_transport_retry,
 )
 
+# Prodex plan 2026-11-10: an address on CISA's Cyber Hygiene list is scanned the way CISA
+# scans it, and only while one of its names still points at it (cisa_mirror.py).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cisa_mirror as cm  # noqa: E402
+
 # ─── Lazy import so --help works without psycopg installed ─────────────
 def _import_deps() -> Any:
     try:
@@ -265,6 +270,51 @@ def fetch_asset(conn, asset_id: str) -> dict | None:
         cur.execute(FETCH_ASSET_SQL, (asset_id,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+# ─── Prodex plan 2026-11-10: an address on CISA's Cyber Hygiene list ──────
+# public.cisa_mirror_addresses (migration 20261110b) lists the addresses Sentry scans the
+# way CISA does, each with the names that should point at it. Before that table exists,
+# and for every asset not in it, nothing here changes anything.
+CISA_MIRROR_PRESENT_SQL = "select to_regclass('public.cisa_mirror_addresses') is not null as present;"
+CISA_MIRROR_SQL = """
+select address, names, priority
+  from public.cisa_mirror_addresses
+ where address = %s;
+"""
+
+
+def fetch_cisa_mirror(conn, asset_id: str) -> dict | None:
+    """The address's row on CISA's list, or None (no table yet, or not on it)."""
+    with conn.cursor() as cur:
+        cur.execute(CISA_MIRROR_PRESENT_SQL)
+        row = cur.fetchone()
+        if not row or not row["present"]:
+            return None
+        cur.execute(CISA_MIRROR_SQL, (asset_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def _resolve_v4(name: str) -> list[str]:
+    import socket
+    return sorted({ai[4][0] for ai in socket.getaddrinfo(name, None, socket.AF_INET, socket.SOCK_STREAM)})
+
+
+def cisa_mirror_block(mirror: dict | None, asset_id: str, resolve=_resolve_v4) -> tuple[dict | None, str | None]:
+    """(descriptor block, refusal). Not on CISA's list: (None, None). On it, but no name
+    on its list points at it now: (None, why), and the claim is aborted with nothing
+    scanned: the address may now belong to someone else (an address that isn't
+    reserved, like atlantis-gcp's, can be handed to another cloud customer)."""
+    if not mirror:
+        return None, None
+    names = [str(n) for n in (mirror.get("names") or [])]
+    here = cm.names_pointing_here(asset_id, names, resolve)
+    if not here:
+        return None, (f"cisa_mirror: no name on this address's list points at {asset_id} now "
+                      f"({', '.join(names) or 'no names listed'}); not scanned, the address "
+                      f"may belong to someone else (safety rail, Prodex plan 2026-11-10)")
+    return {"names": names, "pointing": here, "priority": mirror.get("priority")}, None
 
 
 def fetch_auth_config(conn, asset_id: str) -> dict | None:
@@ -440,6 +490,18 @@ def run(dsn: str) -> int:
             conn.commit()
             return 0  # not a worker error; the claim+abort sequence is correct
 
+        # ─── Step 3b: an address on CISA's list (Prodex plan 2026-11-10) ─
+        # Scanned only while one of its names still points at it; otherwise the
+        # claim is aborted with nothing scanned, the same way a missing
+        # prerequisite is (abort_claim).
+        mirror_block, refusal = cisa_mirror_block(
+            fetch_cisa_mirror(conn, queue_row["asset_id"]), queue_row["asset_id"])
+        if refusal:
+            log(f"REFUSED: {refusal}")
+            abort_claim(conn, queue_row["queue_id"], refusal)
+            conn.commit()
+            return 0
+
         # ─── Step 4: optional auth_config fetch ───────────────────────
         auth_config = None
         if queue_row["authenticated"]:
@@ -461,6 +523,8 @@ def run(dsn: str) -> int:
 
         # ─── Step 5: emit descriptor ──────────────────────────────────
         descriptor = build_descriptor(queue_row, scan_run_id, asset, auth_config)
+        if mirror_block:
+            descriptor["cisa_mirror"] = mirror_block
 
         # Commit ALL the writes (queue update, scan_run insert, queue backlink)
         # as one atomic transaction. If the GH Action subsequently dies, we
