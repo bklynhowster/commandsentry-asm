@@ -130,6 +130,35 @@ def test_backstop_dry_run_rolls_back_and_writes_nothing():
     assert all("insert into" not in call[0].lower() for call in conn.calls)
 
 
+def test_backstop_run_reads_dict_rows_by_name():
+    class Cursor:
+        def __init__(self, conn): self.conn = conn
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def execute(self, sql, params=None):
+            self.conn.calls.append((sql, params))
+            self.sql = sql
+        def fetchall(self): return self.conn.rows[self.sql]
+    class Conn:
+        def __init__(self):
+            self.calls = []
+            self.rows = {
+                backstop.ASSETS_SQL: [{"asset_id": "1", "name": "prod.prodexlabs.com"},
+                                      {"asset_id": "2", "name": "demo.prodexlabs.com"}],
+                backstop.RECENT_SQL: [{"name": "prod.prodexlabs.com"}],
+                backstop.ACTIVE_SQL: [{"name": "demo.prodexlabs.com"}],
+            }
+            self.rolled_back = False
+        def cursor(self): return Cursor(self)
+        def rollback(self): self.rolled_back = True
+        def commit(self): raise AssertionError("dry run must not commit")
+    conn = Conn()
+    assert backstop.run(conn, scope=SCOPE, resolver=lambda h: [ADDR], dry_run=True, log=lambda s: None) == []
+    assert [sql for sql, _params in conn.calls] == [backstop.ASSETS_SQL, backstop.RECENT_SQL, backstop.ACTIVE_SQL]
+    assert conn.rolled_back is True
+    assert all("insert into" not in call[0].lower() for call in conn.calls)
+
+
 def test_command_backstop_exits_before_needing_a_dsn(monkeypatch, tmp_path):
     monkeypatch.setattr(backstop.pf, "SCOPE_PATH", tmp_path / "absent.json")
     monkeypatch.delenv("SUPABASE_DSN", raising=False)

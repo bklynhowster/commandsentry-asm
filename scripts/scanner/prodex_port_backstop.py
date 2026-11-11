@@ -60,9 +60,9 @@ def run(conn, *, scope, resolver=pf.resolve_ipv4, dry_run=False, log=print) -> l
         cur.execute(ASSETS_SQL)
         assets = [dict(r) for r in cur.fetchall()]
         cur.execute(RECENT_SQL)
-        recent = {r[0] for r in cur.fetchall()}
+        recent = {r["name"] for r in cur.fetchall()}
         cur.execute(ACTIVE_SQL)
-        active = {r[0] for r in cur.fetchall()}
+        active = {r["name"] for r in cur.fetchall()}
     selected = choose(assets, recent, active, scope=scope, resolver=resolver)
     for row in selected:
         log(f"  {row['address']}: queue heavy for {row['name']}")
