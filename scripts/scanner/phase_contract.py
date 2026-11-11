@@ -46,6 +46,7 @@ DEGRADATION TAXONOMY (4.7 ruling Q2 — do NOT collapse these):
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -660,6 +661,17 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
         result = PhaseResult.degraded(slug)
         result.meta["exception_type"] = type(e).__name__
         result.meta["exception_detail"] = str(e)[:500]
+        # C1 (2026-11-11): what the phase itself recorded before it raised (see
+        # _carry_recorded). The artifacts are persisted by obligation 3 below, like
+        # any outcome's; the inner reason is written beside the outer label after the
+        # entry exists (where the rule is checked again, and a reason that only
+        # repeats the label is dropped).
+        _arts = getattr(e, "phase_artifacts", None)
+        if isinstance(_arts, list) and _arts:
+            result.artifacts = list(_arts)
+        _detail = getattr(e, "phase_detail", None)
+        if isinstance(_detail, str) and _DETAIL_SLUG.fullmatch(_detail):
+            result.meta["detail"] = _detail
     elapsed = round(time.time() - t0, 1)
     result.meta.setdefault("elapsed_s", elapsed)
 
@@ -743,6 +755,18 @@ def run_phase(spec: PhaseSpec, ctx, work_dir, *,
         mark_partial(ctx, spec.name, result)
     else:
         mark_degraded(ctx, spec.name, result.reason or "degraded")
+        # C1 (2026-11-11): the outer label stays exactly as it was (every reader of
+        # tool_status keys on `degraded`); the phase's own reason rides beside it as
+        # `detail`, a new optional key. {"degraded": "nikto_specific_degradation",
+        # "detail": "target_error_limit"}. The slug rule is checked again HERE, at
+        # the one place that writes it: a phase can also return meta["detail"]
+        # itself, and nothing but a code word may reach the record.
+        _detail = result.meta.get("detail")
+        _entry = (getattr(ctx, "tool_status", None) or {}).get(spec.name)
+        if (isinstance(_detail, str) and isinstance(_entry, dict)
+                and "degraded" in _entry and _detail != _entry["degraded"]
+                and _DETAIL_SLUG.fullmatch(_detail)):
+            _entry["detail"] = _detail
     # ⑭′.4 — after the entry exists, on whichever path wrote it.
     _merge_phase_diagnostics(ctx, spec.name)
     _strip_provisional_marker(ctx, spec.name)
@@ -1060,6 +1084,34 @@ def _merge_chunk_progress(ctx, payload: "ProgressPayload") -> None:
         pass
 
 
+# C1 (2026-11-11): the inner reason a phase recorded before it raised. A slug only:
+# the portal shows what is saved, and lesson 114 keeps addresses, exit names and free
+# text out of anything a portal viewer can read. Free text stays in the artifact.
+_DETAIL_SLUG = re.compile(r"[a-z0-9][a-z0-9_.:\-]{0,79}")
+
+
+def _carry_recorded(exc, rec, phase_name=None) -> None:
+    """Attach what a raising legacy phase recorded to its exception: the artifacts
+    (the tool's output and its last words) and the reason it marked. Which reason:
+    the one marked under the phase's own name; with none under that name, the only
+    reason marked. Two different reasons under other names say nothing certain
+    about this failure, so none is carried. Never raises, and never replaces the
+    exception: the caller re-raises it untouched."""
+    try:
+        exc.phase_artifacts = list(rec.artifacts)
+        marked = {t: v.get("degraded") for t, v in rec.tool_status.items()
+                  if isinstance(v, dict) and "degraded" in v}
+        if phase_name and phase_name in marked:
+            reasons = [marked[phase_name]]
+        else:
+            reasons = list(marked.values())
+        if (reasons and all(r == reasons[0] for r in reasons)
+                and isinstance(reasons[0], str) and _DETAIL_SLUG.fullmatch(reasons[0])):
+            exc.phase_detail = reasons[0]
+    except Exception:                          # noqa: BLE001 — diagnostics only
+        pass
+
+
 def legacy_adapter(fn, tier, *args, _phase_name=None, **kwargs):
     """Wrap a self-bookkeeping legacy phase function as a contract phase.
 
@@ -1094,7 +1146,18 @@ def legacy_adapter(fn, tier, *args, _phase_name=None, **kwargs):
             rec._install_chunk_progress_cb(
                 _phase_name,
                 lambda payload: _merge_chunk_progress(ctx, payload))
-        fn(rec, *args, **kwargs)
+        try:
+            fn(rec, *args, **kwargs)
+        except Exception as e:                 # noqa: BLE001 — re-raised below, always
+            # C1 (2026-11-11). A legacy phase that gives up marks its own reason and
+            # saves its last words on the RECORDER, then raises. The raise skipped
+            # everything below, so both died here: Prodex's nikto read only
+            # {"degraded": "nikto_specific_degradation"} on 93 deep scans in 30 days
+            # while the phase had written "target_error_limit" and its stderr, and no
+            # nikto artifact was saved (reading 2026-11-11 1238). Hand both to the
+            # executor on the exception itself; it still decides the outcome.
+            _carry_recorded(e, rec, _phase_name)
+            raise
         degraded = [(t, v.get("degraded")) for t, v in rec.tool_status.items()
                     if isinstance(v, dict) and "degraded" in v]
         partial = [(t, v.get("reason")) for t, v in rec.tool_status.items()
