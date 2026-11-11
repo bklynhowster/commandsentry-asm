@@ -1,0 +1,48 @@
+name: Prodex full-port heavy backstop
+
+# Once a day, queue one existing owned name for an authorized address whose names have had
+# no successful full-port heavy in seven days. Never queues bare IPs or third-party edges.
+# The shared file is inert on Command: the job condition and absent scope file both stop it.
+on:
+  schedule:
+    - cron: "17 11 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Read and report only, write nothing"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+concurrency:
+  group: prodex-port-backstop
+  cancel-in-progress: false
+
+jobs:
+  backstop:
+    if: github.repository == 'bklynhowster/prodexsentry-asm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'psycopg[binary]==3.3.4'
+      - name: Queue at most five missing weekly full-port heavies
+        env:
+          SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python scripts/scanner/prodex_port_backstop.py --dry-run
+          else
+            python scripts/scanner/prodex_port_backstop.py
+          fi
