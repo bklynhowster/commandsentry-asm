@@ -215,7 +215,9 @@ def test_both_renderings_and_the_weekly_say_first_step():
     assert "      First step, for your IT team: Identify the web server serving the site." in text
     assert "The fix, for your IT team: Identify" not in text
     html = dd.render_html(m, portal_url="https://p.example", product_name="COMMANDsentry")
-    assert '<span style="font-weight:700;">First step, for your IT team:</span> Identify the web server' in html
+    # 2026-11-11 redesign: the fix sits in its own panel, the label on its own line
+    assert ">First step, for your IT team</div>" in html and ">Identify the web server serving the site.</div>" in html
+    assert "The fix, for your IT team" not in html
     assert "dd.fix_label(i, kinds=('finding',))" in inspect.getsource(dwk.render_weekly_text)
 
 

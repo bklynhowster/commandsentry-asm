@@ -93,6 +93,7 @@ SEV_WORD = {"CRITICAL": "Critical", "HIGH": "High", "MODERATE-HIGH": "Moderate-h
             "MODERATE": "Moderate", "LOW": "Low", "INFO": "Info"}
 INK, MUTED, RULE, PAGE = "#0F1B2D", "#4A5668", "#E4E9F0", "#E9EEF5"
 GOOD = "#0B7A55"
+CHIP_BG, CHIP_TEXT = "#EAF1FB", "#0A4595"   # 2026-11-11 redesign: the site pills and the fix panel
 FONT = "-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif"
 # Howie, 2026-10-24 13:23, on Bricolage Grotesque: "the font is weird. For example, look at that F.
 # It's really strange." Public Sans is the face he approved that day (job 3l, 2026-10-26).
@@ -238,6 +239,57 @@ def still_line(item: dict, plain: dict | None = None) -> str:
         each = _THIS_SITE.sub(lambda m: ("Each" if m.group(1) == "T" else "each") + (" site's" if m.group(2) else " of these sites"), what)
         return f"{each[:-1]} ({who})."
     return f"{what[:-1]} (on {who})." if who else what
+
+
+# ── the Still open cards (Howie 2026-11-11 07:27: "It is so poorly designed ... make this
+# entire thing look better"; 07:37 on the mock: "I love it. Let's build this.") ─────────────
+# One card per open problem: how many sites, the grade, since when, a title, one sentence of
+# what it is, the sites, the fix. The words are the ones the rest of the email already uses
+# (digest_words: title, why, fix); a problem with no booked words gets its saved plain sentence
+# (4u) for "what it is". Two card titles are said here because their scanner titles are jargon
+# and their words are not booked: the Slack and weekly tests pin them as unbooked, so this
+# table is for the card alone.
+STILL_CARD_TITLES = (
+    (re.compile(r"^DNS missing SPF record"), ("Nothing stops email that pretends to be from this site",
+                                              "Nothing stops email that pretends to be from these sites")),
+    (re.compile(r"^DNS missing DMARC record"), ("Forged email in this site's name isn't rejected",
+                                                "Forged email in these sites' names isn't rejected")),
+)
+
+def still_what(item: dict, plain: dict | None = None) -> str:
+    """One sentence of what the problem is, with no site named (the card lists them): the
+    booked why when there is one, else the saved plain sentence, said for one site or for
+    each of several. '' when neither exists. PURE."""
+    if item.get("body"):
+        return item["body"]
+    plain = plain or {}
+    said = [_first_sentence(plain[f]) for f in item.get("finding_ids", []) if plain.get(f)]
+    what = next((w for w in said if _VERB.match(w) or w.startswith("This site's ")), said[0] if said else "")
+    if not what or len(item.get("sites") or []) <= 1:
+        return what
+    return _THIS_SITE.sub(lambda m: ("Each" if m.group(1) == "T" else "each")
+                          + (" site's" if m.group(2) else " of these sites"), what)
+
+
+def still_card(item: dict, plain: dict | None = None) -> dict:
+    """The card's facts for one open problem. PURE."""
+    sites = sorted(set(item.get("sites") or []), key=lambda x: (is_address(x), x.count("."), x))
+    n = len(sites)
+    addresses = bool(sites) and all(is_address(x) for x in sites)       # IPv4 or IPv6 (review 428)
+    title = item.get("title") or ""
+    if not item.get("family"):
+        for rx, (one, many) in STILL_CARD_TITLES:
+            if rx.match(title):
+                title = one if n <= 1 else many
+                break
+    return {
+        "title": title.strip().rstrip("."), "what": still_what(item, plain), "sites": sites,
+        "count": n, "unit": ("server" if addresses else "site") + ("" if n == 1 else "s"),
+        "note": ("" if not addresses else "This server has no name, only an address." if n == 1
+                 else "These servers have no name, only an address."),
+        "since": item.get("since"), "do": item.get("do") or "",
+        "fix_label": fix_label(item).rstrip(":") if item.get("do") else "",
+    }
 
 
 # ── sites: from the evidence (KB 12 job 4, push B) ────────────────────────────
@@ -1165,7 +1217,8 @@ def with_still_open(model: dict, picks: list, plain: dict | None = None) -> dict
     a built model, re-says the headline, and records each finding behind a line under its own
     told key once the email goes out (the 7-day gap is read from those rows). PURE."""
     lines = [{"text": still_line(i, plain), "severity": i.get("severity"),
-              "finding_ids": list(i.get("finding_ids") or [])} for i in (picks or [])[:STILL_OPEN_MAX]]
+              "finding_ids": list(i.get("finding_ids") or []), "card": still_card(i, plain)}
+             for i in (picks or [])[:STILL_OPEN_MAX]]
     model["still_open"] = lines
     model["headline"] = headline(len(model["do"]), len(model["ticket"]), model["do"], model["ticket"],
                                  still=lines, since=model.get("since", "yesterday"))
@@ -1175,6 +1228,33 @@ def with_still_open(model: dict, picks: list, plain: dict | None = None) -> dict
         (told_rule.still_key(f), (l.get("severity") or "").upper(), "daily")
         for l in lines for f in l["finding_ids"]]
     return model
+
+
+def hero_words(model: dict) -> tuple:
+    """(headline, the one job, its sites) for the top of the HTML email. With exactly one thing
+    to do, the headline counts it and the line under it names it, its sites as pills (2026-11-11:
+    a site inside the big headline turned into a hard-to-read link). The first thing read still
+    says what to do (10-22). Any other day, or a headline someone else set, is left as it is. PURE."""
+    do, ticket = model.get("do") or [], model.get("ticket") or []
+    still = model.get("still_open") or []
+    said = headline(len(do), len(ticket), do, ticket, still=still, since=model.get("since", "yesterday"))
+    if model.get("headline") != said:
+        return model.get("headline", ""), "", []
+    one = do[0] if len(do) == 1 else ticket[0] if not do and len(ticket) == 1 else None
+    if one is None:
+        return said, "", []
+    job = (one.get("headline") or one.get("title") or "").strip().rstrip(".")
+    if not job:
+        return said, "", []
+    # a job that starts with a site's name keeps the name as it is (review 428: capitalized, it
+    # was no longer recognized as the site and lost its pill)
+    names_first = any(job.startswith(s_) for s_ in (one.get("sites") or []) if s_)
+    job = job if names_first or job[1:2].isupper() else job[0].upper() + job[1:]
+    if do:
+        head = "One thing for today." + (f" Plus {_n(len(ticket))} for this week." if ticket else "")
+    else:
+        head = "Nothing urgent today. One job for this week."
+    return head, job + ".", [s_ for s_ in (one.get("sites") or []) if s_ and s_ in job]
 
 
 def subject(model: dict, product_name: str) -> str:
@@ -1266,6 +1346,100 @@ def _pill(sev: str) -> str:
             f'{escape(SEV_WORD.get(sev, sev.title()))}</span>')
 
 
+def _tag(text: str, bg: str, fg: str) -> str:
+    return (f'<span style="display:inline-block;white-space:nowrap;background:{bg};color:{fg};font-family:{FONT};'
+            f'font-size:12px;font-weight:800;line-height:18px;padding:3px 11px;border-radius:999px;">{escape(text)}</span>')
+
+
+def _site_pills(sites, limit: int = 12) -> str:
+    """Site names as solid blue-tint pills (the cards), wrapping between names, never inside one."""
+    out = "".join(
+        f'<span style="display:inline-block;white-space:nowrap;margin:8px 6px 0 0;font-family:{FONT};font-size:13px;'
+        f'font-weight:700;color:{CHIP_TEXT};background:{CHIP_BG};border-radius:999px;padding:5px 12px;">'
+        f'{_noauto(s)}</span>' for s in list(sites)[:limit])
+    if len(sites) > limit:
+        out += f'<span style="font-family:{FONT};font-size:13px;color:{MUTED};"> and {len(sites) - limit} more</span>'
+    return f'<div>{out}</div>'
+
+
+def _noauto(name: str) -> str:
+    """A site name a mail program won't turn into a blue link: a zero-width joiner after each dot."""
+    return escape(name).replace(".", ".&#8288;")
+
+
+def _fix_panel(label: str, text: str, bg: str = "") -> str:
+    """The fix, in its own panel: the label on its own line, the words under it."""
+    bg = bg or CHIP_BG
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{bg}" '
+            f'style="background:{bg};border-radius:10px;margin-top:14px;"><tr><td style="padding:13px 16px 14px;">'
+            f'<div style="font-family:{FONT};font-size:13px;line-height:18px;font-weight:800;color:{CHIP_TEXT};">'
+            f'{escape(label)}</div><div style="font-family:{FONT};font-size:15px;line-height:1.5;color:{INK};'
+            f'padding-top:3px;">{escape(text)}</div></td></tr></table>')
+
+
+def _mix(a: str, b: str, t: float) -> str:
+    """Color a moved the fraction t toward color b ('#RRGGBB'). PURE."""
+    pa, pb = (int(a[i:i + 2], 16) for i in (1, 3, 5)), (int(b[i:i + 2], 16) for i in (1, 3, 5))
+    return "#" + "".join(f"{round(x + (y - x) * t):02X}" for x, y in zip(pa, pb))
+
+
+def _tiles(model: dict, b: dict) -> str:
+    """The numbers under the headline: urgent today, for this week, and (when the email has
+    them) still open and fixed. A tile with something in it is white; an empty one is dim."""
+    tiles = [(len(model.get("do") or []), "urgent today"), (len(model.get("ticket") or []), "for this week")]
+    if model.get("still_open"):
+        tiles.append((len(model["still_open"]), "still open, no change"))
+    if model.get("done"):
+        tiles.append((len(model["done"]), f"fixed since {model.get('since', 'yesterday')}"))
+    if not any(n for n, _l in tiles):
+        return ""            # a day with nothing in it: the headline says so, no row of zeros
+    cells = []
+    for n, label in tiles:
+        # a tile with something in it is the band's colors reversed (white on Command's blue band,
+        # ink on Prodex's white one); an empty one is the band, a shade toward its text
+        bg, fg, sub_ = ((b["band_text"], b["band_bg"], b["band_bg"]) if n else
+                        (_mix(b["band_bg"], b["band_text"], 0.09), b["band_text"], b["band_muted"]))
+        cells.append(
+            f'<td valign="top" style="padding:0 5px;"><table role="presentation" width="100%" cellpadding="0" '
+            f'cellspacing="0" border="0" bgcolor="{bg}" style="background:{bg};border-radius:12px;"><tr>'
+            f'<td class="tile" style="padding:14px 16px 13px;"><div style="font-family:{DISPLAY};font-size:38px;'
+            f'line-height:38px;font-weight:800;color:{fg};">{n}</div><div style="font-family:{FONT};font-size:13px;'
+            f'line-height:17px;font-weight:700;color:{sub_};padding-top:4px;">{escape(label)}</div></td></tr></table></td>')
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+            f'style="table-layout:fixed;"><tr>{"".join(cells)}</tr></table>')
+
+
+def _still_card(l: dict) -> str:
+    """One open problem as a card: the count on a solid block, then grade, since when, title,
+    what it is, the sites, the fix."""
+    c = l["card"]
+    sev = (l.get("severity") or "").upper()
+    fill, text, _tint = SEV_STYLE.get(sev, ("#D9DEE5", INK, "#F4F7FB"))
+    tags = _tag(SEV_WORD.get(sev, sev.title()), fill, text) if sev in SEV_STYLE else ""
+    if c.get("since"):
+        tags += ("&nbsp; " if tags else "") + _tag(f"Open since {_day(c['since'])}", "#DDE4EE", INK)
+    parts = [f'<div>{tags}</div>' if tags else "",
+             f'<div style="font-family:{DISPLAY};font-size:19px;line-height:1.3;font-weight:800;color:{INK};'
+             f'padding-top:10px;">{escape(c["title"])}</div>']
+    if c.get("what"):
+        parts.append(f'<div style="font-family:{FONT};font-size:15px;line-height:1.55;color:#2B3747;padding-top:6px;">'
+                     f'{escape(c["what"])}</div>')
+    if c.get("sites"):
+        parts.append(_site_pills(c["sites"]))
+    if c.get("note"):
+        parts.append(f'<div style="font-family:{FONT};font-size:13px;line-height:1.5;color:{MUTED};padding-top:8px;">'
+                     f'{escape(c["note"])}</div>')
+    if c.get("do"):
+        parts.append(_fix_panel(c["fix_label"], c["do"]))
+    return (f'<tr><td class="px" style="padding:0 32px 14px;"><table role="presentation" width="100%" cellpadding="0" '
+            f'cellspacing="0" border="0" bgcolor="#F4F7FB" style="background:#F4F7FB;border-radius:14px;"><tr>'
+            f'<td class="cnt" width="92" valign="top" bgcolor="{fill}" style="background:{fill};border-radius:14px 0 0 14px;'
+            f'padding:20px 6px;text-align:center;"><div style="font-family:{DISPLAY};font-size:40px;line-height:40px;'
+            f'font-weight:800;color:{text};">{c["count"]}</div><div style="font-family:{FONT};font-size:13px;'
+            f'line-height:16px;font-weight:800;color:{text};padding-top:3px;">{escape(c["unit"])}</div></td>'
+            f'<td width="100%" valign="top" class="card" style="padding:18px 22px 20px;">{"".join(parts)}</td></tr></table></td></tr>')
+
+
 def _p(text: str, color: str = INK, size: int = 15, extra: str = "") -> str:
     return (f'<p style="margin:6px 0 0;font-family:{FONT};font-size:{size}px;line-height:1.55;'
             f'color:{color};{extra}">{text}</p>')
@@ -1345,9 +1519,16 @@ def _card(item: dict, portal: str) -> str:
     if item.get("kind") == "finding" and item.get("finding_ids") and portal:
         head = (f'<a href="{escape(portal)}/findings/{escape(item["finding_ids"][0])}" '
                 f'style="color:{INK};text-decoration:none;">{head}</a>')
-    pill = (overdue_pill() if item.get("overdue_since") else _pill(sev) if sev in SEV_STYLE else "")
-    parts = [f'<div style="font-family:{FONT};font-size:17px;line-height:1.35;font-weight:700;color:{INK};">'
-             + (f'{pill}&nbsp; ' if pill else "") + head + "</div>"]
+    # 2026-11-11 redesign: the header is a solid block in the card's own color (the grade's, or
+    # berry / violet / blue for the three kinds above), the grade a white pill on it.
+    on = _t if ring == fill and sev in SEV_STYLE else "#FFFFFF"
+    pill = (_tag("Overdue", "#FFFFFF", OVERDUE_FILL) if item.get("overdue_since")
+            else _tag(SEV_WORD.get(sev, sev.title()), "#FFFFFF", INK) if sev in SEV_STYLE else "")
+    head = head.replace(f'style="color:{INK};text-decoration:none;"', f'style="color:{on};text-decoration:none;"')
+    top = ((f'<div>{pill}</div>' if pill else "")
+           + f'<div style="font-family:{DISPLAY};font-size:20px;line-height:1.25;font-weight:800;color:{on};'
+             f'padding-top:{9 if pill else 0}px;">{head}</div>')
+    parts = []
     if item.get("overdue_since"):
         parts.append(_p(escape(overdue_words(item)), OVERDUE_FILL, 13, "font-weight:700;"))
         if item.get("nudge"):
@@ -1355,10 +1536,11 @@ def _card(item: dict, portal: str) -> str:
     if item.get("tag"):
         parts.append(_p(escape(item["tag"]) + ".", MUTED, 13, "font-weight:600;"))
     if item.get("body"):
-        lead = '<span style="font-weight:700;">What it means:</span> ' if item.get("kind") == "finding" else ""
-        parts.append(_p(lead + escape(item["body"]), "#2B3747"))
+        lead = (f'<div style="font-family:{FONT};font-size:13px;line-height:18px;font-weight:800;color:{INK};'
+                f'padding-top:12px;">What it means</div>' if item.get("kind") == "finding" else "")
+        parts.append(lead + _p(escape(item["body"]), "#2B3747", 15, "margin-top:3px;" if lead else ""))
     if item.get("sites") and item.get("kind") in ("finding", "enforcement"):
-        parts.append(chips(item["sites"]))
+        parts.insert(0, chips(item["sites"]))
     for label, sites in item.get("groups", []):
         parts.append(_p(f'<span style="font-weight:700;">{escape(label)}</span>', INK, 14, "margin-top:10px;")
                      + chips(sites))
@@ -1377,9 +1559,7 @@ def _card(item: dict, portal: str) -> str:
     if item.get("note"):
         parts.append(_p(escape(item["note"]), MUTED, 13))
     if item.get("do"):
-        label = fix_label(item)
-        parts.append(_p(f'<span style="font-weight:700;">{escape(label)}</span> {escape(item["do"])}', INK, 15,
-                        "margin-top:10px;"))
+        parts.append(_fix_panel(fix_label(item).rstrip(":"), item["do"], "#FFFFFF"))
     if item.get("forward"):
         parts.append(f'<div style="margin-top:10px;padding:10px 12px;background:#FFFFFF;border:1px dashed #C9D3E0;'
                      f'border-radius:8px;font-family:{FONT};font-size:13px;line-height:1.5;color:#2B3747;">'
@@ -1387,11 +1567,13 @@ def _card(item: dict, portal: str) -> str:
                      f'{escape(item["forward"])}</div>')
     if item.get("why"):
         parts.append(_p(escape(item["why"]), MUTED, 13))
-    return (f'<tr><td class="px" style="padding:0 32px 12px;"><table role="presentation" width="100%" cellpadding="0" '
-            f'cellspacing="0" border="0" bgcolor="{tint}" style="background:{tint};border-radius:12px;">'
-            f'<tr><td class="card" style="padding:18px 20px;"><table role="presentation" width="100%" cellpadding="0" '
-            f'cellspacing="0" border="0"><tr>{_ring(ring)}<td valign="top" style="padding-left:12px;">'
-            f'{"".join(parts)}</td></tr></table></td></tr></table></td></tr>')
+    body = "".join(parts)
+    foot = (f'<tr><td class="card" bgcolor="{tint}" style="background:{tint};border-radius:0 0 14px 14px;'
+            f'padding:12px 22px 20px;">{body}</td></tr>' if body else "")
+    return (f'<tr><td class="px" style="padding:0 32px 14px;"><table role="presentation" width="100%" cellpadding="0" '
+            f'cellspacing="0" border="0"><tr><td class="card" bgcolor="{ring}" style="background:{ring};'
+            f'border-radius:{"14px 14px 0 0" if body else "14px"};padding:14px 22px 15px;">{top}</td></tr>'
+            f'{foot}</table></td></tr>')
 
 
 def _done_row(item: dict) -> str:
@@ -1412,6 +1594,17 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
             f'<span style="font-family:{DISPLAY};font-size:22px;font-weight:800;color:{b["band_text"]};">'
             f'{escape(b["short_name"])}</span>')
     border = f'border-bottom:1px solid {b["band_border"]};' if b.get("band_border") else ""
+    hero, job, job_sites = hero_words(model)
+    tiles = _tiles(model, b)
+    job_html = ""
+    if job:
+        said = escape(job)
+        for s_ in sorted(job_sites, key=len, reverse=True):
+            said = said.replace(escape(s_), (
+                f'<span style="display:inline-block;white-space:nowrap;background:{b["band_text"]};color:{b["band_bg"]};'
+                f'font-weight:800;font-size:15px;border-radius:999px;padding:2px 12px;">{_noauto(s_)}</span>'), 1)
+        job_html = (f'<div style="font-family:{FONT};font-size:17px;line-height:1.6;color:{b["band_muted"]};'
+                    f'padding-top:10px;">{said}</div>')
     rows = []
     rows.append(
         f'<tr><td bgcolor="{b["band_bg"]}" style="background:{b["band_bg"]};{border}border-radius:14px 14px 0 0;">'
@@ -1419,9 +1612,11 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
         f'<tr><td class="px" style="padding:22px 32px 0;" valign="middle">{logo}</td>'
         f'<td class="px" style="padding:22px 32px 0;font-family:{FONT};font-size:13px;line-height:1.4;color:{b["band_muted"]};white-space:nowrap;" '
         f'align="right" valign="middle">{end:%a}, {end:%b} {end.day}, {_clock(end)}</td></tr>'
-        f'<tr><td colspan="2" class="px" style="padding:20px 32px 22px;"><h1 style="margin:0;font-family:{DISPLAY};'
+        f'<tr><td colspan="2" class="px" style="padding:20px 32px 6px;"><h1 style="margin:0;font-family:{DISPLAY};'
         f'font-size:36px;line-height:1.06;font-weight:800;letter-spacing:-0.02em;color:{b["band_text"]};">'
-        f'{escape(model["headline"])}</h1></td></tr>'
+        f'{escape(hero)}</h1>{job_html}</td></tr>'
+        + (f'<tr><td colspan="2" class="px5" style="padding:16px 27px 26px;">{tiles}</td></tr>' if tiles else
+           '<tr><td colspan="2" style="padding:0 0 18px;font-size:0;line-height:0;">&nbsp;</td></tr>') +
         f'</table></td></tr>')
     if model["do"]:
         rows.append(_h2("Needs you today"))
@@ -1433,10 +1628,18 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
         rows.append(_h2(f"Fixed since {model.get('since', 'yesterday')}"))
         rows += [_done_row(i) for i in model["done"]]
     if model.get("still_open"):
-        rows.append(_h2("Still open"))
-        rows.append(f'<tr><td class="px" style="padding:0 32px 4px;">'
-                    + "".join(_p(escape(l["text"]), "#2B3747", 15, "margin-top:8px;") for l in model["still_open"])
-                    + '</td></tr>')
+        n_still = len(model["still_open"])
+        rows.append(
+            f'<tr><td class="px" style="padding:26px 32px 4px;"><h2 style="margin:0;font-family:{DISPLAY};font-size:22px;'
+            f'line-height:1.2;font-weight:700;color:{INK};">Still open &nbsp;<span style="display:inline-block;'
+            f'background:{INK};color:#FFFFFF;font-size:15px;line-height:20px;border-radius:999px;padding:3px 12px;'
+            f'vertical-align:middle;">{n_still}</span></h2></td></tr>'
+            f'<tr><td class="px" style="padding:0 32px 14px;font-family:{FONT};font-size:15px;line-height:1.5;'
+            f'color:{MUTED};">Not new, and nothing changed since {escape(model.get("since", "yesterday"))}. '
+            f'{"It waits" if n_still == 1 else "Each one waits"} on someone to act.</td></tr>')
+        rows += [_still_card(l) if l.get("card") else
+                 f'<tr><td class="px" style="padding:0 32px 4px;">{_p(escape(l["text"]), "#2B3747", 15, "margin-top:8px;")}</td></tr>'
+                 for l in model["still_open"]]
     quiet = []
     if model.get("minor"):
         quiet.append(minor_words(model["minor"]))
@@ -1446,10 +1649,10 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
         rows.append(f'<tr><td class="px" style="padding:18px 32px 0;">{"".join(_p(escape(q), MUTED, 14) for q in quiet)}</td></tr>')
     if portal:
         rows.append(
-            f'<tr><td class="px" style="padding:22px 32px 28px;"><table role="presentation" cellpadding="0" cellspacing="0" '
-            f'border="0"><tr><td bgcolor="{b["button"]}" style="background:{b["button"]};border-radius:8px;">'
-            f'<a href="{escape(portal)}" style="display:inline-block;padding:12px 18px;font-family:{FONT};'
-            f'font-size:15px;font-weight:600;color:#FFFFFF;text-decoration:none;">Open the portal</a>'
+            f'<tr><td class="px" style="padding:22px 32px 28px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+            f'border="0"><tr><td align="center" bgcolor="{b["button"]}" style="background:{b["button"]};border-radius:12px;">'
+            f'<a href="{escape(portal)}" style="display:block;padding:16px 18px;font-family:{FONT};'
+            f'font-size:17px;font-weight:800;color:#FFFFFF;text-decoration:none;">Open the portal &rarr;</a>'
             f'</td></tr></table></td></tr>')
     footer = (f"Sent by {escape(product_name or b['short_name'])} at {_clock(end)}. "
               f"{weekly_words(end)}")
@@ -1464,7 +1667,7 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
 @keyframes grow{{from{{transform:scaleX(0)}}to{{transform:scaleX(1)}}}}
 .seg{{transform-origin:left center;animation:grow .9s cubic-bezier(.3,.7,.2,1) both}}
 @media (prefers-reduced-motion:reduce){{.seg{{animation:none}}}}
-@media (max-width:620px){{h1{{font-size:30px !important}} .px{{padding-left:18px !important;padding-right:18px !important}} .card{{padding:16px 14px !important}}}}
+@media (max-width:620px){{h1{{font-size:30px !important}} .px{{padding-left:18px !important;padding-right:18px !important}} .px5{{padding-left:13px !important;padding-right:13px !important}} .card{{padding-left:16px !important;padding-right:16px !important}} .cnt{{width:64px !important}} .tile{{padding:12px 10px 11px !important}}}}
 </style></head>
 <body style="margin:0;padding:0;background:{PAGE};">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{PAGE}" style="background:{PAGE};">
