@@ -185,8 +185,11 @@ def test_the_email_carries_the_lines_and_records_them_for_the_gap():
     assert dd.subject(m, "COMMANDsentry") == "[COMMANDsentry] Command, Monday: nothing new, 2 still open"
     html = dd.render_html(m, portal_url="https://p.example", product_name="COMMANDsentry")
     text = dd.render_text(m, portal_url="https://p.example", product_name="COMMANDsentry")
-    assert ">Still open<" in html and "STILL OPEN" in text
-    assert "a.com has no email sender policy published." in html and "a.com has no email sender policy published." in text
+    assert ">Still open &nbsp;" in html and "STILL OPEN" in text
+    # 2026-11-11 redesign: the HTML says each problem as a card (the sentence with no site in it,
+    # the site as a pill); the text email keeps the one sentence naming the site.
+    assert "This site has no email sender policy published." in html and ">a.&#8288;com</span>" in html
+    assert "a.com has no email sender policy published." in text
     assert "today's weekly review" in html and "today's weekly review" in text
     for out in (html, text):
         assert "Nothing needs you" not in out and "came back with nothing that needs anyone" not in out

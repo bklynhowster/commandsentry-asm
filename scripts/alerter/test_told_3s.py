@@ -256,7 +256,7 @@ def test_the_daily_button_says_the_portal():
     m = _daily(None, new=[_d("a.com:heavy:tls")])
     html = dd.render_html(m, portal_url="https://portal.example", product_name="COMMANDsentry")
     text = dd.render_text(m, portal_url="https://portal.example", product_name="COMMANDsentry")
-    assert ">Open the portal</a>" in html and "Open the portal: https://portal.example" in text
+    assert ">Open the portal &rarr;</a>" in html and "Open the portal: https://portal.example" in text
     assert "today's report" not in html + text
 
 
