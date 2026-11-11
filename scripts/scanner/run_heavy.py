@@ -194,6 +194,7 @@ from phase_source import HEAVY as TIER_HEAVY  # noqa: E402
 import safe_exploit as se
 import service_greeting as sg   # job 4k: each server's first line, nothing sent
 import cisa_mirror as cm        # Prodex plan 2026-11-10: an address swept the way CISA sweeps it
+import prodex_full_ports as pf  # Prodex every-heavy full TCP sweep + bounded application proof
 import device_clues             # job 4y: what the device behind each address shows anyone
 
 # Degradation primitives (SPEC_SCANNER_DEGRADATION_HARDENING.md).
@@ -3936,6 +3937,51 @@ def _shallow_curated_probe(host: str) -> list[dict]:
     return [{"port": port, "proto": "tcp"} for port in NAABU_CURATED_PORTS if _reconfirm_port(host, port)]
 
 
+def run_prodex_full_sweep(ctx: HeavyScanContext, scope_address: str) -> tuple[bool, list[dict]]:
+    """Every TCP port on every scoped Prodex heavy; only application-proven ports surface."""
+    host = ctx.hostname
+    if not (ctx.target_proven_reachable or ctx.egress_ip_initial):
+        log("  prodex_full_ports: no working-exit evidence; not swept, not credited")
+        return False, []
+    rc, stdout, stderr = run_cmd(pf.sweep_command(host, NAABU_RATE), timeout=pf.SWEEP_TIMEOUT_S)
+    if stdout.strip():
+        ctx.artifacts.append(("naabu", "json", stdout))
+    _log_stderr_tail(stderr, label="naabu")
+    raw = _parse_naabu_ports(stdout) if rc == 0 else []
+    proof = pf.prove_ports(host, [p["port"] for p in raw], ctx.scan_run_id,
+                           reconfirm=_reconfirm_port, probe=pf.probe_application)
+    record = {"plan": "Prodex every heavy: every TCP port with application proof",
+              "host": host, "scope_address": scope_address, "swept": "1-65535/tcp CONNECT",
+              "rate_per_s": NAABU_RATE, "sweep_rc": rc, **proof}
+    ctx.artifacts.append(("prodex_full_ports", "json", json.dumps(record, sort_keys=True)))
+    if rc != 0:
+        log(f"  prodex_full_ports DEGRADED (not credited): rc={rc}")
+        return False, []
+    by_port = {p["port"]: p for p in raw}
+    open_ports = [by_port[p] for p in proof["proven"]]
+    proof_by_port = {r["port"]: r for r in proof["results"]}
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for p in open_ports:
+        port, proto = p["port"], p["proto"]
+        kind = proof_by_port[port].get("kind") or "application"
+        mid = f"{host}:{port}/{proto}"
+        ctx.findings.append(FindingEvent(
+            finding_id=stable_finding_id(ctx.asset_id, "commandsentry_heavy",
+                                         f"naabu-open-port-{port}-{proto}", mid),
+            asset_id=ctx.asset_id, scan_id=ctx.scan_run_id, source="commandsentry_heavy",
+            title=f"Service inventory: {port}/{proto} open", severity="INFO", category="recon",
+            observed_at=now_iso, matched_at=mid, subdomain=host, port=port, protocol=proto,
+            description=(f"Every-TCP-port Prodex heavy sweep observed {port}/{proto}; it answered "
+                         f"again and supplied {kind} application evidence distinct from defaults."),
+            params={"port_sweep": "prodex_all_tcp", "application_proof": kind,
+                    "scope_address": scope_address},
+        ))
+    complete = bool(proof["proof_complete"] and open_ports)
+    log(f"  prodex_full_ports: {len(raw)} raw, {len(open_ports)} proven, "
+        f"{len(proof['proof_overflow'])} overflow; {'credited' if complete else 'NOT credited'}")
+    return complete, open_ports
+
+
 def run_naabu_phase(ctx: HeavyScanContext, work_dir: Path) -> tuple[bool, list[dict]]:
     """naabu CONNECT top-ports port discovery. Returns (naabu_ok, open_ports).
 
@@ -3960,6 +4006,10 @@ def run_naabu_phase(ctx: HeavyScanContext, work_dir: Path) -> tuple[bool, list[d
     # Every other asset goes on below, unchanged.
     if ctx.descriptor.get("cisa_mirror"):
         return run_cisa_mirror_sweep(ctx)
+
+    scope_address = pf.authorized_address(ctx.hostname)
+    if scope_address:
+        return run_prodex_full_sweep(ctx, scope_address)
 
     if not ctx.target_proven_reachable:
         log("  naabu SKIP — testssl did not prove reachability (no egress proof); not credited")

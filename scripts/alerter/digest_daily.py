@@ -765,7 +765,8 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
                 unrecognized_pages=None, sites=None, certs=None, prev_deep=None,
                 hints=None, brand=None, stale_words=None, stale_intro="",
                 stale_note="", details=None, told=None, not_responding=None,
-                reach_checks=None, quiet_where=None, gaps_to_approver=False) -> dict:
+                reach_checks=None, quiet_where=None, gaps_to_approver=False,
+                port_notices=None) -> dict:
     """Everything the two renderers need, decided once. PURE.
 
     Job 3s ("say it once"): `told` is the record of what was told ({finding_id: row});
@@ -1092,6 +1093,8 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
         "headline": headline(n_do, n_ticket, do, ticket, since=since_words(window_start, window_end, brand)),
         "still_open": [],
         "minor": minor,
+        "port_notices": [{"finding_id": r[0], "name": r[1], "port": r[2], "kind": r[3]}
+                         for r in (port_notices or [])],
         "baseline": baseline or {},
         "told_full": told_rule.records(shown, member_sev, "daily") + quiet_told,
         "ours": ours,
@@ -1437,6 +1440,8 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
     quiet = []
     if model.get("minor"):
         quiet.append(minor_words(model["minor"]))
+    quiet.extend(f"New service answering on {n['name']}: {n['port']}/tcp ({n['kind']})."
+                 for n in model.get("port_notices", []))
     if quiet:
         rows.append(f'<tr><td class="px" style="padding:18px 32px 0;">{"".join(_p(escape(q), MUTED, 14) for q in quiet)}</td></tr>')
     if portal:
@@ -1523,6 +1528,8 @@ def render_text(model: dict, *, portal_url: str = "", product_name: str = "") ->
         out.append("")
     if model.get("minor"):
         out.append(minor_words(model["minor"]))
+    for n in model.get("port_notices", []):
+        out.append(f"New service answering on {n['name']}: {n['port']}/tcp ({n['kind']}).")
     if portal_url:
         out.append(f"Open the portal: {portal_url.rstrip('/')}")
     # W4 (Howie 2026-11-03 12:11): this is when Sentry wrote it, not when it went out (it goes

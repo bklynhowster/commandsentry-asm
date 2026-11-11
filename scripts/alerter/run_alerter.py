@@ -215,6 +215,19 @@ ORDER BY
   f.asset_id, f.finding_id;
 """
 
+# Prodex every-heavy: one line for a newly created, application-proven non-web INFO finding.
+SQL_NEW_PROVEN_NONWEB_PORTS = """
+SELECT f.finding_id, a.name, f.port, f.params->>'application_proof', f.first_detected_at
+FROM findings f JOIN assets a ON a.asset_id=f.asset_id
+WHERE f.first_detected_at > %s AND f.first_detected_at <= %s
+  AND a.ownership='owned' AND a.discovery_status='confirmed_live'
+  AND f.severity='INFO' AND f.source='commandsentry_heavy'
+  AND f.params->>'port_sweep'='prodex_all_tcp'
+  AND coalesce(f.params->>'application_proof','') NOT IN ('http','https')
+  AND f.port IS NOT NULL
+ORDER BY a.name, f.port;
+"""
+
 # D-031 — the asset block's device class. ⚠ READ FROM device_class_dryrun, the
 # LATEST row per asset, because `--write` is still off on both instances: the label
 # is a dry-run classification and the digest says so rather than implying it is live.
@@ -1592,7 +1605,7 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
                   hints=None, brand=None, discovery_stale_hours=24,
                   deepscan_stale_hours=192, details=None, told=None,
                   not_responding=None, reach_checks=None, quiet_where=None,
-                  gaps_to_approver=False) -> dict:
+                  gaps_to_approver=False, port_notices=None) -> dict:
     """KB 12 job 3l — every part of the old email, sorted into Do today / Worth a ticket /
     Off your plate by digest_daily.build_model. The stale-host wording stays this file's
     (stale_row_words, note 320)."""
@@ -1608,6 +1621,7 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
         stale_note=stale_overdue_note(discovery_stale_hours, deepscan_stale_hours),
         details=details, told=told, not_responding=not_responding,
         reach_checks=reach_checks, quiet_where=quiet_where, gaps_to_approver=gaps_to_approver,
+        port_notices=port_notices,
     )
 
 
@@ -2642,6 +2656,8 @@ def main() -> int:
         # what you will do ("2 checks and 1 ticket"); "(!) Coverage gap." leads when Sentry
         # has lost sight of hosts; the [name] prefix stays for mail filters.
         new_problems, new_inventory = split_problems_inventory(new_findings)
+        port_notices = _soft("new proven non-web ports", SQL_NEW_PROVEN_NONWEB_PORTS,
+                             (window_start, window_end))
         model = _digest_model(
             window_start=window_start, window_end=window_end,
             new_findings=new_findings, confirmed=confirmed, regressed=regressed,
@@ -2653,6 +2669,7 @@ def main() -> int:
             discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours,
             details=details, told=told, not_responding=not_responding,
             reach_checks=reach_checks, quiet_where=quiet_where, gaps_to_approver=gate,
+            port_notices=port_notices,
         )
         # KB 12, the Command daily: its own "still open" lines, in Sentry's voice (the voice path,
         # Prodex, has its own "Still sitting there" below and is not changed here).
