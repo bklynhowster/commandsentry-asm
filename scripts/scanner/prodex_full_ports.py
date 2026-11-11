@@ -54,8 +54,8 @@ def authorized_address(host: str, *, scope=None, resolver=None, path=None) -> st
     scope = load_scope(path) if scope is None else scope
     host, resolved = host.lower().rstrip("."), set(resolve_ipv4(host, resolver))
     for address, row in scope.items():
-        if host in row["names"] and address in resolved:
-            return address
+        if host in row["names"] and resolved and (address in resolved or row.get("dynamic") is True):
+            return address if address in resolved else sorted(resolved)[0]
     return None
 
 

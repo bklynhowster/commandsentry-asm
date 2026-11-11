@@ -70,7 +70,10 @@ def test_scope_file_is_prodex_only():
     scope = h.pf.load_scope()
     repo = Path(__file__).resolve().parents[2].name
     if repo == "prodexsentry-asm":
-        assert len(scope) == 11 and scope["52.244.87.51"]["names"] == ["gov.prodexlabs.com"]
+        assert len(scope) == 17 and scope["52.244.87.51"]["names"] == ["gov.prodexlabs.com"]
         assert scope["34.67.20.186"]["reserved"] is False
+        for address in ("150.171.110.18", "66.33.60.130", "76.76.21.61",
+                        "97.107.135.178", "170.187.131.209", "185.3.93.228"):
+            assert scope[address]["reserved"] is False and scope[address]["dynamic"] is True
     else:
         assert scope == {}

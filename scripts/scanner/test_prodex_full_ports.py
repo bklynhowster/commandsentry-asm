@@ -84,6 +84,15 @@ def test_backstop_groups_names_by_address_and_skips_recent_and_active():
     assert all(r["asset_id"] != "3" and r["name"] != ADDR for r in selected)
 
 
+def test_dynamic_scope_follows_current_dns_but_static_scope_refuses():
+    dynamic = {"203.0.113.1": {"names": ["docs.prodexlabs.com"], "dynamic": True}}
+    assert pf.authorized_address("docs.prodexlabs.com", scope=dynamic,
+                                 resolver=lambda h: ["203.0.113.9"]) == "203.0.113.9"
+    assert pf.authorized_address("docs.prodexlabs.com", scope=dynamic, resolver=lambda h: []) is None
+    assert pf.authorized_address("prod.prodexlabs.com", scope=SCOPE,
+                                 resolver=lambda h: ["203.0.113.9"]) is None
+
+
 def test_backstop_never_selects_unscoped_name():
     assets = [{"asset_id": "3", "name": "ph-test.prodexlabs.com"}]
     assert backstop.choose(assets, set(), set(), scope=SCOPE, resolver=lambda h: [ADDR]) == []
