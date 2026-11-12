@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-11-12T06:49:30Z_c929cc9c",
-    "started_at": "2026-11-12T06:49:30Z",
-    "completed_at": "2026-11-12T06:53:16Z",
-    "duration_seconds": 226,
+    "id": "scan_2026-11-12T12:45:16Z_b9c4caa7",
+    "started_at": "2026-11-12T12:45:16Z",
+    "completed_at": "2026-11-12T12:49:20Z",
+    "duration_seconds": 244,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -41,8 +41,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-12T06:53:16Z",
-      "last_seen": "2026-11-12T06:53:16Z",
+      "first_discovered": "2026-11-12T12:49:20Z",
+      "last_seen": "2026-11-12T12:49:20Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -141,8 +141,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-12T06:53:16Z",
-      "last_seen": "2026-11-12T06:53:16Z",
+      "first_discovered": "2026-11-12T12:49:21Z",
+      "last_seen": "2026-11-12T12:49:21Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -278,8 +278,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-12T06:53:16Z",
-      "last_seen": "2026-11-12T06:53:16Z",
+      "first_discovered": "2026-11-12T12:49:21Z",
+      "last_seen": "2026-11-12T12:49:21Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -335,8 +335,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-12T06:53:16Z",
-      "last_seen": "2026-11-12T06:53:16Z",
+      "first_discovered": "2026-11-12T12:49:21Z",
+      "last_seen": "2026-11-12T12:49:21Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -390,8 +390,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-12T06:53:16Z",
-      "last_seen": "2026-11-12T06:53:16Z",
+      "first_discovered": "2026-11-12T12:49:21Z",
+      "last_seen": "2026-11-12T12:49:21Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -474,8 +474,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-12T06:53:16Z",
-      "last_seen": "2026-11-12T06:53:16Z",
+      "first_discovered": "2026-11-12T12:49:21Z",
+      "last_seen": "2026-11-12T12:49:21Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -556,7 +556,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-11-12T01:01:59Z_11a1eaa4",
+    "since_scan": "scan_2026-11-12T06:49:30Z_c929cc9c",
     "added": {
       "subdomains": [],
       "services": [],
@@ -574,50 +574,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-10-15T06:53:49Z_17180861",
-      "started_at": "2026-10-15T06:53:49Z",
-      "completed_at": "2026-10-15T06:57:28Z",
-      "subdomain_count": 6,
-      "live_subdomain_count": 6,
-      "host_count": 6,
-      "service_count": 6,
-      "subdomain_names": [
-        "ftp.sciimage.com",
-        "insite.sciimage.com",
-        "ns01.sciimage.com",
-        "ns02.sciimage.com",
-        "vpn.sciimage.com",
-        "vpn2.sciimage.com"
-      ],
-      "ports_by_sub": {
-        "ftp.sciimage.com": {
-          "24.157.51.76": [
-            80,
-            443
-          ]
-        },
-        "insite.sciimage.com": {
-          "24.157.51.70": [
-            80,
-            443
-          ]
-        },
-        "ns01.sciimage.com": {},
-        "ns02.sciimage.com": {},
-        "vpn.sciimage.com": {
-          "24.157.51.66": [
-            443
-          ]
-        },
-        "vpn2.sciimage.com": {
-          "52.119.65.2": [
-            443
-          ]
-        }
-      },
-      "tech_versions": {}
-    },
     {
       "scan_id": "scan_2026-10-15T12:50:24Z_50f4c854",
       "started_at": "2026-10-15T12:50:24Z",
@@ -5796,13 +5752,58 @@
         }
       },
       "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-11-12T12:45:16Z_b9c4caa7",
+      "started_at": "2026-11-12T12:45:16Z",
+      "completed_at": "2026-11-12T12:49:20Z",
+      "subdomain_count": 6,
+      "live_subdomain_count": 6,
+      "host_count": 6,
+      "service_count": 7,
+      "subdomain_names": [
+        "ftp.sciimage.com",
+        "insite.sciimage.com",
+        "ns01.sciimage.com",
+        "ns02.sciimage.com",
+        "vpn.sciimage.com",
+        "vpn2.sciimage.com"
+      ],
+      "ports_by_sub": {
+        "ftp.sciimage.com": {
+          "24.157.51.76": [
+            22,
+            80,
+            443
+          ]
+        },
+        "insite.sciimage.com": {
+          "24.157.51.70": [
+            80,
+            443
+          ]
+        },
+        "ns01.sciimage.com": {},
+        "ns02.sciimage.com": {},
+        "vpn.sciimage.com": {
+          "24.157.51.66": [
+            443
+          ]
+        },
+        "vpn2.sciimage.com": {
+          "52.119.65.2": [
+            443
+          ]
+        }
+      },
+      "tech_versions": {}
     }
   ],
   "dns_readings": {
     "ftp.sciimage.com": {
       "name": "ftp.sciimage.com",
       "name_status": "exists",
-      "read_at": "2026-11-12T06:50:26Z",
+      "read_at": "2026-11-12T12:46:28Z",
       "records": {
         "a": {
           "health": "ok",
@@ -5854,7 +5855,7 @@
     "insite.sciimage.com": {
       "name": "insite.sciimage.com",
       "name_status": "exists",
-      "read_at": "2026-11-12T06:50:26Z",
+      "read_at": "2026-11-12T12:46:28Z",
       "records": {
         "a": {
           "health": "ok",
@@ -5906,12 +5907,12 @@
     "ns01.sciimage.com": {
       "name": "ns01.sciimage.com",
       "name_status": "exists",
-      "read_at": "2026-11-12T06:50:26Z",
+      "read_at": "2026-11-12T12:46:28Z",
       "records": {
         "a": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1775,
+          "ttl": 1752,
           "values": [
             "13.248.212.206"
           ]
@@ -5958,12 +5959,12 @@
     "ns02.sciimage.com": {
       "name": "ns02.sciimage.com",
       "name_status": "exists",
-      "read_at": "2026-11-12T06:50:26Z",
+      "read_at": "2026-11-12T12:46:28Z",
       "records": {
         "a": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1776,
+          "ttl": 1751,
           "values": [
             "76.223.76.45"
           ]
@@ -6011,7 +6012,7 @@
       "name": "sciimage.com",
       "name_status": "exists",
       "ns_check": {
-        "asked_at": "2026-11-12T06:50:26Z",
+        "asked_at": "2026-11-12T12:46:28Z",
         "counted_before": [
           "ns01.sciimage.com"
         ],
@@ -6049,7 +6050,7 @@
       ],
       "ns_counted_basis": "agreed",
       "ns_disagreement": null,
-      "read_at": "2026-11-12T06:50:26Z",
+      "read_at": "2026-11-12T12:46:28Z",
       "records": {
         "a": {
           "health": "ok",
@@ -6078,7 +6079,7 @@
         "mx": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1775,
+          "ttl": 1751,
           "values": [
             "10 mx1.hc3765-17.iphmx.com",
             "20 mx2.hc3765-17.iphmx.com"
@@ -6087,7 +6088,7 @@
         "ns": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 7175,
+          "ttl": 7151,
           "values": [
             "ns01.sciimage.com",
             "ns02.sciimage.com"
@@ -6096,7 +6097,7 @@
         "txt": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1775,
+          "ttl": 1751,
           "values": [
             "0ed1fe018a578bb877e8354235b4b5eb5a2f99c17c",
             "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
@@ -6109,12 +6110,12 @@
     "vpn.sciimage.com": {
       "name": "vpn.sciimage.com",
       "name_status": "exists",
-      "read_at": "2026-11-12T06:50:26Z",
+      "read_at": "2026-11-12T12:46:28Z",
       "records": {
         "a": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1775,
+          "ttl": 1752,
           "values": [
             "24.157.51.66"
           ]
@@ -6161,12 +6162,12 @@
     "vpn2.sciimage.com": {
       "name": "vpn2.sciimage.com",
       "name_status": "exists",
-      "read_at": "2026-11-12T06:50:26Z",
+      "read_at": "2026-11-12T12:46:28Z",
       "records": {
         "a": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1776,
+          "ttl": 1752,
           "values": [
             "52.119.65.2"
           ]
