@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-11-11T18:34:43Z_04f0bdb9",
-    "started_at": "2026-11-11T18:34:43Z",
-    "completed_at": "2026-11-11T18:37:44Z",
-    "duration_seconds": 181,
+    "id": "scan_2026-11-12T00:53:54Z_195ea9ef",
+    "started_at": "2026-11-12T00:53:54Z",
+    "completed_at": "2026-11-12T00:56:43Z",
+    "duration_seconds": 169,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-11-11T18:37:44Z",
-      "last_seen": "2026-11-11T18:37:44Z",
+      "first_discovered": "2026-11-12T00:56:43Z",
+      "last_seen": "2026-11-12T00:56:43Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -126,8 +126,8 @@
       ],
       "dns": {
         "a": [
-          "199.16.172.41",
-          "199.16.173.231"
+          "199.16.173.231",
+          "199.16.172.41"
         ],
         "aaaa": [],
         "cname": null,
@@ -137,8 +137,8 @@
           "ns18.domaincontrol.com"
         ],
         "txt": [
-          "",
-          "ca3-109f68bf8eb24748b4c4aaa123b93e17"
+          "ca3-109f68bf8eb24748b4c4aaa123b93e17",
+          ""
         ],
         "spf": null,
         "dnssec": false
@@ -255,8 +255,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-11T18:37:45Z",
-      "last_seen": "2026-11-11T18:37:45Z",
+      "first_discovered": "2026-11-12T00:56:43Z",
+      "last_seen": "2026-11-12T00:56:43Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -435,8 +435,8 @@
       ],
       "dns": {
         "a": [
-          "199.16.172.41",
-          "199.16.173.231"
+          "199.16.173.231",
+          "199.16.172.41"
         ],
         "aaaa": [],
         "cname": "commandmarketinginnovations.com",
@@ -446,8 +446,8 @@
           "ns18.domaincontrol.com"
         ],
         "txt": [
-          "",
-          "ca3-109f68bf8eb24748b4c4aaa123b93e17"
+          "ca3-109f68bf8eb24748b4c4aaa123b93e17",
+          ""
         ],
         "spf": null,
         "dnssec": false
@@ -562,7 +562,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-11-11T12:38:59Z_7f8b57ee",
+    "since_scan": "scan_2026-11-11T18:34:43Z_04f0bdb9",
     "added": {
       "subdomains": [],
       "services": [],
@@ -580,50 +580,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-10-14T18:47:43Z_a8b48658",
-      "started_at": "2026-10-14T18:47:43Z",
-      "completed_at": "2026-10-14T18:51:36Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 2,
-      "service_count": 8,
-      "subdomain_names": [
-        "commandmarketinginnovations.com",
-        "www.commandmarketinginnovations.com"
-      ],
-      "ports_by_sub": {
-        "commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        },
-        "www.commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.0",
-        "Mailcheck": "1.1.2",
-        "Slider Revolution": "6.7.58",
-        "WPMU DEV Smush": "4.3.4",
-        "Yoast SEO": "28.7",
-        "jQuery Migrate": "3.4.1",
-        "punycode": "1.0.0"
-      }
-    },
     {
       "scan_id": "scan_2026-10-15T01:04:53Z_6b0b1311",
       "started_at": "2026-10-15T01:04:53Z",
@@ -5843,6 +5799,50 @@
         "jQuery Migrate": "3.4.1",
         "punycode": "1.0.0"
       }
+    },
+    {
+      "scan_id": "scan_2026-11-12T00:53:54Z_195ea9ef",
+      "started_at": "2026-11-12T00:53:54Z",
+      "completed_at": "2026-11-12T00:56:43Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.8.1",
+        "WPMU DEV Smush": "4.3.6",
+        "Yoast SEO": "28.8",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
     }
   ],
   "dns_readings": {
@@ -5855,12 +5855,12 @@
       ],
       "ns_counted_basis": "everyday",
       "ns_disagreement": null,
-      "read_at": "2026-11-11T18:35:31Z",
+      "read_at": "2026-11-12T00:54:29Z",
       "records": {
         "a": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 583,
+          "ttl": 576,
           "values": [
             "199.16.172.41",
             "199.16.173.231"
@@ -5893,7 +5893,7 @@
         "ns": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1261,
+          "ttl": 1707,
           "values": [
             "ns17.domaincontrol.com",
             "ns18.domaincontrol.com"
@@ -5902,7 +5902,7 @@
         "txt": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1783,
+          "ttl": 1776,
           "values": [
             "",
             "ca3-109f68bf8eb24748b4c4aaa123b93e17"
@@ -5924,7 +5924,7 @@
     "www.commandmarketinginnovations.com": {
       "name": "www.commandmarketinginnovations.com",
       "name_status": "exists",
-      "read_at": "2026-11-11T18:35:31Z",
+      "read_at": "2026-11-12T00:54:29Z",
       "records": {
         "a": {
           "cname_chain": [
@@ -5932,7 +5932,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 583,
+          "ttl": 576,
           "values": [
             "199.16.172.41",
             "199.16.173.231"
@@ -5950,7 +5950,7 @@
         "cname": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 583,
+          "ttl": 576,
           "values": [
             "commandmarketinginnovations.com"
           ]
@@ -5970,7 +5970,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1261,
+          "ttl": 1707,
           "values": [
             "ns17.domaincontrol.com",
             "ns18.domaincontrol.com"
@@ -5982,7 +5982,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1783,
+          "ttl": 1776,
           "values": [
             "",
             "ca3-109f68bf8eb24748b4c4aaa123b93e17"
