@@ -195,6 +195,7 @@ import safe_exploit as se
 import service_greeting as sg   # job 4k: each server's first line, nothing sent
 import cisa_mirror as cm        # Prodex plan 2026-11-10: an address swept the way CISA sweeps it
 import prodex_full_ports as pf  # Prodex every-heavy full TCP sweep + bounded application proof
+import signin_door  # D-077: name the sign-in and read its version, look-only (pure half)
 import device_clues             # job 4y: what the device behind each address shows anyone
 
 # Degradation primitives (SPEC_SCANNER_DEGRADATION_HARDENING.md).
@@ -2319,6 +2320,90 @@ def run_fwbbot_check_probe_phase(ctx: HeavyScanContext, work_dir: Path) -> None:
                "details": details}
     ctx.artifacts.append(("stack_id_fwbbot_check", "json", json.dumps(verdict)))
     _write_active_probe_audit(ctx, verdict)
+
+
+# ============================================================================
+# Look-only — name the sign-in and read its version (D-077, Howie 2026-11-12)
+# ============================================================================
+# "we want to identify a vulnerability, not exploit it." A site behind OAuth2 Proxy
+# answers every address with a redirect to its own /oauth2/start, and until now the scan
+# wrote that down and stopped: no product, no version, so rule 3r had nothing to match.
+# This phase sends AT MOST TWO plain page loads (signin_door.py has the whole contract):
+#   1. GET /oauth2/sign_in
+#   2. GET /oauth2/callback with nothing attached — only when request 1 looked like or
+#      said OAuth2 Proxy, showed no version, AND assets.active_probe_authorized is true.
+# No cookie, no body, no credential, no redirect followed, no other host. Request 2 draws
+# the sign-in's own error page, whose footer prints the version; it is not a sign-in
+# attempt (no code from the identity provider is sent) and is audited like the other
+# per-site-gated requests.
+# Persist-only, self-registers NO tool (like the passive phase): one `signin_door`
+# artifact. It writes no finding; advisory_watch.py reads the artifact in a later push.
+# SIGNIN_DOOR_LIVE unset or false -> nothing is sent (the artifact says so). The workflow
+# sets it per instance; repo variable SIGNIN_DOOR_LIVE=false is the kill switch.
+_SIGNIN_DOOR_LIVE = _env_flag_armed(os.environ.get("SIGNIN_DOOR_LIVE"))
+
+
+def _signin_door_look(ctx: HeavyScanContext, work_dir: Path, path: str) -> dict:
+    """ONE plain GET of `path`, reduced to what may be kept (signin_door.looked_at). The
+    page lives in a scratch file for the length of this call only and is never stored."""
+    body_path = Path(work_dir) / ("signin_door_" + path.rsplit("/", 1)[-1] + ".body")
+    try:
+        rc, out, _err = run_cmd(
+            signin_door.curl_args(ctx.hostname, path, str(body_path), _BROWSER_UA), timeout=25)
+        try:
+            body = body_path.read_bytes()[:signin_door.MAX_BODY_BYTES]
+        except OSError:
+            body = b""
+        return signin_door.looked_at(path, rc, out or "", body)
+    finally:
+        try:
+            body_path.unlink()
+        except OSError:
+            pass
+
+
+def run_signin_door_phase(ctx: HeavyScanContext, work_dir: Path, sleep=time.sleep) -> None:
+    """D-077. ADDITIVE + NON-FATAL; never aborts the tier. Sends nothing unless the home
+    page already redirects to this site's own /oauth2/start AND SIGNIN_DOOR_LIVE is on."""
+    try:
+        location = signin_door.home_location(ctx.artifacts)
+        if not signin_door.qualifies(location, ctx.hostname):
+            log("  signin_door: SKIP — home page does not redirect to this site's own "
+                "/oauth2/start; nothing sent")
+            return
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if not _SIGNIN_DOOR_LIVE:
+            record = signin_door.build_record(ctx.hostname, now_iso, False, True,
+                                              second_why="switched_off")
+            ctx.artifacts.append(("signin_door", "json", json.dumps(record, sort_keys=True)))
+            log("  signin_door: qualifying redirect seen, SIGNIN_DOOR_LIVE off — nothing sent")
+            return
+        first = _signin_door_look(ctx, work_dir, signin_door.SIGN_IN)
+        second = None
+        if signin_door.wants_second(first):
+            authorized, _egress, reason = _read_active_probe_policy(ctx)
+            send, why = signin_door.second_decision(first, authorized, reason)
+            if send:
+                sleep(signin_door.PACING_S)
+                second = _signin_door_look(ctx, work_dir, signin_door.CALLBACK)
+            # One audit row per evaluation of the per-site-gated request, sent or not.
+            _write_active_probe_audit(ctx, {
+                "probe_class": "signin_door_version", "authorized": bool(authorized),
+                "dry_run": not send,
+                "observed": (bool(second.get("version")) if second else None),
+                "corroborated": None,
+                "details": {"path": signin_door.CALLBACK, "decision": why,
+                            "first_grade": first.get("grade"),
+                            "status": (second or {}).get("status")}})
+        else:
+            _send, why = signin_door.second_decision(first, False)
+        record = signin_door.build_record(ctx.hostname, now_iso, True, True, first, second, why)
+        ctx.artifacts.append(("signin_door", "json", json.dumps(record, sort_keys=True)))
+        log(f"  signin_door (look-only): grade={record['grade']} "
+            f"version={record['version'] or 'not shown'} requests={len(record['requests'])} "
+            f"second={why}")
+    except Exception as e:  # noqa: BLE001 — a look that fails concludes nothing
+        log(f"  signin_door: failed ({type(e).__name__}: {e}) — non-fatal, nothing concluded")
 
 
 # ============================================================================
@@ -5034,6 +5119,12 @@ def run(descriptor_path: str, dsn: str) -> int:
         # this call are the entire "add a tool" surface; the writer + close_out
         # are tool-agnostic. Runs after testssl has proven reachability.
         run_httpx_phase(ctx, work_dir)
+
+        # Look-only — name the sign-in and read its version (D-077, 2026-11-12). At most
+        # two plain page loads, and only on a site whose home page redirects to its own
+        # /oauth2/start. Needs httpx's record of that redirect, so it sits here. Persist-
+        # only: one `signin_door` artifact, no finding, no tool credited. Non-fatal.
+        run_signin_door_phase(ctx, work_dir)
 
         # gau — historical-URL harvest (ADDITIVE, non-fatal, INPUT-ONLY Ship 1;
         # Obsidian 168/173). ZERO target traffic: queries third-party archives
