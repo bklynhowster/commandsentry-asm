@@ -9,6 +9,14 @@ name: Advisory watch
 # Talks only to NVD, CISA and the database — never to a scanned host (D-056).
 # It reads the tech lists the scans already banked; it scans nothing.
 #
+# D-077 step 2 (2026-11-12): for a sign-in a deep scan named with a version (the
+# `signin_door` artifact), it also reads two more PUBLIC sources, still never a
+# scanned host: the maker's release list on GitHub (api.github.com) and the open
+# advisory database (api.osv.dev), then NVD once per flaw. GITHUB_TOKEN below is
+# this workflow's own short-lived token: it only lifts GitHub's shared-address
+# rate limit for that public read, is sent to api.github.com alone and is never
+# printed. A run with many flaws to read takes longer, hence 30 minutes.
+#
 # Needs the enum value from migration 20261021a. A public source being down is a
 # WARNING: that product changes nothing this run and the next run tries again.
 
@@ -33,7 +41,7 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -53,4 +61,5 @@ jobs:
         env:
           SUPABASE_DSN: ${{ secrets.SUPABASE_DSN }}
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/scanner/advisory_watch.py

@@ -124,11 +124,23 @@ THIN_DESCRIPTION_LEN = 200
 # closes the class. Fail-open, which is the discipline the yml's own comment
 # at :128-131 states.
 _ATTESTED_SOURCES = ("ai_synthesized", "ai_synthesized_reviewed", "manual")
+# ⛔ SECTIONS THE SCANNER WROTE ITSELF ARE NOT WORK (D-077 step 2, 2026-11-12).
+# advisory_watch.py writes all three sections of a sign-in's out-of-date finding IN CODE
+# (signin_flaws.py: wording Howie approved, each claim attributed to its source), with
+# description_source left at 'scanner'. An AI rewrite of that text is exactly what the
+# rule-3r wording must not get. So 'scanner' joins the fourth clause's list: a scanner
+# row is in the queue only through the first three clauses (a section is NULL), which
+# is every scanner row the parsers write today. Measured before the change, both
+# databases: rows with description_source='scanner' AND all three sections non-NULL = 0
+# (Prodex 0 of 1069, Command 0 of 2808), so no existing row changes state.
+# The writer stores a blank section as NULL (advisory_watch.DOOR_UPSERT_SQL, pinned by
+# a test), so "non-NULL" and "filled" are the same thing for the rows it writes.
+_SCANNER_SOURCE = "scanner"
 THIN_PREDICATE = (
     "description_synth.is.null,"
     "impact.is.null,"
     "remediation.is.null,"
-    f"description_source.not.in.({','.join(_ATTESTED_SOURCES)}),"
+    f"description_source.not.in.({','.join(_ATTESTED_SOURCES + (_SCANNER_SOURCE,))}),"
     # ⚠ 5th clause, added 2026-09-15 (relay 141). `not.in` is THREE-VALUED:
     # for description_source IS NULL, NOT (NULL IN (...)) evaluates to NULL, so
     # PostgREST EXCLUDES the row — while the Python test (`in {...}` on None ->
@@ -408,6 +420,17 @@ class FindingInput:
         )
 
 
+def scanner_wrote_all_three(row: dict) -> bool:
+    """True when description_source is 'scanner' and all three sections are filled
+    (non-blank): text the scanner wrote in code, which the AI never rewrites. A scanner
+    row with any section empty is ordinary work, exactly as before."""
+    def filled(k):
+        v = row.get(k)
+        return isinstance(v, str) and bool(v.strip())
+    return (row.get("description_source") == _SCANNER_SOURCE
+            and filled("description_synth") and filled("impact") and filled("remediation"))
+
+
 # ─── DB access ──────────────────────────────────────────────────────────────
 def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, force: bool):
     """Return list of FindingInput.
@@ -612,6 +635,14 @@ def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, for
 
     out: list[FindingInput] = []
     for r in rows:
+        # ⛔ The scanner wrote all three sections itself (see _SCANNER_SOURCE above):
+        # never synthesised, and --force does not change that. --force re-runs the
+        # MACHINE over the machine's own text; this text is not the machine's. This
+        # is the second gate for the --finding-id and --force paths, which do not
+        # go through THIN_PREDICATE.
+        if scanner_wrote_all_three(r):
+            continue
+
         # Skip only if FULLY synthesized — all three Phase F sections present
         # AND description_source attests to that provenance. Previously this
         # skipped on description_synth alone, which made findings with a

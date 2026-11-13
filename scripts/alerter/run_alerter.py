@@ -1114,9 +1114,11 @@ SELECT ids.asset_id,
 
 # Each listed finding's remediation (the fix line when no plain-words family covers it), its
 # description and CVEs (a WordPress plugin advisory is judged against its own affected range
-# and its risk is read from it — digest_words.advisory).
+# and its risk is read from it — digest_words.advisory), and its three page sections with
+# who wrote them (own_words: a finding the scanner worded itself says those words here too).
 SQL_FINDING_HINTS = """
-SELECT finding_id, remediation, description, cve FROM public.findings WHERE finding_id = ANY(%s::text[])
+SELECT finding_id, remediation, description, cve, description_synth, description_source, impact
+  FROM public.findings WHERE finding_id = ANY(%s::text[])
 """
 
 
@@ -1127,6 +1129,33 @@ def hints_and_details(rows) -> tuple[dict, dict]:
         hints[r[0]] = r[1]
         details[r[0]] = (r[2] if len(r) > 2 else "", list(r[3] or []) if len(r) > 3 else [])
     return hints, details
+
+
+# The longest "what it means" and fix a card carries in a finding's own words. Longer text
+# is a page, not a card: that finding keeps its family's stock words.
+OWN_WORDS_MAX = (400, 200)
+
+
+def own_words(rows) -> dict:
+    """SQL_FINDING_HINTS rows -> {finding_id: (what, fix)} for the findings whose three page
+    sections the scanner wrote itself, in code: description_source 'scanner' with "what is
+    this", the flaws section and the fix all filled. That is the test the AI description
+    job (scanner_wrote_all_three) and the finding page use; a parser's row has no sections,
+    and a person's rejection empties them. Today it is a sign-in's out-of-date finding
+    (scanner/signin_flaws.py), in wording Howie approved 2026-11-12. The daily email and
+    #on-call say those two sentences, not the family's stock ones (Howie 2026-11-12 18:40:
+    "b"). Each is one line; anything longer than OWN_WORDS_MAX is left out. PURE."""
+    out = {}
+    for r in rows or []:
+        if len(r) < 7 or r[5] != "scanner":
+            continue
+        if not all(isinstance(t, str) and t.strip() for t in (r[4], r[1], r[6])):
+            continue
+        what, fix = " ".join(r[4].split()), " ".join(r[1].split())
+        if len(what) > OWN_WORDS_MAX[0] or len(fix) > OWN_WORDS_MAX[1]:
+            continue
+        out[r[0]] = (what, fix)
+    return out
 
 # KB 12 job 3l slice 2 — the weekly's day columns: finished scans of owned hosts per
 # local day and intensity (deep = heavy; quick = light and medium).
@@ -1605,7 +1634,7 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
                   hints=None, brand=None, discovery_stale_hours=24,
                   deepscan_stale_hours=192, details=None, told=None,
                   not_responding=None, reach_checks=None, quiet_where=None,
-                  gaps_to_approver=False, port_notices=None) -> dict:
+                  gaps_to_approver=False, port_notices=None, own=None) -> dict:
     """KB 12 job 3l — every part of the old email, sorted into Do today / Worth a ticket /
     Off your plate by digest_daily.build_model. The stale-host wording stays this file's
     (stale_row_words, note 320)."""
@@ -1621,7 +1650,7 @@ def _digest_model(*, window_start, window_end, new_findings, confirmed, regresse
         stale_note=stale_overdue_note(discovery_stale_hours, deepscan_stale_hours),
         details=details, told=told, not_responding=not_responding,
         reach_checks=reach_checks, quiet_where=quiet_where, gaps_to_approver=gaps_to_approver,
-        port_notices=port_notices,
+        port_notices=port_notices, own=own,
     )
 
 
@@ -2643,8 +2672,9 @@ def main() -> int:
         listed = sorted({r[1] for r in list(new_findings) + list(regressed) + list(confirmed)})
         prev_deep = dict(_soft("previous deep scans", SQL_PREV_DEEP_SCANS, (window_start, listed))) if listed else {}
         hint_ids = sorted({r[0] for r in list(new_findings) + list(regressed) + list(confirmed)})
-        hints, details = hints_and_details(_soft("remediation hints", SQL_FINDING_HINTS, (hint_ids,))) \
-            if hint_ids else ({}, {})
+        hint_rows = _soft("remediation hints", SQL_FINDING_HINTS, (hint_ids,)) if hint_ids else []
+        hints, details = hints_and_details(hint_rows)
+        own = own_words(hint_rows)
         brand = _dd.load_brand()
         # Job 3s — say it once: mark told findings now closed (real runs only, sent or not),
         # then read the record; None (no table yet) = today's email.
@@ -2669,7 +2699,7 @@ def main() -> int:
             discovery_stale_hours=discovery_stale_hours, deepscan_stale_hours=deepscan_stale_hours,
             details=details, told=told, not_responding=not_responding,
             reach_checks=reach_checks, quiet_where=quiet_where, gaps_to_approver=gate,
-            port_notices=port_notices,
+            port_notices=port_notices, own=own,
         )
         # KB 12, the Command daily: its own "still open" lines, in Sentry's voice (the voice path,
         # Prodex, has its own "Still sitting there" below and is not changed here).
