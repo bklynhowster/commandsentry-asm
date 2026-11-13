@@ -1093,6 +1093,10 @@ class ScanContext:
     ffuf_catchall_pattern: "tuple[str, str] | None" = None
     # Suppressed-by-pattern count, drives its own collapsed summary finding.
     ffuf_catchall_pattern_count: int = 0
+    # 438 (2026-11-13) — what the calibration probes answered, each
+    # (status, location, size); one entry when the first got no answer. Kept so
+    # the log says it and a skipped path check records the right reason.
+    ffuf_calibration_probes: "tuple | None" = None
     # #32 (2026-06-16) — set True the FIRST time any tool successfully
     # gets a real HTTP response from the target (wafw00f verdict
     # parsed / httpx tech-detect parsed / nuclei chunk completed with
@@ -2721,6 +2725,76 @@ def _probe_calibration_path_once(ctx: ScanContext) -> tuple[int, str | None, int
     return status_code, (location_str or None), body_size
 
 
+# 438 (2026-11-13) — why a calibration that is not clean skips ffuf.
+FFUF_CALIB_NO_ANSWER = "catchall_calibration_failed"             # a probe got no answer after its retries (4.7 hole 5)
+FFUF_CALIB_ANSWERS_DIFFER = "catchall_calibration_inconclusive"  # two made-up paths, two different statuses
+
+
+def calibration_answers_differ(status1: int, status2: int) -> bool:
+    """438. True when both made-up paths got an answer and the two statuses are
+    not the same.
+
+    Neither path exists, so a host that tells real paths from fake ones says the
+    same thing to both. Two different statuses mean the host, or something in
+    front of it, is not treating our requests alike at this moment (a front door
+    refusing part of what one exit sends, a rate limit, two backends that
+    disagree). No per-path result means anything while that is so.
+
+    Scan 626f9631 (2026-11-12): the two probes disagreed (their statuses were
+    not logged; that exit was getting the site's 200 page and its front door's
+    403 by turns), and that was read as "the host discriminates"; 85 findings
+    were written for one page, two of them MODERATE.
+    A probe with no answer (status 0) is the OTHER reason, never this one. PURE."""
+    return bool(status1) and bool(status2) and status1 != status2
+
+
+def ffuf_calibration_skip_reason(probes) -> str:
+    """The reason a skipped ffuf records: the answers differed, or (anything
+    else, nothing recorded included) a probe got no answer. PURE."""
+    if probes and len(probes) == 2 and calibration_answers_differ(probes[0][0], probes[1][0]):
+        return FFUF_CALIB_ANSWERS_DIFFER
+    return FFUF_CALIB_NO_ANSWER
+
+
+def location_for_log(location) -> str:
+    """Where a redirect pointed, in a form that is safe to write in a run log:
+    scheme, host, port and path only. The user:password part, the query, the
+    fragment and any ;parameters on the path are left out (a Location can carry
+    a signed query, a state value or a session token), and a long one is cut.
+    PURE."""
+    try:
+        u = urllib.parse.urlsplit(str(location))
+        host = u.hostname or ""
+        if host and u.port:
+            host += f":{u.port}"
+        path = u.path.split(";", 1)[0]
+    except ValueError:
+        return "(a location that could not be read)"
+    shown = (f"{u.scheme}://{host}" if u.scheme and host else f"//{host}" if host else "") + path
+    shown = shown or "(no host or path)"
+    return shown if len(shown) <= 80 else shown[:77] + "..."
+
+
+def describe_calibration_probes(probes) -> str:
+    """What the calibration probes answered, for the log: status, and where a
+    redirect pointed (location_for_log: never its query or credentials) or how
+    many bytes came back. PURE."""
+    if not probes:
+        return "not recorded"
+    said = []
+    for status, location, size in probes:
+        if not status:
+            said.append("no answer")
+            continue
+        one = f"HTTP {status}"
+        if location:
+            one += f" to {location_for_log(location)}"
+        elif size is not None:
+            one += f" ({size} bytes)"
+        said.append(one)
+    return "; ".join(said)
+
+
 def detect_ffuf_catchall(
     ctx: ScanContext,
 ) -> "tuple[str | None, int | None, int | None, bool, tuple[str, str] | None]":
@@ -2740,7 +2814,11 @@ def detect_ffuf_catchall(
             AND neither was a redirect. The catch-all status baseline
             (S3 Part 1 path).
           - (None, None): real discrimination on this host — per-path
-            emission unchanged from pre-#33 behavior.
+            emission unchanged from pre-#33 behavior. Only when both probes
+            got the SAME status and no catch-all shape matched: 404 twice, or
+            the same redirect status to two unrelated places. Two DIFFERENT
+            statuses are not discrimination: 438 returns calib_ok=False for
+            them and the caller skips ffuf.
 
     Uses httpx (same Go stack ffuf runs — no probe-vs-tool TLS fingerprint
     divergence). Best-effort: any failure on either probe → (None, None).
@@ -2754,9 +2832,11 @@ def detect_ffuf_catchall(
     # as "no catch-all" and emitting per-path (that silent fallthrough is Bug B,
     # 4.7 hole 5). True = probes landed; classification below is trustworthy.
     status1, redirect1, size1 = _probe_calibration_path(ctx)
+    ctx.ffuf_calibration_probes = ((status1, redirect1, size1),)
     if status1 == 0:
         return None, None, None, False, None
     status2, redirect2, size2 = _probe_calibration_path(ctx)
+    ctx.ffuf_calibration_probes = ((status1, redirect1, size1), (status2, redirect2, size2))
     if status2 == 0:
         return None, None, None, False, None
 
@@ -2801,9 +2881,18 @@ def detect_ffuf_catchall(
         baseline_size = size1 if (size1 is not None and size1 == size2) else None
         return None, status1, baseline_size, True, None
 
-    # Otherwise: discrimination present (different responses across probes,
-    # or 404 = real not-found behavior). No catch-all — but calibration DID
-    # run cleanly, so calib_ok=True (do not fail-closed).
+    # 438 (2026-11-13): two made-up paths, two DIFFERENT statuses. That is not a
+    # host telling real from fake (neither path exists), it is a host not
+    # answering alike. Until 438 this fell through as "discrimination present"
+    # and every result was emitted per-path. calib_ok=False: the caller fails
+    # closed, exactly as for a probe that got no answer.
+    if calibration_answers_differ(status1, status2):
+        return None, None, None, False, None
+
+    # Otherwise both answers have the same status and none of the catch-all
+    # shapes above: 404 twice (real not-found behavior), or the same redirect
+    # status to two unrelated places. No catch-all — and calibration DID run
+    # cleanly, so calib_ok=True (do not fail-closed).
     return None, None, None, True, None
 
 
@@ -5597,18 +5686,29 @@ def run_ffuf_chunked(ctx: ScanContext) -> None:
      ctx.ffuf_catchall_size, _calib_ok, ctx.ffuf_catchall_pattern) = (
         detect_ffuf_catchall(ctx)
     )
+    _probes = getattr(ctx, "ffuf_calibration_probes", None)
+    log(f"  ffuf catch-all calibration probes: {describe_calibration_probes(_probes)}")
     if not _calib_ok:
         # 4.7 hole 5 — calibration probes exhausted their retries (transient or
         # dead target). FAIL CLOSED: skip ffuf entirely rather than emit per-path
         # against an UNDETECTED catch-all (that is Bug B — up to 96 phantom
         # findings/host). Mirror the auth_gated skip so set-equality holds.
-        log("  ⊘ skip ffuf (all chunks) — catch-all calibration probes failed "
-            "after retries (fail-closed, 4.7 hole 5); per-path emit would risk "
-            "phantom findings")
+        # 438 — the same fail-closed for two probes that got DIFFERENT answers,
+        # under its own reason so the record says which of the two it was.
+        _skip_reason = ffuf_calibration_skip_reason(_probes)
+        if _skip_reason == FFUF_CALIB_ANSWERS_DIFFER:
+            log("  ⊘ skip ffuf (all chunks) — two made-up paths got different answers "
+                f"({describe_calibration_probes(_probes)}); the host is not answering our "
+                "requests alike right now, so no per-path result would mean anything "
+                "(fail-closed, 438)")
+        else:
+            log("  ⊘ skip ffuf (all chunks) — catch-all calibration probes failed "
+                "after retries (fail-closed, 4.7 hole 5); per-path emit would risk "
+                "phantom findings")
         for i, words in enumerate(chunks):
             chunk_name = f"ffuf[{len(words)}w]#{i+1}"
             ctx.tools_run.append(chunk_name)
-            mark_tool_skipped(ctx, chunk_name, "catchall_calibration_failed")
+            mark_tool_skipped(ctx, chunk_name, _skip_reason)
         return
     if ctx.ffuf_catchall_redirect:
         log(f"  ffuf catch-all calibration: host redirects random paths "

@@ -420,6 +420,8 @@ class HeavyScanContext:
     # these two were added to medium alone — the guard doing its job.
     ffuf_catchall_pattern: "tuple[str, str] | None" = None
     ffuf_catchall_pattern_count: int = 0
+    # 438 — mirrors the medium ScanContext: what the calibration probes answered.
+    ffuf_calibration_probes: "tuple | None" = None
     auth_gated: bool = False
 
     # Canonical host for HTTP-layer phases (4.7 rulings 77-82). Medium's

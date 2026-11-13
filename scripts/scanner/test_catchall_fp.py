@@ -375,10 +375,14 @@ def test_detect_ffuf_catchall_redirect_catchall_is_calib_true(monkeypatch):
     assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == ("/x", None, None, True, None)
 
 
-def test_detect_ffuf_catchall_discriminating_host_is_calib_true(monkeypatch):
-    # 200 then 404 → host discriminates → no catch-all, calib clean.
+def test_detect_ffuf_catchall_two_different_answers_is_calib_false(monkeypatch):
+    # 438 (2026-11-13): 200 then 404 for two MADE-UP paths is not a host that
+    # discriminates. Neither path exists, so a host that tells real from fake
+    # says the same thing to both. Until 438 this test pinned "calib clean" for
+    # it, and that reading wrote 85 false findings on one site (scan 626f9631).
+    # The cases are in test_ffuf_calibration_438.py.
     monkeypatch.setattr(M, "_probe_calibration_path", _two_probe((200, None, 870), (404, None, 400)))
-    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == (None, None, None, True, None)
+    assert M.detect_ffuf_catchall(types.SimpleNamespace(hostname="h")) == (None, None, None, False, None)
 
 
 def test_detect_ffuf_catchall_both_404_is_not_catchall(monkeypatch):
