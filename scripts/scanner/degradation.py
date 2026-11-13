@@ -787,6 +787,7 @@ _CUT_CLASS_PREFIXES: tuple[tuple[str, str], ...] = (
     ("no_version_data",             CUT_TOOL),     # 302 step 3: httpx_tech gave no version list (its own entry says why)
     ("naabu_rc",                    CUT_TOOL),
     ("catchall_calibration_failed", CUT_TOOL),
+    ("catchall_calibration_inconclusive", CUT_TOOL),  # 438: two made-up paths got different answers; ffuf was not run
     ("no_status_recorded",          CUT_TOOL),
     ("tool_status_invariant",       CUT_TOOL),
     # ── Slugs documented in DegradedRunError's own docstring ────────────
