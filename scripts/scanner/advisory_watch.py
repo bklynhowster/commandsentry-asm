@@ -134,6 +134,8 @@ MIN_CVSS = 9.0             # Decision 3: critical
 INVENTORY_DAYS = 30        # only a host's latest tech list from the last 30 days counts
 DOOR_HISTORY_DAYS = 90     # how far back a sign-in's last SHOWN version is looked for
 MAX_DOOR_NVD_READS = 100   # per run; a flaw past it is listed "not read today" (about 11 minutes)
+NVD_GIVE_UP_AFTER = 3      # NVD reads failed in a row before the sign-in track stops asking it this run
+NVD_SECONDS_MAX = 600      # and after this long no new NVD read is started in a run, slow answers included
 GITHUB_API = "https://api.github.com"
 RELEASES_PER_PAGE = 100
 RELEASE_PAGES = 3          # newest first: 300 releases is every one newer than any version we will see
@@ -183,6 +185,10 @@ VERSION_RE = re.compile(r"^\d{1,4}(?:\.\d{1,6}){0,5}[a-z]?$")
 
 class SourceError(Exception):
     """A public source could not be read. Closes nothing."""
+
+
+# What one NVD read can raise: no answer (SourceError), or an answer in a shape nobody expected.
+NVD_READ_ERRORS = (SourceError, AttributeError, IndexError, KeyError, TypeError, ValueError)
 
 
 # ── identity ─────────────────────────────────────────────────────────────────
@@ -327,7 +333,10 @@ def http_get_json(url, timeout=30, opener=None, sleep=time.sleep, headers=None, 
             last = e
         if attempt == 1:
             sleep(RETRY_SLEEP_S)
-    raise SourceError(f"{type(last).__name__}: {str(last)[:200]}")
+    # Name the host that did not answer (never the path or query). 2026-11-13: "The read
+    # operation timed out" did not say which of four public sources it was.
+    host = urllib.parse.urlsplit(url).hostname or "?"
+    raise SourceError(f"{host}: {type(last).__name__}: {str(last)[:200]}")
 
 
 def _iso(dt: datetime) -> str:
@@ -670,11 +679,19 @@ def severity_for(key, version, kev) -> str:
     return evidence.version_based_severity(kev)
 
 
-def door_lookup(src: Sources, key: str, version: str, kev_ids, budget: dict) -> "signin_flaws.Lookup":
+def door_lookup(src: Sources, key: str, version: str, kev_ids, budget: dict,
+                clock=time.monotonic) -> "signin_flaws.Lookup":
     """What the public sources say about one sign-in product at the version a page
-    showed. Raises SourceError if any read fails (that site then changes nothing this
-    run). `budget["nvd"]` is the run's remaining NVD reads; a flaw past it stays unread
-    and the finding then leaves the crash count off rather than understate it."""
+    showed. Raises SourceError when the release list or the advisory database cannot be
+    read: the finding's facts come from those two, and that site then changes nothing this
+    run. NVD only feeds the crash-or-overload count, so an NVD read that fails leaves that
+    one flaw unread (the count is then left off, never understated) and never costs the
+    site its finding. First real run, 2026-11-13: one NVD timeout among 18 reads wrote
+    nothing. `budget["nvd"]` is the run's remaining NVD reads; after NVD_GIVE_UP_AFTER
+    failures in a row, or NVD_SECONDS_MAX seconds of asking, the run stops asking NVD
+    (`budget["nvd_down"]`): a slow NVD must not run the job out of time, which would lose
+    every other finding this run writes. The flaws NVD did not hand over are listed in
+    `budget["nvd_missed"]`."""
     spec = signin_flaws.DOORS[key]
     newer = signin_flaws.newer(signin_flaws.full_releases(src.releases(spec["repo"])), version)
     ecosystem, package = spec["osv"]
@@ -686,18 +703,50 @@ def door_lookup(src: Sources, key: str, version: str, kev_ids, budget: dict) -> 
         if not signin_flaws.CVE_ONE.match(fid):
             continue
         cached = fid in src._cve_cache
-        if not cached and budget.get("nvd", 0) <= 0:
-            continue
-        rec = src.nvd_cve(fid)
-        if rec is not None and not isinstance(rec, dict):
-            raise SourceError(f"NVD {fid}: unexpected answer")
+        if not cached:
+            if budget.get("nvd", 0) <= 0 or budget.get("nvd_down"):
+                continue
+            if clock() >= budget.setdefault("nvd_until", clock() + NVD_SECONDS_MAX):
+                budget["nvd_down"] = budget["nvd_out_of_time"] = True
+                continue
+        try:
+            rec = src.nvd_cve(fid)
+            if rec is not None and not isinstance(rec, dict):
+                raise SourceError(f"NVD {fid}: unexpected answer")
+            signin_flaws.describe(f, rec, kev_ids)
+            answered = True
+        except NVD_READ_ERRORS as e:
+            # no answer, or one in a shape nobody expected at any depth: this flaw is unread
+            answered, f.read, f.crash = False, False, False
+            why = str(e) if isinstance(e, SourceError) else f"{type(e).__name__}: {e}"
+            missed = budget.setdefault("nvd_missed", [])
+            if not any(m.startswith(f"{fid} (") for m in missed):
+                missed.append(f"{fid} ({why[:90]})")
         if not cached:
             budget["nvd"] = budget.get("nvd", 0) - 1
-        signin_flaws.describe(f, rec, kev_ids)
+            budget["nvd_failed_in_a_row"] = 0 if answered else budget.get("nvd_failed_in_a_row", 0) + 1
+            if budget["nvd_failed_in_a_row"] >= NVD_GIVE_UP_AFTER:
+                budget["nvd_down"] = True              # stop asking a source that is not answering
     named = {f.fixed_in for f in flaws.values() if f.in_notes}
     return signin_flaws.Lookup(flaws=flaws, releases=[r for r in newer if r.version in named],
                                osv_count=sum(1 for f in flaws.values() if f.in_osv),
                                osv_total=signin_flaws.osv_listed(vulns))
+
+
+def door_fields(cur, key, version, look, today_year=None, **kw) -> dict:
+    """The columns to write for one sign-in's finding. Today's reading, with one exception:
+    when today could not read every published description (NVD) and, with the finding's
+    own earlier answer for the ones not read, the words come to exactly what the finding
+    already says, those words are written again. Nothing is then known to have changed,
+    and today's shorter text would only drop a count the finding rightly had. Any real
+    change (another version, another flaw, another fixing release, a description read
+    today that differs) writes today's reading. PURE."""
+    fields = signin_flaws.finding_fields(key, version, look, today_year, **kw)
+    if signin_flaws.crash_count(look.flaws) is not None:
+        return fields                                    # every description was read: today stands
+    was = (cur or {}).get("description")
+    kept = signin_flaws.finding_fields(key, version, signin_flaws.carried_over(look, was), today_year, **kw)
+    return kept if kept["description"] == was else fields
 
 
 def plan_doors(doors: dict, existing: dict, lookup, today_year=None, log=print) -> list:
@@ -729,7 +778,7 @@ def plan_doors(doors: dict, existing: dict, lookup, today_year=None, log=print) 
                     continue                               # a failed lookup changes nothing
                 if look.flaws:
                     acts.append(Action("upsert", fid, asset_id, k,
-                                       signin_flaws.finding_fields(k, version, look, today_year),
+                                       door_fields(cur, k, version, look, today_year),
                                        reopen=bool(cur and cur["status"] in WATCHER_CLOSED)))
                 elif active:
                     # Closed only by a NEWER version shown. The same (or an older) version with
@@ -758,9 +807,8 @@ def plan_doors(doors: dict, existing: dict, lookup, today_year=None, log=print) 
                 # The footer was hidden (or changed) after a version was shown: the row stays
                 # open and says so. Hiding a version must never make a finding disappear.
                 acts.append(Action("upsert", fid, asset_id, k,
-                                   signin_flaws.finding_fields(k, door.shown_version, look, today_year,
-                                                               last_shown_day=door.shown_day,
-                                                               no_longer_shown=True)))
+                                   door_fields(cur, k, door.shown_version, look, today_year,
+                                               last_shown_day=door.shown_day, no_longer_shown=True)))
             # anything else (no artifact in the window, the phase switched off, no answer,
             # an unreadable record) decides nothing.
     return acts
@@ -897,7 +945,7 @@ def plan(inventory: dict, found: dict, failed: set, existing: dict, recheck: dic
 
 EXISTING_SQL = """
 SELECT finding_id, asset_id, current_status::text AS status, cve, tags,
-       affected_component_version AS version
+       affected_component_version AS version, description
   FROM public.findings WHERE source::text = %(source)s
 """
 UPSERT_SQL = """
@@ -1063,7 +1111,8 @@ def run(conn, src: Sources, dry_run=False, log=print, Json=None) -> dict:
         rows = cur.fetchall()
     inv = build_inventory(tech, appl, wp_core)
     existing = {r["finding_id"]: dict(asset_id=r["asset_id"], key=_key_of(r), status=r["status"],
-                                      cve=list(r["cve"] or []), version=r.get("version"))
+                                      cve=list(r["cve"] or []), version=r.get("version"),
+                                      description=r.get("description"))
                 for r in rows if _key_of(r)}
     # The sign-ins' rows are the sign-in track's alone: the product-name plan below would
     # close them as "no longer seen in the host's latest scan" (httpx never names them).
@@ -1153,6 +1202,16 @@ def door_track(conn, src: Sources, existing_door: dict, kev, failed: set, log=pr
         return memo[(key, version)]
 
     acts = plan_doors(doors, existing_door, lookup, today_year=src.now.year, log=log)
+    missed = budget.get("nvd_missed") or []
+    if missed or budget.get("nvd_down"):
+        said = (f"NVD did not hand over {len(missed)} flaw description(s): {'; '.join(missed[:3])}"
+                f"{'; ...' if len(missed) > 3 else ''}" if missed else "NVD was slow")
+        if budget.get("nvd_out_of_time"):
+            said += f". Stopped asking it for this run after {NVD_SECONDS_MAX // 60} minutes"
+        elif budget.get("nvd_down"):
+            said += ". Stopped asking it for this run"
+        log(f"::warning::{said}. The crash-or-overload count is left off where a description was not read; "
+            f"nothing else changes.")
     log(f"sign-ins: {len(doors)} host(s) with a sign-in record; existing rows: {len(existing_door)}; "
         f"planned: {len(acts)}")
     return acts

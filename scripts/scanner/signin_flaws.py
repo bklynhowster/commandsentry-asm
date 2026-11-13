@@ -49,7 +49,7 @@ Nothing here closes a finding on silence. advisory_watch.plan_doors holds that r
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from urllib.parse import urlsplit
 
 import evidence
@@ -382,6 +382,35 @@ def crash_count(flaws) -> int | None:
     if not flaws or not all(f.read for f in flaws.values()):
         return None
     return sum(1 for f in flaws.values() if f.crash)
+
+
+# flaw_text's first line, when it has one. crash_ids_listed reads back exactly what flaw_text
+# writes; a test pins the two together.
+_CRASH_LINE = re.compile(r"\AThe (?:\d+ described as crash or overload flaws|one described as a crash or "
+                         r"overload flaw): (.+)\.\Z")
+
+
+def crash_ids_listed(description) -> set:
+    """The flaw numbers a finding's own text lists as crash or overload flaws (the line
+    flaw_text writes), or none. PURE."""
+    for line in (description.split("\n") if isinstance(description, str) else ()):
+        m = _CRASH_LINE.match(line)
+        if m:
+            return set(m.group(1).split(", "))
+    return set()
+
+
+def carried_over(look: Lookup, description) -> Lookup:
+    """Today's reading with the finding's own earlier answer for each CVE whose published
+    description was NOT read today: read, and a crash or overload flaw exactly when the
+    finding's text lists it. A flaw read today keeps today's answer, and a flaw NVD is
+    never asked about stays unread. Only for comparing with what the finding already says
+    (advisory_watch.plan_doors): on a day NVD answers slowly, a finding that had its
+    count keeps its words instead of losing the count until NVD is quick again. PURE."""
+    listed = crash_ids_listed(description)
+    flaws = {i: (f if f.read or not CVE_ONE.match(i) else replace(f, read=True, crash=i in listed))
+             for i, f in look.flaws.items()}
+    return replace(look, flaws=flaws)
 
 
 def title(display, version, flaws) -> str:

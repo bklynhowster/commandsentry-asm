@@ -674,7 +674,7 @@ def test_a_token_never_follows_a_redirect_to_another_host():
 def test_a_public_answer_in_a_shape_nobody_expected_fails_that_lookup_only(monkeypatch):
     def boom(*a, **kw):
         raise TypeError("unexpected shape")
-    monkeypatch.setattr(sf, "describe", boom)
+    monkeypatch.setattr(sf, "collect", boom)        # the release notes or the advisory database
     conn = Conn(doors=[door_row()], existing=[finding_row("open")])
     n, logs = run(conn)
     assert conn.sqls(aw.DOOR_UPSERT_SQL) == [] and conn.sqls(aw.CLOSE_SQL) == [] and n["failed"] == [KEY]
@@ -697,8 +697,10 @@ def test_door_lookup_reads_each_flaw_once_and_stops_at_the_runs_budget():
     assert "crash or overload" not in sf.flaw_text("OAuth2 Proxy", "7.15.5", again, "x"), "left off, not understated"
 
 
-@pytest.mark.parametrize("fail", ["github", "osv", "nvd", CVES[17]])
-def test_any_source_that_cannot_be_read_fails_the_whole_lookup(fail):
+@pytest.mark.parametrize("fail", ["github", "osv"])
+def test_a_source_the_findings_facts_come_from_fails_the_whole_lookup_when_unread(fail):
+    """The release list and the advisory database carry the finding's facts. NVD only feeds
+    the crash-or-overload count: see test_signin_flaws_nvd_437.py (2026-11-13)."""
     with pytest.raises(aw.SourceError):
         lookup_for(one_release_get(fail=[fail]))
 
