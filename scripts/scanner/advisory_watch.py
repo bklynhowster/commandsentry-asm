@@ -71,6 +71,35 @@ severities above and 3c's D4:
     versions; update it". Severity evidence.version_based_severity(kev): MODERATE, or
     MODERATE-HIGH with a flaw on CISA's exploited list — security devices included
     (D4's CRITICAL / HIGH are gone). Never "vulnerable".
+
+A SIGN-IN A DEEP SCAN NAMED (D-077, step 2 of plan-name-the-sign-in; Howie 2026-11-12
+15:48 "Do it.", 16:21 "That text is absolutely fine. I approve."): its own track, beside
+the product-name track above and never mixed with it.
+  * Read: the deep scan's `signin_door` artifacts (push-434). Only a page that SAYS its
+    product and prints a plain release number gives a version (rule 3r). A cookie name,
+    a hidden footer or a development build writes nothing new.
+  * Asked, none of them a scanned site: the maker's public release list on GitHub (the
+    CVE numbers the notes of every FULL release newer than the version shown name), the
+    open advisory database (OSV) for the product's own code, NVD for each flaw's
+    published description (read to count the crash-or-overload ones, never kept),
+    CISA's list. NVD by product name finds nothing here: the flaws are mostly in the
+    language and libraries the product is built with.
+  * Written: one OUT-OF-DATE row per site under the same identity and title as above,
+    MODERATE (MODERATE-HIGH with a flaw on CISA's list), with its three page sections
+    written in code by signin_flaws.py, so the AI enrichment job has nothing to fill.
+    All of it short: two sentences, three lines about the flaws, one line to fix it
+    (Howie, 2026-11-12 18:25: "No one will ever read anything like this", of a longer one).
+  * A lookup that fails changes nothing for that site this run.
+  * Closed only by a later deep scan that got a real answer: the page shows a release
+    no listed flaw applies to, or the home page answered 2xx with no redirect to the
+    sign-in. Silence, an error, a missing artifact or a hidden footer closes nothing; a
+    hidden footer turns the text to "last showed X on <date>; confirm it was updated".
+  * A person's text stands: once someone edits or approves the sections in the portal
+    they are kept until the facts under them change, then rewritten and the change
+    audited. "The facts" are the scanner description, which this job writes every run
+    and which holds every fact the three sections render (the version, the releases and
+    their dates, the counts, which flaws are described as crash or overload flaws, CISA's
+    list, the fix). A rejected row's sections are never written.
 """
 from __future__ import annotations
 
@@ -89,6 +118,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 import evidence
+import signin_flaws
 
 SOURCE = "advisory_watch"                       # findings.source (migration 20261021a)
 USER_AGENT = "Sentry-ASM advisory-watch/1.0 (public advisory lookups)"
@@ -102,6 +132,13 @@ RECENT_DAYS = 30           # Decision 4
 KEV_DAYS = 90              # Decision 4
 MIN_CVSS = 9.0             # Decision 3: critical
 INVENTORY_DAYS = 30        # only a host's latest tech list from the last 30 days counts
+DOOR_HISTORY_DAYS = 90     # how far back a sign-in's last SHOWN version is looked for
+MAX_DOOR_NVD_READS = 100   # per run; a flaw past it is listed "not read today" (about 11 minutes)
+GITHUB_API = "https://api.github.com"
+RELEASES_PER_PAGE = 100
+RELEASE_PAGES = 3          # newest first: 300 releases is every one newer than any version we will see
+OSV_QUERY = "https://api.osv.dev/v1/query"
+OSV_PAGES = 5
 NET_ERRORS = (OSError, ValueError, http.client.HTTPException)
 
 # httpx (Wappalyzer) product name, lower-cased -> (display name, NVD CPE prefixes
@@ -260,13 +297,23 @@ def cvss(cve: dict) -> float | None:
 
 # ── reading the public sources ───────────────────────────────────────────────
 
-def http_get_json(url, timeout=30, opener=None, sleep=time.sleep):
-    """GET JSON. One retry on rate limits, 5xx and network errors; anything
-    else raises SourceError (a 404 included: these queries never 404 when they
-    work)."""
+def http_get_json(url, timeout=30, opener=None, sleep=time.sleep, headers=None, body=None):
+    """GET JSON (POST when `body` is given). One retry on rate limits, 5xx and network
+    errors; anything else raises SourceError (a 404 included: these queries never 404
+    when they work). `headers` go to `url` alone (never onto a redirect) and are never
+    logged."""
     opener = opener or urllib.request.urlopen
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT,
-                                               "Accept": "application/json"})
+    hdrs = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        hdrs["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=hdrs,
+                                 method="POST" if data is not None else "GET")
+    for k, v in (headers or {}).items():
+        # "Unredirected": sent to `url` only. urllib copies ordinary headers onto the request
+        # it builds for a redirect, to whatever host that points at; a token must not go.
+        req.add_unredirected_header(k, v)
     last = None
     for attempt in (1, 2):
         try:
@@ -306,6 +353,11 @@ def nvd_cve_url(cve_id: str) -> str:
     return f"{NVD_API}?cveId={urllib.parse.quote(cve_id, safe='')}"
 
 
+def releases_url(repo: str, page: int = 1) -> str:
+    """GitHub's public release list for one repository, newest first. PURE."""
+    return f"{GITHUB_API}/repos/{repo}/releases?per_page={RELEASES_PER_PAGE}&page={page}"
+
+
 @dataclass
 class Advisory:
     cve_id: str
@@ -328,11 +380,13 @@ class Sources:
     """The feeds. Each fetch_* raises SourceError; callers decide what a
     failure means (it never closes anything)."""
 
-    def __init__(self, get=http_get_json, sleep=time.sleep, now=None):
+    def __init__(self, get=http_get_json, sleep=time.sleep, now=None, github_token=None):
         self.get, self.sleep = get, sleep
         self.now = now or datetime.now(timezone.utc)
         self._calls = 0
         self._cve_cache: dict[str, dict | None] = {}
+        self._github_token = github_token or None      # never logged, sent only to GITHUB_API
+        self._releases: dict[str, list] = {}
 
     def _nvd(self, url):
         if self._calls:
@@ -367,6 +421,43 @@ class Sources:
             self._cve_cache[cve_id] = vs[0].get("cve") if vs else None
         return self._cve_cache[cve_id]
 
+    def releases(self, repo: str) -> list:
+        """GitHub's public release list for `repo`, read once a run. Public data; the
+        workflow's own token (when given) only lifts the shared-address rate limit."""
+        if repo not in self._releases:
+            out = []
+            for page in range(1, RELEASE_PAGES + 1):
+                url = releases_url(repo, page)
+                d = (self.get(url, headers={"Authorization": f"Bearer {self._github_token}",
+                                            "X-GitHub-Api-Version": "2022-11-28"})
+                     if self._github_token else self.get(url))
+                if not isinstance(d, list):
+                    raise SourceError(f"release list {repo}: unexpected answer")
+                out += [r for r in d if isinstance(r, dict)]
+                if len(d) < RELEASES_PER_PAGE:
+                    break
+            self._releases[repo] = out
+        return self._releases[repo]
+
+    def osv(self, ecosystem: str, package: str, version: str) -> list:
+        """Every record the open advisory database lists for this package version. The
+        request carries a package name and a version number, nothing about any site."""
+        body = {"package": {"name": package, "ecosystem": ecosystem}, "version": version}
+        vulns = []
+        for _ in range(OSV_PAGES):
+            d = self.get(OSV_QUERY, body=body)
+            page = d.get("vulns") if isinstance(d, dict) else None
+            if page is None and isinstance(d, dict):
+                page = []
+            if not isinstance(page, list):
+                raise SourceError(f"advisory database {package} {version}: unexpected answer")
+            vulns += page
+            token = d.get("next_page_token")
+            if not token:
+                return vulns
+            body = dict(body, page_token=token)
+        raise SourceError(f"advisory database {package} {version}: more than {OSV_PAGES} pages")
+
 
 def advisories_for(src: Sources, cpes, kev_ids, all_kev: bool = False) -> dict:
     """{cve_id: Advisory} for one product: recent critical + KEV (last KEV_DAYS, or
@@ -389,6 +480,11 @@ SOURCES = [("nvd_recent_critical", "NVD, published in the last 30 days, CVSS >= 
            ("nvd_kev", "NVD's copy of CISA's known-exploited list, added in the last 90 days "
                        "(every entry, any age, for an edge security device)"),
            ("cisa_kev", "CISA's known-exploited catalog (severity flag)")]
+# The sign-in track's own sources (signin_flaws.SOURCES_LINE words them for the finding):
+DOOR_SOURCES = [("maker_release_notes", "the maker's public release list on GitHub"),
+                ("osv", "the open advisory database, for the product's own code at the version shown"),
+                ("nvd_cve", "NVD, one read per flaw: its published description (read to count, not kept)"),
+                ("cisa_kev", "CISA's known-exploited catalog (severity flag)")]
 
 
 # ── the parts list (read, not built) ─────────────────────────────────────────
@@ -423,6 +519,34 @@ CONFIRMED_APPLIANCE_SQL = """
 SELECT asset_id, vendor_product
   FROM public.assets
  WHERE ownership = 'owned' AND vendor_product_confidence = 'confirmed'
+"""
+
+
+# D-077 step 2. Every `signin_door` artifact kept for an owned host (the deep scan writes
+# one only for a site whose home page redirects to its own sign-in), newest decides.
+DOOR_SQL = """
+SELECT sr.asset_id, sra.content_jsonb AS door, sra.created_at AS seen_at
+  FROM public.scan_run_artifacts sra
+  JOIN public.scan_run sr ON sr.scan_run_id = sra.scan_run_id
+  JOIN public.assets a    ON a.asset_id = sr.asset_id
+ WHERE sra.tool_name = 'signin_door'
+   AND sra.created_at > now() - make_interval(days => %(days)s)
+   AND a.ownership = 'owned'
+ ORDER BY sr.asset_id, sra.created_at DESC
+"""
+# The newest DEEP scan's own home-page record per owned host: the only thing, beside a
+# newer version, that may close a sign-in's row (2xx, no redirect to the sign-in).
+DOOR_HOME_SQL = """
+SELECT DISTINCT ON (sr.asset_id)
+       sr.asset_id, sra.content_jsonb AS home, sra.created_at AS seen_at
+  FROM public.scan_run_artifacts sra
+  JOIN public.scan_run sr ON sr.scan_run_id = sra.scan_run_id
+  JOIN public.assets a    ON a.asset_id = sr.asset_id
+ WHERE sra.tool_name = 'httpx_tech'
+   AND sr.intensity::text = 'heavy'
+   AND sra.created_at > now() - make_interval(days => %(days)s)
+   AND a.ownership = 'owned'
+ ORDER BY sr.asset_id, sra.created_at DESC
 """
 
 
@@ -544,6 +668,102 @@ def severity_for(key, version, kev) -> str:
     Only a proven finding rates HIGH or CRITICAL, and a version match proves nothing.
     PURE."""
     return evidence.version_based_severity(kev)
+
+
+def door_lookup(src: Sources, key: str, version: str, kev_ids, budget: dict) -> "signin_flaws.Lookup":
+    """What the public sources say about one sign-in product at the version a page
+    showed. Raises SourceError if any read fails (that site then changes nothing this
+    run). `budget["nvd"]` is the run's remaining NVD reads; a flaw past it stays unread
+    and the finding then leaves the crash count off rather than understate it."""
+    spec = signin_flaws.DOORS[key]
+    newer = signin_flaws.newer(signin_flaws.full_releases(src.releases(spec["repo"])), version)
+    ecosystem, package = spec["osv"]
+    vulns = src.osv(ecosystem, package, version)
+    flaws = signin_flaws.collect(newer, vulns, ecosystem, package, version)
+    for fid in sorted(flaws):
+        f = flaws[fid]
+        f.kev = fid in kev_ids
+        if not signin_flaws.CVE_ONE.match(fid):
+            continue
+        cached = fid in src._cve_cache
+        if not cached and budget.get("nvd", 0) <= 0:
+            continue
+        rec = src.nvd_cve(fid)
+        if rec is not None and not isinstance(rec, dict):
+            raise SourceError(f"NVD {fid}: unexpected answer")
+        if not cached:
+            budget["nvd"] = budget.get("nvd", 0) - 1
+        signin_flaws.describe(f, rec, kev_ids)
+    named = {f.fixed_in for f in flaws.values() if f.in_notes}
+    return signin_flaws.Lookup(flaws=flaws, releases=[r for r in newer if r.version in named],
+                               osv_count=sum(1 for f in flaws.values() if f.in_osv),
+                               osv_total=signin_flaws.osv_listed(vulns))
+
+
+def plan_doors(doors: dict, existing: dict, lookup, today_year=None, log=print) -> list:
+    """What to write for the sign-ins the deep scans named. PURE given `lookup`.
+    doors: {asset_id: signin_flaws.Door}; existing: {finding_id: {asset_id, key, status,
+    version}} for the sign-in keys only (version: the release the open row is about); lookup(key, version) -> signin_flaws.Lookup, or None when
+    a public source could not be read (which changes nothing)."""
+    acts = []
+    for asset_id in sorted(set(doors) | {r["asset_id"] for r in existing.values()}):
+        door = doors.get(asset_id) or signin_flaws.Door(asset_id)
+        state, key, version = signin_flaws.reading(door.latest)
+        keys = [key] if key else sorted({r["key"] for r in existing.values() if r["asset_id"] == asset_id})
+        for k in keys:
+            fid = ood_finding_id(asset_id, k)
+            cur = existing.get(fid)
+            if cur and cur["status"] not in ACTIVE + WATCHER_CLOSED:
+                continue                                   # a person closed it: hands off
+            active = bool(cur and cur["status"] in ACTIVE)
+            disp = signin_flaws.DOORS[k]["display"]
+            if door.home_ok:
+                # A later deep scan's home page answered 2xx with no redirect to the sign-in.
+                if active:
+                    acts.append(Action("close", fid, asset_id, k,
+                                       reason="a later deep scan's home page answered without this sign-in"))
+                continue
+            if state == signin_flaws.STATE_VERSION:
+                look = lookup(k, version)
+                if look is None:
+                    continue                               # a failed lookup changes nothing
+                if look.flaws:
+                    acts.append(Action("upsert", fid, asset_id, k,
+                                       signin_flaws.finding_fields(k, version, look, today_year),
+                                       reopen=bool(cur and cur["status"] in WATCHER_CLOSED)))
+                elif active:
+                    # Closed only by a NEWER version shown. The same (or an older) version with
+                    # no flaw listed today means the public sources changed, not the site: an
+                    # emptied release list or edited notes must never close a finding.
+                    was, now_v = signin_flaws.vt(cur.get("version")), signin_flaws.vt(version)
+                    if was and now_v and now_v > was:
+                        left = (f" (the open advisory database lists {look.osv_total} with no fixing release)"
+                                if look.osv_total else "")
+                        acts.append(Action("close", fid, asset_id, k,
+                                           reason=f"the sign-in now shows {disp} {version}, and no later "
+                                                  f"release fixes a published flaw in it{left}"))
+                    else:
+                        log(f"::warning::{asset_id}: the public sources list no flaw for {disp} {version} "
+                            f"today, and the open finding is for {cur.get('version') or 'an unrecorded version'}; "
+                            f"left open (only a newer version shown closes it)")
+            elif state == signin_flaws.STATE_NO_VERSION:
+                if not active:
+                    log(f"  not written: a sign-in on {asset_id} looks like {disp}, version not shown")
+                    continue                               # rule 3r: no version seen, nothing said
+                if not door.shown_version or door.shown_key != k:
+                    continue                               # nothing kept to word it from: leave the row as it is
+                look = lookup(k, door.shown_version)
+                if look is None or not look.flaws:
+                    continue
+                # The footer was hidden (or changed) after a version was shown: the row stays
+                # open and says so. Hiding a version must never make a finding disappear.
+                acts.append(Action("upsert", fid, asset_id, k,
+                                   signin_flaws.finding_fields(k, door.shown_version, look, today_year,
+                                                               last_shown_day=door.shown_day,
+                                                               no_longer_shown=True)))
+            # anything else (no artifact in the window, the phase switched off, no answer,
+            # an unreadable record) decides nothing.
+    return acts
 
 
 def finding_fields(asset_id, key, version, advs, release_date=None) -> dict:
@@ -676,7 +896,8 @@ def plan(inventory: dict, found: dict, failed: set, existing: dict, recheck: dic
 # ── writing ──────────────────────────────────────────────────────────────────
 
 EXISTING_SQL = """
-SELECT finding_id, asset_id, current_status::text AS status, cve, tags
+SELECT finding_id, asset_id, current_status::text AS status, cve, tags,
+       affected_component_version AS version
   FROM public.findings WHERE source::text = %(source)s
 """
 UPSERT_SQL = """
@@ -703,6 +924,63 @@ ON CONFLICT (finding_id) DO UPDATE SET
                        THEN NULL ELSE public.findings.remediated_at END
 WHERE public.findings.current_status::text IN ('detected','confirmed','open','regressed','remediated')
 """
+# The sign-in track's row (D-077 step 2): the same upsert, plus the three page sections
+# written in code (signin_flaws.py) so the AI enrichment job has nothing to fill.
+#   * "rejected": a person threw the text away in the portal (description_source
+#     'scanner' with a review stamp, relay 154). Sticky: the sections are never written.
+#   * the sections are the watcher's while description_source is 'scanner'. Once a person
+#     edits or approves them they are kept, until the scanner DESCRIPTION this job is about
+#     to write differs from the one stored. That column is the job's own (the portal's
+#     edit, approve and reject never write it) and holds every fact the three sections
+#     render, so "it differs" means a fact under the person's text moved: the sections are
+#     rewritten, description_source goes back to 'scanner' and the review stamp is
+#     cleared. apply() audits that from was_source. (A title-only test would miss a new
+#     crash count, fixing release, release date or CISA listing: outside review, 17:41.)
+#   * a blank section is stored as NULL, so the enrichment job's "is anything empty?"
+#     test still sees it.
+_DOOR_WRITE = ("""NOT (public.findings.description_source = 'scanner'
+            AND public.findings.description_synth_reviewed_at IS NOT NULL)
+       AND (public.findings.description_source = 'scanner'
+            OR public.findings.description IS DISTINCT FROM EXCLUDED.description)""")
+DOOR_UPSERT_SQL = f"""
+WITH was AS (SELECT description_source FROM public.findings WHERE finding_id = %(finding_id)s)
+INSERT INTO public.findings
+  (finding_id, asset_id, title, severity, category, description, cve, "references",
+   tags, current_status, source, first_detected_at, last_observed_at,
+   affected_component, affected_component_version, description_source,
+   description_synth, impact, remediation)
+VALUES (%(finding_id)s, %(asset_id)s, %(title)s, %(severity)s::severity_t,
+        %(category)s::finding_category_t, %(description)s, %(cve)s, %(references)s,
+        %(tags)s, 'open'::finding_status_t, %(source)s::finding_source_t, now(), now(),
+        %(affected_component)s, %(affected_component_version)s, 'scanner',
+        NULLIF(btrim(%(description_synth)s), ''), NULLIF(btrim(%(impact)s), ''),
+        NULLIF(btrim(%(remediation)s), ''))
+ON CONFLICT (finding_id) DO UPDATE SET
+  title = EXCLUDED.title, severity = EXCLUDED.severity, description = EXCLUDED.description,
+  cve = EXCLUDED.cve, "references" = EXCLUDED."references", tags = EXCLUDED.tags,
+  last_observed_at = now(),
+  affected_component = EXCLUDED.affected_component,
+  affected_component_version = EXCLUDED.affected_component_version,
+  description_synth = CASE WHEN {_DOOR_WRITE}
+                           THEN EXCLUDED.description_synth ELSE public.findings.description_synth END,
+  impact = CASE WHEN {_DOOR_WRITE}
+                THEN EXCLUDED.impact ELSE public.findings.impact END,
+  remediation = CASE WHEN {_DOOR_WRITE}
+                     THEN EXCLUDED.remediation ELSE public.findings.remediation END,
+  description_synth_reviewed_at = CASE WHEN {_DOOR_WRITE}
+                                       THEN NULL ELSE public.findings.description_synth_reviewed_at END,
+  description_source = CASE WHEN {_DOOR_WRITE}
+                            THEN 'scanner' ELSE public.findings.description_source END,
+  current_status = CASE WHEN public.findings.current_status = 'remediated'
+                        THEN 'regressed'::finding_status_t
+                        ELSE public.findings.current_status END,
+  last_regressed_at = CASE WHEN public.findings.current_status = 'remediated'
+                           THEN now() ELSE public.findings.last_regressed_at END,
+  remediated_at = CASE WHEN public.findings.current_status = 'remediated'
+                       THEN NULL ELSE public.findings.remediated_at END
+WHERE public.findings.current_status::text IN ('detected','confirmed','open','regressed','remediated')
+RETURNING (SELECT description_source FROM was) AS was_source, description_source AS now_source
+"""
 CLOSE_SQL = """
 UPDATE public.findings
    SET current_status = 'remediated', remediated_at = now()
@@ -721,7 +999,28 @@ def apply(conn, acts, Json, log=print) -> dict:
     n = {"upsert": 0, "close": 0, "reopen": 0}
     for a in acts:
         with conn.cursor() as cur:
-            if a.kind == "upsert":
+            if a.kind == "upsert" and "description_synth" in a.fields:
+                # the sign-in track: its row carries the three page sections
+                cur.execute(DOOR_UPSERT_SQL, dict(a.fields, finding_id=a.finding_id, asset_id=a.asset_id,
+                                                  source=SOURCE))
+                n["upsert"] += 1
+                row = cur.fetchone() or {}
+                was = row.get("was_source") if isinstance(row, dict) else None
+                if was not in (None, "scanner") and row.get("now_source") == "scanner":
+                    cur.execute(AUDIT_SQL, {"action": "advisory_watch_text_rewritten",
+                                            "before": Json({"finding_id": a.finding_id, "description_source": was}),
+                                            "after": Json({"finding_id": a.finding_id, "description_source": "scanner"}),
+                                            "details": Json({"rule": "d077_signin_flaws",
+                                                             "reason": "a fact the page sections render changed, "
+                                                                       "so a person's text was replaced",
+                                                             "title": a.fields.get("title")})})
+                if a.reopen:
+                    n["reopen"] += 1
+                    cur.execute(AUDIT_SQL, {"action": "advisory_watch_reopen",
+                                            "before": Json({"finding_id": a.finding_id, "current_status": "remediated"}),
+                                            "after": Json({"finding_id": a.finding_id, "current_status": "regressed"}),
+                                            "details": Json({"rule": "d077_signin_flaws", "cve": a.fields.get("cve")})})
+            elif a.kind == "upsert":
                 cur.execute(UPSERT_SQL, dict(a.fields, finding_id=a.finding_id, asset_id=a.asset_id,
                                              source=SOURCE))
                 n["upsert"] += 1
@@ -764,7 +1063,12 @@ def run(conn, src: Sources, dry_run=False, log=print, Json=None) -> dict:
         rows = cur.fetchall()
     inv = build_inventory(tech, appl, wp_core)
     existing = {r["finding_id"]: dict(asset_id=r["asset_id"], key=_key_of(r), status=r["status"],
-                                      cve=list(r["cve"] or [])) for r in rows if _key_of(r)}
+                                      cve=list(r["cve"] or []), version=r.get("version"))
+                for r in rows if _key_of(r)}
+    # The sign-ins' rows are the sign-in track's alone: the product-name plan below would
+    # close them as "no longer seen in the host's latest scan" (httpx never names them).
+    existing_door = {fid: r for fid, r in existing.items() if r["key"] in signin_flaws.DOORS}
+    existing = {fid: r for fid, r in existing.items() if fid not in existing_door}
     log(f"inventory: {len(inv)} hosts, products {sorted({k for h in inv.values() for k in h.products})}; "
         f"existing out-of-date rows: {len(existing)}")
     for line in guesses(inv):
@@ -803,6 +1107,11 @@ def run(conn, src: Sources, dry_run=False, log=print, Json=None) -> dict:
             except SourceError:
                 recheck[c] = None
     acts = plan(inv, found, failed, existing, recheck, kev_ids=kev)
+    try:
+        acts += door_track(conn, src, existing_door, kev, failed, log)
+    except Exception as e:            # noqa: BLE001 — never let this track break the one above
+        log(f"::warning::sign-in track failed ({type(e).__name__}: {str(e)[:200]}); "
+            f"it changes nothing this run")
     if dry_run:
         for a in acts:
             log(f"  [dry-run] {a.kind}: {a.finding_id} {a.reason or a.fields.get('title', '')}")
@@ -810,6 +1119,50 @@ def run(conn, src: Sources, dry_run=False, log=print, Json=None) -> dict:
     n = apply(conn, acts, Json, log=log)
     n["failed"] = sorted(failed)
     return n
+
+
+def door_track(conn, src: Sources, existing_door: dict, kev, failed: set, log=print) -> list:
+    """The sign-in track's reads and plan (D-077 step 2). Returns its actions; a public
+    source that cannot be read adds its key to `failed` and changes nothing."""
+    with conn.cursor() as cur:
+        cur.execute(DOOR_SQL, {"days": DOOR_HISTORY_DAYS})
+        door_rows = [r for r in cur.fetchall() if isinstance(r, dict) and isinstance(r.get("door"), dict)]
+        home_rows = []
+        if door_rows:
+            cur.execute(DOOR_HOME_SQL, {"days": INVENTORY_DAYS})
+            home_rows = cur.fetchall()
+    if not door_rows and not existing_door:
+        return []
+    doors = signin_flaws.doors_from(door_rows, home_rows, src.now, INVENTORY_DAYS)
+    budget, memo = {"nvd": MAX_DOOR_NVD_READS}, {}
+
+    def lookup(key, version):
+        if (key, version) not in memo:
+            try:
+                memo[(key, version)] = door_lookup(src, key, version, kev, budget)
+                look = memo[(key, version)]
+                log(f"  {key} {version}: {len(look.flaws)} published flaws fixed in later releases "
+                    f"({len(look.releases)} newer release(s) name one; the advisory database lists "
+                    f"{look.osv_count})")
+            except (SourceError, AttributeError, KeyError, TypeError, ValueError) as e:
+                # a source that could not be read, or answered in a shape nobody expected
+                memo[(key, version)] = None
+                failed.add(key)
+                log(f"::warning::{key} {version}: lookup failed ({type(e).__name__}: {str(e)[:200]}); "
+                    f"this sign-in changes nothing this run")
+        return memo[(key, version)]
+
+    acts = plan_doors(doors, existing_door, lookup, today_year=src.now.year, log=log)
+    log(f"sign-ins: {len(doors)} host(s) with a sign-in record; existing rows: {len(existing_door)}; "
+        f"planned: {len(acts)}")
+    return acts
+
+
+def github_token(env=None) -> str | None:
+    """The workflow's own short-lived token, for GitHub's PUBLIC release list only: it
+    lifts the shared-address rate limit and nothing else. Handed to Sources, sent to
+    api.github.com alone, never printed. None when the run has none (it still tries)."""
+    return ((os.environ if env is None else env).get("GITHUB_TOKEN") or "").strip() or None
 
 
 def main(argv=None) -> int:
@@ -827,7 +1180,7 @@ def main(argv=None) -> int:
     dry = args.dry_run or os.environ.get("DRY_RUN", "").strip().lower() == "true"
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row, connect_timeout=15) as conn:
         conn.execute("SET statement_timeout = '60s'")
-        n = run(conn, Sources(), dry_run=dry, Json=Json)
+        n = run(conn, Sources(github_token=github_token()), dry_run=dry, Json=Json)
     print(f"advisory-watch: {n}")
     return 0
 

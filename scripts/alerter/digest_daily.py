@@ -465,7 +465,7 @@ def fix_label(item: dict, kinds=("finding", "cert", "enforcement")) -> str:
 
 
 def group_problems(rows, names, prev_deep=None, hints=None, window_start=None, tag="",
-                   details=None):
+                   details=None, own=None):
     """Finding rows (finding_id, asset_id, title, severity, status, source, ts) ->
     [item], one per problem, worst first, each in digest_words' plain words: what we found
     (title), what it means (body), the fix (do) and who does it (who). Grouped by family, so
@@ -473,10 +473,13 @@ def group_problems(rows, names, prev_deep=None, hints=None, window_start=None, t
     (description, [cve])} lets a plugin advisory be judged: one whose affected range excludes
     the version we saw is dropped (10-22: four of five Slider Revolution advisories did not
     cover 6.7.58), and the ones that apply say what an attacker could do. "Version not
-    shown" rows are not passed here at all."""
+    shown" rows are not passed here at all. `own` {finding_id: (what, fix)} holds the
+    findings the scanner worded itself (run_alerter.own_words): a problem whose findings
+    all carry the same own words says those, not the family's (Howie 2026-11-12 18:40: "b")."""
     prev_deep = prev_deep or {}
     hints = hints or {}
     details = details or {}
+    own = own or {}
     groups: dict = {}
     for r in rows or []:
         fid, aid, title, sev = r[0], r[1], r[2], (r[3] or "").upper()
@@ -523,6 +526,10 @@ def group_problems(rows, names, prev_deep=None, hints=None, window_start=None, t
         do_raw = False            # True: the fix is the scanner's own first step, not plain words
         if g["advs"]:
             body, do, forward = _plugin_words(g["advs"], sorted(g["sites"]), dw_words.plugin_of(g["raw"]))
+        else:
+            said = {own.get(f) for f in g["finding_ids"]}
+            if len(said) == 1 and None not in said:
+                body, do = said.pop()         # the finding's own two sentences, as written
         if not do:
             steps = {first_step(hints.get(f, "")) for f in g["finding_ids"]}
             if len(steps) == 1:
@@ -818,7 +825,7 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
                 hints=None, brand=None, stale_words=None, stale_intro="",
                 stale_note="", details=None, told=None, not_responding=None,
                 reach_checks=None, quiet_where=None, gaps_to_approver=False,
-                port_notices=None) -> dict:
+                port_notices=None, own=None) -> dict:
     """Everything the two renderers need, decided once. PURE.
 
     Job 3s ("say it once"): `told` is the record of what was told ({finding_id: row});
@@ -947,9 +954,9 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
 
     # 2. findings that need you today
     do += rule(group_problems(pick(changed, DO_TODAY_SEVERITIES), names, prev_deep, hints,
-                              window_start, tag="Came back after being fixed", details=details), True)
+                              window_start, tag="Came back after being fixed", details=details, own=own), True)
     do += rule(group_problems(pick(created, DO_TODAY_SEVERITIES), names, prev_deep, hints,
-                              window_start, details=details))
+                              window_start, details=details, own=own))
 
     # 3. a web firewall that stopped blocking — said once, for all its sites, and not at
     # all for a site whose firewall finding is already on the list (the 10-22 Prodex test
@@ -1012,12 +1019,12 @@ def build_model(*, window_start, window_end, new_findings, confirmed, regressed,
 
     # This week (was "Worth a ticket" — Howie, 10-22: "We don't have any tickets")
     ticket += rule(group_problems(pick(changed, TICKET_SEVERITIES), names, prev_deep, hints,
-                                  window_start, tag="Came back after being fixed", details=details), True)
+                                  window_start, tag="Came back after being fixed", details=details, own=own), True)
     ticket += rule(group_problems(pick(created, TICKET_SEVERITIES), names, prev_deep, hints,
-                                  window_start, details=details))
+                                  window_start, details=details, own=own))
     ticket += rule(group_problems(pick(reconfirmed, DO_TODAY_SEVERITIES + TICKET_SEVERITIES),
                                   names, prev_deep, hints, window_start,
-                                  tag="Confirmed by a second scan", details=details))
+                                  tag="Confirmed by a second scan", details=details, own=own))
     if quiet_item:
         ticket.append(quiet_item)
     # Ratings that went up: only the sites today's list does not already explain (the

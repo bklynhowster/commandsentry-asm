@@ -155,7 +155,7 @@ jobs:
           # ⚠ The pin in test_synthesize_fetch_pagination.py compares the WHOLE
           # filter, both terms — pinning only the or-group is how the two halves
           # drifted the first time.
-          QUERY='description_synth_reviewed_at=is.null&or=(description_synth.is.null,impact.is.null,remediation.is.null,description_source.not.in.(ai_synthesized,ai_synthesized_reviewed,manual),description_source.is.null)'
+          QUERY='description_synth_reviewed_at=is.null&or=(description_synth.is.null,impact.is.null,remediation.is.null,description_source.not.in.(ai_synthesized,ai_synthesized_reviewed,manual,scanner),description_source.is.null)'
           # HEAD with Prefer: count=exact returns total in Content-Range.
           # -sS = silent but show errors; -f bails on 4xx/5xx so we don't
           # silently treat a 500 as "zero findings."

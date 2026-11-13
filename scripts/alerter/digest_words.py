@@ -368,6 +368,6 @@ def family_key(title: str | None) -> str:
     f, m = family_of(title)
     if not f:
         return unescape(title or "").strip().lower()
-    if f["key"] == "version-unknown" and m and m.groups():
+    if f["key"] in ("version-unknown", "out-of-date") and m and m.groups():
         return f"{f['key']}:{m.group(1).strip().lower()}"
     return f["key"]

@@ -125,6 +125,60 @@ Write the three parts."""
 RETRY_PROMPT = ("Your answer broke these rules: {problems}. Write the three parts again, following "
                 "every rule. JSON only.")
 
+# ─── An out-of-date finding says only what was seen (rule 3r; D-077 step 2) ──
+# "Runs X 1.2.3: out of date" means a version number was SEEN and its maker's later release
+# fixes published flaws. Nothing was tried against the site, so the explanation may not say,
+# or deny, that this site can be attacked, crashed, taken offline or taken over (Howie,
+# 2026-10-22: never "vulnerable"; 2026-11-12: the finding's own lead says "shows", "its maker
+# says", "are described as", and the plain words may not say more than it does). The line
+# below is added to the request for these findings only; the shared prompt and PROMPT_VERSION
+# are untouched, so no other finding's explanation is rewritten. An answer that breaks it is
+# retried once and then left empty, like any other failed check.
+OUT_OF_DATE_TITLE = re.compile(r"^Runs .+: out of date\b")
+OUT_OF_DATE_NOTE = ("\n\nThis is an out-of-date finding: a version number was seen, and its maker's newer "
+                    "release fixes published flaws. Say what was seen, what its maker says, and that updating "
+                    "is the fix. You may repeat how the flaws are described (for example \"described as crash "
+                    "or overload flaws\"). Do not say or deny that this site can be attacked, crashed, "
+                    "overloaded, taken offline or taken over, or that it is or is not affected. Do not use "
+                    "these words: vulnerable, vulnerability, attack, attacker, hacker, stranger, remote, remotely, offline, "
+                    "exploit, compromised, affected, unaffected, take over, at risk.")
+# "can", "could", "might" and their negatives ("won't", "cannot"): the start of a prediction.
+_MODAL = (r"(?:can(?:not)?|can[’']t|could(?:n[’']t)?|may|might(?:n[’']t)?|will|won[’']t|would(?:n[’']t)?"
+          r"|should(?:n[’']t)?)")
+# Words that say (or deny) what could happen to this site. Any form: "attacked" as much as
+# "attacker", "unaffected" as much as "affected" (outside review, 17:50).
+_OUT_OF_DATE_WORDS = (r"\bvulnerab\w*|\battack\w*|\bhack\w*|\bstrangers?\b|\bremote(?:ly)?\b"
+                      r"|\boff-?line\b|\bcompromis\w*|\b(?:un)?affect\w*"
+                      r"|\bt(?:ake|akes|aken|aking|ook)[ -]?over\b|\bat risk\b"
+                      # "could crash", "can be overloaded", "might knock it out": a prediction about
+                      # the site, anywhere later in the same sentence. "described as crash or overload
+                      # flaws" has no such verb before it.
+                      r"|\b" + _MODAL + r"\b[^.!?]*?"
+                      r"\b(?:crash\w*|overload\w*|knock\w*|(?:take|taken|bring|brought|shut|go|goes)\s+down)\b")
+_OUT_OF_DATE_RULE = re.compile(_OUT_OF_DATE_WORDS + r"|\bexploit\w*", re.I)
+# A title that itself says a flaw is on CISA's exploited list may be explained in those words,
+# but only as that list's statement: the sentence must name the list, and "exploitable" or
+# "can be exploited" is a claim about this site in any sentence.
+_OUT_OF_DATE_RULE_LISTED = re.compile(_OUT_OF_DATE_WORDS + r"|\bexploitab\w*"
+                                      r"|\b" + _MODAL + r"\b[^.!?]*?\bexploit\w*", re.I)
+_EXPLOIT = re.compile(r"\bexploit\w*", re.I)
+_NAMES_A_LIST = re.compile(r"\blist(?:ed|s)?\b", re.I)
+OUT_OF_DATE_WHY = "says more than an out-of-date finding shows (it may only say what was seen and what its maker says)"
+
+
+class _ListedRule:
+    """For a title that names CISA's exploited list: the words above, plus any "exploit..."
+    in a sentence that does not name a list."""
+    def search(self, text):
+        if _OUT_OF_DATE_RULE_LISTED.search(text):
+            return True
+        return any(_EXPLOIT.search(sent) and not _NAMES_A_LIST.search(sent)
+                   for sent in re.split(r"(?<=[.!?])\s+", text))
+
+
+def is_out_of_date(title) -> bool:
+    return isinstance(title, str) and bool(OUT_OF_DATE_TITLE.match(title))
+
 # ─── The answer checker ─────────────────────────────────────────────────────
 # Every part of every answer passes all of these, or the answer is not saved. Plan v2 §1; the
 # re-check's note (Grok, handoff 004): "breach" in any case is its own rule; the code review (Kimi,
@@ -180,11 +234,15 @@ def _acronyms(text: str) -> list:
     return [t for t in _ACRONYM.findall(text) if t not in _ACRONYM_OK and sum(c.isupper() for c in t) >= 2]
 
 
-def check_answer(parts) -> list:
-    """The reasons an answer may not be saved; [] means it may."""
+def check_answer(parts, title=None) -> list:
+    """The reasons an answer may not be saved; [] means it may. `title` is the finding's
+    title: an out-of-date finding carries one more rule (OUT_OF_DATE_TITLE above)."""
     problems = []
     if not isinstance(parts, dict):
         return ["is not a JSON object with what, worry and todo"]
+    rules = list(_RULES)
+    if is_out_of_date(title):
+        rules.append((OUT_OF_DATE_WHY, _ListedRule() if "exploited list" in title else _OUT_OF_DATE_RULE))
     for key, cap in CAPS.items():
         text = parts.get(key)
         if not isinstance(text, str) or not text.strip():
@@ -192,7 +250,7 @@ def check_answer(parts) -> list:
             continue
         if len(text) > cap:
             problems.append(f'"{key}" is longer than {cap} characters')
-        for why, rx in _RULES:
+        for why, rx in rules:
             msg = f'"{key}" {why}'
             if rx.search(text) and msg not in problems:
                 problems.append(msg)
@@ -258,7 +316,7 @@ def build_prompt(row: dict, excerpt: str | None) -> str:
         impact=v(row.get("impact")),
         remediation=v(row.get("remediation")),
         excerpt=v(excerpt),
-    )
+    ) + (OUT_OF_DATE_NOTE if is_out_of_date(row.get("title")) else "")
 
 
 # ─── The database ───────────────────────────────────────────────────────────
@@ -389,7 +447,8 @@ def write_one(client, row: dict, excerpt: str | None):
     for attempt in (1, 2):
         text = ask(client, messages)
         parts = parse_answer(text)
-        problems = check_answer(parts) if parts is not None else ["is not a JSON object with what, worry and todo"]
+        problems = (check_answer(parts, row.get("title")) if parts is not None
+                    else ["is not a JSON object with what, worry and todo"])
         if not problems:
             return parts, []
         if attempt == 1:
