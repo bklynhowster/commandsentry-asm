@@ -346,6 +346,7 @@ import software_inventory  # noqa: E402  (302 step 1)
 import library_flaws  # noqa: E402  (302 step 3)
 import evidence  # noqa: E402  (KB 12 job 3r: proven / out of date / guess)
 import csp_policy  # noqa: E402  (job 3z: does the CSP actually limit scripts?)
+import close_fixed  # noqa: E402  (D-078: a fixed header finding closes, a returning one reopens)
 import plain_http  # noqa: E402  (job 4f: does http:// send visitors to https?)
 import stack_fingerprint  # noqa: E402  (job 3c — security-stack fingerprints)
 import device_clues  # noqa: E402  (job 4y — what the device behind a web address shows anyone)
@@ -3915,6 +3916,24 @@ def close_out(conn, ctx: ScanContext, inserted: int, updated: int, Json) -> None
                 write_scanner_surface(conn, ctx, "light", "partial", "scanner_light", Json)
         except Exception as e:
             log(f"surface write-back failed (non-fatal): {e!r}")
+
+        # D-078 (Howie 2026-11-13 18:35 ET, "Go yes to both."): a closed header finding this
+        # scan saw again reopens at once (regressed); an open one this scan's own front-page
+        # reading shows fixed closes as remediated. Header findings only; the rules and their
+        # evidence are in close_fixed.py. Before the history block: the reopen writes its own
+        # 'regressed' row (that block runs only when every tool was ok), and a closed row was
+        # not re-emitted, so the two never write one row. Each runs in its own savepoint and
+        # never costs the scan.
+        _hdr_names = [name for name, _sev, _why in SECURITY_HEADERS]
+        n_hdr_reopened = close_fixed.reopen_headers_seen_again(
+            conn, ctx.scan_run_id, ctx.asset_id, ctx.tool_status, Json,
+            header_names=_hdr_names, tier="light", log=log)
+        n_hdr_closed = close_fixed.close_fixed_headers(
+            conn, ctx.scan_run_id, ctx.asset_id, ctx.tool_status, Json,
+            header_names=_hdr_names, header_key=httpx_header_key, tier="light", log=log)
+        if n_hdr_reopened or n_hdr_closed:
+            log(f"close-fixed (D-078): {n_hdr_closed} header finding(s) closed as remediated, "
+                f"{n_hdr_reopened} reopened as regressed")
 
         # 4.7 H2/H3 (LIGHT_SCAN_FINDING_HISTORY_SPEC) — per-finding observation
         # history. Runs AFTER the scan_run is marked complete (completed_at set)
