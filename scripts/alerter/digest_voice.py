@@ -243,6 +243,37 @@ def _short(host: str) -> str:
     return h.split(".")[0]
 
 
+# 441 (Howie 2026-11-14 08:28, "fix it"): a host is named only by its WHOLE name. The old test
+# was a substring test, so "staging" counted as named inside "prosalud-staging": with nine
+# hosts the check wanted "and 2 more" where "and 3 more" was right, refused a correct line, the
+# backup's identical line could not repair it, and the mornings of Nov 11, 12, 13 and 14 went
+# out as the backup. One matcher now serves the check, the backup's own test (_names_all) and
+# the per-host date clauses, so the three cannot disagree.
+def _name_forms(host: str) -> list:
+    """Every way a host may be written as a whole name, longest first: the full name and the
+    name cut after each label ('pulse.uat.prodexlabs.com' ... 'pulse.uat', 'pulse'). An
+    address, or a one-label name, only whole."""
+    h = (host or "").strip().lower()
+    if not h:
+        return []
+    if _short(h) == h:
+        return [h]
+    labels = h.split(".")
+    return [".".join(labels[:i]) for i in range(len(labels), 0, -1)]
+
+
+def _name_re(form: str) -> re.Pattern:
+    # a whole name: not inside another name or word ('staging' is not in 'prosalud-staging',
+    # nor 'prosalud'), and not followed by more host ('staging' is not 'staging.example.com');
+    # a sentence's period after it is fine
+    return re.compile(r"(?<![\w.-])" + re.escape(form) + r"(?![\w-])(?!\.\w)", re.I)
+
+
+def _names_host(text: str, host: str) -> bool:
+    """True when the text names this host by a whole name (full, or cut after a label)."""
+    return any(_name_re(f).search(text or "") for f in _name_forms(host))
+
+
 def _item(iid: str, section: str, kind: str, severity: str, hosts: list, what: str, why: str,
           fix: str, text_for_dates: str, *, dates_allowed: bool = True, extra_numbers=(), detail=(),
           family: str = "", fix_raw: bool = False) -> dict:
@@ -577,7 +608,7 @@ def _entry_problems(entry: dict, item: dict, where: str, portal_host: str) -> li
         if re.fullmatch(r"\d+(\.\d+)+", h):          # a version number, not a host
             continue
         out.append(f"{where} {item['id']}: names a host that is not its own ({h})")
-    missing = [h for h in item["hosts"] if h.lower() not in low and _short(h).lower() not in low]
+    missing = [h for h in item["hosts"] if not _names_host(text, h)]
     if len(item["hosts"]) > HOSTS_NAMED_MAX and missing:
         # six names and "and N more" is the form for a long list (Howie 16:30)
         named = len(item["hosts"]) - len(missing)
@@ -605,9 +636,8 @@ def _entry_problems(entry: dict, item: dict, where: str, portal_host: str) -> li
             masked, marks = text, {}
             for i, h in enumerate(per_host):            # hosts carry dots: mask them before splitting
                 marks[f"hostmark{i}"] = h
-                masked = re.sub(re.escape(h), f" hostmark{i} ", masked, flags=re.I)
-                if _short(h):
-                    masked = re.sub(r"\b" + re.escape(_short(h)) + r"\b", f" hostmark{i} ", masked, flags=re.I)
+                for form in _name_forms(h):             # whole names only (441)
+                    masked = _name_re(form).sub(f" hostmark{i} ", masked)
             for clause in _CLAUSE.split(masked):
                 named = sorted(((clause.index(k), marks[k]) for k in marks if k in clause))
                 dates = [m.group(0).replace(".", "") for m in _DATE.finditer(clause)]
@@ -1083,8 +1113,7 @@ def _sev_prefix(it: dict) -> str:
 def _names_all(text: str, hosts: list) -> bool:
     """True when the text already names every host (full name or short name), the same
     test the check applies, so the backup neither leaves a host out nor names it twice."""
-    low = (text or "").lower()
-    return all(h.lower() in low or _short(h).lower() in low for h in hosts)
+    return all(_names_host(text, h) for h in hosts)
 
 
 def _guard_words(it: dict) -> str:
