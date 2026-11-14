@@ -137,6 +137,10 @@ from run_medium import (
 )
 from finding_history_writer import write_finding_history_for_scan_run
 from run_light import derive_hostname
+# D-078: the header rule reads the same list and key translation the header check uses.
+from run_light import SECURITY_HEADERS as _LIGHT_SECURITY_HEADERS  # noqa: E402
+from run_light import httpx_header_key as _httpx_header_key  # noqa: E402
+import close_fixed  # noqa: E402  (D-078)
 
 # Pure differential WAF-presence logic (4.7 Cloud Armor Q1–Q8). No I/O — the
 # collector below does the HTTP (benign baseline + payload GETs) and hands the
@@ -5307,6 +5311,22 @@ def run(descriptor_path: str, dsn: str) -> int:
         n_signin = reopen_signin_rows_retracted_by_311(conn, ctx, Json)
         if n_signin:
             log(f"sign-in front door: {n_signin} row(s) retracted by 311 reopened (351)")
+
+        # D-078 (Howie 2026-11-13 18:35 ET, "Go yes to both."): a security-header finding this
+        # run's own front-page reading shows fixed closes; an old-encryption finding closes
+        # after two clean deep scans in a row (rules and evidence in close_fixed.py). Same slot
+        # and reasons as the closures above: after the regress loop (a closed finding was not
+        # re-emitted, so the two never touch one row) and before finding_history. A header
+        # finding seen again was already reopened by the regress loop. CLEAN PATH ONLY.
+        n_fixed_hdr = close_fixed.close_fixed_headers(
+            conn, ctx.scan_run_id, ctx.asset_id, ctx.tool_status, Json,
+            header_names=[name for name, _sev, _why in _LIGHT_SECURITY_HEADERS],
+            header_key=_httpx_header_key, tier="heavy", log=log)
+        n_fixed_tls = close_fixed.close_fixed_tls(
+            conn, ctx.scan_run_id, ctx.asset_id, ctx.tool_status, Json, log=log)
+        if n_fixed_hdr or n_fixed_tls:
+            log(f"close-fixed (D-078): {n_fixed_hdr} header + {n_fixed_tls} encryption "
+                f"finding(s) closed as remediated")
 
         # Note 129 round 7 — finding_history per re-emitted finding.
         # Runs AFTER the per-source regress loop so the recorded
