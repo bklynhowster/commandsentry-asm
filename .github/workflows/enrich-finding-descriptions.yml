@@ -65,6 +65,11 @@ on:
         required: false
         default: false
         type: boolean
+      other_company:
+        description: 'One-off (443): rewrite the AI write-ups that name the other Sentry company.'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -109,7 +114,7 @@ jobs:
         id: precheck
         # workflow_dispatch with force=true or a specific finding_id
         # must always run — those are intentional re-syntheses.
-        if: ${{ github.event.inputs.force != 'true' && github.event.inputs.finding_id == '' }}
+        if: ${{ github.event.inputs.force != 'true' && github.event.inputs.finding_id == '' && github.event.inputs.other_company != 'true' }}
         env:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           # Hardcoded URL matches synthesize_finding_descriptions.py's
@@ -230,6 +235,9 @@ jobs:
           fi
           if [[ "${{ github.event.inputs.force }}" == "true" ]]; then
             ARGS+=(--force)
+          fi
+          if [[ "${{ github.event.inputs.other_company }}" == "true" ]]; then
+            ARGS+=(--names-other-company)
           fi
 
           echo "Running with: ${ARGS[*]:-(no args — defaults: all thin findings)}"

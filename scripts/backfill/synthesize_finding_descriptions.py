@@ -73,6 +73,18 @@ TEMPERATURE = 0.2  # low — we want consistent, factual output
 
 DEFAULT_SUPABASE_URL = "https://hdygktppfvuspnumpfuq.supabase.co"
 
+# ─── Whose write-ups these are (443) ─────────────────────────────────────────
+# Legitimate instance divergence: COMMAND-ONLY values (the tests.yml guard keeps this marker).
+# ⛔ WITH DEFAULT_SUPABASE_URL (and one older comment), THE LINES THAT DIFFER BETWEEN
+# THE TWO SCANNER REPOS' COPIES OF THIS FILE. Howie, 2026-11-14 11:51: Prodex's write-ups said "Command
+# Sentry"; each copy now names its own company and refuses the other's.
+COMPANY = "Command Companies"
+PRODUCT = "Command Sentry"
+ROLE_LINE = ("You are an IT security analyst writing internal vulnerability documentation for Command Companies — a multi-org enterprise that includes Command Digital (marketing/print), Command Financial, Command Marketing, Command Missouri, Unimac (Unimac Graphics), and SCI. Your audience is asset owners and their dev leads: technically competent but not security specialists. They need to understand what a finding actually means and what to do about it.")
+# Names that belong to the OTHER Sentry instance. A write-up that says any of them is refused
+# (never written), and --names-other-company rewrites the ones already written.
+OTHER_COMPANY_WORDS = ("prodex",)
+
 # Findings whose description is shorter than this AND matches a "citation"
 # pattern are considered thin and qualify for synthesis.
 THIN_DESCRIPTION_LEN = 200
@@ -257,7 +269,7 @@ def _execute_with_retry(builder, what: str):
 
 
 # ─── Prompt ─────────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are an IT security analyst writing internal vulnerability documentation for Command Companies — a multi-org enterprise that includes Command Digital (marketing/print), Command Financial, Command Marketing, Command Missouri, Unimac (Unimac Graphics), and SCI. Your audience is asset owners and their dev leads: technically competent but not security specialists. They need to understand what a finding actually means and what to do about it.
+SYSTEM_PROMPT = ROLE_LINE + """
 
 You will receive structured data about one vulnerability finding. Output a single JSON object with TWO halves:
   · prose sections (what is this, what could it do, how do I fix it)
@@ -271,6 +283,8 @@ WRITING RULES (for the prose):
 - Be concrete about consequences ("an attacker could dump the WordPress user table including hashed passwords") not generic ("could lead to data exposure").
 - Name versions, components, and CVE IDs explicitly when they appear in the input.
 - Tone: like a senior security analyst writing to a senior engineer they respect. Direct, not patronizing.
+- The scanner is «PRODUCT». When a section mentions the scanner, call it «PRODUCT» (its quick, medium or deep scan). Never name any company other than «COMPANY» and its own organisations as the owner of these sites or the maker of this scan; name the software and vendors involved as usual (for example WordPress, nginx, Google).
+- No disclaimers about what the scan did not or could not do (for example "this is not a confirmed exploit", "the scanner could not authenticate", "nothing behind the login was tested"). Say what was seen and what to do about it.
 - LENGTH guidance: §1 = 2-4 sentences. §2 = 2-4 sentences. §3 = 4-7 numbered steps + an "Estimated remediation time" line + a "Priority" line for HIGH/CRITICAL severities.
 
 CRITICAL — do NOT fabricate stack specifics:
@@ -289,7 +303,7 @@ EXTRACTION RULES (for the structured fields):
 - "affected_component_version": detected version string (e.g. "2.8.3", "1.24.0"). Null if not in input.
 - "suggested_category": ONE of the valid enum values — sast, dast, sca, secret, recon, tls, headers, dns, email, auth, session, csrf, ssrf, xxe, xss, sqli, idor, rce, lfi, redirect, info_disclosure, takeover, typosquat, config, deprecation, supply_chain, other. Pick the BEST fit. An outdated WordPress plugin with known CVEs is "sca". A TLS cipher issue is "tls". A missing security header is "headers". An XSS finding is "xss". When unsure, "other".
 - "matched_url": the specific URL / endpoint where the scanner reported this finding (e.g. "/wp-admin/admin-ajax.php", "/account/changepassword", "https://www.example.com/login"). If the source data names a URL, copy it. If it doesn't but the finding clearly targets a known endpoint per the description (e.g. "password change form" → "/account/changepassword"), infer it. Null only if there's no defensible URL.
-- "frameworks": compliance framework references that this finding maps to. **YOU MUST emit BOTH explicit source-data mentions AND inferred mappings — not just one.** For Command Companies, the frameworks that always need consideration are: NIST 800-63B (auth/passwords), NIST CSF (any control), ISO 27001 (any control), SOC 2 (any control). HIPAA and PCI DSS only when health data or payment data is involved. **Default expectation: 2–4 framework chips per finding.** Output the framework identifier in the form Command actually uses, with the specific clause/control reference when applicable (e.g. "NIST 800-63B" not just "NIST"; "ISO 27001 A.9.4.3" not "ISO 27001"; "SOC 2 CC6.1" not "SOC 2"; "NIST CSF PR.AC-1" not "NIST CSF"; "HIPAA §164.308(a)(5)(ii)(D)" not "HIPAA"; "PCI DSS 8.3.6" not "PCI DSS"). Reference table for common inferences:
+- "frameworks": compliance framework references that this finding maps to. **YOU MUST emit BOTH explicit source-data mentions AND inferred mappings — not just one.** For «COMPANY», the frameworks that always need consideration are: NIST 800-63B (auth/passwords), NIST CSF (any control), ISO 27001 (any control), SOC 2 (any control). HIPAA and PCI DSS only when health data or payment data is involved. **Default expectation: 2–4 framework chips per finding.** Output the framework identifier in the form «COMPANY» actually uses, with the specific clause/control reference when applicable (e.g. "NIST 800-63B" not just "NIST"; "ISO 27001 A.9.4.3" not "ISO 27001"; "SOC 2 CC6.1" not "SOC 2"; "NIST CSF PR.AC-1" not "NIST CSF"; "HIPAA §164.308(a)(5)(ii)(D)" not "HIPAA"; "PCI DSS 8.3.6" not "PCI DSS"). Reference table for common inferences:
     · Password/credential requirements → ALWAYS: NIST 800-63B, NIST CSF PR.AC-1, ISO 27001 A.9.4.3, SOC 2 CC6.1
     · Access control/auth bypass → NIST CSF PR.AC, ISO 27001 A.9.1, SOC 2 CC6.1, NIST 800-53 AC-2
     · Encryption in transit (TLS) → NIST CSF PR.DS-2, ISO 27001 A.10.1, SOC 2 CC6.7, PCI DSS 4.1
@@ -322,6 +336,39 @@ OUTPUT FORMAT: a single JSON object, no surrounding prose, no markdown fences:
 }
 
 No other text. No markdown code fences around the JSON. Just the object."""
+SYSTEM_PROMPT = SYSTEM_PROMPT.replace("«COMPANY»", COMPANY).replace("«PRODUCT»", PRODUCT)
+assert "«" not in SYSTEM_PROMPT and "»" not in SYSTEM_PROMPT
+
+
+# The scanner's own tool names (finding.source) are internal; the writer is told what they are.
+_SCAN_WORDS = {"commandsentry_light": "quick scan", "commandsentry_medium": "medium scan",
+               "commandsentry_heavy": "deep scan"}
+
+
+def source_label(source) -> str:
+    """What the prompt calls a finding's source: the scanner's own scans by name, anything
+    else (testssl, nuclei, nikto ...) as recorded."""
+    s = (source or "").strip()
+    w = _SCAN_WORDS.get(s.lower())
+    return f"{PRODUCT} {w}" if w else (s or "unknown")
+
+
+def names_other_company(text) -> str | None:
+    """The first name of the OTHER Sentry instance's company in text, or None."""
+    low = (text or "").lower()
+    for w in OTHER_COMPANY_WORDS:
+        if w in low:
+            return w
+    return None
+
+
+PROSE_KEYS = ("what_is_this", "what_could_it_do", "how_do_i_fix_it")
+
+# PostgREST or-group: a section naming the other company. A space becomes the * wildcard,
+# so no value needs quoting (the server's match is a little wider; names_other_company()
+# decides row by row, exactly).
+OTHER_COMPANY_FILTER = ",".join(f"{col}.ilike.*{w.replace(' ', '*')}*" for col in ("description_synth", "impact", "remediation")
+                                for w in OTHER_COMPANY_WORDS)
 
 
 USER_PROMPT_TEMPLATE = """Write the three sections for the following finding.
@@ -413,7 +460,7 @@ class FindingInput:
             cve_line=cve_line,
             cwe_line=cwe_line,
             category=self.category or "—",
-            source=self.source,
+            source=source_label(self.source),
             description=self.description or "(empty)",
             best_excerpt=self.best_excerpt or "(none)",
             references_list="\n".join(f"- {r}" for r in self.references) if self.references else "(none)",
@@ -432,7 +479,8 @@ def scanner_wrote_all_three(row: dict) -> bool:
 
 
 # ─── DB access ──────────────────────────────────────────────────────────────
-def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, force: bool):
+def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, force: bool,
+                   other_company: bool = False):
     """Return list of FindingInput.
 
     Picks findings that need synth work. A finding qualifies if ANY of:
@@ -489,12 +537,16 @@ def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, for
         conditional. It is an AND, unconditionally, on every path.
         """
         builder = builder.is_(REJECTION_MARKER_COLUMN, "null")
+        if other_company:
+            # 443, one-off: the AI's own write-ups (never a person's, never the scanner's)
+            # that name the other Sentry instance's company. Thin filter not applied.
+            builder = builder.eq("description_source", "ai_synthesized").or_(OTHER_COMPANY_FILTER)
         if finding_id:
             return builder.eq("finding_id", finding_id)
         if severities:
             builder = builder.in_("severity", severities)
         # --force means "re-synthesise everything in scope", so no thin filter.
-        if not force:
+        if not force and not other_company:
             builder = builder.or_(THIN_PREDICATE)
         return builder
 
@@ -648,7 +700,11 @@ def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, for
         # skipped on description_synth alone, which made findings with a
         # parser-written description (wpvuln_json, probe_results) get skipped
         # even though their impact/remediation were still NULL.
-        if not force:
+        if other_company:
+            # second gate: the row's own text names the other company, checked here too
+            if not any(names_other_company(r.get(k)) for k in ("description_synth", "impact", "remediation")):
+                continue
+        elif not force:
             fully_synthesized = (
                 r.get("description_synth")
                 and r.get("impact")
@@ -708,7 +764,7 @@ def fetch_findings(sb, severities: list[str] | None, finding_id: str | None, for
         # is an exclusion one code path can walk past; both gates or neither.
         if r.get(REJECTION_MARKER_COLUMN):
             continue
-        if force or finding.is_thin or missing_impact_or_remediation:
+        if force or other_company or finding.is_thin or missing_impact_or_remediation:
             out.append(finding)
 
     return out
@@ -1044,6 +1100,8 @@ def main():
     parser.add_argument("--severity", nargs="+", help="Severity filter (e.g. HIGH MODERATE-HIGH).")
     parser.add_argument("--dry-run", action="store_true", help="Print result, do not write to DB.")
     parser.add_argument("--force", action="store_true", help="Re-synthesize even if already done.")
+    parser.add_argument("--names-other-company", action="store_true",
+                        help="One-off (443): rewrite the AI write-ups that name the other Sentry instance's company.")
     parser.add_argument("--limit", type=int, default=300, help="Max findings to process this run. Bumped 100→300 on 2026-05-27 so a single workflow_dispatch can drain the typical backlog (~300 thin findings) in one sitting; cron sweeps the tail.")
     args = parser.parse_args()
 
@@ -1075,6 +1133,7 @@ def main():
         severities=args.severity,
         finding_id=args.finding_id,
         force=args.force,
+        other_company=args.names_other_company,
     )
     if not findings:
         print("No findings match.")
@@ -1093,6 +1152,10 @@ def main():
             t0 = time.monotonic()
             result = synthesize_one(client, f)
             elapsed = time.monotonic() - t0
+            for k in PROSE_KEYS:
+                bad = names_other_company(result.get(k))
+                if bad:
+                    raise ValueError(f"refused, not written: its {k} names another company ({bad!r})")
             print(f"  ✓ synth ok ({elapsed:.1f}s)")
             if args.dry_run:
                 print(f"\n  WHAT IS THIS:\n    {result['what_is_this']}")
