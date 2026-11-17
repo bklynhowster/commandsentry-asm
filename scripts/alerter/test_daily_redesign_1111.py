@@ -161,11 +161,11 @@ def test_one_job_the_headline_counts_it_and_the_line_under_names_it_with_its_sit
     assert ">Nothing urgent today. One job for this week.</h1>" in html
     assert "Put a web firewall in front of the sign-in on <span" in html
     # at the top the site is never bare text a mail program can turn into a link (a word joiner
-    # follows each dot); the same holds for the pills on the Still open cards
+    # follows each dot); the same holds for the names on the Still open cards
     top = html.split("<body", 1)[1].split(">This week</h2>", 1)[0]
     assert "ftp.commandmi.com" not in top and "ftp.&#8288;commandmi.&#8288;com" in top
     still = html.split(">Still open &nbsp;", 1)[1]
-    assert "ftp.commandmi.com" not in still and "ftp.&#8288;commandmi.&#8288;com" in still
+    assert "ftp.commandmi.com" not in still and "ftp.&#8288;&#8203;commandmi.&#8288;&#8203;com" in still
     assert f"<title>{dd.escape(m['headline'])}</title>" in html
 
 

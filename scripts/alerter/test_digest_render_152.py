@@ -173,7 +173,8 @@ def test_the_html_digest_groups_merges_collapses_and_links(monkeypatch):
     """KB 12 job 3l keeps 152's lessons: the asset once, no FINDING ID column, the title is
     the link, INFO and LOW are counted not listed, and no device-class decoder text."""
     html = A.render_html(dashboard_url="https://portal.example", **_render())
-    assert html.count(">bcbsma.commandcommcentral.com</span>") == 1      # one chip under one problem
+    # the asset once, under one problem (2026-11-17: at the top of its card, no longer a chip under the words)
+    assert html.count(">bcbsma.&#8288;&#8203;commandcommcentral.&#8288;&#8203;com</div>") == 1
     assert "Finding ID" not in html
     assert 'href="https://portal.example/findings/f-csp"' in html
     # 3l rework (Howie, 10-22): a minor item is named in one plain line; INFO is not mentioned
