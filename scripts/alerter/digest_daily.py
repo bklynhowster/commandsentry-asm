@@ -1358,20 +1358,35 @@ def _tag(text: str, bg: str, fg: str) -> str:
             f'font-size:12px;font-weight:800;line-height:18px;padding:3px 11px;border-radius:999px;">{escape(text)}</span>')
 
 
-def _site_pills(sites, limit: int = 12) -> str:
-    """Site names as solid blue-tint pills (the cards), wrapping between names, never inside one."""
-    out = "".join(
-        f'<span style="display:inline-block;white-space:nowrap;margin:8px 6px 0 0;font-family:{FONT};font-size:13px;'
-        f'font-weight:700;color:{CHIP_TEXT};background:{CHIP_BG};border-radius:999px;padding:5px 12px;">'
-        f'{_noauto(s)}</span>' for s in list(sites)[:limit])
-    if len(sites) > limit:
-        out += f'<span style="font-family:{FONT};font-size:13px;color:{MUTED};"> and {len(sites) - limit} more</span>'
-    return f'<div>{out}</div>'
-
-
 def _noauto(name: str) -> str:
     """A site name a mail program won't turn into a blue link: a zero-width joiner after each dot."""
     return escape(name).replace(".", ".&#8288;")
+
+
+def _site_names(sites, color: str = CHIP_TEXT, limit: int = 12) -> str:
+    """Which site a card is about, said first and in the largest type on the card. Howie, 2026-11-17, on
+    the names as small pills under the words: "in too-small letters. It's hard to determine, in the
+    world, which asset they're talking about." One site: its name alone. Several: one bullet each, a
+    size down (and one more down from five up, so a long list stays a list). A long name may wrap,
+    after a dot only, never inside a word."""
+    sites = list(sites)
+    if not sites:
+        return ""
+    def name(s):       # the word joiner keeps a mail program from linking the name; the zero-width space lets a line end there
+        return escape(s).replace(".", ".&#8288;&#8203;")
+    # last resort, for a single word wider than a phone's card: break inside it rather than push the email sideways
+    WRAP = "overflow-wrap:anywhere;word-break:break-word;"
+    if len(sites) == 1:
+        return (f'<div class="s1" style="font-family:{DISPLAY};font-size:22px;line-height:1.25;font-weight:800;'
+                f'color:{color};{WRAP}">{name(sites[0])}</div>')
+    size, cls = (19, "s2") if len(sites) <= 4 else (16, "s3")
+    rows = "".join(
+        f'<tr><td width="18" valign="top" class="{cls}" style="font-family:{DISPLAY};font-size:{size}px;line-height:1.4;'
+        f'font-weight:800;color:{color};">&bull;</td><td valign="top" class="{cls}" style="font-family:{DISPLAY};'
+        f'font-size:{size}px;line-height:1.4;font-weight:800;color:{color};{WRAP}">{name(x)}</td></tr>' for x in sites[:limit])
+    more = (f'<div style="font-family:{FONT};font-size:14px;line-height:1.5;font-weight:700;color:{color};padding:2px 0 0 18px;">'
+            f'and {len(sites) - limit} more</div>' if len(sites) > limit else "")
+    return f'<table role="presentation" cellpadding="0" cellspacing="0" border="0">{rows}</table>{more}'
 
 
 def _fix_panel(label: str, text: str, bg: str = "") -> str:
@@ -1417,22 +1432,22 @@ def _tiles(model: dict, b: dict) -> str:
 
 
 def _still_card(l: dict) -> str:
-    """One open problem as a card: the count on a solid block, then grade, since when, title,
-    what it is, the sites, the fix."""
+    """One open problem as a card: the count on a solid block, then the site (or sites) it is on,
+    the grade, since when, a title, what it is, the fix."""
     c = l["card"]
     sev = (l.get("severity") or "").upper()
     fill, text, _tint = SEV_STYLE.get(sev, ("#D9DEE5", INK, "#F4F7FB"))
     tags = _tag(SEV_WORD.get(sev, sev.title()), fill, text) if sev in SEV_STYLE else ""
     if c.get("since"):
         tags += ("&nbsp; " if tags else "") + _tag(f"Open since {_day(c['since'])}", "#DDE4EE", INK)
-    parts = [f'<div>{tags}</div>' if tags else "",
-             f'<div style="font-family:{DISPLAY};font-size:19px;line-height:1.3;font-weight:800;color:{INK};'
+    names = _site_names(c.get("sites") or [])
+    parts = [names,
+             f'<div style="padding-top:{10 if names else 0}px;">{tags}</div>' if tags else "",
+             f'<div style="font-family:{FONT};font-size:16px;line-height:1.35;font-weight:700;color:{INK};'
              f'padding-top:10px;">{escape(c["title"])}</div>']
     if c.get("what"):
         parts.append(f'<div style="font-family:{FONT};font-size:15px;line-height:1.55;color:#2B3747;padding-top:6px;">'
                      f'{escape(c["what"])}</div>')
-    if c.get("sites"):
-        parts.append(_site_pills(c["sites"]))
     if c.get("note"):
         parts.append(f'<div style="font-family:{FONT};font-size:13px;line-height:1.5;color:{MUTED};padding-top:8px;">'
                      f'{escape(c["note"])}</div>')
@@ -1532,9 +1547,14 @@ def _card(item: dict, portal: str) -> str:
     pill = (_tag("Overdue", "#FFFFFF", OVERDUE_FILL) if item.get("overdue_since")
             else _tag(SEV_WORD.get(sev, sev.title()), "#FFFFFF", INK) if sev in SEV_STYLE else "")
     head = head.replace(f'style="color:{INK};text-decoration:none;"', f'style="color:{on};text-decoration:none;"')
-    top = ((f'<div>{pill}</div>' if pill else "")
-           + f'<div style="font-family:{DISPLAY};font-size:20px;line-height:1.25;font-weight:800;color:{on};'
-             f'padding-top:{9 if pill else 0}px;">{head}</div>')
+    # 2026-11-17: the site (or sites) leads the header, in the largest type; the title sits under it
+    names = (_site_names(item["sites"], on) if item.get("sites") and item.get("kind") in ("finding", "enforcement")
+             else "")
+    top = (names + (f'<div style="padding-top:{10 if names else 0}px;">{pill}</div>' if pill else "")
+           + (f'<div style="font-family:{FONT};font-size:16px;line-height:1.35;font-weight:700;color:{on};'
+              f'padding-top:{9 if pill or names else 0}px;">{head}</div>' if names else
+              f'<div style="font-family:{DISPLAY};font-size:20px;line-height:1.25;font-weight:800;color:{on};'
+              f'padding-top:{9 if pill else 0}px;">{head}</div>'))
     parts = []
     if item.get("overdue_since"):
         parts.append(_p(escape(overdue_words(item)), OVERDUE_FILL, 13, "font-weight:700;"))
@@ -1546,8 +1566,6 @@ def _card(item: dict, portal: str) -> str:
         lead = (f'<div style="font-family:{FONT};font-size:13px;line-height:18px;font-weight:800;color:{INK};'
                 f'padding-top:12px;">What it means</div>' if item.get("kind") == "finding" else "")
         parts.append(lead + _p(escape(item["body"]), "#2B3747", 15, "margin-top:3px;" if lead else ""))
-    if item.get("sites") and item.get("kind") in ("finding", "enforcement"):
-        parts.insert(0, chips(item["sites"]))
     for label, sites in item.get("groups", []):
         parts.append(_p(f'<span style="font-weight:700;">{escape(label)}</span>', INK, 14, "margin-top:10px;")
                      + chips(sites))
@@ -1674,7 +1692,7 @@ def render_html(model: dict, *, portal_url: str = "", product_name: str = "") ->
 @keyframes grow{{from{{transform:scaleX(0)}}to{{transform:scaleX(1)}}}}
 .seg{{transform-origin:left center;animation:grow .9s cubic-bezier(.3,.7,.2,1) both}}
 @media (prefers-reduced-motion:reduce){{.seg{{animation:none}}}}
-@media (max-width:620px){{h1{{font-size:30px !important}} .px{{padding-left:18px !important;padding-right:18px !important}} .px5{{padding-left:13px !important;padding-right:13px !important}} .card{{padding-left:16px !important;padding-right:16px !important}} .cnt{{width:64px !important}} .tile{{padding:12px 10px 11px !important}}}}
+@media (max-width:620px){{h1{{font-size:30px !important}} .px{{padding-left:18px !important;padding-right:18px !important}} .px5{{padding-left:13px !important;padding-right:13px !important}} .card{{padding-left:16px !important;padding-right:16px !important}} .cnt{{width:64px !important}} .s1{{font-size:19px !important}} .s2{{font-size:17px !important}} .s3{{font-size:15px !important}} .tile{{padding:12px 10px 11px !important}}}}
 </style></head>
 <body style="margin:0;padding:0;background:{PAGE};">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{PAGE}" style="background:{PAGE};">
