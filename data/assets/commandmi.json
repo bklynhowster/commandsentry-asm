@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-11-21T12:41:41Z_c16d52d5",
-    "started_at": "2026-11-21T12:41:41Z",
-    "completed_at": "2026-11-21T12:46:39Z",
-    "duration_seconds": 298,
+    "id": "scan_2026-11-21T18:36:48Z_47439594",
+    "started_at": "2026-11-21T18:36:48Z",
+    "completed_at": "2026-11-21T18:41:48Z",
+    "duration_seconds": 300,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -43,8 +43,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-11-21T12:46:39Z",
-      "last_seen": "2026-11-21T12:46:39Z",
+      "first_discovered": "2026-11-21T18:41:48Z",
+      "last_seen": "2026-11-21T18:41:48Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -106,6 +106,376 @@
         ],
         "aaaa": [],
         "cname": null,
+        "mx": [],
+        "ns": [
+          "ns69.domaincontrol.com",
+          "ns70.domaincontrol.com"
+        ],
+        "txt": [
+          "MS=ms11147654",
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
+          "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca",
+          "google-site-verification=ZiVaKRBG6JgkKzhGYUF7YWRlYDlBj62kwdnzhnb7g0E",
+          "Sendinblue-code:d6ec6d432f5c3f2c2d3963e1b0efeb4c"
+        ],
+        "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": "nginx",
+        "platform_label": "WordPress on wp.cloud (Pressable)",
+        "tech": [
+          {
+            "name": "Bootstrap",
+            "version": "5.1.0",
+            "category": "frontend"
+          },
+          {
+            "name": "Email Encoder for Wordpress",
+            "version": null,
+            "category": null
+          },
+          {
+            "name": "Font Awesome",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          },
+          {
+            "name": "Mailcheck",
+            "version": "1.1.2",
+            "category": null
+          },
+          {
+            "name": "MySQL",
+            "version": null,
+            "category": "database"
+          },
+          {
+            "name": "Nginx",
+            "version": null,
+            "category": "webserver"
+          },
+          {
+            "name": "PHP",
+            "version": null,
+            "category": "language"
+          },
+          {
+            "name": "Slider Revolution",
+            "version": "6.8.1",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "WPMU DEV Smush",
+            "version": "4.3.7",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "WordPress",
+            "version": null,
+            "category": "cms"
+          },
+          {
+            "name": "Yoast SEO",
+            "version": "28.9",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "jQuery",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery Migrate",
+            "version": "3.4.1",
+            "category": "frontend"
+          },
+          {
+            "name": "jsDelivr",
+            "version": null,
+            "category": "cdn"
+          },
+          {
+            "name": "punycode",
+            "version": "1.0.0",
+            "category": null
+          },
+          {
+            "name": "reCAPTCHA",
+            "version": null,
+            "category": null
+          },
+          {
+            "name": "wp.cloud",
+            "version": null,
+            "category": "hosting"
+          },
+          {
+            "name": "wpBakery",
+            "version": null,
+            "category": "wp-plugin"
+          }
+        ]
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
+      "name": "ftp.commandmi.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-11-21T18:41:48Z",
+      "last_seen": "2026-11-21T18:41:48Z",
+      "tags": [],
+      "reachability": {
+        "live": false,
+        "http_status": null,
+        "title": null
+      },
+      "probe_status": {
+        "naabu": {
+          "ok": true
+        },
+        "httpx_tech": {
+          "ok": true
+        }
+      },
+      "hosts": [
+        {
+          "ip": "208.199.0.161",
+          "asn": "AS701",
+          "asn_org": "Verizon Business",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Ashburn",
+          "reverse_dns": null,
+          "is_private": false
+        }
+      ],
+      "services": [],
+      "dns": {
+        "a": [
+          "208.199.0.161"
+        ],
+        "aaaa": [],
+        "cname": null,
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": false,
+        "vendor": null,
+        "confidence": "unknown"
+      }
+    },
+    {
+      "name": "pay.commandmi.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-11-21T18:41:48Z",
+      "last_seen": "2026-11-21T18:41:48Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 404,
+        "title": "Pay Link Not Found"
+      },
+      "probe_status": {
+        "naabu": {
+          "ok": true
+        },
+        "httpx_tech": {
+          "ok": true
+        }
+      },
+      "hosts": [
+        {
+          "ip": "100.49.0.246",
+          "asn": "AS14618",
+          "asn_org": "Amazon.com, Inc.",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Ashburn",
+          "reverse_dns": "ec2-100-49-0-246.compute-1.amazonaws.com",
+          "is_private": false
+        },
+        {
+          "ip": "100.49.110.141",
+          "asn": "AS14618",
+          "asn_org": "Amazon.com, Inc.",
+          "country": "US",
+          "region": "Virginia",
+          "city": "Ashburn",
+          "reverse_dns": "ec2-100-49-110-141.compute-1.amazonaws.com",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "100.49.0.246",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "100.49.0.246",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=paylinks.commerce.godaddy.com",
+            "issuer": "CN=GoDaddy Internal Intermediate CA DV - R1v1, O=GoDaddy.com, C=US",
+            "san": [
+              "paylinks.commerce.godaddy.com"
+            ],
+            "not_before": "2026-10-28T07:36:38Z",
+            "not_after": "2027-10-28T07:36:38Z",
+            "self_signed": false,
+            "days_to_expiry": 340
+          }
+        },
+        {
+          "ip": "100.49.110.141",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "100.49.110.141",
+          "port": 443,
+          "protocol": "tcp",
+          "service": "https",
+          "banner": null,
+          "tls": true,
+          "cert": {
+            "subject": "CN=paylinks.commerce.godaddy.com",
+            "issuer": "CN=GoDaddy Internal Intermediate CA DV - R1v1, O=GoDaddy.com, C=US",
+            "san": [
+              "paylinks.commerce.godaddy.com"
+            ],
+            "not_before": "2026-10-28T07:36:38Z",
+            "not_after": "2027-10-28T07:36:38Z",
+            "self_signed": false,
+            "days_to_expiry": 340
+          }
+        }
+      ],
+      "dns": {
+        "a": [
+          "100.49.110.141",
+          "100.49.0.246"
+        ],
+        "aaaa": [],
+        "cname": "paylinks.commerce.godaddy.com",
+        "mx": [],
+        "ns": [],
+        "txt": [],
+        "spf": null,
+        "dnssec": false
+      },
+      "fingerprint": {
+        "server": null,
+        "platform_label": null,
+        "tech": []
+      },
+      "waf": {
+        "detected": true,
+        "vendor": "AWS Elastic Load Balancer",
+        "confidence": "high"
+      }
+    },
+    {
+      "name": "www.commandmi.com",
+      "alive": true,
+      "is_root": false,
+      "discovered_via": "subfinder",
+      "first_discovered": "2026-11-21T18:41:49Z",
+      "last_seen": "2026-11-21T18:41:49Z",
+      "tags": [],
+      "reachability": {
+        "live": true,
+        "http_status": 200,
+        "title": "Home - Command Marketing Innovations"
+      },
+      "probe_status": {
+        "naabu": {
+          "ok": true
+        },
+        "httpx_tech": {
+          "ok": true
+        }
+      },
+      "hosts": [
+        {
+          "ip": "15.197.142.173",
+          "asn": "AS16509",
+          "asn_org": "Amazon.com, Inc.",
+          "country": "US",
+          "region": "Washington",
+          "city": "Seattle",
+          "reverse_dns": "a4ec4c6ea1c92e2e6.awsglobalaccelerator.com",
+          "is_private": false
+        },
+        {
+          "ip": "3.33.152.147",
+          "asn": "AS16509",
+          "asn_org": "Amazon.com, Inc.",
+          "country": "US",
+          "region": "Washington",
+          "city": "Seattle",
+          "reverse_dns": "a4ec4c6ea1c92e2e6.awsglobalaccelerator.com",
+          "is_private": false
+        }
+      ],
+      "services": [
+        {
+          "ip": "15.197.142.173",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        },
+        {
+          "ip": "3.33.152.147",
+          "port": 80,
+          "protocol": "tcp",
+          "service": "http",
+          "banner": null,
+          "tls": false
+        }
+      ],
+      "dns": {
+        "a": [
+          "15.197.142.173",
+          "3.33.152.147"
+        ],
+        "aaaa": [],
+        "cname": "commandmi.com",
         "mx": [],
         "ns": [
           "ns69.domaincontrol.com",
@@ -227,381 +597,11 @@
         "vendor": null,
         "confidence": "unknown"
       }
-    },
-    {
-      "name": "ftp.commandmi.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-11-21T12:46:39Z",
-      "last_seen": "2026-11-21T12:46:39Z",
-      "tags": [],
-      "reachability": {
-        "live": false,
-        "http_status": null,
-        "title": null
-      },
-      "probe_status": {
-        "naabu": {
-          "ok": true
-        },
-        "httpx_tech": {
-          "ok": true
-        }
-      },
-      "hosts": [
-        {
-          "ip": "208.199.0.161",
-          "asn": "AS701",
-          "asn_org": "Verizon Business",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Ashburn",
-          "reverse_dns": null,
-          "is_private": false
-        }
-      ],
-      "services": [],
-      "dns": {
-        "a": [
-          "208.199.0.161"
-        ],
-        "aaaa": [],
-        "cname": null,
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": null,
-        "platform_label": null,
-        "tech": []
-      },
-      "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
-      }
-    },
-    {
-      "name": "pay.commandmi.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-11-21T12:46:39Z",
-      "last_seen": "2026-11-21T12:46:39Z",
-      "tags": [],
-      "reachability": {
-        "live": true,
-        "http_status": 404,
-        "title": "Pay Link Not Found"
-      },
-      "probe_status": {
-        "naabu": {
-          "ok": true
-        },
-        "httpx_tech": {
-          "ok": true
-        }
-      },
-      "hosts": [
-        {
-          "ip": "100.49.0.246",
-          "asn": "AS14618",
-          "asn_org": "Amazon.com, Inc.",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Ashburn",
-          "reverse_dns": "ec2-100-49-0-246.compute-1.amazonaws.com",
-          "is_private": false
-        },
-        {
-          "ip": "100.49.110.141",
-          "asn": "AS14618",
-          "asn_org": "Amazon.com, Inc.",
-          "country": "US",
-          "region": "Virginia",
-          "city": "Ashburn",
-          "reverse_dns": "ec2-100-49-110-141.compute-1.amazonaws.com",
-          "is_private": false
-        }
-      ],
-      "services": [
-        {
-          "ip": "100.49.0.246",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "100.49.0.246",
-          "port": 443,
-          "protocol": "tcp",
-          "service": "https",
-          "banner": null,
-          "tls": true,
-          "cert": {
-            "subject": "CN=paylinks.commerce.godaddy.com",
-            "issuer": "CN=GoDaddy Internal Intermediate CA DV - R1v1, O=GoDaddy.com, C=US",
-            "san": [
-              "paylinks.commerce.godaddy.com"
-            ],
-            "not_before": "2026-10-28T07:36:38Z",
-            "not_after": "2027-10-28T07:36:38Z",
-            "self_signed": false,
-            "days_to_expiry": 340
-          }
-        },
-        {
-          "ip": "100.49.110.141",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "100.49.110.141",
-          "port": 443,
-          "protocol": "tcp",
-          "service": "https",
-          "banner": null,
-          "tls": true,
-          "cert": {
-            "subject": "CN=paylinks.commerce.godaddy.com",
-            "issuer": "CN=GoDaddy Internal Intermediate CA DV - R1v1, O=GoDaddy.com, C=US",
-            "san": [
-              "paylinks.commerce.godaddy.com"
-            ],
-            "not_before": "2026-10-28T07:36:38Z",
-            "not_after": "2027-10-28T07:36:38Z",
-            "self_signed": false,
-            "days_to_expiry": 340
-          }
-        }
-      ],
-      "dns": {
-        "a": [
-          "100.49.0.246",
-          "100.49.110.141"
-        ],
-        "aaaa": [],
-        "cname": "paylinks.commerce.godaddy.com",
-        "mx": [],
-        "ns": [],
-        "txt": [],
-        "spf": null,
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": null,
-        "platform_label": null,
-        "tech": []
-      },
-      "waf": {
-        "detected": true,
-        "vendor": "AWS Elastic Load Balancer",
-        "confidence": "high"
-      }
-    },
-    {
-      "name": "www.commandmi.com",
-      "alive": true,
-      "is_root": false,
-      "discovered_via": "subfinder",
-      "first_discovered": "2026-11-21T12:46:40Z",
-      "last_seen": "2026-11-21T12:46:40Z",
-      "tags": [],
-      "reachability": {
-        "live": true,
-        "http_status": 200,
-        "title": "Home - Command Marketing Innovations"
-      },
-      "probe_status": {
-        "naabu": {
-          "ok": true
-        },
-        "httpx_tech": {
-          "ok": true
-        }
-      },
-      "hosts": [
-        {
-          "ip": "15.197.142.173",
-          "asn": "AS16509",
-          "asn_org": "Amazon.com, Inc.",
-          "country": "US",
-          "region": "Washington",
-          "city": "Seattle",
-          "reverse_dns": "a4ec4c6ea1c92e2e6.awsglobalaccelerator.com",
-          "is_private": false
-        },
-        {
-          "ip": "3.33.152.147",
-          "asn": "AS16509",
-          "asn_org": "Amazon.com, Inc.",
-          "country": "US",
-          "region": "Washington",
-          "city": "Seattle",
-          "reverse_dns": "a4ec4c6ea1c92e2e6.awsglobalaccelerator.com",
-          "is_private": false
-        }
-      ],
-      "services": [
-        {
-          "ip": "15.197.142.173",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        },
-        {
-          "ip": "3.33.152.147",
-          "port": 80,
-          "protocol": "tcp",
-          "service": "http",
-          "banner": null,
-          "tls": false
-        }
-      ],
-      "dns": {
-        "a": [
-          "15.197.142.173",
-          "3.33.152.147"
-        ],
-        "aaaa": [],
-        "cname": "commandmi.com",
-        "mx": [],
-        "ns": [
-          "ns69.domaincontrol.com",
-          "ns70.domaincontrol.com"
-        ],
-        "txt": [
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
-          "Sendinblue-code:d6ec6d432f5c3f2c2d3963e1b0efeb4c",
-          "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca",
-          "google-site-verification=ZiVaKRBG6JgkKzhGYUF7YWRlYDlBj62kwdnzhnb7g0E",
-          "MS=ms11147654"
-        ],
-        "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
-        "dnssec": false
-      },
-      "fingerprint": {
-        "server": "nginx",
-        "platform_label": "WordPress on wp.cloud (Pressable)",
-        "tech": [
-          {
-            "name": "Bootstrap",
-            "version": "5.1.0",
-            "category": "frontend"
-          },
-          {
-            "name": "Email Encoder for Wordpress",
-            "version": null,
-            "category": null
-          },
-          {
-            "name": "Font Awesome",
-            "version": null,
-            "category": "frontend"
-          },
-          {
-            "name": "HSTS",
-            "version": null,
-            "category": "security"
-          },
-          {
-            "name": "Mailcheck",
-            "version": "1.1.2",
-            "category": null
-          },
-          {
-            "name": "MySQL",
-            "version": null,
-            "category": "database"
-          },
-          {
-            "name": "Nginx",
-            "version": null,
-            "category": "webserver"
-          },
-          {
-            "name": "PHP",
-            "version": null,
-            "category": "language"
-          },
-          {
-            "name": "Slider Revolution",
-            "version": "6.8.1",
-            "category": "wp-plugin"
-          },
-          {
-            "name": "WPMU DEV Smush",
-            "version": "4.3.7",
-            "category": "wp-plugin"
-          },
-          {
-            "name": "WordPress",
-            "version": null,
-            "category": "cms"
-          },
-          {
-            "name": "Yoast SEO",
-            "version": "28.9",
-            "category": "wp-plugin"
-          },
-          {
-            "name": "jQuery",
-            "version": null,
-            "category": "frontend"
-          },
-          {
-            "name": "jQuery Migrate",
-            "version": "3.4.1",
-            "category": "frontend"
-          },
-          {
-            "name": "jsDelivr",
-            "version": null,
-            "category": "cdn"
-          },
-          {
-            "name": "punycode",
-            "version": "1.0.0",
-            "category": null
-          },
-          {
-            "name": "reCAPTCHA",
-            "version": null,
-            "category": null
-          },
-          {
-            "name": "wp.cloud",
-            "version": null,
-            "category": "hosting"
-          },
-          {
-            "name": "wpBakery",
-            "version": null,
-            "category": "wp-plugin"
-          }
-        ]
-      },
-      "waf": {
-        "detected": false,
-        "vendor": null,
-        "confidence": "unknown"
-      }
     }
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-11-21T06:42:49Z_52654737",
+    "since_scan": "scan_2026-11-21T12:41:41Z_c16d52d5",
     "added": {
       "subdomains": [],
       "services": [],
@@ -4943,6 +4943,59 @@
         "jQuery Migrate": "3.4.1",
         "punycode": "1.0.0"
       }
+    },
+    {
+      "scan_id": "scan_2026-11-21T18:36:48Z_47439594",
+      "started_at": "2026-11-21T18:36:48Z",
+      "completed_at": "2026-11-21T18:41:48Z",
+      "subdomain_count": 4,
+      "live_subdomain_count": 4,
+      "host_count": 5,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmi.com",
+        "ftp.commandmi.com",
+        "pay.commandmi.com",
+        "www.commandmi.com"
+      ],
+      "ports_by_sub": {
+        "commandmi.com": {
+          "15.197.142.173": [
+            80
+          ],
+          "3.33.152.147": [
+            80
+          ]
+        },
+        "ftp.commandmi.com": {},
+        "pay.commandmi.com": {
+          "100.49.0.246": [
+            80,
+            443
+          ],
+          "100.49.110.141": [
+            80,
+            443
+          ]
+        },
+        "www.commandmi.com": {
+          "15.197.142.173": [
+            80
+          ],
+          "3.33.152.147": [
+            80
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.8.1",
+        "WPMU DEV Smush": "4.3.7",
+        "Yoast SEO": "28.9",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
     }
   ],
   "dns_readings": {
@@ -4955,12 +5008,12 @@
       ],
       "ns_counted_basis": "everyday",
       "ns_disagreement": null,
-      "read_at": "2026-11-21T12:42:39Z",
+      "read_at": "2026-11-21T18:37:48Z",
       "records": {
         "a": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 562,
+          "ttl": 561,
           "values": [
             "15.197.142.173",
             "3.33.152.147"
@@ -4981,7 +5034,7 @@
         "dmarc": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1762,
+          "ttl": 1759,
           "values": [
             "v=DMARC1; p=none; pct=100; rua=mailto:dkimreport@commandcompanies.com; ruf=mailto:dkimalert@commandcompanies.com"
           ]
@@ -4989,7 +5042,7 @@
         "mx": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1762,
+          "ttl": 1760,
           "values": [
             "10 mx1.hc3765-17.iphmx.com",
             "20 mx2.hc3765-17.iphmx.com"
@@ -4998,7 +5051,7 @@
         "ns": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 402,
+          "ttl": 630,
           "values": [
             "ns69.domaincontrol.com",
             "ns70.domaincontrol.com"
@@ -5007,7 +5060,7 @@
         "txt": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1762,
+          "ttl": 1759,
           "values": [
             "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca",
             "MS=ms11147654",
@@ -5032,12 +5085,12 @@
     "ftp.commandmi.com": {
       "name": "ftp.commandmi.com",
       "name_status": "exists",
-      "read_at": "2026-11-21T12:42:39Z",
+      "read_at": "2026-11-21T18:37:48Z",
       "records": {
         "a": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1763,
+          "ttl": 1761,
           "values": [
             "208.199.0.161"
           ]
@@ -5084,7 +5137,7 @@
     "pay.commandmi.com": {
       "name": "pay.commandmi.com",
       "name_status": "exists",
-      "read_at": "2026-11-21T12:42:39Z",
+      "read_at": "2026-11-21T18:37:48Z",
       "records": {
         "a": {
           "cname_chain": [
@@ -5168,7 +5221,7 @@
     "www.commandmi.com": {
       "name": "www.commandmi.com",
       "name_status": "exists",
-      "read_at": "2026-11-21T12:42:39Z",
+      "read_at": "2026-11-21T18:37:48Z",
       "records": {
         "a": {
           "cname_chain": [
@@ -5176,7 +5229,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 562,
+          "ttl": 561,
           "values": [
             "15.197.142.173",
             "3.33.152.147"
@@ -5194,7 +5247,7 @@
         "cname": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 562,
+          "ttl": 561,
           "values": [
             "commandmi.com"
           ]
@@ -5205,7 +5258,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1762,
+          "ttl": 1760,
           "values": [
             "10 mx1.hc3765-17.iphmx.com",
             "20 mx2.hc3765-17.iphmx.com"
@@ -5217,7 +5270,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 402,
+          "ttl": 630,
           "values": [
             "ns69.domaincontrol.com",
             "ns70.domaincontrol.com"
@@ -5229,7 +5282,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1762,
+          "ttl": 1759,
           "values": [
             "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca",
             "MS=ms11147654",
