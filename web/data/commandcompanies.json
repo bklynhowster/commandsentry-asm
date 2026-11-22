@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-11-22T12:15:43Z_b3b3f80d",
-    "started_at": "2026-11-22T12:15:43Z",
-    "completed_at": "2026-11-22T12:19:43Z",
-    "duration_seconds": 240,
+    "id": "scan_2026-11-22T18:13:22Z_e51c35bb",
+    "started_at": "2026-11-22T18:13:22Z",
+    "completed_at": "2026-11-22T18:17:36Z",
+    "duration_seconds": 254,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -30,7 +30,7 @@
   "summary": {
     "subdomain_count": 3,
     "live_subdomain_count": 3,
-    "host_count": 18,
+    "host_count": 16,
     "service_count": 16,
     "newest_cert_expiry_days": 29,
     "top_hosting_org": "Microsoft Corporation",
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-11-22T12:19:43Z",
-      "last_seen": "2026-11-22T12:19:43Z",
+      "first_discovered": "2026-11-22T18:17:36Z",
+      "last_seen": "2026-11-22T18:17:36Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -137,10 +137,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
-          "apple-domain-verification=cWkfjNKuM61a3EZ6",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
-          "MS=ms93622757"
+          "MS=ms93622757",
+          "apple-domain-verification=cWkfjNKuM61a3EZ6",
+          "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -252,13 +252,13 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-22T12:19:43Z",
-      "last_seen": "2026-11-22T12:19:43Z",
+      "first_discovered": "2026-11-22T18:17:36Z",
+      "last_seen": "2026-11-22T18:17:36Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 200,
-        "title": "Outlook"
+        "http_status": 403,
+        "title": null
       },
       "probe_status": {
         "naabu": {
@@ -270,169 +270,149 @@
       },
       "hosts": [
         {
-          "ip": "2603:1036:305:3006::2",
+          "ip": "2603:1036:30c:900::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:305:3889::2",
+          "ip": "2603:1036:30c:90f::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:305:38b4::2",
+          "ip": "2603:1036:30c:c8a::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:305:4014::2",
+          "ip": "2603:1036:30c:c8b::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:305:48ca::2",
+          "ip": "2603:1036:30c:c92::2",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:305:48cb::2",
+          "ip": "2603:1036:903:47::6",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:305:48cc::2",
+          "ip": "40.104.23.130",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "2603:1036:805:b4::2",
+          "ip": "40.104.23.98",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "40.99.168.226",
+          "ip": "40.99.229.194",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "40.99.168.242",
+          "ip": "40.99.229.226",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "40.99.245.50",
+          "ip": "52.96.156.50",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "52.96.103.34",
+          "ip": "52.96.230.66",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "52.96.121.98",
+          "ip": "52.97.104.66",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         },
         {
-          "ip": "52.96.191.98",
+          "ip": "52.97.104.98",
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation",
           "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "52.96.57.114",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
-          "reverse_dns": null,
-          "is_private": false
-        },
-        {
-          "ip": "52.96.57.82",
-          "asn": "AS8075",
-          "asn_org": "Microsoft Corporation",
-          "country": "US",
-          "region": "Texas",
-          "city": "San Antonio",
+          "region": "Arizona",
+          "city": "Phoenix",
           "reverse_dns": null,
           "is_private": false
         }
       ],
       "services": [
         {
-          "ip": "40.99.245.50",
+          "ip": "40.104.23.130",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -440,27 +420,45 @@
           "tls": false
         },
         {
-          "ip": "40.99.245.50",
+          "ip": "40.104.23.130",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
           "banner": null,
           "tls": true,
           "cert": {
-            "subject": "CN=outlook.cloud.microsoft, O=Microsoft Corporation, L=Redmond, ST=WA, C=US",
-            "issuer": "CN=Microsoft TLS G2 RSA CA OCSP 04, O=Microsoft Corporation, C=US",
+            "subject": "CN=outlook.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
             "san": [
-              "places.cloud.microsoft",
-              "outlook.cloud.microsoft"
+              "outlook.com",
+              "*.hotmail.com",
+              "*.internal.outlook.com",
+              "*.live.com",
+              "*.office.com",
+              "*.office365.com",
+              "*.outlook.com",
+              "*.outlook.office365.com",
+              "attachment.outlook.live.net",
+              "attachment.outlook.office.net",
+              "attachment.outlook.officeppe.net",
+              "attachments.office.net",
+              "attachments-sdf.office.net",
+              "ccs.login.microsoftonline.com",
+              "hotmail.com",
+              "mail.services.live.com",
+              "office365.com",
+              "outlook.office.com",
+              "substrate.office.com",
+              "substrate-sdf.office.com"
             ],
-            "not_before": "2026-03-08T00:17:03Z",
-            "not_after": "2027-03-03T00:17:03Z",
+            "not_before": "2026-10-13T00:00:00Z",
+            "not_after": "2027-04-29T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 100
+            "days_to_expiry": 158
           }
         },
         {
-          "ip": "52.96.103.34",
+          "ip": "52.96.156.50",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -468,27 +466,45 @@
           "tls": false
         },
         {
-          "ip": "52.96.103.34",
+          "ip": "52.96.156.50",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
           "banner": null,
           "tls": true,
           "cert": {
-            "subject": "CN=outlook.cloud.microsoft, O=Microsoft Corporation, L=Redmond, ST=WA, C=US",
-            "issuer": "CN=Microsoft TLS G2 RSA CA OCSP 04, O=Microsoft Corporation, C=US",
+            "subject": "CN=outlook.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
             "san": [
-              "places.cloud.microsoft",
-              "outlook.cloud.microsoft"
+              "outlook.com",
+              "*.hotmail.com",
+              "*.internal.outlook.com",
+              "*.live.com",
+              "*.office.com",
+              "*.office365.com",
+              "*.outlook.com",
+              "*.outlook.office365.com",
+              "attachment.outlook.live.net",
+              "attachment.outlook.office.net",
+              "attachment.outlook.officeppe.net",
+              "attachments.office.net",
+              "attachments-sdf.office.net",
+              "ccs.login.microsoftonline.com",
+              "hotmail.com",
+              "mail.services.live.com",
+              "office365.com",
+              "outlook.office.com",
+              "substrate.office.com",
+              "substrate-sdf.office.com"
             ],
-            "not_before": "2026-03-08T00:17:03Z",
-            "not_after": "2027-03-03T00:17:03Z",
+            "not_before": "2026-10-13T00:00:00Z",
+            "not_after": "2027-04-29T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 100
+            "days_to_expiry": 158
           }
         },
         {
-          "ip": "52.96.57.114",
+          "ip": "52.96.230.66",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -496,27 +512,45 @@
           "tls": false
         },
         {
-          "ip": "52.96.57.114",
+          "ip": "52.96.230.66",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
           "banner": null,
           "tls": true,
           "cert": {
-            "subject": "CN=outlook.cloud.microsoft, O=Microsoft Corporation, L=Redmond, ST=WA, C=US",
-            "issuer": "CN=Microsoft TLS G2 RSA CA OCSP 04, O=Microsoft Corporation, C=US",
+            "subject": "CN=outlook.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
             "san": [
-              "places.cloud.microsoft",
-              "outlook.cloud.microsoft"
+              "outlook.com",
+              "*.hotmail.com",
+              "*.internal.outlook.com",
+              "*.live.com",
+              "*.office.com",
+              "*.office365.com",
+              "*.outlook.com",
+              "*.outlook.office365.com",
+              "attachment.outlook.live.net",
+              "attachment.outlook.office.net",
+              "attachment.outlook.officeppe.net",
+              "attachments.office.net",
+              "attachments-sdf.office.net",
+              "ccs.login.microsoftonline.com",
+              "hotmail.com",
+              "mail.services.live.com",
+              "office365.com",
+              "outlook.office.com",
+              "substrate.office.com",
+              "substrate-sdf.office.com"
             ],
-            "not_before": "2026-03-08T00:17:03Z",
-            "not_after": "2027-03-03T00:17:03Z",
+            "not_before": "2026-10-13T00:00:00Z",
+            "not_after": "2027-04-29T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 100
+            "days_to_expiry": 158
           }
         },
         {
-          "ip": "52.96.57.82",
+          "ip": "52.97.104.98",
           "port": 80,
           "protocol": "tcp",
           "service": "http",
@@ -524,38 +558,56 @@
           "tls": false
         },
         {
-          "ip": "52.96.57.82",
+          "ip": "52.97.104.98",
           "port": 443,
           "protocol": "tcp",
           "service": "https",
           "banner": null,
           "tls": true,
           "cert": {
-            "subject": "CN=outlook.cloud.microsoft, O=Microsoft Corporation, L=Redmond, ST=WA, C=US",
-            "issuer": "CN=Microsoft TLS G2 RSA CA OCSP 04, O=Microsoft Corporation, C=US",
+            "subject": "CN=outlook.com, O=Microsoft Corporation, L=Redmond, ST=Washington, C=US",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
             "san": [
-              "places.cloud.microsoft",
-              "outlook.cloud.microsoft"
+              "outlook.com",
+              "*.hotmail.com",
+              "*.internal.outlook.com",
+              "*.live.com",
+              "*.office.com",
+              "*.office365.com",
+              "*.outlook.com",
+              "*.outlook.office365.com",
+              "attachment.outlook.live.net",
+              "attachment.outlook.office.net",
+              "attachment.outlook.officeppe.net",
+              "attachments.office.net",
+              "attachments-sdf.office.net",
+              "ccs.login.microsoftonline.com",
+              "hotmail.com",
+              "mail.services.live.com",
+              "office365.com",
+              "outlook.office.com",
+              "substrate.office.com",
+              "substrate-sdf.office.com"
             ],
-            "not_before": "2026-03-08T00:17:03Z",
-            "not_after": "2027-03-03T00:17:03Z",
+            "not_before": "2026-10-13T00:00:00Z",
+            "not_after": "2027-04-29T23:59:59Z",
             "self_signed": false,
-            "days_to_expiry": 100
+            "days_to_expiry": 158
           }
         }
       ],
       "dns": {
         "a": [
-          "40.99.168.242",
-          "52.96.191.98",
-          "40.99.168.226",
-          "52.96.121.98"
+          "52.97.104.66",
+          "40.99.229.226",
+          "40.104.23.98",
+          "40.99.229.194"
         ],
         "aaaa": [
-          "2603:1036:305:3889::2",
-          "2603:1036:805:b4::2",
-          "2603:1036:305:48cc::2",
-          "2603:1036:305:3006::2"
+          "2603:1036:903:47::6",
+          "2603:1036:30c:900::2",
+          "2603:1036:30c:c8b::2",
+          "2603:1036:30c:c92::2"
         ],
         "cname": "outlook.office365.com",
         "mx": [],
@@ -596,8 +648,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-22T12:19:45Z",
-      "last_seen": "2026-11-22T12:19:45Z",
+      "first_discovered": "2026-11-22T18:17:38Z",
+      "last_seen": "2026-11-22T18:17:38Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -761,10 +813,10 @@
           "ns74.domaincontrol.com"
         ],
         "txt": [
-          "apple-domain-verification=cWkfjNKuM61a3EZ6",
           "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
-          "MS=ms93622757"
+          "MS=ms93622757",
+          "apple-domain-verification=cWkfjNKuM61a3EZ6"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com -all",
         "dnssec": false
@@ -874,8 +926,119 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-11-22T06:18:28Z_f4aabeb1",
+    "since_scan": "scan_2026-11-22T12:15:43Z_b3b3f80d",
     "added": {
+      "subdomains": [],
+      "services": [
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.23.130",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.23.130",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.156.50",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.156.50",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.230.66",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.230.66",
+          "port": 443,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.97.104.98",
+          "port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.97.104.98",
+          "port": 443,
+          "protocol": "tcp"
+        }
+      ],
+      "hosts": [
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:900::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:90f::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:c8a::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:c8b::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:30c:c92::2"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "2603:1036:903:47::6"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.23.130"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.104.23.98"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.194"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "40.99.229.226"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.156.50"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.96.230.66"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.97.104.66"
+        },
+        {
+          "subdomain": "email.commandcompanies.com",
+          "ip": "52.97.104.98"
+        }
+      ]
+    },
+    "removed": {
       "subdomains": [],
       "services": [
         {
@@ -994,121 +1157,6 @@
         }
       ]
     },
-    "removed": {
-      "subdomains": [],
-      "services": [
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.46.18",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.46.18",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.111.82",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.111.82",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.182.114",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.182.114",
-          "port": 443,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.88.114",
-          "port": 80,
-          "protocol": "tcp"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.88.114",
-          "port": 443,
-          "protocol": "tcp"
-        }
-      ],
-      "hosts": [
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:207:869::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:302:4154::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:302:481e::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:302:4840::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:302:4845::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:302:48b4::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "2603:1036:302:505b::2"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.104.46.18"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "40.99.232.114"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.111.50"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.111.82"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.182.114"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.182.98"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.88.114"
-        },
-        {
-          "subdomain": "email.commandcompanies.com",
-          "ip": "52.96.88.2"
-        }
-      ]
-    },
     "changed": {
       "fingerprint": [],
       "cert": [],
@@ -1116,83 +1164,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-10-25T12:23:49Z_f5d59d1b",
-      "started_at": "2026-10-25T12:23:49Z",
-      "completed_at": "2026-10-25T12:29:07Z",
-      "subdomain_count": 3,
-      "live_subdomain_count": 3,
-      "host_count": 34,
-      "service_count": 24,
-      "subdomain_names": [
-        "commandcompanies.com",
-        "email.commandcompanies.com",
-        "www.commandcompanies.com"
-      ],
-      "ports_by_sub": {
-        "commandcompanies.com": {
-          "199.16.172.42": [
-            80,
-            443
-          ],
-          "199.16.173.153": [
-            80,
-            443
-          ]
-        },
-        "email.commandcompanies.com": {
-          "40.104.2.18": [
-            80,
-            443
-          ],
-          "40.104.2.210": [
-            80,
-            443
-          ],
-          "40.104.23.114": [
-            80,
-            443
-          ],
-          "40.104.23.146": [
-            80,
-            443
-          ],
-          "40.99.229.178": [
-            80,
-            443
-          ],
-          "52.96.104.194": [
-            80,
-            443
-          ],
-          "52.97.104.66": [
-            80,
-            443
-          ],
-          "52.97.104.82": [
-            80,
-            443
-          ]
-        },
-        "www.commandcompanies.com": {
-          "199.16.172.42": [
-            80,
-            443
-          ],
-          "199.16.173.153": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.3",
-        "Slider Revolution": "6.7.58",
-        "Yoast SEO": "28.7",
-        "jQuery Migrate": "3.4.1",
-        "Microsoft HTTPAPI": "2.0"
-      }
-    },
     {
       "scan_id": "scan_2026-10-25T16:16:02Z_a11f7172",
       "started_at": "2026-10-25T16:16:02Z",
@@ -9113,6 +9084,67 @@
         "jQuery Migrate": "3.4.1",
         "Microsoft HTTPAPI": "2.0"
       }
+    },
+    {
+      "scan_id": "scan_2026-11-22T18:13:22Z_e51c35bb",
+      "started_at": "2026-11-22T18:13:22Z",
+      "completed_at": "2026-11-22T18:17:36Z",
+      "subdomain_count": 3,
+      "live_subdomain_count": 3,
+      "host_count": 16,
+      "service_count": 16,
+      "subdomain_names": [
+        "commandcompanies.com",
+        "email.commandcompanies.com",
+        "www.commandcompanies.com"
+      ],
+      "ports_by_sub": {
+        "commandcompanies.com": {
+          "199.16.172.42": [
+            80,
+            443
+          ],
+          "199.16.173.153": [
+            80,
+            443
+          ]
+        },
+        "email.commandcompanies.com": {
+          "40.104.23.130": [
+            80,
+            443
+          ],
+          "52.96.156.50": [
+            80,
+            443
+          ],
+          "52.96.230.66": [
+            80,
+            443
+          ],
+          "52.97.104.98": [
+            80,
+            443
+          ]
+        },
+        "www.commandcompanies.com": {
+          "199.16.172.42": [
+            80,
+            443
+          ],
+          "199.16.173.153": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.3",
+        "Slider Revolution": "6.8.1",
+        "Yoast SEO": "28.9",
+        "jQuery Migrate": "3.4.1",
+        "Microsoft HTTPAPI": "2.0"
+      }
     }
   ],
   "dns_readings": {
@@ -9125,12 +9157,12 @@
       ],
       "ns_counted_basis": "everyday",
       "ns_disagreement": null,
-      "read_at": "2026-11-22T12:16:00Z",
+      "read_at": "2026-11-22T18:13:58Z",
       "records": {
         "a": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1794,
+          "ttl": 1795,
           "values": [
             "199.16.172.42",
             "199.16.173.153"
@@ -9151,7 +9183,7 @@
         "dmarc": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1794,
+          "ttl": 1795,
           "values": [
             "v=DMARC1; p=none; pct=100; rua=mailto:dkimreport@commandcompanies.com; ruf=mailto:dkimalert@commandcompanies.com"
           ]
@@ -9159,7 +9191,7 @@
         "mx": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1794,
+          "ttl": 1795,
           "values": [
             "10 mx1.hc3765-17.iphmx.com",
             "20 mx2.hc3765-17.iphmx.com"
@@ -9168,7 +9200,7 @@
         "ns": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1086,
+          "ttl": 56,
           "values": [
             "ns73.domaincontrol.com",
             "ns74.domaincontrol.com"
@@ -9177,7 +9209,7 @@
         "txt": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1794,
+          "ttl": 1795,
           "values": [
             "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
             "MS=ms93622757",
@@ -9201,7 +9233,7 @@
     "email.commandcompanies.com": {
       "name": "email.commandcompanies.com",
       "name_status": "exists",
-      "read_at": "2026-11-22T12:16:00Z",
+      "read_at": "2026-11-22T18:13:58Z",
       "records": {
         "a": {
           "cname_chain": [
@@ -9212,12 +9244,12 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 9,
+          "ttl": 5,
           "values": [
-            "40.99.168.242",
-            "52.96.22.178",
-            "52.96.57.50",
-            "52.96.8.130"
+            "40.104.23.130",
+            "40.104.23.146",
+            "40.104.23.98",
+            "40.99.140.226"
           ]
         },
         "aaaa": {
@@ -9231,10 +9263,10 @@
           "status": "NOERROR",
           "ttl": 8,
           "values": [
-            "2603:1036:305:3889::2",
-            "2603:1036:305:4019::2",
-            "2603:1036:305:401b::2",
-            "2603:1036:305:48c8::2"
+            "2603:1036:30c:1000::2",
+            "2603:1036:30c:c86::2",
+            "2603:1036:30c:c92::2",
+            "2603:1036:30c:c96::2"
           ]
         },
         "cname": {
@@ -9284,11 +9316,15 @@
       },
       "nx_streak": 0,
       "owners": {
-        "2603:1036:305:3889::2": {
+        "2603:1036:30c:c92::2": {
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation"
         },
-        "40.99.168.242": {
+        "40.104.23.130": {
+          "asn": "AS8075",
+          "asn_org": "Microsoft Corporation"
+        },
+        "40.104.23.98": {
           "asn": "AS8075",
           "asn_org": "Microsoft Corporation"
         }
@@ -9297,7 +9333,7 @@
     "www.commandcompanies.com": {
       "name": "www.commandcompanies.com",
       "name_status": "exists",
-      "read_at": "2026-11-22T12:15:59Z",
+      "read_at": "2026-11-22T18:13:58Z",
       "records": {
         "a": {
           "cname_chain": [
@@ -9305,7 +9341,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1794,
+          "ttl": 1795,
           "values": [
             "199.16.172.42",
             "199.16.173.153"
@@ -9323,7 +9359,7 @@
         "cname": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1794,
+          "ttl": 1795,
           "values": [
             "commandcompanies.com"
           ]
@@ -9334,7 +9370,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1794,
+          "ttl": 1795,
           "values": [
             "10 mx1.hc3765-17.iphmx.com",
             "20 mx2.hc3765-17.iphmx.com"
@@ -9346,7 +9382,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1086,
+          "ttl": 56,
           "values": [
             "ns73.domaincontrol.com",
             "ns74.domaincontrol.com"
@@ -9358,7 +9394,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1794,
+          "ttl": 1795,
           "values": [
             "0ed1fe018a0b51be5c4cd34ee5b2364c6b3de8d430",
             "MS=ms93622757",
