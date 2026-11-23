@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-11-23T06:50:53Z_9b67e31d",
-    "started_at": "2026-11-23T06:50:53Z",
-    "completed_at": "2026-11-23T06:55:51Z",
-    "duration_seconds": 298,
+    "id": "scan_2026-11-23T12:41:10Z_9b3d28e3",
+    "started_at": "2026-11-23T12:41:10Z",
+    "completed_at": "2026-11-23T12:46:03Z",
+    "duration_seconds": 293,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -31,9 +31,11 @@
     "live_subdomain_count": 4,
     "host_count": 5,
     "service_count": 8,
-    "newest_cert_expiry_days": 339,
+    "newest_cert_expiry_days": 338,
     "top_hosting_org": "Amazon.com, Inc.",
-    "platforms": []
+    "platforms": [
+      "WordPress on wp.cloud (Pressable)"
+    ]
   },
   "subdomains": [
     {
@@ -41,13 +43,13 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-11-23T06:55:51Z",
-      "last_seen": "2026-11-23T06:55:51Z",
+      "first_discovered": "2026-11-23T12:46:03Z",
+      "last_seen": "2026-11-23T12:46:03Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 403,
-        "title": "403 Forbidden"
+        "http_status": 200,
+        "title": "Home - Command Marketing Innovations"
       },
       "probe_status": {
         "naabu": {
@@ -110,23 +112,108 @@
           "ns70.domaincontrol.com"
         ],
         "txt": [
-          "MS=ms11147654",
-          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
+          "google-site-verification=ZiVaKRBG6JgkKzhGYUF7YWRlYDlBj62kwdnzhnb7g0E",
           "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca",
-          "Sendinblue-code:d6ec6d432f5c3f2c2d3963e1b0efeb4c",
-          "google-site-verification=ZiVaKRBG6JgkKzhGYUF7YWRlYDlBj62kwdnzhnb7g0E"
+          "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
+          "MS=ms11147654",
+          "Sendinblue-code:d6ec6d432f5c3f2c2d3963e1b0efeb4c"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
         "dnssec": false
       },
       "fingerprint": {
         "server": "nginx",
-        "platform_label": null,
+        "platform_label": "WordPress on wp.cloud (Pressable)",
         "tech": [
+          {
+            "name": "Bootstrap",
+            "version": "5.1.0",
+            "category": "frontend"
+          },
+          {
+            "name": "Font Awesome",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          },
+          {
+            "name": "Mailcheck",
+            "version": "1.1.2",
+            "category": null
+          },
+          {
+            "name": "MySQL",
+            "version": null,
+            "category": "database"
+          },
           {
             "name": "Nginx",
             "version": null,
             "category": "webserver"
+          },
+          {
+            "name": "PHP",
+            "version": null,
+            "category": "language"
+          },
+          {
+            "name": "Slider Revolution",
+            "version": "6.8.1",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "WPMU DEV Smush",
+            "version": "4.3.7",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "WordPress",
+            "version": null,
+            "category": "cms"
+          },
+          {
+            "name": "Yoast SEO",
+            "version": "28.9",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "jQuery",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery Migrate",
+            "version": "3.4.1",
+            "category": "frontend"
+          },
+          {
+            "name": "jsDelivr",
+            "version": null,
+            "category": "cdn"
+          },
+          {
+            "name": "punycode",
+            "version": "1.0.0",
+            "category": null
+          },
+          {
+            "name": "reCAPTCHA",
+            "version": null,
+            "category": null
+          },
+          {
+            "name": "wp.cloud",
+            "version": null,
+            "category": "hosting"
+          },
+          {
+            "name": "wpBakery",
+            "version": null,
+            "category": "wp-plugin"
           }
         ]
       },
@@ -141,8 +228,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-23T06:55:51Z",
-      "last_seen": "2026-11-23T06:55:51Z",
+      "first_discovered": "2026-11-23T12:46:03Z",
+      "last_seen": "2026-11-23T12:46:03Z",
       "tags": [],
       "reachability": {
         "live": false,
@@ -198,8 +285,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-23T06:55:51Z",
-      "last_seen": "2026-11-23T06:55:51Z",
+      "first_discovered": "2026-11-23T12:46:04Z",
+      "last_seen": "2026-11-23T12:46:04Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -261,7 +348,7 @@
             "not_before": "2026-10-28T07:36:38Z",
             "not_after": "2027-10-28T07:36:38Z",
             "self_signed": false,
-            "days_to_expiry": 339
+            "days_to_expiry": 338
           }
         },
         {
@@ -288,14 +375,14 @@
             "not_before": "2026-10-28T07:36:38Z",
             "not_after": "2027-10-28T07:36:38Z",
             "self_signed": false,
-            "days_to_expiry": 339
+            "days_to_expiry": 338
           }
         }
       ],
       "dns": {
         "a": [
-          "100.49.110.141",
-          "100.49.0.246"
+          "100.49.0.246",
+          "100.49.110.141"
         ],
         "aaaa": [],
         "cname": "paylinks.commerce.godaddy.com",
@@ -321,13 +408,13 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-23T06:55:51Z",
-      "last_seen": "2026-11-23T06:55:51Z",
+      "first_discovered": "2026-11-23T12:46:04Z",
+      "last_seen": "2026-11-23T12:46:04Z",
       "tags": [],
       "reachability": {
         "live": true,
-        "http_status": 403,
-        "title": "403 Forbidden"
+        "http_status": 200,
+        "title": "Home - Command Marketing Innovations"
       },
       "probe_status": {
         "naabu": {
@@ -390,23 +477,108 @@
           "ns70.domaincontrol.com"
         ],
         "txt": [
-          "MS=ms11147654",
-          "Sendinblue-code:d6ec6d432f5c3f2c2d3963e1b0efeb4c",
           "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca",
           "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
-          "google-site-verification=ZiVaKRBG6JgkKzhGYUF7YWRlYDlBj62kwdnzhnb7g0E"
+          "google-site-verification=ZiVaKRBG6JgkKzhGYUF7YWRlYDlBj62kwdnzhnb7g0E",
+          "Sendinblue-code:d6ec6d432f5c3f2c2d3963e1b0efeb4c",
+          "MS=ms11147654"
         ],
         "spf": "v=spf1 exists:%{i}.spf.hc3765-17.iphmx.com include:spf.sendinblue.com mx -all",
         "dnssec": false
       },
       "fingerprint": {
         "server": "nginx",
-        "platform_label": null,
+        "platform_label": "WordPress on wp.cloud (Pressable)",
         "tech": [
+          {
+            "name": "Bootstrap",
+            "version": "5.1.0",
+            "category": "frontend"
+          },
+          {
+            "name": "Font Awesome",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "HSTS",
+            "version": null,
+            "category": "security"
+          },
+          {
+            "name": "Mailcheck",
+            "version": "1.1.2",
+            "category": null
+          },
+          {
+            "name": "MySQL",
+            "version": null,
+            "category": "database"
+          },
           {
             "name": "Nginx",
             "version": null,
             "category": "webserver"
+          },
+          {
+            "name": "PHP",
+            "version": null,
+            "category": "language"
+          },
+          {
+            "name": "Slider Revolution",
+            "version": "6.8.1",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "WPMU DEV Smush",
+            "version": "4.3.7",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "WordPress",
+            "version": null,
+            "category": "cms"
+          },
+          {
+            "name": "Yoast SEO",
+            "version": "28.9",
+            "category": "wp-plugin"
+          },
+          {
+            "name": "jQuery",
+            "version": null,
+            "category": "frontend"
+          },
+          {
+            "name": "jQuery Migrate",
+            "version": "3.4.1",
+            "category": "frontend"
+          },
+          {
+            "name": "jsDelivr",
+            "version": null,
+            "category": "cdn"
+          },
+          {
+            "name": "punycode",
+            "version": "1.0.0",
+            "category": null
+          },
+          {
+            "name": "reCAPTCHA",
+            "version": null,
+            "category": null
+          },
+          {
+            "name": "wp.cloud",
+            "version": null,
+            "category": "hosting"
+          },
+          {
+            "name": "wpBakery",
+            "version": null,
+            "category": "wp-plugin"
           }
         ]
       },
@@ -419,7 +591,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-11-23T00:55:33Z_1f84d64b",
+    "since_scan": "scan_2026-11-23T06:50:53Z_9b67e31d",
     "added": {
       "subdomains": [],
       "services": [],
@@ -5130,6 +5302,59 @@
         }
       },
       "tech_versions": {}
+    },
+    {
+      "scan_id": "scan_2026-11-23T12:41:10Z_9b3d28e3",
+      "started_at": "2026-11-23T12:41:10Z",
+      "completed_at": "2026-11-23T12:46:03Z",
+      "subdomain_count": 4,
+      "live_subdomain_count": 4,
+      "host_count": 5,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmi.com",
+        "ftp.commandmi.com",
+        "pay.commandmi.com",
+        "www.commandmi.com"
+      ],
+      "ports_by_sub": {
+        "commandmi.com": {
+          "15.197.142.173": [
+            80
+          ],
+          "3.33.152.147": [
+            80
+          ]
+        },
+        "ftp.commandmi.com": {},
+        "pay.commandmi.com": {
+          "100.49.0.246": [
+            80,
+            443
+          ],
+          "100.49.110.141": [
+            80,
+            443
+          ]
+        },
+        "www.commandmi.com": {
+          "15.197.142.173": [
+            80
+          ],
+          "3.33.152.147": [
+            80
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.8.1",
+        "WPMU DEV Smush": "4.3.7",
+        "Yoast SEO": "28.9",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
     }
   ],
   "dns_readings": {
@@ -5142,7 +5367,7 @@
       ],
       "ns_counted_basis": "everyday",
       "ns_disagreement": null,
-      "read_at": "2026-11-23T06:51:57Z",
+      "read_at": "2026-11-23T12:42:04Z",
       "records": {
         "a": {
           "health": "ok",
@@ -5168,7 +5393,7 @@
         "dmarc": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1766,
+          "ttl": 1765,
           "values": [
             "v=DMARC1; p=none; pct=100; rua=mailto:dkimreport@commandcompanies.com; ruf=mailto:dkimalert@commandcompanies.com"
           ]
@@ -5176,7 +5401,7 @@
         "mx": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1766,
+          "ttl": 1765,
           "values": [
             "10 mx1.hc3765-17.iphmx.com",
             "20 mx2.hc3765-17.iphmx.com"
@@ -5185,7 +5410,7 @@
         "ns": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 133,
+          "ttl": 1132,
           "values": [
             "ns69.domaincontrol.com",
             "ns70.domaincontrol.com"
@@ -5194,7 +5419,7 @@
         "txt": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1766,
+          "ttl": 1765,
           "values": [
             "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca",
             "MS=ms11147654",
@@ -5219,12 +5444,12 @@
     "ftp.commandmi.com": {
       "name": "ftp.commandmi.com",
       "name_status": "exists",
-      "read_at": "2026-11-23T06:51:57Z",
+      "read_at": "2026-11-23T12:42:04Z",
       "records": {
         "a": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1767,
+          "ttl": 1766,
           "values": [
             "208.199.0.161"
           ]
@@ -5271,7 +5496,7 @@
     "pay.commandmi.com": {
       "name": "pay.commandmi.com",
       "name_status": "exists",
-      "read_at": "2026-11-23T06:51:58Z",
+      "read_at": "2026-11-23T12:42:04Z",
       "records": {
         "a": {
           "cname_chain": [
@@ -5355,7 +5580,7 @@
     "www.commandmi.com": {
       "name": "www.commandmi.com",
       "name_status": "exists",
-      "read_at": "2026-11-23T06:51:57Z",
+      "read_at": "2026-11-23T12:42:04Z",
       "records": {
         "a": {
           "cname_chain": [
@@ -5392,7 +5617,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1766,
+          "ttl": 1765,
           "values": [
             "10 mx1.hc3765-17.iphmx.com",
             "20 mx2.hc3765-17.iphmx.com"
@@ -5404,7 +5629,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1767,
+          "ttl": 1132,
           "values": [
             "ns69.domaincontrol.com",
             "ns70.domaincontrol.com"
@@ -5416,7 +5641,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1766,
+          "ttl": 1765,
           "values": [
             "0ed1fe018a50b72b3110fb42efbcc74bb6c29aa4ca",
             "MS=ms11147654",
