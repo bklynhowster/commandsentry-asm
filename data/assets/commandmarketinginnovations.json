@@ -10,10 +10,10 @@
     "discovered_via": "manual"
   },
   "scan": {
-    "id": "scan_2026-11-24T18:35:41Z_5874117c",
-    "started_at": "2026-11-24T18:35:41Z",
-    "completed_at": "2026-11-24T18:38:55Z",
-    "duration_seconds": 194,
+    "id": "scan_2026-11-25T00:51:22Z_86accd18",
+    "started_at": "2026-11-25T00:51:22Z",
+    "completed_at": "2026-11-25T00:54:37Z",
+    "duration_seconds": 195,
     "engine_version": "3.0.0",
     "scanner_origin": "github-actions-ubuntu-azure",
     "tools_run": [
@@ -44,8 +44,8 @@
       "alive": true,
       "is_root": true,
       "discovered_via": "dnsx",
-      "first_discovered": "2026-11-24T18:38:55Z",
-      "last_seen": "2026-11-24T18:38:55Z",
+      "first_discovered": "2026-11-25T00:54:37Z",
+      "last_seen": "2026-11-25T00:54:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -346,8 +346,8 @@
       "alive": true,
       "is_root": false,
       "discovered_via": "subfinder",
-      "first_discovered": "2026-11-24T18:38:55Z",
-      "last_seen": "2026-11-24T18:38:55Z",
+      "first_discovered": "2026-11-25T00:54:37Z",
+      "last_seen": "2026-11-25T00:54:37Z",
       "tags": [],
       "reachability": {
         "live": true,
@@ -535,8 +535,8 @@
           "ns18.domaincontrol.com"
         ],
         "txt": [
-          "ca3-109f68bf8eb24748b4c4aaa123b93e17",
-          ""
+          "",
+          "ca3-109f68bf8eb24748b4c4aaa123b93e17"
         ],
         "spf": null,
         "dnssec": false
@@ -646,7 +646,7 @@
   ],
   "phantom_subdomains": [],
   "deltas": {
-    "since_scan": "scan_2026-11-24T12:43:16Z_fd0777e3",
+    "since_scan": "scan_2026-11-24T18:35:41Z_5874117c",
     "added": {
       "subdomains": [],
       "services": [],
@@ -664,50 +664,6 @@
     }
   },
   "history": [
-    {
-      "scan_id": "scan_2026-10-27T01:09:49Z_63b4b53b",
-      "started_at": "2026-10-27T01:09:50Z",
-      "completed_at": "2026-10-27T01:12:35Z",
-      "subdomain_count": 2,
-      "live_subdomain_count": 2,
-      "host_count": 2,
-      "service_count": 8,
-      "subdomain_names": [
-        "commandmarketinginnovations.com",
-        "www.commandmarketinginnovations.com"
-      ],
-      "ports_by_sub": {
-        "commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        },
-        "www.commandmarketinginnovations.com": {
-          "199.16.172.41": [
-            80,
-            443
-          ],
-          "199.16.173.231": [
-            80,
-            443
-          ]
-        }
-      },
-      "tech_versions": {
-        "Bootstrap": "5.1.0",
-        "Mailcheck": "1.1.2",
-        "Slider Revolution": "6.7.58",
-        "WPMU DEV Smush": "4.3.5",
-        "Yoast SEO": "28.7",
-        "jQuery Migrate": "3.4.1",
-        "punycode": "1.0.0"
-      }
-    },
     {
       "scan_id": "scan_2026-10-27T06:52:25Z_11fa088f",
       "started_at": "2026-10-27T06:52:25Z",
@@ -5935,6 +5891,50 @@
         "jQuery Migrate": "3.4.1",
         "punycode": "1.0.0"
       }
+    },
+    {
+      "scan_id": "scan_2026-11-25T00:51:22Z_86accd18",
+      "started_at": "2026-11-25T00:51:22Z",
+      "completed_at": "2026-11-25T00:54:37Z",
+      "subdomain_count": 2,
+      "live_subdomain_count": 2,
+      "host_count": 2,
+      "service_count": 8,
+      "subdomain_names": [
+        "commandmarketinginnovations.com",
+        "www.commandmarketinginnovations.com"
+      ],
+      "ports_by_sub": {
+        "commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        },
+        "www.commandmarketinginnovations.com": {
+          "199.16.172.41": [
+            80,
+            443
+          ],
+          "199.16.173.231": [
+            80,
+            443
+          ]
+        }
+      },
+      "tech_versions": {
+        "Bootstrap": "5.1.0",
+        "Mailcheck": "1.1.2",
+        "Slider Revolution": "6.8.1",
+        "WPMU DEV Smush": "4.3.7",
+        "Yoast SEO": "28.9",
+        "jQuery Migrate": "3.4.1",
+        "punycode": "1.0.0"
+      }
     }
   ],
   "dns_readings": {
@@ -5947,12 +5947,12 @@
       ],
       "ns_counted_basis": "everyday",
       "ns_disagreement": null,
-      "read_at": "2026-11-24T18:36:23Z",
+      "read_at": "2026-11-25T00:52:27Z",
       "records": {
         "a": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 579,
+          "ttl": 567,
           "values": [
             "199.16.172.41",
             "199.16.173.231"
@@ -5985,7 +5985,7 @@
         "ns": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 499,
+          "ttl": 1361,
           "values": [
             "ns17.domaincontrol.com",
             "ns18.domaincontrol.com"
@@ -5994,7 +5994,7 @@
         "txt": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1778,
+          "ttl": 1766,
           "values": [
             "",
             "ca3-109f68bf8eb24748b4c4aaa123b93e17"
@@ -6016,7 +6016,7 @@
     "www.commandmarketinginnovations.com": {
       "name": "www.commandmarketinginnovations.com",
       "name_status": "exists",
-      "read_at": "2026-11-24T18:36:23Z",
+      "read_at": "2026-11-25T00:52:27Z",
       "records": {
         "a": {
           "cname_chain": [
@@ -6024,7 +6024,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 579,
+          "ttl": 567,
           "values": [
             "199.16.172.41",
             "199.16.173.231"
@@ -6042,7 +6042,7 @@
         "cname": {
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 579,
+          "ttl": 566,
           "values": [
             "commandmarketinginnovations.com"
           ]
@@ -6062,7 +6062,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 499,
+          "ttl": 1361,
           "values": [
             "ns17.domaincontrol.com",
             "ns18.domaincontrol.com"
@@ -6074,7 +6074,7 @@
           ],
           "health": "ok",
           "status": "NOERROR",
-          "ttl": 1778,
+          "ttl": 1766,
           "values": [
             "",
             "ca3-109f68bf8eb24748b4c4aaa123b93e17"
